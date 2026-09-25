@@ -57,12 +57,12 @@ function readGroupMembers(groupId: number): GroupMember[] {
   return members;
 }
 
-function retainAdoptedCleanup(rootPid: number): void {
+function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
   const wait = loadWaitPid();
   if (!wait) {
     return;
   }
-  const deadline = performance.now() + CLEANUP_DEADLINE_MS;
+  const deadline = performance.now() + Math.max(CLEANUP_DEADLINE_MS, cleanupTimeoutMs);
   let quietScans = 0;
   const tick = () => {
     if (performance.now() >= deadline) {
@@ -101,6 +101,7 @@ function retainAdoptedCleanup(rootPid: number): void {
 export function scheduleAdoptedChildZombieReapAfterExit(
   child: TrackedChild,
   usedProcessGroup: boolean,
+  cleanupTimeoutMs = CLEANUP_DEADLINE_MS,
 ): void {
   if (
     process.platform !== "linux" ||
@@ -112,7 +113,7 @@ export function scheduleAdoptedChildZombieReapAfterExit(
   }
   const rootPid = child.pid;
   scheduledChildren.add(child);
-  const start = () => retainAdoptedCleanup(rootPid);
+  const start = () => retainAdoptedCleanup(rootPid, cleanupTimeoutMs);
   if (child.exitCode !== null || child.signalCode !== null) {
     start();
   } else {

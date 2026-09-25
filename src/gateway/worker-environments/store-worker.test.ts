@@ -41,6 +41,7 @@ import { createWorkerEnvironmentStore } from "./store.js";
 
 const delivery = vi.hoisted(() => ({
   afterTransition: undefined as (() => Promise<void>) | undefined,
+  afterTouch: undefined as (() => Promise<void>) | undefined,
   commands: [] as string[],
 }));
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
@@ -58,12 +59,15 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
         (scope) =>
           operation({
             execute: async (command, executeOptions) => {
-              if (delivery.afterTransition) {
+              if (delivery.afterTransition || delivery.afterTouch) {
                 delivery.commands.push(command.type);
               }
               const result = await scope.execute(command, executeOptions);
               if (command.type === "workerEnvironments.transition") {
                 await delivery.afterTransition?.();
+              }
+              if (command.type === "workerEnvironments.touchSessionAttachment") {
+                await delivery.afterTouch?.();
               }
               return result;
             },
@@ -77,6 +81,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.unstubAllEnvs();
   delivery.afterTransition = undefined;
+  delivery.afterTouch = undefined;
   delivery.commands = [];
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -511,6 +516,65 @@ it.each(["create", "close"] as const)(
     }
   },
 );
+
+it("rechecks idle-cleanup activity after a pending attachment touch publishes", async () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-cleanup-") },
+  });
+  let nowMs = 1_000;
+  const store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+  const { attachment } = await store.createSessionAttachmentIntent(
+    {
+      environmentId: "active-conversation",
+      providerId: "provider",
+      profileId: "profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "active-conversation-provision",
+      sessionId: "active-session",
+      sessionKey: "agent:main:active-session",
+      agentId: "main",
+    },
+    () => {},
+  );
+  const committed = createDeferredCore();
+  const publish = createDeferredCore();
+  delivery.afterTouch = async () => {
+    committed.resolve();
+    await publish.promise;
+  };
+  nowMs = 2_000;
+  const touch = store.touchSessionAttachment(attachment, () => {});
+  let cleanup: Promise<unknown> | undefined;
+  try {
+    await committed.promise;
+    expect(() => store.getSessionAttachmentRecord(attachment.sessionId)).toThrow(
+      "unsettled mutation",
+    );
+    cleanup = store.closeSessionAttachment(attachment.sessionId, () => {
+      if (
+        store.getSessionAttachmentRecord(attachment.sessionId)?.lastUsedAtMs !==
+        attachment.lastUsedAtMs
+      ) {
+        throw new Error("Conversation environment changed before cleanup");
+      }
+    });
+    const rejected = expect(cleanup).rejects.toThrow(
+      "Conversation environment changed before cleanup",
+    );
+    publish.resolve();
+    await touch;
+    await rejected;
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)).toMatchObject({
+      lastUsedAtMs: 2_000,
+      closedAtMs: null,
+    });
+  } finally {
+    publish.resolve();
+    await Promise.allSettled([touch, cleanup]);
+    delivery.afterTouch = undefined;
+    await store.close();
+  }
+});
 
 it("rejects queued cleanup before it can revoke a successor owner's credential", async () => {
   const database = openOpenClawStateDatabase({

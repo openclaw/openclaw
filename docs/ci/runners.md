@@ -188,6 +188,12 @@ and logs but disables verbose system-diagnostic collection: Xcode 27 can spend
 universal simulator compilation, verbose diagnostics, the Release device build,
 and lifecycle/UI/Watch tests. Frozen targets keep their original build settings.
 
+Scheduled main CI uses the same automatic runner and dependency-cache policy as
+main pushes. A `runson` configuration keeps the existing hybrid baseline for
+scheduled work; only qualified paths opt into RunsOn. Manual dispatches stay
+hosted under their existing policy, even when their dispatch ID resembles the
+retired hourly marker. Native runner labels and worker limits are unchanged.
+
 ### Runner backend modes
 
 The `macos-swift` lane builds Swift tests once and runs each test once per job. The ordinary suite retains default-profile behavior; rendered Quick Chat tests follow in a fresh default-profile process, then AppState isolation tests run in a named-profile process through the same resource-owning launcher. Historical targets retain their original two partitions. Each launch owns a private home and disposable, unlocked default Keychain until the test process group and output pipes close. HOME and profile markers do not isolate macOS services; all partitions run only on the disposable credentialless macOS worker. Current launcher-capable targets bound Swift Testing parallelism to the runner's logical CPU count, capped at 12, for automatic runs, manual dispatches, and rerun attempts. Only frozen targets that predate the resource owner use the serial fallback. A failing test fails the job without an in-job retry. See [native test safety](/platforms/mac/dev-setup#run-native-tests-safely).
@@ -307,7 +313,7 @@ Hybrid compact jobs containing `test/scripts/write-unified-entry-dts.test.ts` re
 
 The Blacksmith profile reuses the existing file partitioner for three measured serial outliers: chat/session control-plane tests, the third Gateway core group, and infrastructure storage/state tests. Their complete file inventory, config ownership, worker pins, build prerequisites and complete timing-history floors remain intact. Agent support stays one larger-runner job. On the captured 2026-09-02 inventory, these exceptions add three compact jobs while plugin consolidation removes twenty-two. The resulting broad-PR projection is 103 Node jobs; the last measured run used 121. Source inventory has changed between those observations, so actual CI must establish the final count and wall-time improvement.
 
-GitHub pull-request packing checks for a single exchange between two existing bins before opening another anchor job. This avoids stranding time when one bin reaches the ten-group limit. Both replacement bins and the incoming group must pass the original admission rules, including time, prerequisite and sibling-family constraints. Anchor placement stays independent of hosted tooling inventory; Blacksmith, hybrid and push plans retain their existing packing.
+GitHub pull-request and push packing checks for a single exchange between two existing bins before opening another anchor job. This avoids stranding time when one bin reaches the ten-group limit. Both replacement bins and the incoming group must pass the original admission rules, including time, prerequisite and sibling-family constraints. Pull-request anchor placement stays independent of hosted tooling inventory; Blacksmith and hybrid plans retain their existing packing.
 
 Ordinary non-Windows CI targets eight minutes; Windows must still pass but sits outside this latency objective. The 210-second expanded packing budget is an estimate, not a job timeout or a measured workflow result. Preflight, checkout/setup, queueing and actual test walls all count.
 

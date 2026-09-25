@@ -4,6 +4,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
@@ -18,7 +19,6 @@ import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
-import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
@@ -191,7 +191,7 @@ export function sidebarPanelDefinitions(
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
         .resourceBasePath=${state.resourceBasePath}
-        .authToken=${resolveAssistantAttachmentAuthToken(state)}
+        .authToken=${resolveControlUiAuthToken(state)}
       ></openclaw-browser-panel>`
     : null;
   const companion = params

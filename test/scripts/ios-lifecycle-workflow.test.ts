@@ -51,7 +51,12 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
 if (tool === "uname") {
   console.log("arm64");
 } else if (tool === "xcrun") {
-  if (args[1] === "list") {
+  if (args[1] === "list" && args[2] === "pairs") {
+    console.log(JSON.stringify({ pairs: mode === "unpaired" ? {} : {
+      unrelated: { watch: { udid: "other-watch" }, phone: { udid: "other-phone" } },
+      selected: { watch: { udid: "watch-fixture" }, phone: { udid: "companion-fixture" } }
+    } }));
+  } else if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
       { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
     ] } }));
@@ -121,50 +126,55 @@ if (tool === "uname") {
 }
 
 describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => {
-  it("reuses project build products and installs the exact Watch target before running its tests", () => {
-    const { result, commands, product } = runSimulatorStep();
-    expect(result.status, result.stderr).toBe(0);
-    const xcodeCommands = commands.filter((command) => command.tool === "xcodebuild");
-    for (const command of xcodeCommands) {
-      expect(command.args).not.toContain("-derivedDataPath");
-    }
-    expect(
-      commands.filter((command) => command.tool === "xcrun").map((command) => command.args),
-    ).toEqual([
-      ["simctl", "list", "devices", "available", "--json"],
-      ["simctl", "boot", "watch-fixture"],
-      ["simctl", "bootstatus", "watch-fixture", "-b"],
-      ["simctl", "install", "watch-fixture", product],
-    ]);
-    expect(
-      xcodeCommands.map((command) =>
-        command.args.find((arg) =>
-          ["build-for-testing", "-showBuildSettings", "test-without-building"].includes(arg),
+  it.each(["ready", "unpaired"])(
+    "prepares the %s Watch destination before running its tests",
+    (mode) => {
+      const { result, commands, product } = runSimulatorStep(mode);
+      expect(result.status, result.stderr).toBe(0);
+      const xcodeCommands = commands.filter((command) => command.tool === "xcodebuild");
+      for (const command of xcodeCommands) {
+        expect(command.args).not.toContain("-derivedDataPath");
+      }
+      expect(
+        commands.filter((command) => command.tool === "xcrun").map((command) => command.args),
+      ).toEqual([
+        ["simctl", "list", "devices", "available", "--json"],
+        ["simctl", "list", "pairs", "--json"],
+        ...(mode === "unpaired" ? [] : [["simctl", "bootstatus", "companion-fixture", "-b"]]),
+        ["simctl", "boot", "watch-fixture"],
+        ["simctl", "bootstatus", "watch-fixture", "-b"],
+        ["simctl", "install", "watch-fixture", product],
+      ]);
+      expect(
+        xcodeCommands.map((command) =>
+          command.args.find((arg) =>
+            ["build-for-testing", "-showBuildSettings", "test-without-building"].includes(arg),
+          ),
         ),
-      ),
-    ).toEqual(["build-for-testing", "-showBuildSettings", "test-without-building"]);
-    for (const command of xcodeCommands.filter(
-      (entry) =>
-        entry.args.includes("build-for-testing") || entry.args.includes("test-without-building"),
-    )) {
-      expect(command.args).toEqual(
-        expect.arrayContaining([
-          "OpenClawWatchApp",
-          "Debug",
-          "platform=watchOS Simulator,id=watch-fixture",
-          "-parallel-testing-enabled",
-          "NO",
-          "-only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests",
-          "-only-testing:OpenClawWatchTests/WatchRealtimeMediaTests",
-          "-only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests",
-          "CODE_SIGNING_ALLOWED=NO",
-        ]),
-      );
-    }
-    expect(
-      xcodeCommands.find((command) => command.args.includes("test-without-building"))?.args,
-    ).toContain("apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult");
-  });
+      ).toEqual(["build-for-testing", "-showBuildSettings", "test-without-building"]);
+      for (const command of xcodeCommands.filter(
+        (entry) =>
+          entry.args.includes("build-for-testing") || entry.args.includes("test-without-building"),
+      )) {
+        expect(command.args).toEqual(
+          expect.arrayContaining([
+            "OpenClawWatchApp",
+            "Debug",
+            "platform=watchOS Simulator,id=watch-fixture",
+            "-parallel-testing-enabled",
+            "NO",
+            "-only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests",
+            "-only-testing:OpenClawWatchTests/WatchRealtimeMediaTests",
+            "-only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests",
+            "CODE_SIGNING_ALLOWED=NO",
+          ]),
+        );
+      }
+      expect(
+        xcodeCommands.find((command) => command.args.includes("test-without-building"))?.args,
+      ).toContain("apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult");
+    },
+  );
 
   it.each(["missing-product", "ambiguous-product", "relative-product"])(
     "rejects %s settings before simulator installation or test execution",

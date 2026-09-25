@@ -78,6 +78,14 @@ stop with a warning naming those counts; missing custody information never block
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
 
+An already replaced Gateway that rejects connections because its runtime files
+are unavailable is stopped through its service owner with a warning instead of
+waiting for an RPC it cannot serve. For the older error emitted by published
+June Gateways, this also requires a live legacy lock and local listener matching
+the owned service PID. Listener ownership, the lock, and native service identity
+are rechecked before stopping. Missing listener attribution or an unrelated
+connection error keeps the normal drain path.
+
 Maintenance drain uses the service's local credentials, including an existing
 paired operator identity when no shared token or password is configured. It does
 not create an identity or request new pairing. Older installed updaters that omit
@@ -171,6 +179,26 @@ maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.
+
+After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
+readiness verification as active steps. `openclaw update status`, including `--json`,
+shows the recorded operation, wait reason, start time, and budget. Readiness observations
+refresh at most every 30 seconds within each probe stage. Verification checks the managed
+service, listener identity, installed version/build, health RPC, and HTTP readiness.
+Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
+and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
+headroom for slow hardware while bounding observation of the already-serving Gateway.
+Expiry records a warning and continues with previous-Gateway readiness unverified;
+automatic rollback cannot restart an unverified previous Gateway. Run
+`openclaw gateway status --deep --require-rpc` to inspect it.
+
+Each disposable-copy cleanup has a five-minute allowance. If removal takes longer,
+the update records a warning and continues; removal may still finish in the background.
+The warning names the temporary path and explains cleanup after the updater exits.
+These progress improvements require the repaired updater on the next update hop.
+An already-running 2026.9.5 updater retains its original silent verification window;
+independent `openclaw gateway status --deep --require-rpc` and `/readyz` probes can show
+whether the old Gateway is still serving, but do not establish the updater's wait reason.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout

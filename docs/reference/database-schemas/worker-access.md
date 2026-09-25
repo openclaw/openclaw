@@ -95,6 +95,13 @@ receives a refusal and settles cleanup without waiting behind the foreground
 callback that requested close. Already admitted write-capable work retains its
 permit through native settlement; cancellation never releases it early.
 
+Reclamation commit acceptance checks the live parent authority and atomically
+accepts the pending commit before returning to the event loop. Revocation before
+acceptance refuses the commit; an accepted commit drains through its settled
+result or native worker exit before releasing writer admission, publishing facts,
+or releasing request custody. The parent does not open SQLite or synchronously
+wait for the worker's commit. This changes no schema, retention, or update behavior.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
@@ -465,6 +472,20 @@ lease; database close joins the callback and its retained worker cleanup. Cleanu
 refuses a replacement physical database and cannot delete a successor's lease.
 Upload formats, expiry limits, installation permissions, and update behavior are
 unchanged.
+
+Reply recovery reads file-backed logical session entries through the existing
+agent database executor. The worker preserves canonical initialization and schema
+migration, logical key and folded-candidate validation, configured owner inference,
+and the distinction between logical agents and shared physical stores. Captured
+registry authority follows only registration changes witnessed by that same
+opening owner after dispatch. A read queued behind an earlier writer may refresh
+registry facts before opening its actor, but must prove the original logical owner,
+physical target, and caller authority are unchanged. It never replays a dispatched
+operation or accepts target reassociation. Recovery callers await the result and
+recheck their live authority before admission or reply decisions.
+Transaction predicates and commit checks stay with their existing writers.
+Process-held incognito entries retain their native owner until its complete
+worker cutover; this does not make the whole reply path free of host SQLite.
 
 Discord thread-binding startup and bundled mutations use the existing plugin-state
 worker. Inbound and outbound activity, binding changes, lifecycle settings, thread

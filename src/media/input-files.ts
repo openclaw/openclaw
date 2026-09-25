@@ -81,19 +81,7 @@ export type InputImageSource =
     };
 
 /** Supported input_file source variants before text/PDF extraction. */
-type InputFileSource =
-  | {
-      type: "base64";
-      data: string;
-      mediaType?: string;
-      filename?: string;
-    }
-  | {
-      type: "url";
-      url: string;
-      mediaType?: string;
-      filename?: string;
-    };
+type InputFileSource = InputImageSource & { filename?: string };
 
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {

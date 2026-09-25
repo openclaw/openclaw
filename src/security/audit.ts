@@ -47,7 +47,7 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
-import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
+import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 import {
   readBoundedMcporterRegistry,
   type McporterRegistryReadOutcome,
@@ -470,18 +470,6 @@ async function collectFilesystemFindings(params: {
   return findings;
 }
 
-function collectGatewayConfigFindings(
-  cfg: OpenClawConfig,
-  sourceConfig: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  options: { gatewayAuthOverride?: SecurityAuditGatewayAuthOverride } = {},
-): SecurityAuditFinding[] {
-  return collectGatewayConfigFindingsBase(cfg, sourceConfig, env, {
-    collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
-    gatewayAuthOverride: options.gatewayAuthOverride,
-  });
-}
-
 async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
@@ -865,17 +853,11 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         local: agentExec,
       }) ?? {};
     const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
-    if (interpreters.length === 0) {
-      for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
-        riskySemanticSafeBinHits.push(
-          `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
-        );
-      }
-      continue;
+    if (interpreters.length > 0) {
+      interpreterHits.push(
+        `- agents.entries.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+      );
     }
-    interpreterHits.push(
-      `- agents.entries.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
-    );
     for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
       riskySemanticSafeBinHits.push(
         `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
@@ -1335,6 +1317,7 @@ export async function runSecurityAuditCore(
 
   findings.push(
     ...collectGatewayConfigFindings(cfg, context.sourceConfig, env, {
+      collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );

@@ -142,7 +142,6 @@ extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.actions.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
-extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
@@ -218,7 +217,6 @@ extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/fetch.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
-extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
@@ -398,7 +396,6 @@ src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
 src/auto-reply/reply/inbound-meta.test.ts
-src/auto-reply/reply/inbound-meta.ts
 src/auto-reply/reply/model-selection.test.ts
 src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
@@ -754,7 +751,6 @@ ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
 ui/src/pages/agents/memory/view.ts
 ui/src/pages/chat/chat-command-executor.test.ts
-ui/src/pages/chat/chat-command-executor.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts

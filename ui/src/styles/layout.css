@@ -1560,7 +1560,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-sessions__head {
   --sidebar-session-group-action-size: 22px;
-  --sidebar-session-group-count-slot: 24px;
 
   position: relative;
   display: flex;
@@ -1591,7 +1590,8 @@ openclaw-settings-save-indicator:empty {
   cursor: grabbing;
 }
 
-.sidebar-session-group-toggle {
+.sidebar-session-group-toggle,
+.sidebar-session-group-status {
   display: flex;
   align-items: center;
   gap: var(--sidebar-row-gap);
@@ -1676,6 +1676,18 @@ openclaw-settings-save-indicator:empty {
   width: 12px;
   height: 12px;
   flex: 0 0 12px;
+}
+
+/* Keep counts on the trailing edge, after any running and attention indicators. */
+.sidebar-session-group-status {
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-status > .sidebar-session-group-count {
+  order: 1;
+  min-width: 24px;
+  text-align: right;
 }
 
 .sidebar-session-group-count {
@@ -1849,54 +1861,6 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Reserve the new-session button's width so provider counts line up. */
-.sidebar-session-catalog-new-spacer {
-  width: var(--sidebar-session-group-action-size);
-  height: var(--sidebar-session-group-action-size);
-  flex: 0 0 var(--sidebar-session-group-action-size);
-}
-
-.sidebar-session-catalog-action-reserve {
-  display: none;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  /* Keep hover actions immediately left of the fixed count. */
-  .sidebar-session-catalog-grouping,
-  .sidebar-session-catalog-new {
-    position: absolute;
-    top: 50%;
-    right: calc(10px + var(--sidebar-session-group-count-slot));
-    transform: translateY(-50%);
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create
-    > .sidebar-recent-sessions__head
-    > .sidebar-session-catalog-grouping {
-    right: calc(
-      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        8px
-    );
-  }
-
-  .sidebar-session-catalog-action-reserve {
-    display: block;
-    flex: 0 0
-      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
-    flex-basis: calc(
-      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        var(--sidebar-session-group-action-size) + 8px
-    );
-  }
-
-  .sidebar-session-catalog-new-spacer {
-    display: none;
-  }
 }
 
 @media (hover: none), (pointer: coarse) {

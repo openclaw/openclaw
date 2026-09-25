@@ -30,6 +30,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "taskflow-restoration",
   "workshop-doctor-recovery",
   "update-report-recovery",
+  "dreaming-cron-doctor",
 ]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
@@ -50,6 +51,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "update-report-recovery" &&
+    scenario !== "dreaming-cron-doctor" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -161,6 +163,9 @@ function comparePublishedReleaseVersion(a, b) {
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   const version = parsePublishedReleaseVersion(baselineSpec);
+  if (scenario === "dreaming-cron-doctor") {
+    return baselineSpec === "openclaw@2026.9.6";
+  }
   if (
     scenario === "projects-doctor" ||
     scenario === "projects-startup-migration" ||

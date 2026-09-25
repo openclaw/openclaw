@@ -134,13 +134,17 @@ export function createRuntimeSecretsActivator(params: {
     config: OpenClawConfig | null,
     isCurrent: () => boolean,
     publish: () => void,
+    checkpoint?: () => Promise<void>,
   ): Promise<boolean> => {
+    await checkpoint?.();
     if (!isCurrent()) {
       return false;
     }
     let published = false;
     try {
       await params.beforeSnapshotPublication?.(config);
+      // Reconcile a delayed filesystem echo before the final synchronous publication checks.
+      await checkpoint?.();
       if (!isCurrent()) {
         return false;
       }
@@ -256,6 +260,7 @@ export function createRuntimeSecretsActivator(params: {
       activateRuntimeSecretsSnapshot?: (snapshot: PreparedRuntimeSecretsSnapshot) => void;
       onActivated?: () => void;
       canActivate?: () => boolean;
+      checkpoint?: () => Promise<void>;
       alreadyActivated?: boolean;
       stateScope?: SecretsStateScope;
       stateDegradedOwners?: PreparedRuntimeSecretsSnapshot["degradedOwners"];
@@ -278,6 +283,7 @@ export function createRuntimeSecretsActivator(params: {
             activateRuntimeSecretsSnapshot(prepared);
             options?.onActivated?.();
           },
+          options?.checkpoint,
         ))
       ) {
         throw supersededActivation;
@@ -520,6 +526,7 @@ export function createRuntimeSecretsActivator(params: {
         let callbackOpen = true;
         try {
           activated = await finishPreparedSnapshot(snapshot, activationParams, {
+            checkpoint,
             canActivate: () =>
               getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision &&
               (canActivate?.() ?? true),

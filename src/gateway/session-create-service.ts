@@ -115,6 +115,7 @@ import {
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -203,10 +204,7 @@ export async function createGatewaySession(
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
   if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
-    };
+    return invalidSessionRequest("invalid catalog session target");
   }
   const lifecycleIntentError = resolveSessionCreateLifecycleIntentError(params, parentSessionKey);
   if (lifecycleIntentError) {
@@ -229,20 +227,11 @@ export async function createGatewaySession(
     explicitTargetParts?.agentId === agentId &&
     explicitTargetParts.rest.startsWith("dashboard:");
   if (explicitIncognito && params.incognito !== true) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "incognito-shaped session keys require incognito: true",
-      ),
-    };
+    return invalidSessionRequest("incognito-shaped session keys require incognito: true");
   }
   if (params.incognito === true && explicitTargetKey) {
     if (!explicitDashboardIncognito) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
-      };
+      return invalidSessionRequest("incognito sessions are web-only");
     }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const durableEntry = loadExactSessionEntryFromStoreReadOnly({
@@ -252,13 +241,7 @@ export async function createGatewaySession(
       projection: "list",
     });
     if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "incognito is immutable and requires a new session key",
-        ),
-      };
+      return invalidSessionRequest("incognito is immutable and requires a new session key");
     }
   }
   if (
@@ -266,13 +249,7 @@ export async function createGatewaySession(
     explicitTargetKey &&
     !explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
   ) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "catalog sessions require a generated dashboard key",
-      ),
-    };
+    return invalidSessionRequest("catalog sessions require a generated dashboard key");
   }
 
   const authorizedHarnessCreation = Boolean(
@@ -288,13 +265,7 @@ export async function createGatewaySession(
     params.authorizedPluginId === params.initialEntry.pluginOwnerId,
   );
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "trusted plugin session owner is not authorized",
-      ),
-    };
+    return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
   const existingHarnessEntry =
     explicitTargetKey && isAgentHarnessSessionKey(explicitTargetKey)
@@ -306,10 +277,7 @@ export async function createGatewaySession(
     !authorizedHarnessCreation &&
     (!existingHarnessEntry || existingHarnessEntry.modelSelectionLocked === true)
   ) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE),
-    };
+    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
 
   const childIntentError = resolveSessionCreateChildIntentError(params, parentSessionKey);
@@ -356,13 +324,7 @@ export async function createGatewaySession(
         agentId,
       }).canonicalKey !== canonicalParentSessionKey)
   ) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "active fork parent must match the same-agent requester",
-      ),
-    };
+    return invalidSessionRequest("active fork parent must match the same-agent requester");
   }
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
@@ -384,13 +346,7 @@ export async function createGatewaySession(
     resolveGatewaySessionStoreTarget({ cfg: params.cfg, key: explicitTargetKey, agentId })
       .canonicalKey === canonicalParentSessionKey
   ) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "sessions.create key must differ from parentSessionKey",
-      ),
-    };
+    return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
@@ -495,13 +451,7 @@ export async function createGatewaySession(
     const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
     if (canonicalParentSessionKey === parentMainKey) {
       if (params.visibility) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "sessions.create visibility requires a new session",
-          ),
-        };
+        return invalidSessionRequest("sessions.create visibility requires a new session");
       }
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
       const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
@@ -542,10 +492,7 @@ export async function createGatewaySession(
         return resetResult;
       }
       if ("incognitoDeleted" in resetResult) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions cannot reset in place"),
-        };
+        return invalidSessionRequest("incognito sessions cannot reset in place");
       }
       return {
         ok: true,
@@ -597,13 +544,9 @@ export async function createGatewaySession(
         currentParentEntry.sessionId !== parentSessionEntry?.sessionId ||
         currentParentEntry.lifecycleRevision !== parentSessionEntry?.lifecycleRevision
       ) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Parent session ${parentSessionKey} changed before child creation; retry.`,
-          ),
-        };
+        return invalidSessionRequest(
+          `Parent session ${parentSessionKey} changed before child creation; retry.`,
+        );
       }
       currentParentSessionEntry = currentParentEntry;
       const parentOwnershipError = resolvePluginSessionOwnershipError({
@@ -619,10 +562,7 @@ export async function createGatewaySession(
         (params.emitCommandHooks === true || params.fork === true) &&
         isModelSelectionLocked(currentParentEntry)
       ) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
-        };
+        return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
       }
       const parentHasActiveWork =
         (params.emitCommandHooks === true || params.fork === true) &&
@@ -809,13 +749,7 @@ export async function createGatewaySession(
           !authorizedHarnessCreation &&
           (!existingEntry || existingEntry.modelSelectionLocked === true)
         ) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-            ),
-          };
+          return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
         }
         if (!params.initialEntry && existingEntry?.initializationPending === true) {
           return {
@@ -827,67 +761,32 @@ export async function createGatewaySession(
           };
         }
         if (params.initialEntry && existingEntry !== undefined) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "trusted initial session state requires a new session",
-            ),
-          };
+          return invalidSessionRequest("trusted initial session state requires a new session");
         }
         if (params.catalogTarget && existingEntry !== undefined) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "catalog session target requires a new session",
-            ),
-          };
+          return invalidSessionRequest("catalog session target requires a new session");
         }
         if ((pendingProjectGitUrl || pendingWorktree) && existingEntry !== undefined) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "workspace preparation requires a new session",
-            ),
-          };
+          return invalidSessionRequest("workspace preparation requires a new session");
         }
         if (spawnToolPolicy && existingEntry !== undefined) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "spawn tool policy requires a new session",
-            ),
-          };
+          return invalidSessionRequest("spawn tool policy requires a new session");
         }
         if (
           params.visibility &&
           existingEntry === undefined &&
           !isSessionVisibilityAllowed(params.cfg, params.visibility)
         ) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `session visibility is disabled: ${params.visibility}`,
-              { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility } },
-            ),
-          };
+          return invalidSessionRequest(`session visibility is disabled: ${params.visibility}`, {
+            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility },
+          });
         }
         if (
           params.visibility &&
           existingEntry !== undefined &&
           resolveSessionVisibility(existingEntry) !== params.visibility
         ) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "sessions.create visibility requires a new session",
-            ),
-          };
+          return invalidSessionRequest("sessions.create visibility requires a new session");
         }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.
@@ -981,13 +880,7 @@ export async function createGatewaySession(
           stableStringify(existingEntry.toolOverrides) !==
             stableStringify(patched.entry.toolOverrides)
         ) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "sessions.create toolOverrides requires a new session",
-            ),
-          };
+          return invalidSessionRequest("sessions.create toolOverrides requires a new session");
         }
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
@@ -1000,27 +893,17 @@ export async function createGatewaySession(
           ? normalizeSessionColorValue(params.initialEntry.color)
           : null;
         if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              params.initialEntry?.agentHarnessId !== undefined
-                ? "initial agentHarnessId must be non-empty"
-                : "trusted initial session state requires an authorized owner",
-            ),
-          };
+          return invalidSessionRequest(
+            params.initialEntry?.agentHarnessId !== undefined
+              ? "initial agentHarnessId must be non-empty"
+              : "trusted initial session state requires an authorized owner",
+          );
         }
         if (
           params.initialEntry?.modelSelectionLocked !== undefined &&
           !params.initialEntry.modelSelectionLocked
         ) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "initial modelSelectionLocked must be true when provided",
-            ),
-          };
+          return invalidSessionRequest("initial modelSelectionLocked must be true when provided");
         }
         const catalogResolvedModel = params.catalogTarget
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
@@ -1260,13 +1143,9 @@ export async function createGatewaySession(
           ? await preparedLifecycle.withCommit(forkWithCreation)
           : await forkWithCreation();
         if (forkResult.status === "too-large") {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
-            ),
-          };
+          return invalidSessionRequest(
+            `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
+          );
         }
         if (forkResult.status !== "created") {
           return {

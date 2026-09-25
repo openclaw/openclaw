@@ -162,8 +162,6 @@ function identityDeliveryContext(value: unknown) {
 
 function createDefaultSessionHelperMocks() {
   return {
-    resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
-    resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
     resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
   };
 }

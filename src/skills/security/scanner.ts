@@ -1,4 +1,3 @@
-// Skill security scanner inspects skill files and manifests for unsafe patterns.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,11 +8,8 @@ import { hasErrnoCode } from "../../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 type SkillScanSeverity = "info" | "warn" | "critical";
 
@@ -45,10 +41,6 @@ export type SkillScanOptions = {
   maxFiles?: number;
   maxFileBytes?: number;
 };
-
-// ---------------------------------------------------------------------------
-// Scannable extensions
-// ---------------------------------------------------------------------------
 
 const SCANNABLE_EXTENSIONS = new Set([
   ".js",
@@ -126,10 +118,6 @@ function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): v
   FILE_SCAN_CACHE.set(filePath, entry);
 }
 
-// ---------------------------------------------------------------------------
-// Rule definitions
-// ---------------------------------------------------------------------------
-
 type LineRule = {
   ruleId: string;
   severity: SkillScanSeverity;
@@ -156,11 +144,7 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dangerous-exec",
     severity: "critical",
     message: "Shell command execution detected (child_process)",
-    // Two call shapes both expose the bare command name in a capture group
-    // (group 1 for direct, group 2 for computed) so the downstream benign-member
-    // filter can normalize via `match[1] ?? match[2]`:
-    //   - direct:    exec(  |  cp.exec(  |  cp.spawn(
-    //   - computed:  cp["spawn"](  |  proc["exec"](
+    // Capture the method in group 1 for direct calls and group 2 for computed calls.
     pattern:
       /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(|["'](exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\s*\]\s*\(/,
     requiresContext: /child_process/,
@@ -247,11 +231,6 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Core scanner
-// ---------------------------------------------------------------------------
-
-// Methods exported by node:child_process that the dangerous-exec rule watches.
 const CHILD_PROCESS_EXEC_METHODS = new Set([
   "exec",
   "execSync",
@@ -261,27 +240,14 @@ const CHILD_PROCESS_EXEC_METHODS = new Set([
   "execFileSync",
 ]);
 
-/**
- * Provenance-aware child_process binding collection.
- *
- * The scanner is intentionally regex-based (no AST). This helper derives call
- * bindings ONLY from actual `child_process` imports/requires so that an
- * unrelated alias bound from another module (e.g. `import { spawn as launch }
- * from "./other"`) does not become a false positive — this is the issue's
- * "avoid source-wide token correlation false positives" constraint.
- *
- * Returns two views of the same provenance:
- * - `methodAliases`: renamed method bindings (`spawn -> launch`, `exec -> run`)
- * - `namespaceAliases`: whole-namespace bindings (`cp`, `proc`, …) used for
- *   both dot calls (`cp.exec()`) and computed calls (`proc["exec"]()`).
- */
 type ChildProcessBindings = {
-  methodAliases: Map<string, string>;
+  methodAliases: Set<string>;
   namespaceAliases: Set<string>;
 };
 
+// Only imports/requires establish provenance; unrelated aliases must not match.
 function collectChildProcessBindings(source: string): ChildProcessBindings {
-  const methodAliases = new Map<string, string>();
+  const methodAliases = new Set<string>();
   const namespaceAliases = new Set<string>();
 
   // ESM named imports: import { spawn as launch, execFile } from "child_process"
@@ -309,7 +275,7 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
         const original = asMatch[1];
         const alias = asMatch[2];
         if (CHILD_PROCESS_EXEC_METHODS.has(original)) {
-          methodAliases.set(alias, original);
+          methodAliases.add(alias);
         }
       }
       // Bare imported method name (`execFile`) is already matched by the
@@ -337,38 +303,19 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   return { methodAliases, namespaceAliases };
 }
 
-/**
- * Detects every call to a renamed child_process method alias on a single line
- * (e.g. `launch("node", [...])` for `spawn as launch`, `run("...")` for
- * `exec: run`). Only matches stand-alone calls (not member calls like
- * `obj.launch(`) so an unrelated `.launch()` on another object is not flagged.
- * The alias name is already provenance-scoped to child_process by the caller.
- * Returns one entry per proven alias call occurrence, ordered by position, so
- * a line with several calls (e.g. `run("a"); run("b")`) reports each of them
- * instead of only the first (ClawSweeper P1: report every aliased execution
- * call on a line).
- */
-function matchAliasedChildProcessCalls(
-  line: string,
-  methodAliases: Map<string, string>,
-): Array<{ alias: string; index: number }> {
-  const calls: Array<{ alias: string; index: number }> = [];
-  for (const alias of methodAliases.keys()) {
+// Report every standalone alias call in source order, excluding object members.
+function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>): number[] {
+  const calls: number[] = [];
+  for (const alias of methodAliases) {
     const pattern = new RegExp(`(?<![\\w.])${escapeRegExp(alias)}\\s*\\(`, "g");
     for (const callMatch of line.matchAll(pattern)) {
-      calls.push({ alias, index: callMatch.index ?? -1 });
+      calls.push(callMatch.index);
     }
   }
-  return calls.toSorted((a, b) => a.index - b.index);
+  return calls.toSorted((a, b) => a - b);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// The receiver names that, by long-standing convention, denote a direct
-// child_process namespace. Namespace aliases collected at scan time extend
-// this set so computed/exec calls through any proven binding are recognized.
+// Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
 function isBenignMemberExecMatch(
@@ -382,45 +329,24 @@ function isBenignMemberExecMatch(
     return false;
   }
 
-  const matchIndex = match.index ?? -1;
-  if (matchIndex < 0) {
-    return false;
-  }
-
+  const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
-  // Computed-member call: `obj["spawn"](` / `obj["exec"](` — the match starts
-  // at the opening quote, so `line.slice(0, matchIndex)` ends at the `[`.
-  // Provenance is required for EVERY watched execution method, not only
-  // `exec`: an unrelated `worker["spawn"]()` or `bus["execSync"]()` must stay
-  // benign when the receiver is not a proven child_process namespace alias,
-  // even if `child_process` appears elsewhere in the file. Only once the
-  // receiver is a proven alias does the computed call get attributed to
-  // child_process. (This also preserves the `RegExp.exec` exclusion: a regex's
-  // `re["exec"](value)` receiver is not child_process-derived.)
+  // Computed calls require a known receiver for every watched method.
   if (charAtMatch === '"' || charAtMatch === "'") {
     const receiverMatch = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/);
     const receiver = receiverMatch?.[1];
-    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
-      return false;
-    }
-    return true;
+    return (
+      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+    );
   }
 
-  // Direct dot-member call: `obj.exec(` — the match starts at `exec`. This
-  // branch only applies the long-standing `RegExp.exec` exclusion (a regex's
-  // `.exec()` is not child_process-derived) and the provenance-aware receiver
-  // check: a dot call through a collected namespace alias (e.g.
-  // `proc.exec(` for `const proc = require("child_process")` or
-  // `import * as proc from "node:child_process"`) is child_process-derived and
-  // must be reported. Other dot-member execution calls fall through and are
-  // reported as before.
+  // Only .exec requires a known receiver; this excludes RegExp.exec.
   if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
     const receiverMatch = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/);
     const receiver = receiverMatch?.[1];
-    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
-      return false;
-    }
-    return true;
+    return (
+      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+    );
   }
 
   return false;
@@ -539,15 +465,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
 
-  // Provenance-aware child_process bindings, collected once per source from
-  // the comment-stripped text. Used to attribute aliased execution calls and
-  // computed namespace calls back to their child_process origin. Cheap when
-  // the source has no child_process reference at all (all regexes no-op).
   const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
-  // --- Line rules ---
   for (const rule of LINE_RULES) {
-    // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
@@ -555,6 +475,23 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
+    const addFinding = (line: string, lineNumber: number): boolean => {
+      if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+        omittedMatches += 1;
+        lastOmittedLine = lineNumber;
+        return false;
+      }
+      findings.push({
+        ruleId: rule.ruleId,
+        severity: rule.severity,
+        file: filePath,
+        line: lineNumber,
+        message: rule.message,
+        evidence: formatScanEvidence(line),
+      });
+      acceptedMatches += 1;
+      return true;
+    };
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
@@ -571,7 +508,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           continue;
         }
 
-        // Special handling for suspicious-network: check port
         if (rule.ruleId === "suspicious-network") {
           const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
           if (STANDARD_PORTS.has(port)) {
@@ -579,53 +515,18 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
-        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
-          omittedMatches += 1;
-          lastOmittedLine = i + 1;
-          continue;
-        }
-
-        // Retain distinct calls up to the cap, then aggregate every remaining match.
-        // This keeps hostile output bounded without hiding that later sites exist.
-        findings.push({
-          ruleId: rule.ruleId,
-          severity: rule.severity,
-          file: filePath,
-          line: i + 1,
-          message: rule.message,
-          evidence: formatScanEvidence(line),
-        });
-        acceptedMatches += 1;
-        if (rule.ruleId === "dangerous-exec") {
-          literalDangerousExecIndexes.add(match.index ?? -1);
+        if (addFinding(line, i + 1) && rule.ruleId === "dangerous-exec") {
+          literalDangerousExecIndexes.add(match.index);
         }
       }
 
-      // Attribute aliased child_process calls (`launch(...)`, `run(...)`) that
-      // the literal pattern cannot match. Only fires when the alias name was
-      // bound from an actual child_process import/require (provenance-scoped),
-      // so unrelated functions such as a locally-defined `launch()` do not.
-      // Every proven alias call on the line is reported (per-occurrence
-      // semantics), skipping any position the literal pattern already reported.
+      // Aliases follow literal matches; don't emit a call twice if both patterns match.
       if (rule.ruleId === "dangerous-exec" && methodAliases.size > 0) {
-        for (const aliasMatch of matchAliasedChildProcessCalls(line, methodAliases)) {
-          if (literalDangerousExecIndexes.has(aliasMatch.index)) {
+        for (const index of matchAliasedChildProcessCalls(line, methodAliases)) {
+          if (literalDangerousExecIndexes.has(index)) {
             continue;
           }
-          if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
-            omittedMatches += 1;
-            lastOmittedLine = i + 1;
-            continue;
-          }
-          findings.push({
-            ruleId: rule.ruleId,
-            severity: rule.severity,
-            file: filePath,
-            line: i + 1,
-            message: rule.message,
-            evidence: formatScanEvidence(line),
-          });
-          acceptedMatches += 1;
+          addFinding(line, i + 1);
         }
       }
     }
@@ -641,16 +542,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     }
   }
 
-  // --- Source rules ---
-  const matchedSourceRules = new Set<string>();
   for (const rule of SOURCE_RULES) {
-    // Allow multiple findings for different messages with the same ruleId
-    // but deduplicate exact (ruleId+message) combos
-    const ruleKey = `${rule.ruleId}::${rule.message}`;
-    if (matchedSourceRules.has(ruleKey)) {
-      continue;
-    }
-
     const match = findSourceRuleMatch({
       rule,
       source: heuristicSource,
@@ -668,7 +560,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       message: rule.message,
       evidence: formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
-    matchedSourceRules.add(ruleKey);
   }
 
   return findings;
@@ -677,12 +568,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 export function scanSkillContent(content: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = content.split("\n");
-  const matchedRules = new Set<string>();
 
   for (const rule of SKILL_CONTENT_RULES) {
-    if (matchedRules.has(rule.ruleId)) {
-      continue;
-    }
     const match = findSourceRuleMatch({
       rule,
       source: content,
@@ -703,15 +590,10 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
           ? "[REDACTED CREDENTIAL]"
           : formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
-    matchedRules.add(rule.ruleId);
   }
 
   return findings;
 }
-
-// ---------------------------------------------------------------------------
-// Directory scanner
-// ---------------------------------------------------------------------------
 
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
@@ -726,14 +608,21 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   };
 }
 
+async function statIfPresent(filePath: string): Promise<Stats | null> {
+  try {
+    return await fs.stat(filePath);
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function resolveForcedFiles(params: {
   rootDir: string;
   includeFiles: string[];
 }): Promise<string[]> {
-  if (params.includeFiles.length === 0) {
-    return [];
-  }
-
   const seen = new Set<string>();
   const out: string[] = [];
 
@@ -749,15 +638,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    let st: Awaited<ReturnType<typeof fs.stat>> | null;
-    try {
-      st = await fs.stat(includePath);
-    } catch (err) {
-      if (hasErrnoCode(err, "ENOENT")) {
-        continue;
-      }
-      throw err;
-    }
+    const st = await statIfPresent(includePath);
     if (!st?.isFile()) {
       continue;
     }
@@ -835,15 +716,7 @@ async function scanFileWithCache(params: {
   maxFileBytes: number;
 }): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
   const { filePath, maxFileBytes } = params;
-  let st: Awaited<ReturnType<typeof fs.stat>> | null;
-  try {
-    st = await fs.stat(filePath);
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      return { scanned: false, findings: [] };
-    }
-    throw err;
-  }
+  const st = await statIfPresent(filePath);
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }

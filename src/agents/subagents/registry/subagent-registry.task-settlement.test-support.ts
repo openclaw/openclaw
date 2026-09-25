@@ -1,12 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { getTaskFlowByIdForOwner } from "../../../tasks/task-flow-owner-access.js";
 import { readTaskRegistryRevision } from "../../../tasks/task-registry-state.js";
 import {
   configureTaskRegistryRuntime,
   getTaskRegistryStore,
+  onTaskRegistryChange,
 } from "../../../tasks/task-registry.store.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -16,7 +24,9 @@ import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import {
   createSessionEntry,
   createSubagentRunRecord,
+  expectRecordFields,
   mockGatewayMethods,
+  mockCallArg as getMockCallArg,
   waitForFast,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
@@ -27,6 +37,93 @@ import {
   makeKilledRun,
   makeRunningTaskParams,
 } from "./subagent-registry.run-fixtures.test-support.js";
+
+export function registerCompletedTaskSettlementTest({
+  getRegistry,
+  mocks,
+}: {
+  getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<
+    ReturnType<typeof createSubagentRegistryMockState>,
+    | "entries"
+    | "runSubagentAnnounceFlow"
+    | "emitSessionLifecycleEvent"
+    | "persistSubagentRunsToDisk"
+    | "persistSubagentRunsToDiskOrThrow"
+  >;
+}): void {
+  it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
+    const mod = getRegistry();
+    mocks.entries["agent:main:subagent:child"] = createSessionEntry({
+      lifecycleRevision: "revision-child",
+      lastRunError: "previous failure",
+      abortedLastRun: true,
+    });
+    const announceEntered = createDeferred();
+    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
+      announceEntered.resolve();
+      return "delivered";
+    });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.registerSubagentRun({
+        runId: "run-1",
+        requesterOrigin: { channel: " quietchat ", accountId: " acct-1 " },
+        task: "finish the task",
+        cleanup: "delete",
+      });
+      await announceEntered.promise;
+    } finally {
+      await settleRootWork();
+    }
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+
+    expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
+      sessionKey: "agent:main:subagent:child",
+      reason: "subagent-status",
+      parentSessionKey: "agent:main:main",
+      label: undefined,
+    });
+
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "completion announce"),
+      {
+        childSessionKey: "agent:main:subagent:child",
+        childRunId: "run-1",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
+        task: "finish the task",
+        cleanup: "delete",
+        roundOneReply: "final completion reply",
+        outcome: {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          elapsedMs: 111,
+        },
+      },
+      "completion announce params",
+    );
+
+    expectRecordFields(
+      mocks.entries["agent:main:subagent:child"],
+      {
+        sessionId: "sess-child",
+        startedAt: Date.parse("2026-03-24T12:00:00Z"),
+        endedAt: 222,
+        runtimeMs: 111,
+        status: "done",
+      },
+      "persisted child session entry",
+    );
+    expect(mocks.entries["agent:main:subagent:child"]).not.toHaveProperty("lastRunError");
+    expect(mocks.entries["agent:main:subagent:child"]).not.toHaveProperty("abortedLastRun");
+
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalled();
+  });
+}
 
 type RestoredTaskSettlementTestOptions = {
   getRegistry: () => SubagentRegistryHarness;
@@ -254,6 +351,66 @@ export function registerRestoredRunningTaskSettlementTest({
         resetTaskFlowRegistryForTests({ persist: false });
       }
     },
+  );
+}
+
+export function registerReplacedGenerationTaskSettlementTest({
+  getRegistry,
+  mocks,
+}: Omit<RestoredTaskSettlementTestOptions, "hydrateAndActivateRegistry">): void {
+  it.each([
+    { name: "unchanged", replaced: false },
+    { name: "replaced by a plugin reload", replaced: true },
+  ])(
+    "settles a child task when the spawning generation is $name",
+    async ({ replaced }) => {
+      const mod = getRegistry();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const runId = `run-spawn-generation-${String(replaced)}`;
+      const spawning = createEmptyPluginRegistry();
+      setActivePluginRegistry(spawning);
+      const gateway = createPluginRegistryOwner(spawning);
+      const childEnded = createDeferred<{ status: "ok"; startedAt: number; endedAt: number }>();
+      mockGatewayMethods(mocks.callGateway, { "agent.wait": () => childEnded.promise });
+      const settled = createDeferred();
+      // The task registry publishes the terminal write; await it instead of polling.
+      const stopObserving = onTaskRegistryChange(() => {
+        if (findTaskByRunIdForStatus(runId)?.status === "succeeded") {
+          settled.resolve();
+        }
+      });
+      const settleRootWork = observeRootWork();
+      try {
+        // The spawning turn runs inside its admitted plugin generation.
+        await withPluginRuntimeRegistryScope(spawning, () =>
+          mod.registerSubagentRun({
+            runId,
+            task: "outlive a plugin reload",
+            expectsCompletionMessage: false,
+          }),
+        );
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "running" });
+        if (replaced) {
+          // A plugin enable/disable publishes the Gateway's successor while the child still runs.
+          const successor = createEmptyPluginRegistry();
+          setActivePluginRegistry(successor);
+          gateway.publish(successor);
+        }
+        childEnded.resolve({ status: "ok", startedAt: Date.now() - 1_000, endedAt: Date.now() });
+
+        await settled.promise;
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded" });
+      } finally {
+        stopObserving();
+        await settleRootWork();
+        resetPluginRuntimeStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+      // An unsettled child never publishes; fail promptly instead of waiting on retries.
+    },
+    10_000,
   );
 }
 

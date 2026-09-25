@@ -1,8 +1,28 @@
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { collectBundledPluginPublicSurfaceArtifacts } from "../plugins/bundled-plugin-scan.js";
+import { isPluginControlUiAssetPath } from "../plugins/control-ui-assets.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { listBuiltRuntimeEntryCandidates } from "../plugins/package-entrypoints.js";
+import { DEFAULT_PLUGIN_ENTRY_CANDIDATES } from "../plugins/package-manifest.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheRealpathSync,
+  readPluginCacheFile,
+} from "../plugins/plugin-cache-files.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import {
+  isPluginActivityToolName,
+  PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
+  PORTABLE_PLUGIN_ICON_PATH,
+} from "../plugins/portable-icon-paths.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../plugins/public-surface-runtime.js";
 import { root as openRoot } from "./fs-safe.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   assertUpdateCandidatePluginLinkTarget,
@@ -12,6 +32,7 @@ import {
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
 import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree.js";
+import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
 
 // Relocation rewrites these members in place; a hard link would edit the live package.
@@ -29,7 +50,7 @@ const isLinkUnsupported = (error: unknown) =>
  *
  * Retention only needs the inventoried inodes to outlive the installer's rename or
  * unlink, so files share their inode with the source and bytes are copied only when
- * the filesystem cannot preserve identity or the member needs relocation.
+ * the filesystem cannot preserve identity, a plugin boundary checks it, or relocation rewrites it.
  * One walk performs the inventory check, publication, relocation, and escape check
  * for every entry.
  */
@@ -60,6 +81,115 @@ export async function linkUpdateCandidatePluginTrees(
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
+  const pluginFiles = new Set<string>();
+  const entryKinds = new Map(plan.entries.map((entry) => [entry.path, entry.kind]));
+  const activityScopes: Array<readonly [string, string]> = [];
+  const browserScopes: Array<readonly [string, string]> = [];
+  await withPluginCache(createPluginCache({ kind: "operation" }), async () => {
+    for (const entry of plan.entries) {
+      if (path.basename(entry.path) !== "openclaw.plugin.json") {
+        continue;
+      }
+      await assertEntry(entry);
+      const rootDir = path.dirname(entry.path);
+      const add = (relative: string) => {
+        const file = path.resolve(rootDir, relative);
+        const real = isPathInside(rootDir, file) ? pluginCacheRealpathSync(file) : null;
+        if (real && isPathInside(rootDir, real) && entryKinds.get(real) === "file") {
+          pluginFiles.add(real);
+        }
+      };
+      // Older projections may already have linked these admitted metadata files.
+      // Reading their paths is not plugin admission; loading keeps its strict guard.
+      const loaded = loadPluginManifest(rootDir, false);
+      const manifest = loaded.ok ? loaded.manifest : undefined;
+      const packageFile = readPluginCacheFile({
+        rootDir,
+        relativePath: "package.json",
+        rejectHardlinks: false,
+        maxBytes: 256 * 1024,
+      });
+      const parsed = packageFile.ok ? parsePluginCacheJson(packageFile) : undefined;
+      const metadata =
+        parsed?.ok && isRecord(parsed.value) && isRecord(parsed.value.openclaw)
+          ? parsed.value.openclaw
+          : {};
+      const sources = normalizeTrimmedStringList([
+        ...(Array.isArray(metadata.extensions)
+          ? metadata.extensions
+          : DEFAULT_PLUGIN_ENTRY_CANDIDATES),
+        ...(Array.isArray(metadata.runtimeExtensions) ? metadata.runtimeExtensions : []),
+        metadata.setupEntry,
+        metadata.runtimeSetupEntry,
+        manifest?.providerCatalogEntry,
+        manifest?.capabilityCatalogEntry,
+      ]);
+      for (const directory of new Set([
+        rootDir,
+        path.join(rootDir, "dist"),
+        ...sources.map((source) => path.dirname(path.resolve(rootDir, source))),
+      ])) {
+        if (isPathInside(rootDir, directory) && entryKinds.get(directory) === "directory") {
+          for (const artifact of collectBundledPluginPublicSurfaceArtifacts({
+            pluginDir: directory,
+            sourceEntry: "",
+          }) ?? []) {
+            sources.push(
+              ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) =>
+                path.relative(rootDir, path.join(directory, artifact.replace(/\.js$/u, extension))),
+              ),
+            );
+          }
+        }
+      }
+      [
+        "openclaw.plugin.json",
+        "package.json",
+        PORTABLE_PLUGIN_ICON_PATH,
+        PLUGIN_ACTIVITY_ICON_PATH,
+      ].forEach(add);
+      for (const source of sources) {
+        add(source);
+        listBuiltRuntimeEntryCandidates(source).forEach(add);
+      }
+      for (const theme of manifest?.themes ?? []) {
+        [
+          theme.source,
+          ...Object.values(theme.hats ?? {}),
+          ...Object.values(theme.critters ?? {}).map((critter) => critter.source),
+        ].forEach(add);
+      }
+      const activity = path.join(rootDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);
+      const browser =
+        manifest?.controlUi && path.resolve(rootDir, path.dirname(manifest.controlUi.entry));
+      activityScopes.push([activity, activity]);
+      if (browser && isPathInside(rootDir, browser)) {
+        browserScopes.push([browser, browser]);
+      }
+    }
+  });
+  // Nested contracts validate paths relative to their own root, not an ancestor.
+  const deepestFirst = ([left]: readonly [string, string], [right]: readonly [string, string]) =>
+    right.length - left.length;
+  const activityScope = createRuntimePathLookup(activityScopes.toSorted(deepestFirst));
+  const browserScope = createRuntimePathLookup(browserScopes.toSorted(deepestFirst));
+  for (const entry of plan.entries) {
+    if (entry.kind !== "file") {
+      continue;
+    }
+    const activity = activityScope(entry.path);
+    const browser = browserScope(entry.path);
+    if (
+      (activity &&
+        path.dirname(entry.path) === activity &&
+        entry.path.endsWith(".svg") &&
+        isPluginActivityToolName(path.basename(entry.path, ".svg"))) ||
+      (browser &&
+        isPluginControlUiAssetPath(path.relative(browser, entry.path).split(path.sep).join("/")))
+    ) {
+      pluginFiles.add(entry.path);
+    }
+  }
   await targets.assertBindings();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   let destinationRoot: Awaited<ReturnType<typeof openRoot>> | undefined;
@@ -72,6 +202,8 @@ export async function linkUpdateCandidatePluginTrees(
     // its private stage is published.
     await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
+      // The entry loop already prepares each destination parent.
+      mkdir: false,
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
@@ -119,7 +251,11 @@ export async function linkUpdateCandidatePluginTrees(
       );
       continue;
     }
-    if (isRelocatedFile(destination) || (await requiresCopy(entry))) {
+    if (
+      pluginFiles.has(entry.path) ||
+      isRelocatedFile(destination) ||
+      (await requiresCopy(entry))
+    ) {
       await copyEntry(entry, destination);
       counts.copied += 1;
       continue;

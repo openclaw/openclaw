@@ -51,22 +51,13 @@ export type ChatComposerPersistOptions = {
   expectedDraftRevision?: number;
 };
 
-export type ChatComposerPersistenceState = {
-  settings?: { gatewayUrl?: string | null };
-  assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: {
-    snapshot?: unknown;
-  } | null;
+export type ChatComposerPersistenceState = ChatComposerScope & {
   sessionKey: string;
-  selectedChatSessionIncognito?: boolean;
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
   chatAttachments?: ChatAttachment[];
   chatQueue: ChatQueueItem[];
-  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
-  connected?: boolean;
   lastError?: string | null;
   chatError?: string | null;
   requestUpdate?: () => void;

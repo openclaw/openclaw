@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -110,7 +111,7 @@ export async function isCaseSensitiveDirectory(directory: string): Promise<boole
       await fs.access(alternatePath);
       return false;
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         return true;
       }
       throw error;

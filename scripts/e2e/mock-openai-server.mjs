@@ -14,6 +14,7 @@ import {
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
+import { createTelegramBindingScenario } from "./lib/telegram-binding-scenario.mjs";
 
 const port =
   process.env.MOCK_PORT?.trim() === "0"
@@ -46,6 +47,7 @@ const LEGACY_MEDIA_PATTERN =
 const MEDIA_DATA_URL_PATTERN =
   /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
 let scriptState;
+const telegramBindingScenario = createTelegramBindingScenario();
 
 function parseMediaDataUrl(value) {
   if (typeof value !== "string") {
@@ -861,6 +863,16 @@ function agentPluginBundleEvents(body, bodyText) {
     : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
 }
 
+function telegramBindingEvents(body) {
+  const response = telegramBindingScenario(body);
+  if (!response) {
+    return null;
+  }
+  return response.spawn
+    ? toolCallEvents("sessions_spawn", response.spawn)
+    : responseEvents(response.text);
+}
+
 function countAutomaticSelection(events) {
   const tool = events.some((event) => event.item?.type === "function_call");
   requests.selections[tool ? "automaticTool" : "automaticText"] += 1;
@@ -957,7 +969,8 @@ const server = http.createServer((req, res) => {
           agentPluginBundleEvents(body, bodyText) ??
           mcpAppConformanceEvents(body, bodyText) ??
           mcpCodeModeApiFileEvents(body, bodyText) ??
-          progressDraftEvents(body, bodyText);
+          progressDraftEvents(body, bodyText) ??
+          telegramBindingEvents(body);
         if (events) {
           countAutomaticSelection(events);
           writeResponsesEvents(res, body.stream, events);

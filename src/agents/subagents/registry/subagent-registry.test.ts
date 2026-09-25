@@ -77,7 +77,9 @@ import {
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
+  registerCompletedTaskSettlementTest,
   registerProvisionalKillCompletionSettlementTest,
+  registerReplacedGenerationTaskSettlementTest,
   registerRestoredRunningTaskSettlementTest,
   registerRestoredTaskSettlementTest,
 } from "./subagent-registry.task-settlement.test-support.js";
@@ -1069,6 +1071,8 @@ describe("subagent registry seam flow", () => {
     mocks,
     hydrateAndActivateRegistry,
   });
+
+  registerReplacedGenerationTaskSettlementTest({ getRegistry: () => mod, mocks });
 
   it.each([
     { name: "exact retired orphan", retired: true, sameRun: true, aborted: false, waits: false },
@@ -5140,67 +5144,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
-    mocks.entries["agent:main:subagent:child"] = createSessionEntry({
-      lifecycleRevision: "revision-child",
-      lastRunError: "previous failure",
-      abortedLastRun: true,
-    });
-    await mod.registerSubagentRun({
-      runId: "run-1",
-      requesterOrigin: { channel: " quietchat ", accountId: " acct-1 " },
-      task: "finish the task",
-      cleanup: "delete",
-    });
-
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
-
-    expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "subagent-status",
-      parentSessionKey: "agent:main:main",
-      label: undefined,
-    });
-
-    expectRecordFields(
-      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "completion announce"),
-      {
-        childSessionKey: "agent:main:subagent:child",
-        childRunId: "run-1",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
-        task: "finish the task",
-        cleanup: "delete",
-        roundOneReply: "final completion reply",
-        outcome: {
-          status: "ok",
-          startedAt: 111,
-          endedAt: 222,
-          elapsedMs: 111,
-        },
-      },
-      "completion announce params",
-    );
-
-    expectRecordFields(
-      mocks.entries["agent:main:subagent:child"],
-      {
-        sessionId: "sess-child",
-        startedAt: Date.parse("2026-03-24T12:00:00Z"),
-        endedAt: 222,
-        runtimeMs: 111,
-        status: "done",
-      },
-      "persisted child session entry",
-    );
-    expect(mocks.entries["agent:main:subagent:child"]).not.toHaveProperty("lastRunError");
-    expect(mocks.entries["agent:main:subagent:child"]).not.toHaveProperty("abortedLastRun");
-
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
-    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalled();
-  });
+  registerCompletedTaskSettlementTest({ getRegistry: () => mod, mocks });
 
   it("retries completion after a transient durable registry write failure", async () => {
     mocks.persistSubagentRunsToDiskOrThrow

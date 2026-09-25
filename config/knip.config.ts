@@ -124,7 +124,10 @@ const repositoryScriptEntries = [
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
+  // run.sh invokes this CLI and preloads it into updater/Doctor children.
+  "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
@@ -940,6 +943,8 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: bundledPluginWorkspace([
+      // The private QA Gateway package profile builds this entry by path.
+      "gateway-entry.ts!",
       // Core loads the CLI facade by basename; QA Lab also owns a nested Vite app.
       "cli.ts!",
       "web/index.html!",

@@ -83,7 +83,7 @@ export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime 
 
 /** Exact settlement stays with the registered runtime; unsupported owners never fall through. */
 export function transitionTaskAssignment(params: DetachedTaskAssignmentTransition): TaskRecord[] {
-  const owner = captureDetachedTaskRuntimeOwner();
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
   const assertCurrent = () => {
     owner.assertCurrent();
     params.assertCurrent();
@@ -263,7 +263,8 @@ export function findDetachedTaskRun(params: DetachedTaskFindParams): DetachedTas
 export async function findDetachedTaskRunAsync(
   params: DetachedTaskFindParams,
 ): Promise<DetachedTaskFindResult> {
-  const owner = captureDetachedTaskRuntimeOwner();
+  // Reads of existing task rows follow the same owner as their settlement.
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
   try {
     owner.assertCurrent();
     if (owner.runtime?.findTaskRun) {

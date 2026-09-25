@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { resolveObjectURL } from "node:buffer";
 import { describe, expect, it } from "vitest";
-import { builtinEnvironments } from "vitest/runtime";
+
+// Exercise the environment installed by the native preload, including in VM tests.
+const require = process.getBuiltinModule("module").createRequire(import.meta.url);
+const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 
 describe("jsdom native API boundary", () => {
   it.each([0, 1, 2])("keeps window event identity across %i iframe levels", (depth) => {
