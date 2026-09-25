@@ -377,8 +377,8 @@ function isManagedDailyDreamingBoundary(
   blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
 ): boolean {
   const trimmed = line.trim();
-  const heading = /^(#{1,6})\s+/.exec(trimmed);
-  return (heading !== null && heading[1].length <= headingLevel) || blockByStartMarker.has(trimmed);
+  const heading = /^#{1,6}(?=\s)/.exec(trimmed);
+  return (heading !== null && heading[0].length <= headingLevel) || blockByStartMarker.has(trimmed);
 }
 
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
