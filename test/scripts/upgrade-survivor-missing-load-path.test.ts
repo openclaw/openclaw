@@ -220,6 +220,9 @@ if ((mode === "convergence-once" && attempt === 1) || mode === "convergence-repe
   fs.writeFileSync(env.FIXTURE_READY, "ready");
   process.stdout.write("[gateway] ready\\n");
 }
+process.on("SIGTERM", () => {
+  process.stdout.write("Gateway stopped after observation\\n", () => process.exit(0));
+});
 setInterval(() => {}, 1000);
 `,
     { mode: 0o755 },
@@ -315,5 +318,6 @@ printf 'baseline-complete\\n'
   expect(diagnosticLog.includes("Startup readiness observation after failure")).toBe(liveFailure);
   if (liveFailure) {
     expect(diagnosticLog).toContain('{"body":{"ready":true},"status":200}');
+    expect(diagnosticLog).toContain("Gateway stopped after observation");
   }
 });
