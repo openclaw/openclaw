@@ -363,6 +363,7 @@ export async function parseMessageWithAttachments(
 
       const isImage = finalMime.startsWith("image/");
       const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
+      opts?.signal?.throwIfAborted();
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -412,7 +413,6 @@ export async function parseMessageWithAttachments(
         continue;
       }
 
-      opts?.signal?.throwIfAborted();
       opts?.assertCurrent?.();
       const bytes = prepared.buffer;
       const buffer = bytes

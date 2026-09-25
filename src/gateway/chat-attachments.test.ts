@@ -1013,22 +1013,25 @@ describe("attachment validation", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
-  it("cleans earlier offloads when cancellation arrives during image capability resolution", async () => {
-    const controller = new AbortController();
-    const reason = new Error("upload cancelled");
-    await expect(
-      parseMessageWithAttachments("read these", [pdfAttachment(), pngAttachment()], {
-        signal: controller.signal,
-        supportsImages: async () => {
-          controller.abort(reason);
-          return false;
-        },
-      }),
-    ).rejects.toBe(reason);
-    expect(saveMediaBufferMock).toHaveBeenCalledOnce();
-    const saved = await saveMediaBufferMock.mock.results[0]?.value;
-    expect(deleteMediaBufferMock).toHaveBeenCalledWith(saved?.id, "inbound");
-  });
+  it.each([true, false])(
+    "cleans earlier offloads when cancelled capability resolution returns %s",
+    async (supportsImages) => {
+      const controller = new AbortController();
+      const reason = new Error("upload cancelled");
+      await expect(
+        parseMessageWithAttachments("read these", [pdfAttachment(), pngAttachment()], {
+          signal: controller.signal,
+          supportsImages: async () => {
+            controller.abort(reason);
+            return supportsImages;
+          },
+        }),
+      ).rejects.toBe(reason);
+      expect(saveMediaBufferMock).toHaveBeenCalledOnce();
+      const saved = await saveMediaBufferMock.mock.results[0]?.value;
+      expect(deleteMediaBufferMock).toHaveBeenCalledWith(saved?.id, "inbound");
+    },
+  );
 
   it("accepts nonzero pad bits without using them for MIME inference", async () => {
     const parsed = await parseMessageWithAttachments("x", [pngAttachment({ content: "ZE==" })]);
