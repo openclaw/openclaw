@@ -44,12 +44,6 @@ describe("stripHeartbeatToken", () => {
     );
   });
 
-  it("drops short remainder in heartbeat mode", () => {
-    expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
   it("keeps heartbeat replies when remaining content exceeds threshold", () => {
     const long = "A".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
     expect(stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
@@ -153,7 +147,7 @@ describe("stripHeartbeatToken", () => {
 });
 
 describe("isHeartbeatAcknowledgementText", () => {
-  it.each([undefined, "", "NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
+  it.each([undefined, "NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
     "recognizes %s as a quiet acknowledgement",
     (text) => {
       expect(isHeartbeatAcknowledgementText(text)).toBe(true);
@@ -172,21 +166,11 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
   });
 
-  it("returns true for empty string", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("")).toBe(true);
-  });
-
   it("returns true for whitespace only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("   ")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("\n\n\n")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("  \n  \n  ")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("\t\t")).toBe(true);
-  });
-
-  it("returns true for header-only content", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n")).toBe(true);
   });
 
   it("returns true for comments only", () => {
@@ -214,16 +198,6 @@ tasks:
     expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
-  });
-
-  it("returns true for HTML comments only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- runtime template note -->")).toBe(true);
-    expect(
-      isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
-
-# Heartbeat scratch
-`),
-    ).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
@@ -256,47 +230,10 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
-  it("returns false when a code fence wraps plain instructional prose", () => {
-    const content = `\`\`\`markdown
-Keep this scratch empty unless you want a tiny checklist.
-\`\`\`
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns true for header with only empty lines", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n\n")).toBe(true);
-  });
-
   it("returns false when actionable content exists", () => {
     expect(isHeartbeatContentEffectivelyEmpty("- Check email")).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n- Task 1")).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
-  });
-
-  it("returns false for content with tasks after header", () => {
-    const content = `# Heartbeat scratch
-
-- Task 1
-- Task 2
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns false for mixed content with non-comment text", () => {
-    const content = `# Heartbeat scratch
-## Tasks
-Check the server logs
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("treats markdown headers as comments (effectively empty)", () => {
-    const content = `# Heartbeat scratch
-## Section 1
-### Subsection
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 });
 

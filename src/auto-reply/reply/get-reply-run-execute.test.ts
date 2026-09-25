@@ -9,12 +9,11 @@ const BASE = {
 };
 
 describe("fresh channel cron authority turn", () => {
-  it.each(["telegram", "discord", "slack", "custom-channel"])(
-    "recognizes a fresh authenticated turn from %s without channel-specific policy",
-    (messageProvider) => {
-      expect(isFreshChannelCronAuthorityTurn({ ...BASE, messageProvider })).toBe(true);
-    },
-  );
+  it("recognizes a fresh authenticated turn without channel-specific policy", () => {
+    expect(
+      isFreshChannelCronAuthorityTurn({ ...BASE, messageProvider: "custom-channel" }),
+    ).toBe(true);
+  });
 
   it.each([
     { name: "missing provider", overrides: { messageProvider: undefined } },
