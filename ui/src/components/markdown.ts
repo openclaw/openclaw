@@ -703,7 +703,8 @@ export function toStreamingMarkdownParts(
     previous?.options === renderKey &&
     stableMarkdown.startsWith(previous.markdown) &&
     (previous.markdown === stableMarkdown ||
-      (!/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
+      (previous.markdown.endsWith("\n") &&
+        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
         !/^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]*$/mu.test(stableMarkdown) &&
         !stableMarkdown.includes("<") &&
         !previous.html.includes('class="markdown-block-art"') &&

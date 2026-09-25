@@ -135,6 +135,29 @@ describe("toStreamingMarkdownParts", () => {
     expect(fragment.querySelector("p")?.textContent).toBe("First\n\u00a0\nSecond");
   });
 
+  it.each([
+    {
+      name: "an unfinished blank line",
+      source: "Hello\n ",
+      suffix: "world\n\n",
+      paragraph: "Hello\nworld",
+    },
+    {
+      name: "an unfinished fence closer",
+      source: "~~~\ncode\n~~~",
+      suffix: "~\nafter\n\n",
+      paragraph: "after",
+    },
+  ])(
+    "revisits $name before extending its rendered prefix",
+    ({ name, source, suffix, paragraph }) => {
+      toStreamingMarkdownParts(source, {}, name);
+      const fragment = htmlFragment(toStreamingMarkdownParts(source + suffix, {}, name).join(""));
+      expect(fragment.querySelectorAll("p")).toHaveLength(1);
+      expect(fragment.querySelector("p")?.textContent).toBe(paragraph);
+    },
+  );
+
   it("revisits reference links when a completed disclosure defines their target", () => {
     const key = "disclosure-reference";
     const source = "See [x]\n\n";
