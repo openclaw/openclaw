@@ -45,6 +45,11 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
     let closeFinished = false;
     let closing: Promise<void> | undefined;
     let siblingClosing: Promise<void> | undefined;
+    const missingModelChunk = vi.fn(() => {
+      throw Object.assign(new Error("rotated model-runtime chunk"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      });
+    });
     const restorers: Array<() => void> = [];
     const bridgeKey = `__managed_model_close_${path.basename(fixture.state.root)}`;
     Object.defineProperty(globalThis, bridgeKey, {
@@ -118,6 +123,12 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
       });
       await entered.promise;
       expect(acquisitionSignal?.aborted).toBe(false);
+      if (scope === "final Gateway") {
+        vi.doMock("../agents/prepared-model-runtime.js", missingModelChunk);
+        await expect(import("../agents/prepared-model-runtime.js")).rejects.toThrow();
+        expect(missingModelChunk).toHaveBeenCalledOnce();
+        missingModelChunk.mockClear();
+      }
       closing = server.close({ reason: "managed model acquisition fixture" }).finally(() => {
         closeFinished = true;
       });
@@ -158,6 +169,7 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
       finishAcquisition.resolve();
       await Promise.all([closing, siblingClosing]);
       expect(acquisitionFinished).toBe(true);
+      expect(missingModelChunk).not.toHaveBeenCalled();
       armed = false;
       if (scope === "live sibling") {
         const context = fixture.kernels.get(siblingPort!)!.gatewayRequestContext;
@@ -174,6 +186,7 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
       escape.resolve();
       finishAcquisition.resolve();
       await Promise.allSettled([closing, siblingClosing]);
+      vi.doUnmock("../agents/prepared-model-runtime.js");
       try {
         await fixture.cleanup();
       } finally {

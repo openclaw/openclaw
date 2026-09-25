@@ -148,10 +148,10 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
   captureRemoteModelCatalogStartupSnapshot();
+  // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
+  const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(async () => {
-    const { cancelPreparedModelRuntimeRefresh } =
-      await import("../agents/prepared-model-runtime.js");
     cancelPreparedModelRuntimeRefresh();
   });
   let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
