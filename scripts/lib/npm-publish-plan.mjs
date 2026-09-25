@@ -347,6 +347,12 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
 }
 
 /**
+ * @typedef {object} NpmVersionPublicationDecision
+ * @property {PublishedNpmVersionRoute | null} route Registry route for a published version; null when publication is still planned.
+ * @property {string | null} supersededBy The newer version the primary dist-tag keeps when the published target is skipped.
+ */
+
+/**
  * @param {{
  *   packageVersion: string;
  *   publishPlan: NpmPublishPlan;
@@ -355,15 +361,46 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
  * @returns {PublishedNpmVersionRoute}
  */
 export function resolvePublishedNpmVersionRoute(params) {
-  const primaryState = classifyNpmDistTagVersion(
-    params.distTags[params.publishPlan.publishTag],
-    params.packageVersion,
+  return /** @type {PublishedNpmVersionRoute} */ (
+    resolveNpmVersionPublicationDecision({ ...params, published: true }).route
   );
+}
+
+/**
+ * A published target whose primary dist-tag already points past it was
+ * superseded by a later release: nothing is published and no selector moves.
+ * An unpublished target behind an ahead selector would publish inconsistently.
+ * @param {{
+ *   packageVersion: string;
+ *   publishPlan: NpmPublishPlan;
+ *   distTags: Record<string, unknown>;
+ *   published: boolean;
+ * }} params
+ * @returns {NpmVersionPublicationDecision}
+ */
+export function resolveNpmVersionPublicationDecision(params) {
+  const primaryVersion = params.distTags[params.publishPlan.publishTag];
+  const primaryState = classifyNpmDistTagVersion(primaryVersion, params.packageVersion);
+  if (primaryState === "ahead" && params.published) {
+    return { route: "npm-readback", supersededBy: /** @type {string} */ (primaryVersion) };
+  }
+  if (!params.published) {
+    // Placeholder selectors (0.0.0) are expected before a first real publication.
+    if (primaryState === "ahead") {
+      throwUnsafeNpmDistTag(
+        params.publishPlan.publishTag,
+        primaryVersion,
+        params.packageVersion,
+        primaryState,
+      );
+    }
+    return { route: null, supersededBy: null };
+  }
   const needsPrimaryRepair = primaryState === "missing" || primaryState === "lagging";
   if (!needsPrimaryRepair && primaryState !== "match") {
     throwUnsafeNpmDistTag(
       params.publishPlan.publishTag,
-      params.distTags[params.publishPlan.publishTag],
+      primaryVersion,
       params.packageVersion,
       primaryState,
     );
@@ -381,9 +418,9 @@ export function resolvePublishedNpmVersionRoute(params) {
     }
   }
   if (needsPrimaryRepair) {
-    return "npm-tag-repair";
+    return { route: "npm-tag-repair", supersededBy: null };
   }
-  return needsMirrorRepair ? "npm-mirror" : "npm-readback";
+  return { route: needsMirrorRepair ? "npm-mirror" : "npm-readback", supersededBy: null };
 }
 
 /**

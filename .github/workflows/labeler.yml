@@ -19,32 +19,22 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-concurrency:
-  # Skipped edits must not cancel running or replace pending labeling.
-  group: >-
-    ${{ github.workflow }}-${{
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'edited' &&
-      !github.event.changes.title &&
-      !github.event.changes.base &&
-      format('ignored-edit-{0}', github.run_id) ||
-      github.event.pull_request.number || github.ref || github.run_id
-    }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
-
 permissions: {}
 
 jobs:
   label:
     if: >-
-      ${{
+      ${{ (
         github.event_name == 'pull_request_target' &&
         (
           github.event.action != 'edited' ||
           github.event.changes.title ||
           github.event.changes.base
         )
-      }}
+      ) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write
@@ -524,6 +514,9 @@ jobs:
 
   backfill-pr-labels:
     if: github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: write
@@ -852,7 +845,12 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
-    if: github.event_name == 'issues'
+    if: >-
+      ${{ (github.event_name == 'issues' &&
+        (github.event.action != 'edited' || !github.event.changes || github.event.changes.title)) }}
+    concurrency:
+      group: ${{ github.workflow }}-issue-${{ github.event.issue.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       issues: write

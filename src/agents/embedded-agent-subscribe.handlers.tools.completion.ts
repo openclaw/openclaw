@@ -54,12 +54,10 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
   loadHookRunnerGlobal,
   readApplyPatchSummary,
-  readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
   resolveFallbackToolTerminalObserver,
@@ -86,7 +84,9 @@ import {
   capLiveExecResult,
   extractToolErrorCode,
   extractToolErrorMessage,
+  isAsyncStartedToolResult,
   isToolResultTimedOut,
+  readAsyncStartedTaskIds,
   sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -187,16 +187,18 @@ export async function handleToolExecutionEnd(
     typeof result === "object" &&
     "terminate" in result &&
     result.terminate === true;
-  ctx.state.toolMetas.push({
+  const terminalMeta: (typeof ctx.state.toolMetas)[number] = {
     toolName,
     toolCallId,
+    ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
     meta,
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
     ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
-  });
+  };
+  ctx.state.toolMetas.push(terminalMeta);
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
@@ -450,6 +452,7 @@ export async function handleToolExecutionEnd(
     ...(errorMessage ? { error: errorMessage } : {}),
   };
   const hideFromChannelProgress = explicitHideFromChannelProgress;
+  terminalMeta.activity = itemData;
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",

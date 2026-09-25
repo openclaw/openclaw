@@ -88,6 +88,11 @@ openclaw tui --local
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
 
+The model picker opens immediately, showing a checking state if no models are known yet.
+In Gateway mode, it reuses the selected agent's last known list while refreshing in the
+background. Catalog changes update an open picker without clearing its search or
+moving its highlighted choice when that model is still present.
+
 ## Questions
 
 When the agent calls [`ask_user`](/tools/ask-user), the TUI opens a question
@@ -192,6 +197,22 @@ OpenClaw:
 - `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+
+## Local Chrome setup
+
+Use `/browser-setup` (or `/browser-setup inspect`) to inspect Chrome extension
+setup on the **TUI process host**, not the connected Gateway.
+`/browser-setup install` explicitly prepares automatic local setup;
+`/browser-setup verify` checks the local authenticated extension relay.
+No pairing code is requested for supported local native bootstrap. Chrome still
+requires its own extension installation and permission approval, and existing
+pairings and automatic-setup opt-outs are preserved.
+
+These commands are deterministic local CLI operations, not messages to the agent.
+Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
+cancels a pending setup command. After interruption, inspect again to reconcile
+any preparation that already completed. When the TUI runs through SSH, setup runs
+on the SSH host; the physical terminal viewer is not assumed to host Chrome.
 
 ## Local shell commands
 

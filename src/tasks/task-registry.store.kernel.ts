@@ -25,7 +25,7 @@ import { readTaskFlowViewRecordInDatabase } from "./task-flow-registry.store.ker
 import {
   compareTasksForRunIdLookup,
   getTaskRelatedSessionIndexKeys,
-  normalizeTaskRecord,
+  normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type {
@@ -158,7 +158,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
-  return normalizeTaskRecord({
+  return normalizeTaskTimestamps({
     taskId: row.task_id,
     runtime: parseTaskRuntime(row.runtime),
     ...(row.task_kind ? { taskKind: row.task_kind } : {}),
@@ -207,7 +207,7 @@ type BoundTaskRecord = Insertable<TaskRunsTable>;
 
 /** Canonically serializes a task before an outer transaction acquires the write lock. */
 export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
-  const normalized = normalizeTaskRecord(record);
+  const normalized = normalizeTaskTimestamps(record);
   return {
     task_id: normalized.taskId,
     runtime: normalized.runtime,
@@ -601,7 +601,7 @@ export function readTaskRegistrySnapshot({
   });
 }
 
-/** The caller holds shared writer custody across this snapshot and its mutation. */
+/** Capture overlapping task and delivery selectors in one committed read transaction. */
 export function readTaskRegistryMutationSnapshotInDatabase(
   db: DatabaseSync,
   scope: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
@@ -615,7 +615,6 @@ export function readTaskRegistryMutationSnapshotInDatabase(
   return runSqliteDeferredTransactionSync(db, () => {
     const kysely = getTaskRegistryKysely(db);
     const selected = kysely.selectFrom("task_runs").where((eb) => {
-      // Restore repairs legacy identifiers before scoped reads; every selector stays indexed.
       // Bound sets keep the parameter count fixed even for large refreshes.
       const matches = [eb("task_runs.task_id", "in", sqliteStringSet(taskIds))];
       if (runIds.length) {

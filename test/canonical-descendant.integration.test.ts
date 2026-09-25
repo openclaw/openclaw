@@ -32,7 +32,10 @@ import {
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "../src/gateway/server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "../src/gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
@@ -75,7 +78,12 @@ import {
 } from "../src/sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
+
+// Native transport mocks own the source graph, so discovery must use that graph.
+const withState = useCanonicalDescendantState({
+  OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -111,6 +119,37 @@ function expectPolicyHandoff(
   });
 }
 
+async function withRetainedNativeForkAttempt<T>(
+  fixture: CanonicalForkFixture,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await fixture.withClient(async (client) => {
+    const requests = vi.spyOn(client, "request");
+    try {
+      const result = await run();
+      const assertCurrent = expectDefined(
+        requests.mock.calls.findLast(([method]) => method === "thread/fork")?.[2]?.assertCurrent,
+        "production native-write authority",
+      );
+      const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
+      expect(before).toBeGreaterThan(0);
+      await expect(
+        client.request(
+          "thread/fork",
+          { threadId: "original", excludeTurns: true },
+          { timeoutMs: 5_000, assertCurrent },
+        ),
+      ).rejects.toThrow("Session initialization source is closed");
+      expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
+        before,
+      );
+      return result;
+    } finally {
+      requests.mockRestore();
+    }
+  });
+}
+
 async function withFixture(
   run: (
     fixture: CanonicalForkFixture,
@@ -127,15 +166,13 @@ async function withFixture(
     codexPlugins?: Parameters<typeof createCanonicalForkFixtureForTest>[0]["codexPlugins"];
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
+    sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
     transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
+    isolatedState?: boolean;
   } = {},
 ) {
-  // The native fixture owns source-module transport mocks, so discovery must use that graph.
-  const env = {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
-  };
-  await withOpenClawTestState({ label: "canonical-descendant", env }, async (state) => {
+  await withState(async (state) => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -409,7 +446,9 @@ async function withFixture(
         );
         const fork = async (sessionKey: string, entryId: string) => {
           expect(
-            listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
+            listRegisteredAgentHarnesses().map(
+              (entry) => entry.harness.sessionForkV2?.upstreamKinds,
+            ),
           ).toEqual([["codex-app-server"]]);
           let result: { ok: boolean; key?: string; message?: string } | undefined;
           const request = { sessionKey, entryId };
@@ -426,6 +465,7 @@ async function withFixture(
             params: request,
             client: null,
             isWebchatConnect: () => false,
+            sessionMutationAuthorization: options.sessionMutationAuthorization,
             // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
             context: {
               getRuntimeConfig: () => config,
@@ -499,7 +539,7 @@ async function withFixture(
     } finally {
       await fixture.dispose();
     }
-  });
+  }, options.isolatedState);
 }
 
 describe("canonical descendant lifecycle through real owners", () => {
@@ -742,52 +782,55 @@ describe("canonical descendant lifecycle through real owners", () => {
   )(
     "fences a supervised policy handoff after run authority is $reason at $phase",
     async ({ reason, phase }) => {
-      await withFixture(async (fixture) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "accepted");
-        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
-        const offset = fixture.native.calls.length;
-        let restore: (() => void) | undefined;
-        try {
-          await expect(
-            fixture.turn(source.sessionKey, "revoked", {
-              workerOwned: reason === "claim",
-              beforeStartup: async (invalidate) => {
-                if (phase === "overload") {
-                  fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
-                } else if (phase === "acknowledged") {
-                  fixture.native.setAfterPolicyWrite(() => invalidate(reason));
-                } else {
-                  await fixture.withClient(async (client) => {
-                    const request = client.request.bind(client);
-                    const spy = vi
-                      .spyOn(client, "request")
-                      .mockImplementation(async (method, input, options) => {
-                        if (method === "thread/inject_items") {
-                          await invalidate(reason);
-                        }
-                        return request(method, input, options);
-                      });
-                    restore = () => spy.mockRestore();
-                  });
-                }
-              },
-            }),
-          ).rejects.toThrow(
-            reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+      await withFixture(
+        async (fixture) => {
+          const source = await fixture.adopt();
+          await fixture.turn(source.sessionKey, "accepted");
+          const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
+          const offset = fixture.native.calls.length;
+          let restore: (() => void) | undefined;
+          try {
+            await expect(
+              fixture.turn(source.sessionKey, "revoked", {
+                workerOwned: reason === "claim",
+                beforeStartup: async (invalidate) => {
+                  if (phase === "overload") {
+                    fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
+                  } else if (phase === "acknowledged") {
+                    fixture.native.setAfterPolicyWrite(() => invalidate(reason));
+                  } else {
+                    await fixture.withClient(async (client) => {
+                      const request = client.request.bind(client);
+                      const spy = vi
+                        .spyOn(client, "request")
+                        .mockImplementation(async (method, input, options) => {
+                          if (method === "thread/inject_items") {
+                            await invalidate(reason);
+                          }
+                          return request(method, input, options);
+                        });
+                      restore = () => spy.mockRestore();
+                    });
+                  }
+                },
+              }),
+            ).rejects.toThrow(
+              reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+            );
+          } finally {
+            restore?.();
+          }
+          const calls = fixture.native.calls.slice(offset);
+          expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
+            phase === "prewrite" ? 0 : 1,
           );
-        } finally {
-          restore?.();
-        }
-        const calls = fixture.native.calls.slice(offset);
-        expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
-          phase === "prewrite" ? 0 : 1,
-        );
-        expect(
-          calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
-        ).toBe(false);
-        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
-      });
+          expect(
+            calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
+          ).toBe(false);
+          expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
+        },
+        { isolatedState: reason === "claim" },
+      );
     },
     180_000,
   );
@@ -995,9 +1038,12 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each(["source", "registry"] as const)(
-    "fences native archive retries after %s rollback authority is revoked",
-    async (target) => {
+  it.each([
+    ["source", 2, 0],
+    ["registry", 1, 1],
+  ] as const)(
+    "keeps native archive overload retry within captured rollback after %s revocation",
+    async (target, attempts, retained) => {
       await withFixture(async (fixture, fork, revoke) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1011,8 +1057,10 @@ describe("canonical descendant lifecycle through real owners", () => {
         expect((await fork(source.sessionKey, selected.entryId)).ok).toBe(false);
         expect(
           fixture.native.calls.filter((call) => call.method === "thread/archive"),
-        ).toHaveLength(archiveCount + 1);
-        expect([...fixture.native.threads.keys()].filter((id) => !before.has(id))).toHaveLength(1);
+        ).toHaveLength(archiveCount + attempts);
+        expect([...fixture.native.threads.keys()].filter((id) => !before.has(id))).toHaveLength(
+          retained,
+        );
         expect(fixture.native.threads.has(binding.threadId)).toBe(true);
         expect(fixture.native.threads.has("original")).toBe(true);
       });
@@ -1020,9 +1068,13 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each(["source", "child", "registry"] as const)(
-    "retires the exact subscription after %s revocation following native fork without killing sibling leases",
-    async (target) => {
+  it.each([
+    ["source", true],
+    ["child", false],
+    ["registry", false],
+  ] as const)(
+    "uses captured rollback ownership after %s revocation following native fork",
+    async (target, rollbackAllowed) => {
       await withFixture(async (fixture, fork, revoke) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1040,14 +1092,18 @@ describe("canonical descendant lifecycle through real owners", () => {
           expect(fresh).toBeTruthy();
           expect(
             fixture.native.calls.filter((call) => call.method === "thread/archive"),
-          ).toHaveLength(archiveCount);
+          ).toHaveLength(archiveCount + (rollbackAllowed ? 1 : 0));
           await expect(client.request("config/read", {})).resolves.toMatchObject({ config: {} });
           await fixture.withClient(async (next) => {
-            expect(next).not.toBe(client);
+            if (rollbackAllowed) {
+              expect(next).toBe(client);
+            } else {
+              expect(next).not.toBe(client);
+            }
           });
           expect(fixture.native.threads.has(binding.threadId)).toBe(true);
           expect(fixture.native.threads.has("original")).toBe(true);
-          expect(fixture.native.threads.has(fresh!)).toBe(true);
+          expect(fixture.native.threads.has(fresh!)).toBe(!rollbackAllowed);
         });
         await vi.waitFor(() =>
           expect([...fixture.native.subscriptions].some((key) => key.endsWith(`:${fresh}`))).toBe(
@@ -1132,7 +1188,9 @@ describe("canonical descendant lifecycle through real owners", () => {
       const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
       current.thread.model = "gpt-5.5";
       const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-      const result = await fork(source.sessionKey, selected.entryId);
+      const result = await withRetainedNativeForkAttempt(fixture, () =>
+        fork(source.sessionKey, selected.entryId),
+      );
       expect(result, result.message).toMatchObject({ ok: true });
       const childKey = expectDefined(result.key, "child key");
       expect(fixture.bindingStore.read(fixture.identity(childKey))).toMatchObject({
@@ -1297,7 +1355,6 @@ describe("canonical descendant lifecycle through real owners", () => {
                           enabled: true,
                           destructive_enabled: false,
                           open_world_enabled: true,
-                          default_tools_approval_mode: "auto",
                         },
                       }
                     : {}),
@@ -1725,38 +1782,25 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it("refuses a creator-required environment before native fork", async () => {
-    await withFixture(async (fixture) => {
+  it("refuses a stored required environment through the registered fork before native I/O", async () => {
+    await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       await fixture.turn(source.sessionKey, "canonical");
+      const sourceEntry = expectDefined(
+        loadSessionEntry({ sessionKey: source.sessionKey, storePath: fixture.storePath }),
+        "source entry",
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          writeSessionEntry(database, source.sessionKey, { ...sourceEntry, sandbox: "required" }),
+        { agentId: "main" },
+      );
       const entries = await fixture.readEntries(source.sessionKey);
       const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
-      const link = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
-      const harness = expectDefined(
-        listRegisteredAgentHarnesses()[0]?.harness,
-        "registered harness",
-      );
-      const result = await expectDefined(harness.sessionFork, "registered fork capability").fork({
-        targetKey: "agent:main:dashboard:required-environment",
-        sandbox: "required",
-        source: {
-          agentId: "main",
-          sessionId: fixture.identity(source.sessionKey).sessionId,
-          sessionKey: source.sessionKey,
-          storePath: fixture.storePath,
-          entryId: entries.at(-1)!.entryId,
-        },
-        upstream: {
-          catalogId: link.catalogId,
-          hostId: link.hostId,
-          threadId: link.threadId,
-          kind: link.upstreamKind,
-          ref: link.upstreamRef,
-        },
-      });
+      const result = await fork(source.sessionKey, entries.at(-1)!.entryId);
       expect(result).toMatchObject({
-        status: "failed",
-        message: expect.stringMatching(/execution environment/),
+        ok: false,
+        message: expect.stringMatching(/requires a sandbox/),
       });
       expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
         before,
@@ -1770,6 +1814,8 @@ describe("canonical descendant lifecycle through real owners", () => {
     ["null model", /model/i],
     ["model changed during preparation", /canonical Codex source changed/],
     ["provider changed during preparation", /canonical Codex source changed/],
+    ["request authorization changed after native fork", /request authorization changed/],
+    ["sandbox policy changed during initialization", /requires a sandbox/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
     ["child model", /did not preserve the exact canonical source and selected native model/],
@@ -1783,6 +1829,7 @@ describe("canonical descendant lifecycle through real owners", () => {
   ])(
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
+      let requestAuthorized = true;
       await withFixture(
         async (fixture, fork, _revoke, _admissions, runtime) => {
           const source = await fixture.adopt();
@@ -1797,6 +1844,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           const messages = await fixture.readEntries(source.sessionKey);
           const countBefore = fixture.native.calls.filter(
             (call) => call.method === "thread/fork",
+          ).length;
+          const archivesBefore = fixture.native.calls.filter(
+            (call) => call.method === "thread/archive",
           ).length;
           const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
           const create = runtime.agent.session.createSessionEntry;
@@ -1852,10 +1902,39 @@ describe("canonical descendant lifecycle through real owners", () => {
           if (failure === "child lineage") {
             fixture.native.setForkFault("lineage");
           }
+          if (failure === "request authorization changed after native fork") {
+            fixture.native.setAfterFork(() => {
+              requestAuthorized = false;
+            });
+          }
+          if (failure === "sandbox policy changed during initialization") {
+            fixture.native.setAfterFork(() => {
+              const sourceEntry = expectDefined(
+                loadSessionEntry({
+                  sessionKey: source.sessionKey,
+                  storePath: fixture.storePath,
+                }),
+                "source policy entry",
+              );
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, source.sessionKey, {
+                    ...sourceEntry,
+                    sandbox: "required",
+                  }),
+                { agentId: "main" },
+              );
+            });
+          }
           if (failure === "unsubscribe failure") {
             fixture.native.setFailUnsubscribe(true);
           }
-          const result = await fork(source.sessionKey, messages.at(-1)!.entryId);
+          const result =
+            failure === "sandbox policy changed during initialization"
+              ? await withRetainedNativeForkAttempt(fixture, () =>
+                  fork(source.sessionKey, messages.at(-1)!.entryId),
+                )
+              : await fork(source.sessionKey, messages.at(-1)!.entryId);
           expect(result.ok, result.message).toBe(false);
           expect(result.message).toMatch(expectedError);
           if (failure === "missing model" || failure === "null model") {
@@ -1878,12 +1957,39 @@ describe("canonical descendant lifecycle through real owners", () => {
               fixture.native.calls.filter((call) => call.method === "thread/fork"),
             ).toHaveLength(countBefore);
           }
+          if (
+            failure === "request authorization changed after native fork" ||
+            failure === "sandbox policy changed during initialization"
+          ) {
+            expect(
+              listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath }).filter(
+                ({ entry }) => !existingSessions.has(entry.sessionId),
+              ),
+            ).toEqual([]);
+            expect(
+              fixture.native.calls.filter((call) => call.method === "thread/archive"),
+            ).toHaveLength(archivesBefore + 1);
+          }
           expect(fixture.native.source).toEqual(sourceBefore);
           expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
             bindingBefore,
           );
         },
-        { senderIsOwner: true },
+        {
+          senderIsOwner: true,
+          ...(failure === "request authorization changed after native fork"
+            ? {
+                sessionMutationAuthorization: {
+                  assertCurrent: () => {
+                    if (!requestAuthorized) {
+                      throw new Error("request authorization changed");
+                    }
+                  },
+                  assertTargetCurrent: vi.fn(),
+                },
+              }
+            : {}),
+        },
       );
     },
     180_000,

@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import "../app/device-scope-upgrade-controller.runtime.ts";
@@ -28,6 +27,7 @@ import {
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
 
 registerSidebarAttentionEnglish();
@@ -49,7 +49,7 @@ type SidebarAttentionPanelParams = {
   onClose: (restoreFocus: boolean) => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
   onKeydown: (event: KeyboardEvent) => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -82,6 +82,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const canDismissShown = visibleDismissals.length > 0 || mentionDismissals.length > 0;
   const mentionsTab = params.selectedTab === "mentions";
   const showMentionStatus =
+    params.context.gateway.snapshot.phase === "connected" &&
     (mentionsTab || params.selectedTab === "all") &&
     (mentions.error !== null ||
       mentions.phase === "loading" ||
@@ -91,11 +92,17 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
     const dismissal = entry.dismissal;
     const onDismiss = dismissal ? () => params.onDismiss(dismissal) : undefined;
     switch (entry.type) {
+      case "outbox":
+        return renderSidebarOutboxItem({
+          entry,
+          context: params.context,
+          onNavigate: params.onNavigate,
+        });
       case "approval":
         return renderSidebarApprovalItem({
           approval: entry.approval,
           context: params.context,
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
           onDecision: params.onApprovalDecision,
         });
       case "attention":
@@ -111,7 +118,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           dismissing: mentions.dismissing.includes(entry.mention.id),
           onDismiss: () => void params.mentions.dismiss([entry.mention.id]),
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
         });
       case "scopeUpgrade":
         return renderSidebarScopeUpgradeItem({

@@ -17,6 +17,9 @@ Use the green window button to enter native full screen. The Dashboard's sidebar
 and chat controls remain available at the top of the window. Leaving full screen
 restores the normal titlebar and window controls.
 
+While the Dashboard loads, its empty canvas follows the native window's appearance.
+Once the page paints, the Dashboard's selected theme supplies its background.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same

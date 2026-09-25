@@ -1,6 +1,7 @@
 // Control UI content-security-policy helpers.
 // Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
+import type { ServerResponse } from "node:http";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
@@ -55,12 +56,13 @@ export function buildControlUiCspHeader(opts?: {
     scriptTokens.push("'wasm-unsafe-eval'");
   }
   // Web Awesome resolves its bundled system icons to data: SVGs, then fetches
-  // them before rendering. This allows local bytes only, not another origin.
+  // them before rendering. Attachment previews fetch browser-owned Blob URLs.
   const connectTokens = [
     "'self'",
     "ws:",
     "wss:",
     "data:",
+    "blob:",
     "https://api.openai.com",
     "https://tweakcn.com",
   ];
@@ -96,4 +98,17 @@ export function buildControlUiCspHeader(opts?: {
     "worker-src 'self'",
     `connect-src ${connectTokens.join(" ")}`,
   ].join("; ");
+}
+
+export function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }

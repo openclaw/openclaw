@@ -15,7 +15,6 @@ import {
 import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 import { clickViaPlaywright, typeViaPlaywright } from "./pw-tools-core.interactions.actions.js";
 import {
-  snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright,
@@ -188,7 +187,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       }
     }, 30_000);
 
-    it("publishes actionable main-frame CDP refs into the Playwright cache", async () => {
+    it("does not retarget CDP refs after marker writes fail", async () => {
       const rootDir = tempDirs.make("openclaw-cdp-role-refs-");
       const port = await getFreePort();
       const cdpUrl = `http://127.0.0.1:${port}`;
@@ -278,11 +277,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         for (const [ref] of nativeRefs) {
           expect(await page.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${ref}"]`).count()).toBe(0);
         }
-        for (const [index, [ref]] of nativeRefs.entries()) {
-          await clickViaPlaywright({ ...target, ref, timeoutMs: 1_000 });
-          expect(await page.locator("output").textContent()).toBe(["first", "second"][index]);
+        for (const [ref] of nativeRefs) {
+          await expect(clickViaPlaywright({ ...target, ref, timeoutMs: 500 })).rejects.toThrow();
+          expect(await page.locator("output").textContent()).toBe("");
         }
-        expect(nativeRefs.map(([, info]) => info.nth)).toEqual([0, 1]);
         await clickViaPlaywright({ ...target, ref: cursorRef!, timeoutMs: 1_000 });
         expect(await page.locator("output").textContent()).toBe("cursor");
       } finally {
@@ -361,14 +359,11 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         await session.detach();
         const target = { cdpUrl, targetId: targetInfo.targetId };
         for (const mode of ["role", "interactive", "ai", "interactive-aria"] as const) {
-          const snapshot =
-            mode === "ai"
-              ? await snapshotAiViaPlaywright(target)
-              : await snapshotRoleViaPlaywright({
-                  ...target,
-                  refsMode: mode === "interactive-aria" ? "aria" : "role",
-                  options: { interactive: mode !== "role" },
-                });
+          const snapshot = await snapshotRoleViaPlaywright({
+            ...target,
+            refsMode: mode === "ai" || mode === "interactive-aria" ? "aria" : "role",
+            options: mode === "ai" ? undefined : { interactive: mode !== "role" },
+          });
           const buttons = Object.entries(snapshot.refs).filter(
             ([, value]) => value.role === "button" && value.name !== "Frame: action",
           );
@@ -385,7 +380,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           await typeViaPlaywright({ ...target, ref: input![0], text: mode, timeoutMs: 1_000 });
           expect(await page.getByRole("textbox").inputValue()).toBe(mode);
         }
-        const snapshot = await snapshotAiViaPlaywright(target);
+        const snapshot = await snapshotRoleViaPlaywright({ ...target, refsMode: "aria" });
         const nested = Object.entries(snapshot.refs).find(
           ([, value]) => value.name === "Frame: action",
         );

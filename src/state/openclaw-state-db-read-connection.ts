@@ -8,6 +8,7 @@ import {
 } from "../infra/sqlite-coordinator.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -221,7 +222,10 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
-      assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+      runSqliteReadOperationSync(opened.database.db, () => {
+        assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+        admitSqliteSchema(opened.database.db);
+      });
       result = { status: "available", value: operation(opened.database) };
     } catch (error) {
       result = { status: "unavailable", error };
@@ -256,13 +260,47 @@ export function readOpenClawStateReadOnlyLocation<T>(
   return result;
 }
 
+/** Keep streamed rows on one private reader while callers yield or close the shared writer. */
+export async function* iterateOpenClawStateDatabaseReadOnly<Row, Result>(
+  source: OpenClawStateDatabase,
+  operation: (database: OpenClawStateReadOnlyDatabase) => Generator<Row, Result>,
+  env: NodeJS.ProcessEnv = process.env,
+): AsyncGenerator<Row, Result> {
+  const pathname = source.db.location();
+  if (!pathname) {
+    throw new Error("Streaming shared-state reads require a filesystem-backed database.");
+  }
+  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  const opened = openOpenClawStateReadOnlyLocation(pathname, pathname);
+  try {
+    // sqlite-allow-raw -- Keep composite streamed reads in one native read-only snapshot.
+    opened.database.db.exec("BEGIN");
+    return yield* operation(opened.database);
+  } catch (error) {
+    openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(source, error);
+    throw error;
+  } finally {
+    try {
+      // Bun can retain statements after close; end the snapshot before releasing handle custody.
+      if (opened.database.db.isTransaction) {
+        opened.database.db.exec("ROLLBACK"); // sqlite-allow-raw -- End this owner's read-only snapshot.
+      }
+    } finally {
+      opened.close();
+    }
+  }
+}
+
 export function openOpenClawStateReadOnlyLocation(
   pathname: string,
   source: string | PreparedSqliteReadOnlyLocation,
 ) {
   const connection = openOpenClawStateReadConnection(pathname, source);
   try {
-    assertStateReadSchema(connection.database.db, pathname);
+    runSqliteReadOperationSync(connection.database.db, () => {
+      assertStateReadSchema(connection.database.db, pathname);
+      admitSqliteSchema(connection.database.db);
+    });
   } catch (error) {
     try {
       connection.close();

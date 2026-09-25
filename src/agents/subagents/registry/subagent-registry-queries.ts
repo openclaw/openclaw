@@ -179,15 +179,15 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   swarmRunsByRequesterSessionKey: ReadonlyMap<string, readonly T[]>;
 };
 
-export type LatestSubagentRunReadIndex = {
-  getLatestSubagentRun(childSessionKey: string): SubagentRunRecord | null;
+export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
+  getLatestSubagentRun(childSessionKey: string): T | null;
 };
 
 /** Builds a reusable latest-generation lookup from one registry snapshot. */
-export function buildLatestSubagentRunReadIndexFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-): LatestSubagentRunReadIndex {
-  const latestRunByChildSessionKey = new Map<string, SubagentRunRecord>();
+export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
+): LatestSubagentRunReadIndex<T> {
+  const latestRunByChildSessionKey = new Map<string, T>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
@@ -588,7 +588,8 @@ export function countActiveRunsForSessionFromRuns(
     return 0;
   }
 
-  const readIndex = buildSubagentRunReadIndexFromRuns({ runs });
+  const now = Date.now();
+  let readIndex: SubagentRunReadIndex | undefined;
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   // Records already carry collect, and spawn admission is not request-hot, so a
@@ -612,6 +613,7 @@ export function countActiveRunsForSessionFromRuns(
       count += 1;
       continue;
     }
+    readIndex ??= buildSubagentRunReadIndexFromRuns({ runs, now });
     if (readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0) {
       count += 1;
     }

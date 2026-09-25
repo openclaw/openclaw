@@ -26,6 +26,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cach
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -36,6 +37,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
@@ -261,13 +263,22 @@ describe("worker placement session evidence", () => {
           updatedAt: 1,
         });
       }
+      // Join seeded disk maintenance before corrupting a store; retain native incognito state.
+      for (const agentId of ["main", "healthy"]) {
+        const seeded = openOpenClawAgentDatabase({ agentId });
+        await closeOpenClawAgentDatabaseByPathAsync(seeded.path, agentId);
+      }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
+      expect(
+        readSessionIdentityEvidenceInDatabase(database, [broken]).map((row) => row.status),
+      ).toEqual(["current"]);
       clearNodeSqliteKyselyCacheForDatabase(database.db);
       database.db.exec("DROP TABLE session_nodes");
 
       const requested = [broken, healthy, absent, incognito];
       const resolve = await createWorkerPlacementSessionEvidenceResolver(requested);
 
+      expect(evidenceWarnSpy).not.toHaveBeenCalled();
       expect(await Promise.all(requested.map(resolve))).toEqual([
         "unknown",
         "current",
@@ -382,10 +393,13 @@ describe("worker placement session evidence", () => {
         const read = vi.fn(async () => ({
           result: { status: "unavailable" as const },
           assertCurrent() {},
+          followRegistration() {
+            throw new Error("Unavailable placement registry reads cannot follow registration");
+          },
         }));
         const registry = vi
           .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-          .mockReturnValue({ read });
+          .mockReturnValue({ read, assertCurrent() {} });
         try {
           const requested =
             route === "incognito-only" ? [incognito, missing] : [disk, incognito, missing];
@@ -456,6 +470,7 @@ describe("worker placement session evidence", () => {
       const registry = vi
         .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
         .mockReturnValueOnce({
+          assertCurrent() {},
           read: async () => {
             throw new Error("evidence pipeline exploded");
           },
@@ -518,13 +533,8 @@ describe("worker placement session evidence", () => {
         calibration.exec("CREATE TABLE calibration (value INTEGER)");
         const cachedInsert = calibration.prepare("INSERT INTO calibration VALUES (?)");
         const cachedRead = calibration.prepare("SELECT value FROM calibration");
-        const counters = [
-          vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-          vi.spyOn(native.DatabaseSync.prototype, "exec"),
-          ...(["get", "all", "run", "iterate"] as const).map((method) =>
-            vi.spyOn(native.StatementSync.prototype, method),
-          ),
-        ];
+        const observation = observeMainThreadSql();
+        const counters = observation.calls;
         try {
           try {
             calibration.exec("DELETE FROM calibration");
@@ -537,9 +547,7 @@ describe("worker placement session evidence", () => {
             expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
           } finally {
             calibration.close();
-            for (const counter of counters) {
-              counter.mockClear();
-            }
+            observation.clear();
           }
           const resolve = await createWorkerPlacementSessionEvidenceResolver(placements);
           await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
@@ -550,9 +558,7 @@ describe("worker placement session evidence", () => {
             JSON.stringify(counters.slice(0, 2).map((counter) => counter.mock.calls)),
           ).toEqual([0, 0, 0, 0, 0, 0]);
         } finally {
-          for (const counter of counters) {
-            counter.mockRestore();
-          }
+          observation.restore();
         }
       });
     },

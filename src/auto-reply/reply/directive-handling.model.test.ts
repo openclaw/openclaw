@@ -8,10 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import {
-  setPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthLabels,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -125,6 +122,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { registerModelRuntimeDirectiveTests } from "./directive-handling.model-runtime.test-support.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
@@ -154,7 +152,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: () => [],
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveNativeModelPrimary: vi.fn(() => undefined),
   resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentIds: () => ({ sessionAgentId: "main" }),
@@ -174,10 +172,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   }) => {
     const owner = createModelsTestOwner(params.config, entries, params);
     const store = readAuthProfileStoreForTest();
-    setPreparedModelRuntimeAuthStore(owner, store);
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      prepareModelCatalogAuthLabels({
+    bindPreparedModelRuntimeAuth(owner, {
+      store,
+      labels: prepareModelCatalogAuthLabels({
         config: params.config,
         agentDir: owner.agentDir,
         workspaceDir: owner.workspaceDir,
@@ -191,7 +188,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
           ...Object.keys(params.config.models?.providers ?? {}),
         ],
       }),
-    );
+    });
     return owner;
   };
   return {
@@ -384,6 +381,7 @@ function resolveModelSelectionForCommand(params: {
 
 async function persistModelDirectiveForTest(params: {
   command: string;
+  directiveOnly?: boolean;
   agentId?: string;
   profiles?: Record<string, ApiKeyProfile>;
   cfg?: OpenClawConfig;
@@ -401,9 +399,10 @@ async function persistModelDirectiveForTest(params: {
     setAuthProfiles(params.profiles);
   }
   const originalDirectives = parseInlineSessionDirectives(params.command);
-  const commandBody = originalDirectives.cleaned.trim()
-    ? params.command
-    : `${params.command} continue with the request`;
+  const commandBody =
+    params.directiveOnly || originalDirectives.cleaned.trim()
+      ? params.command
+      : `${params.command} continue with the request`;
   const directives = parseInlineSessionDirectives(commandBody);
   const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
@@ -691,8 +690,8 @@ describe("/model chat UX", () => {
       sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
     });
 
-    expect(reply?.text).toContain("Think: max (change with /think <level>)");
-    expect(reply?.text).not.toContain("Think: ultra");
+    expect(reply?.text).toContain("Think: ultra (change with /think <level>)");
+    expect(reply?.text).not.toContain("Think: max");
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
@@ -1299,29 +1298,14 @@ describe("/model chat UX", () => {
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
-  it.each(["", " --runtime codex"])(
-    "rejects an incompatible runtime without changing the session (%s)",
-    async (runtime) => {
-      const sessionEntry = createSessionEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-4o",
-        modelOverrideSource: "user",
-        agentRuntimeOverride: "codex",
-      });
-      const { persisted } = await persistModelDirectiveForTest({
-        command: `/model anthropic/claude-opus-4-6${runtime} hello`,
-        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-        sessionEntry,
-        provider: "openai",
-        model: "gpt-4o",
-        initialModelLabel: "openai/gpt-4o",
-      });
-
-      expect(persisted.errorText).toContain('Runtime "codex" is not supported');
-      expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-      expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    },
-  );
+  registerModelRuntimeDirectiveTests({
+    setOpenAiRuntimeScopedUltraProvider,
+    createSessionEntry,
+    createGptAliasIndex,
+    persistModelDirectiveForTest,
+    queueMocks,
+    stickyModelMock,
+  });
 
   it("rejects model/runtime transactions that target an unsupported runtime", async () => {
     vi.mocked(enqueueSystemEvent).mockClear();
@@ -1358,7 +1342,7 @@ describe("/model chat UX", () => {
     });
     const initialSessionEntry = { ...sessionEntry };
     const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime codex /think ultra please solve",
+      command: "/model openai/gpt-5.6-luna --runtime codex /think xhigh please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
       provider: "openai",
@@ -1367,37 +1351,11 @@ describe("/model chat UX", () => {
     });
 
     expect(persisted.errorText).toBe(
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.',
+      'Thinking level "xhigh" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max, ultra.',
     );
     expect(sessionEntry).toEqual(initialSessionEntry);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-  });
-
-  it("commits model/runtime selection while keeping supported mixed thinking on its turn", async () => {
-    setOpenAiRuntimeScopedUltraProvider();
-    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted, result } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
-      allowedModelKeys: ["openai/gpt-5.6-luna"],
-      sessionEntry,
-    });
-
-    expect(persisted.errorText).toBeUndefined();
-    expect(result).toMatchObject({
-      kind: "continue",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      directives: { thinkLevel: "ultra" },
-      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
-    });
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-luna",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-      thinkingLevel: "high",
-    });
   });
 
   it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
@@ -1605,7 +1563,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("preserves an explicit runtime pin when a model switch omits --runtime", async () => {
-    const sessionEntry = createSessionEntry({ agentRuntimeOverride: "codex" });
+    const sessionEntry = createSessionEntry({
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    });
     await handleDirectiveOnly(
       createHandleParams({
         directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
@@ -1614,6 +1575,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(sessionEntry.nativeRuntimeConsent).toBe("codex");
   });
 
   it("rejects model and runtime changes for model-locked sessions", async () => {
@@ -2184,7 +2146,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const result = await runHandleCommand("/think", { currentThinkLevel: "low" });
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: default, off, minimal, low, medium, adaptive, high.");
+    expect(result?.text).toContain(
+      "Options: default, off, minimal, low, medium, adaptive, high, ultra.",
+    );
   });
 
   it("reports the effective thinking level for the pinned runtime", async () => {
@@ -2220,9 +2184,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Current thinking level: max.");
-    expect(result?.text).toContain("Options: default, off, low, medium, high, max.");
-    expect(result?.text).not.toContain("ultra");
+    expect(result?.text).toContain("Current thinking level: ultra.");
+    expect(result?.text).toContain("Options: default, off, low, medium, high, max, ultra.");
   });
 
   it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {

@@ -100,9 +100,3 @@ export async function startGatewayServer(
     throw error;
   }
 }
-
-/** Clears prepared model-catalog generations between tests. */
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
-  const mod = await loadServerStart();
-  await mod.resetPreparedModelCatalogForTestCore();
-}

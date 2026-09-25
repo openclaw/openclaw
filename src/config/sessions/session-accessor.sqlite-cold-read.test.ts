@@ -37,7 +37,6 @@ import {
   loadTranscriptEventsFromDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptEventAtSeqSync,
   readTranscriptEventRows,
   readTranscriptStatsBatchReadOnlySync,
@@ -54,7 +53,7 @@ import {
 import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -201,7 +200,6 @@ const readers: Array<{ name: string; read: (race: Race) => unknown }> = [
       }),
   },
   { name: "header", read: ({ scope }) => loadTranscriptHeaderSync(scope) },
-  { name: "tail", read: ({ scope }) => loadTranscriptTailEventsSync(scope, 2) },
   { name: "checkpoint suffix", read: ({ scope }) => loadTranscriptEventRowsAfterSeqSync(scope, 0) },
   { name: "checkpoint row", read: ({ scope }) => readTranscriptEventAtSeqSync(scope, 1) },
   {
@@ -290,8 +288,10 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
       expect(holds).toEqual([
         {
           async: false,
+          database: race.database.path,
           elapsedMs: 1_200,
           isMainThread,
+          mode: "deferred",
           operation: "session transcript match read",
           pid: process.pid,
           threadId,

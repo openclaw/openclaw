@@ -25,7 +25,6 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
@@ -48,7 +47,6 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
-  kind: "catalog";
   generationFingerprint: string;
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
   sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
@@ -56,14 +54,15 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  catalogFacts: Pick<
+    PreparedModelRuntimeAgentFacts,
+    "configuredModelRefs" | "configuredRuntimeModels"
+  >;
   preferBuiltPluginArtifacts: boolean;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
-export type PreparedModelCatalogWorkerData = (
-  | PreparedModelCatalogWorkerInput
-  | { kind: "gateway" }
-) & {
+export type PreparedModelCatalogWorkerData = {
   sourceCaptureDirectory: string;
   sourceCaptureManagedRoot?: string;
 };
@@ -88,28 +87,23 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   }>;
 
 export type PreparedModelWorkerResult =
-  | Readonly<{
-      status: "ok";
-      kind: "catalog";
-      generationFingerprint: string;
-      snapshot: ModelCatalogSnapshot;
-      runtimeModels: Map<string, Model[]>;
-      providerExpiries: Map<string, number>;
-      configuredProviderModelIds: Map<string, readonly string[]>;
-      configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
-      credentials: Readonly<AuthStorageData>;
-      providerAuthLabels: ModelCatalogAuthLabels;
-      authStore: AuthProfileStore;
-      authModes: PreparedAgentCredentialModes;
-    }>
-  | Readonly<{
-      status: "ok";
-      kind: "auth-refresh";
-      generationFingerprint: string;
-      authStore: AuthProfileStore;
-      authModes: PreparedAgentCredentialModes;
-      credentials: Readonly<AuthStorageData>;
-    }>
+  | Readonly<
+      PreparedModelRuntimeAuth & {
+        status: "ok";
+        generationFingerprint: string;
+        credentials: Readonly<AuthStorageData>;
+      } & (
+          | {
+              kind: "catalog";
+              snapshot: ModelCatalogSnapshot;
+              runtimeModels: Map<string, Model[]>;
+              providerExpiries: Map<string, number>;
+              configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
+              providerAuthLabels: ModelCatalogAuthLabels;
+            }
+          | { kind: "auth-refresh" }
+        )
+    >
   | Readonly<{
       status: "generation-mismatch";
       generationFingerprint: string;
@@ -122,8 +116,9 @@ export type PreparedModelWorkerResult =
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const GATEWAY_CATALOG_WORKERS = 1;
-type CatalogPoolInput = PreparedModelWorkerRequest | PreparedModelCatalogWorkerTask;
-type CatalogPool = WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>;
+// Leave room for source loaders and overlapping generations without inheriting the host heap budget.
+const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
   agentDir: string;
   isCurrent: () => boolean;
@@ -155,6 +150,41 @@ export function getPreparedModelCatalogWorkerPoolSnapshot() {
       pendingTasks: 0,
     }
   );
+}
+
+function createCatalogPool(
+  env: NodeJS.ProcessEnv,
+  validateResult: (result: PreparedModelWorkerResult) => void,
+  assertCurrent?: () => void,
+): CatalogPool {
+  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
+    maxWorkers: GATEWAY_CATALOG_WORKERS,
+    // Only the inventory owner can replace captured code; idle retirement or crash restart
+    // would import a different source generation into an existing publication.
+    idleTimeoutMs: 0,
+    restartOnError: false,
+    prepareWorker: () => {
+      assertCurrent?.();
+      const capture = createPluginSourceCaptureRoot(
+        resolveStateDir(env),
+        "openclaw-model-catalog-",
+      );
+      return {
+        releaseResources: capture.release,
+        options: {
+          workerData: {
+            sourceCaptureDirectory: capture.directory,
+            sourceCaptureManagedRoot: capture.managedRoot,
+          } satisfies PreparedModelCatalogWorkerData,
+          // Establish state/config before imported modules observe process.env.
+          env,
+        },
+      };
+    },
+    validateResult,
+  });
 }
 
 async function getGatewayCatalogPool(
@@ -222,36 +252,15 @@ async function getGatewayCatalogPool(
         release();
       },
       validate: undefined,
-      pool: new WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>({
-        workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-        maxWorkers: GATEWAY_CATALOG_WORKERS,
-        // Source modules belong to this inventory, not to any one agent or idle request.
-        idleTimeoutMs: 0,
-        restartOnError: false,
-        prepareWorker: () => {
-          signal.throwIfAborted();
-          const capture = createPluginSourceCaptureRoot(
-            resolveStateDir(env),
-            "openclaw-model-catalog-",
-          );
-          return {
-            releaseResources: capture.release,
-            options: {
-              workerData: {
-                kind: "gateway",
-                sourceCaptureDirectory: capture.directory,
-                sourceCaptureManagedRoot: capture.managedRoot,
-              } satisfies PreparedModelCatalogWorkerData,
-              env,
-            },
-          };
-        },
-        validateResult: (result) => {
+      pool: createCatalogPool(
+        env,
+        (result) => {
           const validate = current.validate;
           current.validate = undefined;
           validate?.(result);
         },
-      }),
+        () => signal.throwIfAborted(),
+      ),
     };
     const retire = () => {
       void current.close(signal.reason).catch((error: unknown) => {
@@ -296,7 +305,9 @@ export function fingerprintPreparedModelWorkerRequest(
   return fingerprintPreparedRuntimeFacts([input.generationFingerprint, request]);
 }
 
-function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
+function fingerprintPreparedModelCatalogPlugins(
+  snapshot: PreparedModelCatalogWorkerInput["pluginMetadataSnapshot"],
+): string {
   return fingerprintPreparedRuntimeFacts({
     config: snapshot.configFingerprint ?? null,
     index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
@@ -322,16 +333,9 @@ function fingerprintPreparedModelCatalogConfig(config: OpenClawConfig): string {
   return fingerprint;
 }
 
-export function fingerprintPreparedModelCatalogGeneration(params: {
-  input: PreparedModelRuntimeInput;
-  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
-  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  authStore: AuthProfileStore;
-  providerIds: readonly string[];
-  preferBuiltPluginArtifacts?: boolean;
-  pluginMetadataSnapshot: PluginMetadataSnapshot;
-}): string {
+export function fingerprintPreparedModelCatalogGeneration(
+  params: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint">,
+): string {
   return fingerprintPreparedRuntimeFacts({
     input: { ...params.input, config: fingerprintPreparedModelCatalogConfig(params.input.config) },
     sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(params.sourceConfigForSecrets),
@@ -339,8 +343,26 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
     sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
     authStore: params.authStore,
     providerIds: params.providerIds,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
+    catalogFacts: params.catalogFacts,
+    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
+  });
+}
+
+/** Registrations follow their loader context; agent credentials remain request-local. */
+export function fingerprintPreparedModelCatalogPluginContext(
+  value: PreparedModelCatalogWorkerInput,
+): string {
+  return fingerprintPreparedRuntimeFacts({
+    config: fingerprintPreparedModelCatalogConfig(value.input.config),
+    sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(value.sourceConfigForSecrets),
+    configResolutionFacts: value.configResolutionFacts,
+    sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
+    env: value.input.env,
+    workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
+    allowGatewaySubagentBinding: value.input.allowGatewaySubagentBinding === true,
+    preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(value.pluginMetadataSnapshot),
   });
 }
 
@@ -358,12 +380,8 @@ export function createPreparedModelCatalogWorkerInput(params: {
     ...(source.inheritedAuthDir ? { inheritedAuthDir: source.inheritedAuthDir } : {}),
     ...(source.workspaceDir ? { workspaceDir: source.workspaceDir } : {}),
     ...(source.readOnly ? { readOnly: true } : {}),
-    skipCredentials: true,
     env: { ...params.agentFacts.env },
     ...(source.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    ...(source.runtimePluginSelections
-      ? { runtimePluginSelections: source.runtimePluginSelections }
-      : {}),
     config: source.config,
   };
   // Capture the authored pair now; structured cloning cannot carry process-local Ref provenance.
@@ -373,31 +391,23 @@ export function createPreparedModelCatalogWorkerInput(params: {
     getConfigResolutionFacts(source.config) === getConfigResolutionFacts(sourceConfigForSecrets)
       ? configResolutionFacts
       : serializeConfigResolutionFacts(sourceConfigForSecrets);
-  const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
-  const providerIds = [...params.agentFacts.providerIds];
   const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
     params.pluginMetadataSnapshot;
-  return {
-    kind: "catalog",
-    generationFingerprint: fingerprintPreparedModelCatalogGeneration({
-      input,
-      sourceConfigForSecrets,
-      configResolutionFacts,
-      sourceConfigResolutionFacts,
-      authStore,
-      providerIds,
-      preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
-      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    }),
+  const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
     input,
     sourceConfigForSecrets,
     configResolutionFacts,
     sourceConfigResolutionFacts,
-    authStore,
-    providerIds,
+    authStore: cloneAuthProfileStore(params.agentFacts.authStore),
+    providerIds: [...params.agentFacts.providerIds],
+    catalogFacts: {
+      configuredModelRefs: params.agentFacts.configuredModelRefs,
+      configuredRuntimeModels: params.agentFacts.configuredRuntimeModels,
+    },
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
     pluginMetadataSnapshot,
   };
+  return { ...value, generationFingerprint: fingerprintPreparedModelCatalogGeneration(value) };
 }
 
 type PreparedModelCatalogWorker = Readonly<{
@@ -411,7 +421,6 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
-      configuredProviderModelIds: Map<string, readonly string[]>;
     }
   >;
 }>;
@@ -434,6 +443,9 @@ export function createPreparedModelCatalogWorker(
   let stoppedError: Error | undefined;
   let releaseProcessLifetime: (() => void) | undefined;
   let expectedFingerprint: string | undefined;
+  let pendingAuth:
+    | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
+    | undefined;
   const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
   const tasks = new Map<
     Promise<PreparedModelWorkerResult>,
@@ -477,34 +489,6 @@ export function createPreparedModelCatalogWorker(
       throw new Error("prepared model catalog worker returned a stale generation");
     }
   };
-  const createPool = () =>
-    new WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>({
-      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-      maxWorkers: 1,
-      // Recreating this worker would import changed plugin code under the old generation.
-      // Only the lifecycle owner may retire it; crashes close the generation permanently.
-      idleTimeoutMs: 0,
-      restartOnError: false,
-      prepareWorker: () => {
-        const capture = createPluginSourceCaptureRoot(
-          resolveStateDir(workerInput.input.env),
-          "openclaw-model-catalog-",
-        );
-        return {
-          releaseResources: capture.release,
-          options: {
-            workerData: {
-              ...workerInput,
-              sourceCaptureDirectory: capture.directory,
-              sourceCaptureManagedRoot: capture.managedRoot,
-            } satisfies PreparedModelCatalogWorkerData,
-            // Establish state/config environment before module initialization reads process.env.
-            env: workerInput.input.env,
-          },
-        };
-      },
-      validateResult: validate,
-    });
   const stop = async (error: Error) => {
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
@@ -608,7 +592,8 @@ export function createPreparedModelCatalogWorker(
         sharedOwner = shared;
         shared.borrowers.add(borrower);
       }
-      requestPool = pool = shared?.pool ?? pool ?? createPool();
+      requestPool = pool =
+        shared?.pool ?? pool ?? createCatalogPool(workerInput.input.env, validate);
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -621,7 +606,7 @@ export function createPreparedModelCatalogWorker(
           if (shared) {
             shared.validate = validate;
           }
-          return shared ? { value: workerInput, request: workerRequest } : workerRequest;
+          return { value: workerInput, request: workerRequest };
         },
         { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS, signal: controller.signal },
       );
@@ -641,9 +626,11 @@ export function createPreparedModelCatalogWorker(
       if (
         gatewayOwned &&
         sharedOwner &&
-        requestPool?.isClosed &&
+        sharedOwner.pool.isClosed &&
         !(failure instanceof PreparedModelRuntimePublicationSupersededError)
       ) {
+        // Recovery can abort parent capture before this request receives a pool. A known
+        // borrower still joins that recovery before exposing the failed old publication.
         await sharedOwner.recover(failure).catch((recoveryError: unknown) => {
           process.emitWarning(`Gateway catalog recovery failed: ${String(recoveryError)}`);
         });
@@ -698,7 +685,6 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
-        configuredProviderModelIds: message.configuredProviderModelIds,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {
@@ -708,19 +694,32 @@ export function createPreparedModelCatalogWorker(
       const normalizedProfileIds = profileIds
         ? [...new Set(profileIds)].toSorted((left, right) => left.localeCompare(right))
         : undefined;
-      const message = await request({
+      const key = JSON.stringify([normalizedProviderIds, normalizedProfileIds]);
+      if (pendingAuth?.key === key) {
+        return pendingAuth.promise;
+      }
+      const promise = request({
         kind: "auth-refresh",
         providerIds: normalizedProviderIds,
         ...(normalizedProfileIds ? { profileIds: normalizedProfileIds } : {}),
-      });
-      if (message.kind !== "auth-refresh") {
-        throw new Error("prepared model auth refresh worker returned a catalog result");
-      }
-      return {
-        authStore: message.authStore,
-        authModes: message.authModes,
-        credentials: message.credentials,
-      };
+      })
+        .then((message) => {
+          if (message.kind !== "auth-refresh") {
+            throw new Error("prepared model auth refresh worker returned a catalog result");
+          }
+          return {
+            authStore: message.authStore,
+            authModes: message.authModes,
+            credentials: message.credentials,
+          };
+        })
+        .finally(() => {
+          if (pendingAuth?.promise === promise) {
+            pendingAuth = undefined;
+          }
+        });
+      pendingAuth = { key, promise };
+      return promise;
     },
   };
 }

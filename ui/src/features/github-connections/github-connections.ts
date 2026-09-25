@@ -43,9 +43,15 @@ export class GitHubConnections extends OpenClawLightDomElement {
   private subscriptions: Array<() => void> = [];
   private readonly personal = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
+    authorizationSucceeded: () => {
+      this.setupOpen = false;
+    },
   });
   private readonly system = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
+    authorizationSucceeded: () => {
+      this.setupOpen = false;
+    },
     runExternalMutation: (task, options) =>
       this.context.runtimeConfig.runExternalMutation(task, options),
   });
@@ -262,11 +268,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
               title: t("githubConnections.system"),
               description: html`${system?.account ? `@${system.account.login} · ` : ""}${t(
                 "githubConnections.systemDescription",
-              )}${
-                system?.credentialKind === "native"
-                  ? html`<br />${t("agentTools.githubNativeAccountHint")}`
-                  : nothing
-              }`,
+              )}`,
               control: html`${renderGitHubHealth(system, {
                 loading: this.system.loading || this.personal.loading,
                 error: this.system.error ?? this.personal.error,

@@ -32,6 +32,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import {
   expectDeclaredHttpOwnerIdentity,
   expectHttpForeignSessionAuthority,
@@ -52,6 +53,7 @@ import {
   parseSseDataLines,
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
+import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -61,11 +63,12 @@ import {
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
-let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledServer: Awaited<ReturnType<typeof startGatewayServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
@@ -87,29 +90,18 @@ afterAll(async () => {
   await enabledServer?.close({ reason: "openai http enabled suite done" });
 });
 
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
-  });
-}
-
-async function startSharedSecretServer(
-  port: number,
-  mode: "token" | "password",
-  opts?: { openAiChatCompletionsEnabled?: boolean },
-) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth:
-      mode === "token"
-        ? { mode: "token", token: "secret" }
-        : { mode: "password", password: "secret" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
-  });
+async function startSharedSecretServer(port: TestPortClaim, mode: "token" | "password") {
+  return await startClaimedGateway(port, () =>
+    startGatewayServer(port.port, {
+      host: "127.0.0.1",
+      auth:
+        mode === "token"
+          ? { mode: "token", token: "secret" }
+          : { mode: "password", password: "secret" },
+      controlUiEnabled: false,
+      openAiChatCompletionsEnabled: true,
+    }),
+  );
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -2058,119 +2050,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("forwards inbound temperature and top_p into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
-    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0.3,
-        top_p: 0.95,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ temperature: 0.3, topP: 0.95 });
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      const params = getStreamParams();
-      expect(params?.temperature).toBe(0);
-      expect(params?.topP).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 999,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/temperature/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        top_p: 5,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/top_p/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-  });
-
-  it("forwards inbound penalty and seed params into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
-    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        frequency_penalty: -0.5,
-        presence_penalty: 1.25,
-        seed: 12345,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({
-        frequencyPenalty: -0.5,
-        presencePenalty: 1.25,
-        seed: 12345,
-      });
-      await res.text();
-    }
-
-    for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        ...body,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
+  registerOpenAiHttpSamplingTests({
+    getPort: () => enabledPort,
+    postChatCompletions,
+    postRawChatCompletions,
+    firstAgentCommandOptions,
+    agentCommandMock,
   });
 
   it("forwards inbound stop into streamParams", async () => {
@@ -4017,7 +3902,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getGatewayTestPort();
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
         const trustedProxyAuth = {
@@ -4037,12 +3921,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             },
           });
           resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openAiChatCompletionsEnabled: true,
-          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const port = portClaim.port;
+          server = await startClaimedGateway(portClaim, () =>
+            startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: trustedProxyAuth,
+              controlUiEnabled: false,
+              openAiChatCompletionsEnabled: true,
+            }),
+          );
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openai-http";
           await upsertSessionEntryCore(
@@ -4151,8 +4039,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getGatewayTestPort();
-      const server = await startSharedSecretServer(port, mode);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startSharedSecretServer(portClaim, mode);
       try {
         await expectSharedSecretHttpOwnerIdentity({
           post: (stream, headers) =>

@@ -8,7 +8,6 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
-import type { AgentCommandOpts } from "../../agents/command/types.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -20,10 +19,6 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
-import {
-  createExecutionStartedOwnerBinding,
-  isRetainedExecutionOwnerBinding,
-} from "../../audit/execution-owner-binding.js";
 import {
   readAgentRunTerminalError,
   readAgentRunTerminalOutcome,
@@ -45,9 +40,7 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { getTaskById } from "../../tasks/runtime-internal.js";
 import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
-import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
-import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -60,7 +53,9 @@ import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
+import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
+import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -131,15 +126,6 @@ export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry):
   return entry?.abortStopReason?.trim() || "rpc";
 }
 
-export function deleteGatewayDedupeEntries(params: {
-  dedupe: AgentTurnContext["dedupe"];
-  keys: readonly string[];
-}) {
-  for (const key of params.keys) {
-    params.dedupe.delete(key);
-  }
-}
-
 type TaskSettlementAdmission =
   | { taskTrackingMode: "none"; assertSettlementCurrent?: () => void }
   | {
@@ -191,6 +177,8 @@ export function dispatchAgentRunFromGateway(
     );
   };
   const assertCurrent = () => {
+    // Preserve the run's recorded cancellation before a retired source rejects its authority.
+    params.abortController.signal.throwIfAborted();
     params.assertCurrent?.();
     params.abortController.signal.throwIfAborted();
   };
@@ -351,39 +339,28 @@ export function dispatchAgentRunFromGateway(
   if (cronCreatorAuthorityCapability) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
+  const terminalProducer = bindGatewayAgentTerminalProducer({
+    runId: params.runId,
+    entry: registeredRunEntry,
+    controller: params.abortController,
+    ingressOpts: params.ingressOpts,
+    chatAbortControllers: params.context.chatAbortControllers,
+    isOwnerReleased: () => runOwnerCleanedUp,
+  });
   const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
-    params.ingressOpts,
+    { ...params.ingressOpts, beforeTerminalDelivery: terminalProducer.complete },
     readAgentRunDispatchExecutionIdentity(params),
   );
   const activateAgent = () => {
     assertCurrent();
     const task = trackedTask;
     const trackedTaskBinding = task
-      ? createExecutionStartedOwnerBinding(
-          (admitted: Parameters<NonNullable<AgentCommandOpts["onPostAdmittedRunContext"]>>[0]) => {
-            try {
-              const taskResult = bindTaskRunExecution({ admitted, taskId: task.taskId });
-              const flowResult = task.parentFlowId
-                ? isRetainedExecutionOwnerBinding(taskResult)
-                  ? bindTaskFlowExecution({ admitted, flowId: task.parentFlowId })
-                  : taskResult
-                : undefined;
-              if (
-                [taskResult, flowResult].some(
-                  (result) => result === "mismatch" || result === "missing",
-                )
-              ) {
-                params.context.logGateway.warn(
-                  `exact tracked-task execution binding was not retained for ${params.runId}`,
-                );
-              }
-            } catch (error) {
-              params.context.logGateway.warn(
-                `failed to retain tracked-task execution binding ${params.runId}: ${formatForLog(error)}`,
-              );
-            }
-          },
-        )
+      ? createGatewayTaskExecutionBinding({
+          task,
+          runId: params.runId,
+          assertCurrent,
+          log: params.context.logGateway,
+        })
       : undefined;
     const ingressOptsWithTaskBinding = task
       ? {
@@ -397,22 +374,42 @@ export function dispatchAgentRunFromGateway(
           },
         }
       : ingressOptsWithSpawnFacts;
-    if (createdTask) {
-      bindTrackedTaskOwner();
+    const invoke = () =>
+      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+        agentCommandFromGatewayIngress(
+          cronCreatorAuthorityCapability
+            ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
+            : ingressOptsWithTaskBinding,
+          defaultRuntime,
+          params.context.deps,
+          {
+            restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+          },
+          params.commandRuntimeContext,
+        ),
+      );
+    const cancel = task && createTrackedTaskCancellation(task);
+    if (createdTask && task && cancel) {
+      const assertTaskOwnerCurrent = () => {
+        assertCurrent();
+        if (
+          !ownsRunRegistration() ||
+          params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
+        ) {
+          throw new Error("Task no longer owns its Gateway run registration.");
+        }
+      };
+      return createdTask.bindRunOwner(cancel, assertTaskOwnerCurrent).then((binding) => {
+        releaseTaskOwner = binding.release;
+        originalTaskRunOwner = binding.owner;
+        assertTaskOwnerCurrent();
+        if (getTaskRunOwner(task) !== binding.owner) {
+          throw new Error("Task run owner was replaced before Gateway activation.");
+        }
+        return invoke();
+      });
     }
-    return runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-      agentCommandFromGatewayIngress(
-        cronCreatorAuthorityCapability
-          ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
-          : ingressOptsWithTaskBinding,
-        defaultRuntime,
-        params.context.deps,
-        {
-          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-        },
-        params.commandRuntimeContext,
-      ),
-    );
+    return invoke();
   };
   const runAgent = () => {
     try {
@@ -434,13 +431,15 @@ export function dispatchAgentRunFromGateway(
       return Promise.reject(failure);
     }
   };
-  const agentRun = cronCreatorAuthorityCapability
+  const agentExecution = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
         cronCreatorAuthorityCapability,
         runAgent,
         params.abortController.signal,
       )
     : runAgent();
+  // Startup failures may never enter command finalization; delivery already joined this boundary.
+  const agentRun = terminalProducer.settle(agentExecution);
   let inputCompletionWriteFailed = false;
   const runCompletion = agentRun
     .then(async (result) => {
@@ -657,19 +656,24 @@ export function dispatchAgentRunFromGateway(
       releaseTaskOwner?.();
     });
 
-  if (finalizeLegacyRun) {
-    bindTrackedTaskOwner();
+  if (finalizeLegacyRun && trackedTask) {
+    const cancel = createTrackedTaskCancellation(trackedTask);
+    if (cancel) {
+      releaseTaskOwner = bindTaskRunOwner(trackedTask, cancel);
+      originalTaskRunOwner = getTaskRunOwner(trackedTask);
+    }
   }
 
-  function bindTrackedTaskOwner() {
+  function createTrackedTaskCancellation(
+    task: TaskRecord,
+  ): Parameters<typeof bindTaskRunOwner>[1] | undefined {
     const entry = registeredRunEntry;
-    if (trackedTask && entry?.controller === params.abortController) {
-      const task = trackedTask;
+    if (entry?.controller === params.abortController) {
       const taskId = task.taskId;
       const operationalRunInstance = registeredRunInstance;
       const lifecycleGeneration = registeredLifecycleGeneration;
       const sessionKey = registeredSessionKey;
-      releaseTaskOwner = bindTaskRunOwner(task, async (reason) => {
+      return async (reason) => {
         const authority = entry.agentRunDelegatedAuthority;
         if (
           !operationalRunInstance ||
@@ -711,9 +715,9 @@ export function dispatchAgentRunFromGateway(
           return err("Task cancellation was not confirmed. Inspect its final result.");
         }
         return ok(current);
-      });
-      originalTaskRunOwner = getTaskRunOwner(task);
+      };
     }
+    return undefined;
   }
   // Gateway shutdown must join this execution, not just its admission.
   return runCompletion;

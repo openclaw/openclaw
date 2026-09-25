@@ -1,7 +1,6 @@
 // Codex tests cover transcript mirror plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   embeddedAgentLog,
@@ -14,10 +13,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -42,11 +38,15 @@ import {
   mirrorPromptAtTurnStartBestEffort,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
+import {
+  createTranscriptMirrorTestHarness,
+  readMirrorMessages,
+  readMirrorRaw,
+} from "./transcript-mirror.test-harness.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
-const deliverAsyncMessageBestEffort = codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort;
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 
@@ -75,22 +75,12 @@ function messageContent(message: AgentMessage | undefined) {
   return message.content;
 }
 
-const tempDirs: string[] = [];
+const { makeRoot, createSqliteMirrorTarget } = createTranscriptMirrorTestHarness();
 
-afterEach(async () => {
+afterEach(() => {
   resetGlobalHookRunner();
   publishSessionTranscriptUpdateByIdentityMock.mockReset();
-  for (const dir of tempDirs.splice(0)) {
-    await closeOpenClawAgentDatabasesAsync(dir);
-    await fs.rm(dir, { recursive: true, force: true });
-  }
 });
-
-async function makeRoot(prefix: string): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(root);
-  return root;
-}
 
 describe("buildCodexUserPromptMessage", () => {
   it("uses transcriptPrompt when an embedded caller does not provide a recorder", () => {
@@ -139,71 +129,6 @@ describe("buildCodexUserPromptMessage", () => {
     });
   });
 });
-
-function readEventMessages(events: unknown[]): Array<{ role?: string; text?: string }> {
-  return events
-    .map((event) =>
-      event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
-    )
-    .filter((message): message is { role?: string; content?: unknown } =>
-      Boolean(message && typeof message === "object"),
-    )
-    .map((message) => {
-      const content = Array.isArray(message.content)
-        ? message.content.find((part): part is { text: string } =>
-            Boolean(part && typeof part === "object" && typeof part.text === "string"),
-          )?.text
-        : typeof message.content === "string"
-          ? message.content
-          : undefined;
-      return { role: message.role, text: content };
-    });
-}
-
-async function createSqliteMirrorTarget(prefix: string, options: { sessionId?: string } = {}) {
-  const root = await makeRoot(prefix);
-  const agentId = "main";
-  const sessionId = options.sessionId ?? "session-1";
-  const sessionKey = `agent:${agentId}:${sessionId}`;
-  const storePath = path.join(root, "openclaw-agent.sqlite");
-  await upsertSessionEntry({
-    agentId,
-    sessionKey,
-    storePath,
-    entry: {
-      sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
-      sessionId,
-      updatedAt: 1,
-    },
-  });
-  return {
-    agentId,
-    sessionId,
-    sessionKey,
-    storePath,
-    bogusSessionFile: path.join(root, "should-not-be-created.jsonl"),
-  };
-}
-
-async function readMirrorRaw(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<string> {
-  return (await readSessionTranscriptEvents(target))
-    .map((event) => JSON.stringify(event))
-    .join("\n");
-}
-
-async function readMirrorMessages(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<Array<{ role?: string; text?: string }>> {
-  return readEventMessages(await readSessionTranscriptEvents(target));
-}
 
 describe("importCodexThreadHistoryToTranscript", () => {
   it.each([
@@ -819,189 +744,6 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
   });
 
-  it("delivers the persisted async rewrite once across reconnect replay", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-reconnect-");
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: (event) => {
-            const message = asOptionalRecord(asOptionalRecord(event)?.message);
-            expect(message).toHaveProperty("openclawAsyncDelivery.questions");
-            const firstBlock = asOptionalRecord(
-              Array.isArray(message?.content) ? message.content[0] : undefined,
-            );
-            if (!firstBlock) {
-              throw new Error("Expected the async question text block");
-            }
-            firstBlock.text = "[redacted async update]";
-            return {
-              message: castAgentMessage({
-                ...message,
-                phase: "final_answer",
-              }),
-            };
-          },
-        },
-      ]),
-    );
-    const message = castAgentMessage({
-      ...makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Sensitive background update." }],
-        timestamp: Date.now(),
-      }),
-      phase: "final_answer",
-      openclawAsyncDelivery: {
-        itemId: "async-update",
-        questions: [{ title: "Sensitive question?", options: ["Sensitive choice"] }],
-      },
-    });
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-update",
-      message,
-      text: "Sensitive background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
-
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
-    await expect(
-      deliverAsyncMessageBestEffort({
-        ...delivery,
-        params: { ...runParams, runId: "run-async-reconnect" },
-      }),
-    ).resolves.toBe("settled");
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      { text: "[redacted async update]" },
-      {
-        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-update",
-      },
-    );
-    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
-    expect(onBlockReply.mock.calls.map(([payload]) => payload)).not.toContainEqual({
-      text: "Sensitive background update.",
-    });
-    expect(await readMirrorMessages(target)).toEqual([
-      { role: "assistant", text: "[redacted async update]" },
-    ]);
-    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
-      ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
-    );
-    expect(updates).toHaveLength(1);
-    expect(updates[0]?.update?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "[redacted async update]" }],
-      phase: "final_answer",
-      idempotencyKey: "codex-app-server:thread-1:turn-1:async:async-update",
-      openclawAsyncDelivery: { itemId: "async-update" },
-    });
-    expect(updates[0]?.update?.message).not.toHaveProperty("openclawAsyncDelivery.questions");
-  });
-
-  it("retries a durable async callback from the persisted row", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-callback-fail-");
-    const onBlockReply = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("channel unavailable"))
-      .mockResolvedValue(undefined);
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-callback-fail",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-callback-fail",
-      message: castAgentMessage({
-        ...makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Persisted background update." }],
-          timestamp: Date.now(),
-        }),
-        openclawAsyncDelivery: { itemId: "async-callback-fail" },
-      }),
-      text: "Persisted background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
-
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("retry");
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      { text: "Persisted background update." },
-      {
-        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-callback-fail",
-      },
-    );
-    expect(await readMirrorMessages(target)).toEqual([
-      { role: "assistant", text: "Persisted background update." },
-    ]);
-    expect(publishSessionTranscriptUpdateByIdentityMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not deliver async messages blocked by before_message_write", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-blocked-");
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_message_write", handler: () => ({ block: true }) },
-      ]),
-    );
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-blocked",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-
-    await expect(
-      deliverAsyncMessageBestEffort({
-        cwd: path.dirname(target.storePath),
-        params: runParams,
-        itemId: "async-blocked",
-        message: castAgentMessage({
-          ...makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Blocked update." }],
-            timestamp: Date.now(),
-          }),
-          openclawAsyncDelivery: { itemId: "async-blocked" },
-        }),
-        text: "Blocked update.",
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    ).resolves.toBe("settled");
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(await readMirrorMessages(target)).toEqual([]);
-    expect(publishSessionTranscriptUpdateByIdentityMock).not.toHaveBeenCalled();
-  });
-
   it("emits stable sequence numbers for multi-message mirror batches", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-seq-");
 
@@ -1477,7 +1219,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   });
 
   it("skips transcript mirrors for sessionless embedded runs", async () => {
-    const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const root = makeRoot("openclaw-codex-transcript-failure-");
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const markRuntimePersistencePending = vi.fn();
     const assistantMessage = attachCodexMirrorIdentity(
@@ -1525,7 +1267,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   });
 
   it("renders normal-session mirror failures in structured warnings", async () => {
-    const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const root = makeRoot("openclaw-codex-transcript-failure-");
     const blockedParent = path.join(root, "not-a-directory");
     await fs.writeFile(blockedParent, "blocked");
     const storePath = path.join(blockedParent, "openclaw-agent.sqlite");

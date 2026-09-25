@@ -2420,7 +2420,7 @@ describe("anthropic transport stream", () => {
     const firstCallParams = latestAnthropicRequest().payload;
     const system = requireArray(firstCallParams.system, "system");
     expect(requireRecord(system[0], "billing system item").text).toBe(
-      "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+      "x-anthropic-billing-header: cc_version=2.1.278; cc_entrypoint=sdk-cli;",
     );
     expect(
       system.some(
@@ -4496,15 +4496,11 @@ describe("anthropic transport stream", () => {
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
+    const errorMessage = "messages.1.content.63: Invalid signature in thinking block";
     guardedFetchMock.mockResolvedValueOnce(
-      createRawSseResponse(
-        "event: error\ndata: " +
-          JSON.stringify({
-            type: "invalid_request_error",
-            message: "messages.1.content.63: Invalid signature in thinking block",
-          }) +
-          "\n\n",
-      ),
+      createSseResponse([
+        { type: "error", error: { type: "invalid_request_error", message: errorMessage } },
+      ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
     const acceptanceObserver = vi.fn();
@@ -4513,21 +4509,19 @@ describe("anthropic transport stream", () => {
       { apiKey: "sk-ant-api", onResponse } as AnthropicStreamOptions,
       acceptanceObserver,
     );
-    const stream = streamFn(
+    const stream = await streamFn(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
       options,
     );
 
     const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
+    for await (const event of stream) {
       eventTypes.push(event.type);
     }
 
-    // start must not precede the error path, regardless of whether the mock
-    // surfaces the SSE error as an explicit "error" event or silently ends the
-    // stream (a timing artefact of synchronous mock SSE delivery).
-    expect(eventTypes).not.toContain("start");
+    expect(eventTypes).toEqual(["error"]);
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "error", errorMessage });
     expect(acceptanceObserver).toHaveBeenCalledWith({
       kind: "http_response",
       status: 200,

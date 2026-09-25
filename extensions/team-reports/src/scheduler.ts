@@ -309,10 +309,12 @@ export class TeamReportsScheduler {
           await this.options.store.prune(this.options.config.retention.days);
           controller.signal.throwIfAborted();
         }
-        const failed = Object.values(stats).some((source) => !source.ok);
-        if (failed) {
+        const failed = Object.entries(stats)
+          .filter(([, source]) => !source.ok)
+          .map(([sourceId]) => sourceId);
+        if (failed.length > 0) {
           throw new Error(
-            "An activity source failed; inspect report source warnings and check access",
+            `Activity sources failed (${failed.join(", ")}); inspect run source warnings and check access`,
           );
         }
         await this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });

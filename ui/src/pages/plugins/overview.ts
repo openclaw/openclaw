@@ -44,13 +44,19 @@ function pluginRepository(
 export function renderPluginPublisher(
   result: PluginDiscoveryDetailResult | undefined,
   localName?: string,
-): TemplateResult {
+): TemplateResult | typeof nothing {
   const author = result?.detail.author;
   const handle = author?.handle ?? result?.plugin.catalog.author;
+  const name = author?.displayName ?? localName;
+  if (!name && !handle) {
+    return nothing;
+  }
   return html`<div class="plugin-catalog-detail__publisher">
-    ${author?.displayName || localName ? html`<strong>${author?.displayName ?? localName}</strong>` : nothing}
-    ${author?.official === true ? renderPluginOfficialBadge() : nothing}
-    ${handle ? renderPluginAuthor(handle, { linked: true }) : nothing}
+    <span class="plugin-catalog-detail__publisher-name">
+      ${name ? html`<strong>${name}</strong>` : renderPluginAuthor(handle, { linked: true })}
+      ${author?.official === true ? renderPluginOfficialBadge() : nothing}
+    </span>
+    ${name ? renderPluginAuthor(handle, { linked: true }) : nothing}
   </div>`;
 }
 
@@ -58,6 +64,7 @@ export function renderPluginMetadata(
   result: PluginDiscoveryDetailResult | undefined,
   installedVersion?: string,
   local?: PluginsInspectResult["overview"],
+  loading = false,
 ): TemplateResult {
   const detail = result?.detail;
   const catalog = result?.plugin.catalog;
@@ -88,18 +95,23 @@ export function renderPluginMetadata(
     ],
   ];
   const categories = catalog?.categories ?? [];
+  const placeholder = html`<span
+    class="plugin-metadata__placeholder skeleton"
+    aria-hidden="true"
+  ></span>`;
   return html`
+    ${loading ? html`<section class="plugin-metadata__loading" role="status" aria-label=${t("pluginsPage.detailLoading")}><span class="plugin-metadata__placeholder skeleton" aria-hidden="true"></span>${placeholder}</section>` : nothing}
     ${detail?.security ? renderPluginSecurityAudit(detail.security.verdict ?? "unknown", detail.security.auditUrl) : nothing}
     ${
-      values.some(([, value]) => value !== undefined)
+      loading || values.some(([, value]) => value !== undefined)
         ? html`<dl class="plugin-metadata__facts">
             ${values
-              .filter(([, value]) => value !== undefined)
+              .filter(([, value]) => loading || value !== undefined)
               .map(
                 ([label, value]) =>
                   html`<div>
                     <dt>${label}</dt>
-                    <dd>${value}</dd>
+                    <dd>${value ?? placeholder}</dd>
                   </div>`,
               )}
           </dl>`
@@ -110,7 +122,7 @@ export function renderPluginMetadata(
         ? html`<section class="plugin-metadata__section">
             <h2>${t("pluginsPage.detailCategories")}</h2>
             <div class="plugin-metadata__categories">
-              ${categories.map((category) => html`<span class="plugin-catalog-detail__tag">${category}</span>`)}
+              ${categories.map((category) => html`<span class="chip">${category}</span>`)}
             </div>
           </section>`
         : nothing
@@ -146,9 +158,8 @@ export function renderPluginMetadata(
 
 export function renderPluginCapabilitySection(
   title: string,
-  values: Array<{ name: string; description?: string }>,
+  values: Array<{ name: string; description?: string; onOpen?: () => void }>,
   icon: TemplateResult,
-  onOpen?: (name: string) => void,
 ): TemplateResult {
   return html`${
     values.length
@@ -156,14 +167,15 @@ export function renderPluginCapabilitySection(
           <h2>${title}<span>${values.length}</span></h2>
           <div>
             ${values.map((value) => {
+              const open = value.onOpen;
               const content = html`<span class="plugin-capability__icon" aria-hidden="true"
                   >${icon}</span
                 ><span class="plugin-capability__copy"
                   ><strong>${value.name}</strong
                   >${value.description ? html`<span>${value.description}</span>` : nothing}</span
-                >${onOpen ? icons.chevronRight : nothing}`;
+                >${open ? icons.chevronRight : nothing}`;
               return html`<div class="plugin-capability">
-                ${onOpen ? html`<button type="button" @click=${() => onOpen(value.name)}>${content}</button>` : html`<div class="plugin-capability__static">${content}</div>`}
+                ${open ? html`<button type="button" @click=${open}>${content}</button>` : html`<div class="plugin-capability__static">${content}</div>`}
               </div>`;
             })}
           </div>
@@ -172,9 +184,13 @@ export function renderPluginCapabilitySection(
   }`;
 }
 
-export function renderPluginAskAction(onAsk?: () => void) {
+export function renderPluginAskAction(onAsk?: () => void, primary = true) {
   return onAsk
-    ? html`<button type="button" class="btn oc-action oc-action-secondary" @click=${onAsk}>
+    ? html`<button
+        type="button"
+        class="btn oc-action ${primary ? "primary oc-action-primary" : "oc-action-secondary"}"
+        @click=${onAsk}
+      >
         ${t("nav.askOpenClaw")}
       </button>`
     : nothing;

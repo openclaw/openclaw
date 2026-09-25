@@ -5,13 +5,14 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog-outcome.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildPreparedModelsProviderData, handleModelsCommand } from "./commands-models.js";
+import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
+import { handleModelsCommand } from "./commands-models.js";
 import {
   createModelsTestRegistry,
   createModelsTestOwner,
@@ -85,7 +86,7 @@ beforeEach(() => {
         modelCatalog: { ...baseOwner.modelCatalog, providerOutcomes },
         metadataSnapshot: pluginMetadataMocks.getCurrent(),
       };
-      setPreparedModelRuntimeAuthStore(owner, authStore);
+      bindPreparedModelRuntimeAuth(owner, { store: authStore });
       return owner;
     },
   );

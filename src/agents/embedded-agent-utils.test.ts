@@ -9,6 +9,7 @@ import {
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  prepareAssistantVisibleText,
   createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -696,6 +697,18 @@ describe("stripDowngradedToolCallText", () => {
 });
 
 describe("extractAssistantVisibleText", () => {
+  it.each(["Visible prefix <think>private reasoning tail", ""])(
+    "captures legacy string content before it changes: %j",
+    (content) => {
+      const message = makeAssistantMessage({ role: "assistant", content, timestamp: 0 });
+      const render = prepareAssistantVisibleText(message);
+      message.content = [{ type: "text", text: "Replacement" }];
+
+      expect(render()).toBe(content ? "Visible prefix" : "");
+      expect(render()).toBe(content ? "Visible prefix" : "");
+    },
+  );
+
   it.each([
     { name: "plain text", text: "Done." },
     { name: "indented code", text: "    const value = 1;\n    use(value);" },

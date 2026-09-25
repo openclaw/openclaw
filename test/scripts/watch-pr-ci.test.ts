@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectRollupContexts } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
@@ -17,91 +15,7 @@ import {
 } from "../../scripts/watch-pr-ci.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
-
-const sha = "a".repeat(40);
-
-function runWatcher(
-  ghScript: string,
-  headSha = sha,
-  options: string[] = [],
-  clock: "poll" | "wall" | { readClock: string } = "poll",
-  envOverrides: NodeJS.ProcessEnv = {},
-  notifierPath?: string,
-) {
-  return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
-    const ghPath = join(binDir, "gh");
-    writeFileSync(ghPath, ghScript);
-    chmodSync(ghPath, 0o755);
-    const clockPath = join(binDir, "poll-clock.mjs");
-    // Evidence fixtures advance polling only, independent of fake gh startup cost.
-    // Deadline coverage explicitly retains the real clock and child timeout.
-    // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
-    writeFileSync(
-      clockPath,
-      `import { readFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import timers from "node:timers/promises";
-if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
-  const realSleep = timers.setTimeout;
-  let waitedMs = 0;
-  Date.now = () => now() + waitedMs;
-  timers.setTimeout = async (milliseconds, value, options) => {
-    const result = await realSleep(0, value, options);
-    waitedMs += milliseconds;
-    return result;
-  };
-  syncBuiltinESMExports();
-}
-`,
-    );
-    return await new Promise<{ status: number; stdout: string; stderr: string }>(
-      (resolve, reject) => {
-        execFile(
-          notifierPath ? "/bin/bash" : process.execPath,
-          [
-            ...(notifierPath
-              ? [
-                  "-c",
-                  'exec 3>"$1"; shift; exec "$@"',
-                  "watcher-notifier",
-                  notifierPath,
-                  process.execPath,
-                ]
-              : []),
-            "scripts/watch-pr-ci.mjs",
-            "42",
-            headSha,
-            "--attach-timeout",
-            "1",
-            "--timeout",
-            "1",
-            "--interval",
-            "1",
-            ...options,
-          ],
-          {
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              ...envOverrides,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
-              PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-            },
-          },
-          (error, stdout, stderr) => {
-            const status = error ? error.code : 0;
-            if (typeof status !== "number") {
-              reject(new Error("watcher process did not report an exit code", { cause: error }));
-              return;
-            }
-            resolve({ status, stdout, stderr });
-          },
-        );
-      },
-    );
-  });
-}
+import { runWatcher, sha } from "./watch-pr-ci.test-support.js";
 
 function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
@@ -138,7 +52,7 @@ const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -225,11 +139,17 @@ function replaySummary({
   },
   runStatus = "in_progress",
   afterRun = {},
+  detailContexts,
+  supersededFailure = false,
+  completeAfter = 3,
 }: {
   state?: string;
   counts?: Record<string, unknown>;
   runStatus?: string;
   afterRun?: Record<string, unknown>;
+  detailContexts?: unknown;
+  supersededFailure?: boolean;
+  completeAfter?: number;
 }) {
   return withTempDir("openclaw-watch-pr-ci-summary-", async (root) => {
     const callsPath = join(root, "calls.jsonl");
@@ -251,15 +171,17 @@ const pr = {
   ...(runReads >= 2 ? ${JSON.stringify(afterRun)} : {}),
 };
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   value = { state: "open", mergeable: true, head: { sha: "${sha}" } };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
-  value = { workflow_runs: [{ ...identity, id: 201, check_suite_id: 20_000 }] };
+  value = { workflow_runs: [{ ...identity, id: 201, check_suite_id: 20_000 },
+    ...(${supersededFailure} ? [{ ...identity, id: 100, check_suite_id: 10_000 }] : [])] };
 } else if (args[0] === "run" && args[1] === "view") {
-  value = { status: ${JSON.stringify(runStatus)}, conclusion: ${JSON.stringify(runStatus === "completed" ? "success" : null)} };
+  const completed = ${supersededFailure} ? runReads >= ${completeAfter} : ${runStatus === "completed"};
+  value = { status: completed ? "completed" : ${JSON.stringify(runStatus)}, conclusion: completed ? "success" : null };
 } else if (args[1] === "repos/openclaw/openclaw/actions/runs/100") {
   value = { ...identity, id: 100, check_suite_id: 10_000 };
 } else if (args[0] === "api" && args[1] === "graphql") {
@@ -268,15 +190,16 @@ if (args[0] === "browse" && args[1] === "--no-browser") {
   } else {
     const nodes = Array.from({ length: 200 }, (_, index) => ({
       kind: "CheckRun", databaseId: 1_000 + index, name: "old check " + index,
-      status: "COMPLETED", conclusion: "SUCCESS",
+      status: "COMPLETED", conclusion: ${supersededFailure} && index === 0 ? "CANCELLED" : "SUCCESS",
       checkSuite: { databaseId: 10_000, workflowRun: {
         databaseId: 100, event: "pull_request", workflow: { databaseId: 10 },
       } },
     }));
-    nodes.push({ kind: "StatusContext", context: "required status", state: pr.statusCheckRollup.state });
+    nodes.push({ kind: "StatusContext", context: "required status",
+      state: ${supersededFailure} ? runReads >= ${completeAfter} ? "SUCCESS" : "PENDING" : pr.statusCheckRollup.state });
     const start = Number(args.find((arg) => arg.startsWith("cursor="))?.slice(7) ?? 0);
     const end = Math.min(start + 100, nodes.length);
-    pr.statusCheckRollup.contexts = {
+    pr.statusCheckRollup.contexts = ${detailContexts !== undefined} ? ${JSON.stringify(detailContexts)} : {
       totalCount: nodes.length, nodes: nodes.slice(start, end),
       pageInfo: { hasNextPage: end < nodes.length, endCursor: end < nodes.length ? String(end) : null },
     };
@@ -319,6 +242,7 @@ function replayRestRollup(
     statusPages?: unknown[];
     runPages?: unknown[];
     suitePages?: unknown[];
+    afterRun?: { checkPages?: unknown[]; statusPages?: unknown[]; suitePages?: unknown[] };
     afterCollection?: Record<string, unknown>;
     runStatuses?: string[];
   } = {},
@@ -334,13 +258,15 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
-const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+const original = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
+const fixture = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
 const run = { id: 201, workflow_id: 10, check_suite_id: 20_000, event: "pull_request", head_sha: "${sha}" };
 const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -484,7 +410,7 @@ describe("watch-pr-ci", () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
-  "browse --no-browser") printf 'https://github.com/openclaw/openclaw\\n' ;;
+  "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
     printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
@@ -542,7 +468,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -698,7 +624,7 @@ const pullPath = ${JSON.stringify(pullPath)};
 const reads = calls.filter((call) => call.includes(pullPath)).length;
 if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
   console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
   process.exit(0);
@@ -769,8 +695,64 @@ console.log(JSON.stringify(value));
     },
   );
 
+  // These replay groups own their CLI process, files, and polling clock per case.
+  // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it.each([
+    it.concurrent("avoids repeating summaries while superseded failures require full polling", async () => {
+      const result = await replaySummary({ state: "FAILURE", supersededFailure: true });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(2);
+      expect(result.stdout).toContain("\nGREEN");
+      const graphql = result.calls.filter((call) => call[1] === "graphql");
+      expect(graphql).toHaveLength(10);
+      expect(
+        graphql.filter((call) => call.some((arg) => arg.includes("checkRunCountsByState"))),
+      ).toHaveLength(1);
+      expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/pulls/42");
+    });
+
+    it.concurrent("returns to summary polling when failures clear while CI remains active", async () => {
+      const result = await replaySummary({
+        state: "FAILURE",
+        supersededFailure: true,
+        completeAfter: 10,
+        afterRun: { statusCheckRollup: { state: "PENDING" } },
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("\nGREEN");
+      const graphql = result.calls.filter((call) => call[1] === "graphql");
+      expect(graphql).toHaveLength(8);
+      expect(
+        graphql.filter((call) => call.some((arg) => arg.includes("checkRunCountsByState"))),
+      ).toHaveLength(2);
+    });
+
+    it.concurrent.each<[string, unknown]>([
+      ["missing contexts", null],
+      ["missing nodes", { totalCount: 0, pageInfo: { hasNextPage: false } }],
+      ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
+      ["missing pagination", { totalCount: 0, nodes: [] }],
+      ["no checks", { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } }],
+      ...[0, 2].map((totalCount): [string, unknown] => [
+        "inconsistent count",
+        {
+          totalCount,
+          nodes: [{ kind: "StatusContext", context: "required", state: "SUCCESS" }],
+          pageInfo: { hasNextPage: false },
+        },
+      ]),
+    ])("does not turn a FAILURE with %s into success", async (_label, detailContexts) => {
+      const result = await replaySummary({
+        state: "FAILURE",
+        runStatus: "completed",
+        detailContexts,
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).toContain("rollup detail evidence is incomplete");
+      expect(result.stdout).not.toContain("\nGREEN");
+    });
+
+    it.concurrent.each([
       { label: "complete counts", counts: undefined, pending: "1" },
       { label: "missing counts", counts: {}, pending: "unknown" },
       {
@@ -810,7 +792,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
       {
         label: "moved head",
@@ -853,7 +835,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("GraphQL quota fallback", () => {
-    it("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
+    it.concurrent("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
       const result = await replayRestRollup({
         runStatuses: ["in_progress", "in_progress", "in_progress", "completed"],
         checkPages: [
@@ -876,7 +858,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/actions/runs?head_sha="))).toBe(false);
     });
 
-    it.each([
+    it.concurrent.each([
       "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
       "gh: Resource not accessible by integration (HTTP 403)",
       "gh: Bad Gateway (HTTP 502)",
@@ -890,7 +872,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/commits/"))).toBe(false);
     });
 
-    it("keeps a required failure on the second status page blocking", async () => {
+    it.concurrent("keeps a required failure on the second status page blocking", async () => {
       const statuses = Array.from({ length: 100 }, (_, index) => ({
         id: index + 1,
         context: `status ${index}`,
@@ -913,9 +895,32 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.endsWith("/status?per_page=100&page=2"))).toBe(
         true,
       );
+      expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(1);
+      expect(result.calls.filter((call) => call[1]?.includes("/status?"))).toHaveLength(2);
+      expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each(["pending", "failure"])(
+      "reobserves a same-head %s status after attached-run success",
+      async (state) => {
+        const result = await replayRestRollup({
+          afterRun: {
+            statusPages: [
+              { sha, state, total_count: 1, statuses: [{ id: 1, context: "required", state }] },
+            ],
+          },
+        });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
+          state === "failure" ? 15 : 16,
+        );
+        expect(result.stdout).not.toContain("\nGREEN");
+        if (state === "failure") {
+          expect(result.stdout).toContain("FAILING checks=required");
+        }
+      },
+    );
+
+    it.concurrent.each([
       { label: "moved head", afterCollection: { head: { sha: "b".repeat(40) } }, exitCode: 11 },
       { label: "closed PR", afterCollection: { state: "closed" }, exitCode: 10 },
       { label: "conflicting PR", afterCollection: { mergeable: false }, exitCode: 14 },
@@ -926,7 +931,7 @@ console.log(JSON.stringify(value));
     });
 
     const failedCheck = restCheck(1, { conclusion: "failure" });
-    it("keeps an unknown completed REST outcome pending", async () => {
+    it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
         checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
       });
@@ -941,7 +946,7 @@ console.log(JSON.stringify(value));
       event: "pull_request",
       head_sha: sha,
     };
-    it.each([
+    it.concurrent.each([
       {
         label: "missing check page",
         checkPages: [
@@ -1049,7 +1054,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { status: "completed", conclusion: "skipped" },
       { status: "queued", conclusion: null },
     ])(
@@ -1083,12 +1088,18 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "same workflow and event", kind: "matching", exitCode: 0 },
+      {
+        label: "same workflow and event while active",
+        kind: "matching",
+        exitCode: 16,
+        active: true,
+      },
       { label: "another event", kind: "event", exitCode: 15 },
       { label: "missing workflow", kind: "missing", exitCode: 15 },
       { label: "ambiguous suite", kind: "ambiguous", exitCode: 15 },
-    ])("preserves same-name check ownership with $label", async ({ kind, exitCode }) => {
+    ])("preserves same-name check ownership with $label", async ({ kind, exitCode, active }) => {
       const previous = {
         ...workflow,
         id: 100,
@@ -1101,25 +1112,38 @@ console.log(JSON.stringify(value));
         ...(kind === "ambiguous" ? [{ ...previous, id: 101 }] : []),
       ];
       const result = await replayRestRollup({
+        runStatuses: active ? ["in_progress"] : undefined,
         checkPages: [
           {
             total_count: 2,
             check_runs: [
               restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
-              restCheck(2, { name: "build" }),
+              restCheck(2, {
+                name: "build",
+                ...(active ? { status: "in_progress", conclusion: null } : {}),
+              }),
             ],
           },
         ],
         runPages: [{ total_count: runs.length, workflow_runs: runs }],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).toContain(exitCode === 0 ? "\nGREEN" : "FAILING checks=build");
+      expect(result.stdout).toContain(
+        exitCode === 0 ? "\nGREEN" : active ? "TIMEOUT" : "FAILING checks=build",
+      );
       expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
+      if (active) {
+        expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(3);
+        expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(3);
+        expect(
+          result.calls.filter((call) => call[1]?.includes("/actions/runs?head_sha=")),
+        ).toHaveLength(3);
+      }
     });
   });
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
-    it.each([
+    it.concurrent.each([
       ...[
         "407 Proxy Authentication Required",
         'Post "https://api.github.com/graphql": Proxy Authentication Required',
@@ -1150,7 +1174,7 @@ if (phase === ${JSON.stringify(phase)}) {
 }
 const args = process.argv.slice(2);
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -1690,7 +1714,7 @@ if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state =
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }

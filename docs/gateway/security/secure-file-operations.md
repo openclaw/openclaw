@@ -56,6 +56,11 @@ With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.
 
+Ordinary reads return bytes from an admitted file handle without freezing the file
+against in-place writes. Writers should use atomic replacement when readers need
+complete old-or-new contents. Migration and publication owners separately verify
+their recorded content and ownership before removing or replacing files.
+
 ## What native acceleration adds
 
 The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations, replacement-disabled rename, and descriptor-bound ACL inspection for secure credential reads.
@@ -72,8 +77,8 @@ In `require` mode, an unavailable or unloadable helper normally causes `helper-u
 
 ## Plugin and core guidance
 
-- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`. This applies when a path comes from a message, model output, config, or plugin input.
-- Core code should use the fs-safe wrappers under `src/infra/*` so OpenClaw's process policy applies consistently.
+- Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
+- Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

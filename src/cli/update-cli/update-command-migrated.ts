@@ -30,10 +30,8 @@ import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import {
-  createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -99,7 +97,7 @@ export async function inspectActivatedUpdateState(
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
-      name: "state schema verification",
+      name: "state-schema-verification",
       command: "openclaw update",
       cwd: result.root ?? root,
       durationMs: 0,

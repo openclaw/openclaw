@@ -45,15 +45,17 @@ function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): 
   nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
 }
 
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-  Object.assign(CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo, ORIGINAL_CONTROL_UI_BUILD_INFO);
-  vi.useRealTimers();
-});
-
 describe("AppSidebar gateway footer subtitle", () => {
+  afterEach(() => {
+    const nativeWindow = window as SidebarNativeGatewayTestWindow;
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
+    Object.assign(
+      CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo,
+      ORIGINAL_CONTROL_UI_BUILD_INFO,
+    );
+  });
+
   const twoGateways = {
     gateways: [
       { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
@@ -149,12 +151,11 @@ describe("AppSidebar gateway footer subtitle", () => {
     ["suspended", "Suspended"],
     ["restoring", "Restoring…"],
     ["reload-required", "Refresh required"],
-  ] as const)("shows one %s subtitle with the outbox", async (connectionStatus, label) => {
+  ] as const)("shows one %s subtitle without delivery counts", async (connectionStatus, label) => {
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     sidebar.connectionStatus = connectionStatus;
-    sidebar.queuedOutboxCount = 3;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-footer-bar");
@@ -162,21 +163,20 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(footer?.querySelector(".gateway-status__label")?.textContent).toBe(label);
     expect(footer?.querySelector("button [role=status]")).toBeNull();
     expect(footer?.querySelector("[role=status]")?.textContent).toContain(label);
-    expect(footer?.querySelector("[role=status]")?.textContent).toContain("3 in outbox");
+    expect(footer?.querySelector("[role=status]")?.textContent).not.toContain("in outbox");
     expect(footer?.textContent).not.toContain("Offline");
-    expect(footer?.querySelector(".gateway-status__outbox")?.textContent).toContain("3 in outbox");
+    expect(footer?.querySelector(".gateway-status__outbox")).toBeNull();
     expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
     expect(footer?.querySelector(".sidebar-identity-card__gateway")).toBeNull();
     expect(footer?.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
     expect(footer?.querySelector("button button")).toBeNull();
   });
 
-  it("keeps the outbox after reconnect and redacts connection diagnostics", async () => {
+  it("keeps gateway identity after reconnect and redacts connection diagnostics", async () => {
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     sidebar.connectionStatus = "reconnecting";
-    sidebar.queuedOutboxCount = 3;
     sidebar.lastError = "connection refused?token=footer-secret";
     await sidebar.updateComplete;
     const tooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
@@ -187,10 +187,18 @@ describe("AppSidebar gateway footer subtitle", () => {
     sidebar.connectionStatus = null;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".gateway-status__label")).toBeNull();
-    expect(sidebar.querySelector(".gateway-status__outbox")?.textContent).toBe("3 in outbox");
+    expect(sidebar.querySelector(".gateway-status__outbox")).toBeNull();
     expect(sidebar.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
       "Local Gateway",
     );
+    const connectedTooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
+      ".gateway-status-tooltip",
+    );
+    expect(connectedTooltip).toBeNull();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-identity-menu__outbox")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("in outbox");
   });
 
   it("updates when the native gateway snapshot changes", async () => {

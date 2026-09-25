@@ -39,6 +39,19 @@ vi.mock("./tools/embedded-gateway-stub.js", () => ({
   createEmbeddedCallGateway: createEmbeddedCallGatewayMock,
 }));
 
+// This factory suite supplies authorized embedded rows. Registered producer and
+// result-owner boundaries are exercised by sessions-list-privacy.test.ts.
+vi.mock("../gateway/session-list-read-result.js", () => ({
+  withCurrentSessionListRows: async <T>(
+    rows: readonly object[],
+    consume: (visible: readonly boolean[]) => T,
+    requireOwner: boolean,
+  ) => {
+    expect(requireOwner).toBe(true);
+    return consume(rows.map(() => true));
+  },
+}));
+
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));

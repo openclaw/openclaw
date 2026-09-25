@@ -1,4 +1,3 @@
-// Browser tests cover pw tools core.snapshot plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,23 +45,6 @@ vi.mock("./cdp-role-snapshot.js", () => ({ snapshotRoleViaCdpSession }));
 vi.mock("./cdp.js", () => ({
   formatAriaSnapshot,
 }));
-
-type ScopedCdpClientOptions = {
-  fn?: unknown;
-  page?: unknown;
-};
-
-function requireScopedCdpClientOptions(): ScopedCdpClientOptions {
-  const [call] = withPageScopedCdpClient.mock.calls;
-  if (!call) {
-    throw new Error("expected scoped CDP client call");
-  }
-  const [options] = call;
-  if (!options || typeof options !== "object") {
-    throw new Error("expected scoped CDP client options");
-  }
-  return options as ScopedCdpClientOptions;
-}
 
 function makeAriaSnapshotPage(ariaSnapshot: ReturnType<typeof vi.fn>) {
   const mainFrame = { id: "main-frame" };
@@ -117,13 +99,13 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(result).toEqual({ nodes: formattedNodes });
     expect(getPageForTargetId).toHaveBeenCalledTimes(1);
     expect(ensurePageState).toHaveBeenCalledWith(page);
-    expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1);
-    const scopedClientOptions = requireScopedCdpClientOptions();
-    expect(scopedClientOptions.page).toBe(page);
-    expect(typeof scopedClientOptions.fn).toBe("function");
+    expect(withPageScopedCdpClient).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ page, fn: expect.any(Function) }),
+    );
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
       page,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
+      assertCurrent: expect.any(Function),
     });
     expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
       page,
@@ -135,6 +117,54 @@ describe("pw-tools-core aria snapshot storage", () => {
       mode: "role",
     });
   });
+
+  it.each(["native-aria", "raw-aria", "stored-refs"])(
+    "does not publish %s refs after a pending read or binding is cancelled",
+    async (kind) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const controller = new AbortController();
+      const reason = new Error("cancelled capture");
+      const wait = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const page = makeAriaSnapshotPage(
+        vi.fn(async () => {
+          await wait();
+          return '- button "Cancelled" [ref=e1]';
+        }),
+      );
+      getPageForTargetId.mockResolvedValue(page);
+      withPageScopedCdpClient.mockImplementation(async () => {
+        await wait();
+        return { nodes: [] };
+      });
+      markBackendDomRefsOnPage.mockImplementation(async () => {
+        await wait();
+        return new Set();
+      });
+      const options = {
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        signal: controller.signal,
+      };
+      const pending =
+        kind === "native-aria"
+          ? mod.snapshotRoleViaPlaywright({ ...options, refsMode: "aria" })
+          : kind === "raw-aria"
+            ? mod.snapshotAriaViaPlaywright(options)
+            : mod.storeSnapshotRefsViaPlaywright({
+                ...options,
+                refs: { e1: { role: "button", name: "Cancelled" } },
+              });
+      await entered.promise;
+      controller.abort(reason);
+      release.resolve();
+      await expect(pending).rejects.toBe(reason);
+      expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([750, undefined])(
     "bounds a stalled ARIA snapshot with timeoutMs=%s",
@@ -568,7 +598,8 @@ describe("pw-tools-core aria snapshot storage", () => {
     const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
-    await mod.snapshotAiViaPlaywright({
+    await mod.snapshotRoleViaPlaywright({
+      refsMode: "aria",
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       timeoutMs: Number.NaN,
@@ -585,7 +616,8 @@ describe("pw-tools-core aria snapshot storage", () => {
     const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
-    const result = await mod.snapshotAiViaPlaywright({
+    const result = await mod.snapshotRoleViaPlaywright({
+      refsMode: "aria",
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       maxChars: first.length + 2 + marker.length,
@@ -634,7 +666,11 @@ describe("pw-tools-core aria snapshot storage", () => {
     getPageForTargetId.mockResolvedValue(makeAriaSnapshotPage(ariaSnapshot));
 
     await expect(
-      mod.snapshotAiViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", maxChars: 1 }),
+      mod.snapshotRoleViaPlaywright({
+        refsMode: "aria",
+        cdpUrl: "http://127.0.0.1:9222",
+        maxChars: 1,
+      }),
     ).rejects.toBeInstanceOf(SyntaxError);
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
@@ -688,7 +724,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(page.setViewportSize).not.toHaveBeenCalled();
   });
 
-  it("stores role fallback metadata when backend markers are unavailable", async () => {
+  it("requires native bindings even when a captured DOM node cannot be marked", async () => {
     const page = makeAriaSnapshotPage(vi.fn());
 
     getPageForTargetId.mockResolvedValue(page);
@@ -709,9 +745,9 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       refs: {
-        ax1: { role: "button", name: "OK", nth: 0 },
-        ax2: { role: "button", name: "OK", nth: 1 },
-        ax3: { role: "button", name: "" },
+        ax1: { role: "button", name: "OK", nth: 0, domMarker: true },
+        ax2: { role: "button", name: "OK", nth: 1, domMarker: true },
+        ax3: { role: "button", name: "", domMarker: true },
       },
       mode: "role",
     });
@@ -739,7 +775,7 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       refs: {
-        e1: { role: "button", name: "Save", nth: 0 },
+        e1: { role: "button", name: "Save", nth: 0, domMarker: true },
         e2: { role: "button", name: "Save", nth: 1, domMarker: true },
       },
       mode: "role",

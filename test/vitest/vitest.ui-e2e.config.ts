@@ -8,56 +8,13 @@ import {
 } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
-import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
+import { controlUiE2eTestGlobs, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
-const mediaTranscriptRealGatewayTest =
-  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
-const sessionHostCommandStateRealGatewayTest =
-  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
-const openClawDelegationRealGatewayTest =
-  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
-const automationManagementRealGatewayTest =
-  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
   ...controlUiE2eTestGlobs,
-  mediaTranscriptRealGatewayTest,
-  sessionHostCommandStateRealGatewayTest,
-  openClawDelegationRealGatewayTest,
-  automationManagementRealGatewayTest,
-];
-export const uiE2eRealGatewayTestFiles = [
-  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-  "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
-  "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
-  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-  "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
-  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
-  "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-  "ui/src/e2e/logs-lifecycle.e2e.test.ts",
-  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
-  sessionHostCommandStateRealGatewayTest,
-  "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
-  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-  mediaTranscriptRealGatewayTest,
-  openClawDelegationRealGatewayTest,
-  automationManagementRealGatewayTest,
+  ...uiE2eRealGatewayTestFiles.filter(
+    (file) => !controlUiE2eTestGlobs.some((pattern) => matchesVitestGlob(file, pattern)),
+  ),
 ];
 
 // These files own their server instead of leasing the global production bundle.
@@ -70,8 +27,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
+  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-queue-update-reload.e2e.test.ts",

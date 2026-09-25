@@ -121,20 +121,6 @@ export function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
   `);
 }
 
-/** Run before task hydration, so indexed selectors and in-memory receipts share one identity. */
-export function repairLegacyTaskIdentifiers(db: DatabaseSync): void {
-  if (!tableExists(db, "task_runs")) {
-    return;
-  }
-  for (const column of ["run_id", "child_session_key"] as const) {
-    db.prepare(`UPDATE task_runs SET ${column} = NULLIF(trim(${column}, ?), '')
-      WHERE ${column} IS NOT NULLIF(trim(${column}, ?), '')`).run(
-      taskIdentifierWhitespace,
-      taskIdentifierWhitespace,
-    );
-  }
-}
-
 export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
   if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
     return;
@@ -299,7 +285,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       const primary = nullableTextValue(completion, "resultText");
       const fallback = nullableTextValue(completion, "fallbackResultText");
       updateRun.run(JSON.stringify(payload), row.run_id);
-      const taskRunId = (textField(payload, "taskRunId") ?? row.run_id).trim();
+      const taskRunId = textField(payload, "taskRunId")?.trim() ?? row.run_id;
       const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
       const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
       if (updateTask && (taskResult || terminalReply)) {

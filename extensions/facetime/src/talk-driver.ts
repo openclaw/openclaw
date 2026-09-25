@@ -40,7 +40,6 @@ export type FaceTimeTalkDriver = {
   realtimeActive(): boolean;
   activate(): void;
   suspendMedia(reason?: string): Promise<void>;
-  failClosed(reason?: string): Promise<void>;
   close(reason?: string): Promise<void>;
 };
 
@@ -306,9 +305,8 @@ export async function startFaceTimeTalkDriver(params: {
       suppressNextUnkeyedLegacyTerminal = true;
     }
     if (outcome.status === "completed") {
-      if ((pump?.queuedAudioFrames() ?? 0) > 0) {
-        pump?.finishOutputAudio();
-      } else {
+      pump?.finishOutputAudio();
+      if ((pump?.queuedAudioFrames() ?? 0) <= 0) {
         finishDrainedResponse();
       }
       return;
@@ -447,6 +445,9 @@ export async function startFaceTimeTalkDriver(params: {
         }
         bridge = createRealtimeVoiceBridgeSession({
           provider: resolved.provider,
+          capabilities: resolved.capabilities,
+          cfg: params.fullConfig,
+          agentId: consultAgentId,
           providerConfig: resolved.providerConfig,
           audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
           // Configured voice/personality instructions remain customizable, but the
@@ -465,7 +466,7 @@ export async function startFaceTimeTalkDriver(params: {
           ]),
           audioSink: {
             isOpen: () => !stopped && !mediaSuspended,
-            sendAudio(audio) {
+            sendAudio(audio, metadata) {
               if (stopped || mediaSuspended) {
                 return;
               }
@@ -479,8 +480,9 @@ export async function startFaceTimeTalkDriver(params: {
                 turnId,
                 payload: { byteLength: audio.byteLength },
               });
-              pump?.writeOutputAudio(audio);
+              pump?.writeOutputAudio(audio, metadata);
             },
+            getPlaybackState: () => pump.getPlaybackState(),
             clearAudio() {
               if (stopped || mediaSuspended) {
                 return;
@@ -538,20 +540,7 @@ export async function startFaceTimeTalkDriver(params: {
                 },
               });
             }
-            if (event.type === "input_audio_buffer.speech_started") {
-              const playbackActive = response !== undefined && (pump?.queuedAudioFrames() ?? 0) > 0;
-              if (response) {
-                bridge?.setMediaTimestamp(
-                  Math.floor(response.startTimestampMs + playedCurrentResponseMs()),
-                );
-              }
-              bridge?.handleBargeIn({ audioPlaybackActive: playbackActive });
-              if (playbackActive || talk.outputAudioActive) {
-                pump?.clearOutputAudio();
-                finishOutputAudio("barge-in");
-              }
-              resetResponsePlayback();
-            } else if (event.type === "response.created") {
+            if (event.type === "response.created") {
               startResponse(event.responseId);
             } else if (event.type === "session.continuity.reset") {
               resetProviderContinuity();
@@ -700,17 +689,6 @@ export async function startFaceTimeTalkDriver(params: {
       initialGreeting.schedule();
     },
     suspendMedia,
-    async failClosed(reason = "fail-closed") {
-      mediaSuspended = true;
-      stopped = true;
-      activated = false;
-      initialGreeting.cancel();
-      providerReady = false;
-      consultController.abortForClose();
-      await bridge?.close();
-      await pump?.failClosed();
-      remember({ type: "session.closed", payload: { reason }, final: true });
-    },
     close,
   };
 }

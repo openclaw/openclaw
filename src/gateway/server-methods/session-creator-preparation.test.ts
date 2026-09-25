@@ -6,7 +6,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -573,6 +573,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           },
         },
       });
+      await initializeSessionReadContext(context);
       const pending = sessionReadHandlers["sessions.preview"]?.({
         params: { keys: keys.slice(0, 2) },
         client: identifiedClient(callerId),

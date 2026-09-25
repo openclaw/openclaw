@@ -8,8 +8,10 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
+import ai.openclaw.app.PermissionRequester
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -19,9 +21,11 @@ import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.clawColorsForTheme
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -44,6 +48,7 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -76,8 +81,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
@@ -100,6 +109,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowDialog
@@ -132,6 +142,7 @@ class SidebarGatewayPickerTest {
   private lateinit var model: MainViewModel
   private var originalRuntime: NodeRuntime? = null
   private var animatorScale: String? = null
+  private var restoreRecordingPermission = false
 
   @Before
   fun setUp() {
@@ -155,6 +166,7 @@ class SidebarGatewayPickerTest {
     store.clear()
     bindNodeRuntimeTestFixture(app, originalRuntime)
     closeNodeRuntimeTestFixture(runtime)
+    if (restoreRecordingPermission) shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
     servers.forEach { it.shutdown() }
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
@@ -572,6 +584,86 @@ class SidebarGatewayPickerTest {
   }
 
   @Test
+  fun stoppedVoiceNoteReleasesGatewaySwitchWithoutReleasingOtherImports() = assertInterruptedVoiceNoteAllowsGatewaySwitch(stop = true)
+
+  @Test
+  fun disposedVoiceNoteReleasesGatewaySwitchWithoutReleasingOtherImports() = assertInterruptedVoiceNoteAllowsGatewaySwitch(stop = false)
+
+  private fun assertInterruptedVoiceNoteAllowsGatewaySwitch(stop: Boolean) {
+    val alpha = savedGateway("Local QA Alpha")
+    val beta = savedGateway("Local QA Beta")
+    focus(alpha)
+    val lifecycleOwner =
+      object : LifecycleOwner {
+        override val lifecycle = LifecycleRegistry(this)
+      }
+    composeRule.runOnUiThread {
+      lifecycleOwner.lifecycle.currentState = Lifecycle.State.RESUMED
+      restoreRecordingPermission = app.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      model.attachRuntimeUi(lifecycleOwner, PermissionRequester(app))
+    }
+    showSidebarAndComposer(composerLifecycleOwner = lifecycleOwner)
+    // Compose idleness does not join the initial IO history load. Its fixture run
+    // must be adopted before the controller can accept a terminal event for it.
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatSelectedActiveRunPresentation.value.runId == "android-screenshot-active-run"
+      }
+    }
+    composeRule.runOnIdle {
+      ReflectionHelpers.getField<ChatController>(runtime, "chat").handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"${model.chatSessionKey.value}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+    }
+    // The composer consumes the ViewModel bridge, not the controller's immediate state.
+    composeRule.waitUntil { composeRule.runOnIdle { model.pendingRunCount.value == 0 } }
+    val owner = model.captureChatShareOwner()
+    composeRule
+      .onNode(SemanticsMatcher("Voice options") { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Voice options" })
+      .performSemanticsAction(SemanticsActions.OnLongClick) { it() }
+    composeRule.onNodeWithText("Record voice note").performClick()
+    composeRule.onNodeWithContentDescription("Cancel voice note").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertTrue(runtime.hasActiveGatewaySwitchAudio())
+      assertTrue(model.chatComposerState.hasPendingGatewaySwitchWork(owner))
+    }
+
+    val authorization = requireNotNull(model.chatComposerState.beginMediaAcquisition(owner))
+    val importing = requireNotNull(model.chatComposerState.beginMediaImport(owner, authorization, model.mainSessionKey.value))
+    if (stop) {
+      composeRule.runOnUiThread { lifecycleOwner.lifecycle.currentState = Lifecycle.State.CREATED }
+      composeRule.runOnUiThread { lifecycleOwner.lifecycle.currentState = Lifecycle.State.RESUMED }
+    } else {
+      composeRule.runOnIdle { mounted.value = false }
+      composeRule.waitForIdle()
+      composeRule.runOnIdle { mounted.value = true }
+    }
+    composeRule.onNodeWithContentDescription("Cancel voice note").assertDoesNotExist()
+    composeRule.runOnIdle { assertFalse(runtime.hasActiveGatewaySwitchAudio()) }
+
+    // An unrelated import is still real unsettled work; stopping voice must not erase it.
+    openPicker()
+    gatewayItem(beta).performClick()
+    composeRule.runOnIdle {
+      assertEquals(alpha.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+      assertTrue(ShadowToast.getTextOfLatestToast().contains("Finish importing"))
+      model.chatComposerState.cancelMediaImport(importing)
+    }
+    openPicker()
+    gatewayItem(beta).performClick()
+    composeRule.waitUntil { !runtime.gatewayConnectionHandoff.value.pending }
+    openPicker()
+    capture(if (stop) "voice-note-stop" else "voice-note-disposal", popup = true)
+    composeRule.runOnIdle {
+      assertEquals("An interrupted voice note must not block Gateway switching", beta.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+      assertFalse(model.chatComposerState.hasPendingGatewaySwitchWork(owner))
+    }
+    gatewayItem(beta).assertIsSelected()
+  }
+
+  @Test
   fun quickSwitchReadsRecordingImportAndSendOwnersAtSelectionTime() {
     val alpha = savedGateway("Local QA Alpha")
     val beta = savedGateway("Local QA Beta")
@@ -904,6 +996,7 @@ class SidebarGatewayPickerTest {
     fontScale: Float = 1f,
     showComposer: Boolean = true,
     showShell: Boolean = false,
+    composerLifecycleOwner: LifecycleOwner? = null,
   ) {
     if (showShell) MlKitContext.initializeIfNeeded(app)
     themeMode.value = if (dark) AppearanceThemeMode.Dark else AppearanceThemeMode.Light
@@ -945,15 +1038,17 @@ class SidebarGatewayPickerTest {
                 }
                 Box(Modifier.weight(1f)) {
                   if (showComposer) {
-                    ChatScreen(
-                      viewModel = model,
-                      talkActive = false,
-                      showSidebarButton = false,
-                      onOpenSidebar = {},
-                      onToggleTalk = {},
-                      onOpenDashboard = {},
-                      onOpenGatewaySettings = {},
-                    )
+                    CompositionLocalProvider(LocalLifecycleOwner provides (composerLifecycleOwner ?: LocalLifecycleOwner.current)) {
+                      ChatScreen(
+                        viewModel = model,
+                        talkActive = false,
+                        showSidebarButton = false,
+                        onOpenSidebar = {},
+                        onToggleTalk = {},
+                        onOpenDashboard = {},
+                        onOpenGatewaySettings = {},
+                      )
+                    }
                   }
                 }
               }

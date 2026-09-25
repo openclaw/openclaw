@@ -5,7 +5,8 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
-import type { WorkerTaskControl } from "openclaw/plugin-sdk/process-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
@@ -31,7 +32,11 @@ function toDocumentImage(bytes: Uint8Array): DocumentExtractedImage {
   return { type: "image", data, mimeType: "image/png" };
 }
 
-function pageRenderOptions(width: number, height: number, maxPixels: number): RenderOptions | null {
+function pageRenderOptions(
+  width: number,
+  height: number,
+  maxPixels: number,
+): { options: RenderOptions; reduced: boolean } | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
@@ -42,7 +47,7 @@ function pageRenderOptions(width: number, height: number, maxPixels: number): Re
     defaultHeight <= MAX_RENDER_DIMENSION &&
     defaultWidth * defaultHeight <= maxPixels
   ) {
-    return { dpi: 96, forms: true };
+    return { options: { dpi: 96, forms: true }, reduced: false };
   }
 
   const landscape = width >= height;
@@ -63,7 +68,10 @@ function pageRenderOptions(width: number, height: number, maxPixels: number): Re
       high = candidate - 1;
     }
   }
-  return landscape ? { width: size, forms: true } : { height: size, forms: true };
+  return {
+    options: landscape ? { width: size, forms: true } : { height: size, forms: true },
+    reduced: true,
+  };
 }
 
 function isPdfPasswordError(err: unknown): boolean {
@@ -110,6 +118,18 @@ export async function extractPdfContent(
     }
     const selectedPages =
       pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
+    const metadata = {
+      pages: {
+        processed: selectedPages,
+        total: pdf.pageCount,
+        selection: request.pageNumbers ? ("explicit" as const) : ("automatic" as const),
+        truncated: request.pageNumbers
+          ? request.pageNumbers.length > selectedPages.length
+          : pdf.pageCount > request.maxPages,
+      },
+      textTruncated: false,
+      imagesTruncated: false,
+    };
     const imagePages: number[] = [];
     let text = "";
     for (const pageNumber of selectedPages) {
@@ -120,13 +140,15 @@ export async function extractPdfContent(
       }
       const separator = text ? "\n\n" : "";
       const remaining = MAX_EXTRACTED_TEXT_CHARS - text.length - separator.length;
-      if (pageText && remaining > 0) {
-        text += separator + pageText.slice(0, remaining);
+      const prefix = truncateUtf16Safe(pageText, Math.max(0, remaining));
+      metadata.textTruncated ||= prefix.length < pageText.length;
+      if (prefix) {
+        text += separator + prefix;
       }
     }
     control.throwIfCancelled();
     if (imagePages.length === 0) {
-      return { text, images: [] };
+      return { text, images: [], metadata };
     }
 
     // Share the aggregate pixel budget only across pages needing image fallback.
@@ -137,6 +159,7 @@ export async function extractPdfContent(
       for (const [index, pageNumber] of imagePages.entries()) {
         control.throwIfCancelled();
         if (remainingPixels <= 0) {
+          metadata.imagesTruncated = true;
           break;
         }
         const pagesRemaining = imagePages.length - index;
@@ -145,11 +168,13 @@ export async function extractPdfContent(
           throw new PdfError("budget", "maxPixels must be a finite positive number");
         }
         const page = pdf.page(pageNumber);
-        const options = pageRenderOptions(page.width, page.height, maxPixelsPerPage);
-        if (!options) {
+        const plan = pageRenderOptions(page.width, page.height, maxPixelsPerPage);
+        if (!plan) {
+          metadata.imagesTruncated = true;
           continue;
         }
-        const rendered = page.render(options);
+        metadata.imagesTruncated ||= plan.reduced;
+        const rendered = page.render(plan.options);
         control.throwIfCancelled();
         // Node cannot safely terminate a worker inside zlib initialization.
         // Fence one PNG encode; PDFium rendering remains immediately cancellable.
@@ -160,14 +185,15 @@ export async function extractPdfContent(
         images.push(toDocumentImage(bytes));
         remainingPixels -= rendered.width * rendered.height;
       }
-      return { text, images };
+      return { text, images, metadata };
     } catch (err) {
       control.throwIfCancelled();
+      metadata.imagesTruncated = true;
       request.onImageExtractionError?.(err);
       if (!text.trim()) {
         throw new Error("PDF image extraction failed with no extractable text.", { cause: err });
       }
-      return { text, images: [] };
+      return { text, images: [], metadata };
     }
   } finally {
     pdf.destroy();

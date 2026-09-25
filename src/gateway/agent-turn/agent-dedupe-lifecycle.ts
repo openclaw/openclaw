@@ -16,13 +16,13 @@ import {
 } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import {
+  buildAbortedAgentPayload,
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import { deleteGatewayDedupeEntries } from "./agent-run-dispatch.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
@@ -118,11 +118,48 @@ export function createAgentDedupeLifecycle(params: {
     ) {
       return;
     }
-    deleteGatewayDedupeEntries({
+    for (const key of params.agentDedupeKeys) {
+      params.context.dedupe.delete(key);
+    }
+    reserved = false;
+  };
+
+  const bindSessionTarget = (target: {
+    sessionKey: string;
+    agentId?: string;
+    sessionId?: string;
+  }) => {
+    const entry = readGatewayDedupeEntry({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
     });
-    reserved = false;
+    if (
+      !entry?.ok ||
+      !isAcceptedAgentDedupePayload(entry.payload) ||
+      entry.payload.reservationId !== reservationId
+    ) {
+      return;
+    }
+    const previousKey =
+      typeof entry.payload.sessionKey === "string" ? entry.payload.sessionKey : undefined;
+    // Routing and the session COMMIT owner publish this attempt's target. Stop
+    // never manufactures a pending-run incarnation from its own row lookup.
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys.filter(
+        (key) => params.context.dedupe.get(key)?.payload === entry.payload,
+      ),
+      entry: {
+        ...entry,
+        payload: {
+          ...entry.payload,
+          ...target,
+          ...(previousKey && previousKey !== target.sessionKey
+            ? { sessionKeyAliases: [previousKey] }
+            : {}),
+        },
+      },
+    });
   };
 
   const abortForLifecycleRotation = (target?: { sessionKey?: string; agentId?: string }) => {
@@ -167,14 +204,7 @@ export function createAgentDedupeLifecycle(params: {
     params.io.emitAcceptance(
       [
         true,
-        {
-          runId: params.runId,
-          status: "timeout" as const,
-          summary: "aborted",
-          stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          timeoutPhase: "queue" as const,
-          providerStarted: false,
-        },
+        buildAbortedAgentPayload(params.runId, AGENT_RUN_RESTART_ABORT_STOP_REASON),
         undefined,
       ],
       { runId: params.runId },
@@ -185,6 +215,7 @@ export function createAgentDedupeLifecycle(params: {
   return {
     reservationId,
     reserve,
+    bindSessionTarget,
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,

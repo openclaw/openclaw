@@ -4,16 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import {
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-} from "../../process/gateway-work-admission.js";
+import { markGatewayRestartDraining } from "../../process/gateway-work-admission.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -86,6 +84,7 @@ async function withResources(
   ) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-resources-", async ({ stateDir }) => {
+    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -109,10 +108,14 @@ async function withResources(
       await run(db, schedule);
     } finally {
       await Promise.allSettled(pending);
-      db.close();
-      resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await deliveries.settle();
+      } finally {
+        db.close();
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
     }
   });
 }
@@ -121,6 +124,7 @@ it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
   async (phase) => {
     await withStateDirEnv("openclaw-maintenance-tail-", async ({ stateDir }) => {
+      using deliveries = captureTaskDeliveryWork();
       resetCommandQueueStateForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -181,12 +185,16 @@ it.each(["maintenance", "disposal"] as const)(
       } finally {
         release.resolve();
         await Promise.allSettled([...(tail ? [tail] : []), ...(completion ? [completion] : [])]);
-        if (!returned) {
-          db.close();
+        try {
+          await deliveries.settle();
+        } finally {
+          if (!returned) {
+            db.close();
+          }
+          resetCommandQueueStateForTest();
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
         }
-        resetCommandQueueStateForTest();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
       }
     });
   },
@@ -321,7 +329,6 @@ it.each(["parent completion", "gateway restart"] as const)(
         await closing;
         await parent.drain();
         await cancellationCheckpoint;
-        resetGatewayWorkAdmission();
       }
     });
   },

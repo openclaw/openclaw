@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "./backup-run-records.contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -138,5 +143,33 @@ export async function readBackupRunFreshness(env: NodeJS.ProcessEnv): Promise<Ba
       ({ db }) => ({ latest: readBackupRun(db), latestOk: readBackupRun(db, "ok") }),
       { env, path: resolveOpenClawStateSqlitePath(env) },
     ) ?? {}
+  );
+}
+
+/** Archive parents are the fallback scratch roots when TMPDIR overlaps a source. */
+export function readBackupArchiveDirectories(env: NodeJS.ProcessEnv): string[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "backup_runs")) {
+          return [];
+        }
+        const rows = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<BackupRunDatabase>(db).selectFrom("backup_runs").selectAll(),
+        ).rows;
+        return [
+          ...new Set(
+            rows.flatMap((row) => {
+              const record = parseBackupRun(row);
+              return record?.kind === "archive" && path.isAbsolute(record.archivePath)
+                ? [path.dirname(record.archivePath)]
+                : [];
+            }),
+          ),
+        ];
+      },
+      { env, path: resolveOpenClawStateSqlitePath(env) },
+    ) ?? []
   );
 }

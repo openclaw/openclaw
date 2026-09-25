@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
+import type { ProxylineOptions } from "@openclaw/proxyline";
 // Gateway client tests cover WebSocket protocol negotiation, auth persistence,
 // proxy bypass setup, command dispatch, reconnect, and error handling.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -18,9 +19,10 @@ import {
   signDevicePayload as signDevicePayloadWithKey,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import { stopMockedProxylineHandles } from "../infra/net/proxy/proxyline.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { firstMockArg, waitForFast } from "./client.test-support.js";
+import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -42,27 +44,17 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 const readLoggingConfigMock = vi.hoisted(() =>
   vi.fn<() => MockLoggingConfig | undefined>(() => undefined),
 );
-const {
-  installGlobalProxyMock,
-  proxylineRegisterBypassMock,
-  proxylineStopMock,
-  proxylineUnregisterBypassMock,
-} = vi.hoisted(() => {
+const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
   const proxylineStopMockLocal = vi.fn();
-  const proxylineUnregisterBypassMockLocal = vi.fn();
-  const proxylineRegisterBypassMockLocal = vi.fn(() => proxylineUnregisterBypassMockLocal);
   return {
-    proxylineRegisterBypassMock: proxylineRegisterBypassMockLocal,
     proxylineStopMock: proxylineStopMockLocal,
-    proxylineUnregisterBypassMock: proxylineUnregisterBypassMockLocal,
-    installGlobalProxyMock: vi.fn(() => ({
+    installGlobalProxyMock: vi.fn((_options: ProxylineOptions) => ({
       active: true,
       createNodeAgent: vi.fn(),
       createUndiciDispatcher: vi.fn(),
       createWebSocketAgent: vi.fn(),
       explain: vi.fn(),
       mode: "managed",
-      registerBypass: proxylineRegisterBypassMockLocal,
       stop: proxylineStopMockLocal,
       withBypass: vi.fn(),
     })),
@@ -292,21 +284,23 @@ describe("GatewayClient security checks", () => {
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_PROXY_ACTIVE",
     "OPENCLAW_PROXY_LOOPBACK_MODE",
+    "OPENCLAW_PROXY_CA_FILE",
     "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
   ]);
 
-  beforeEach(async () => {
+  beforeEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
-    proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();
-    proxylineUnregisterBypassMock.mockClear();
     wsInstances.length = 0;
     wsConstructorObservers.length = 0;
   });
@@ -317,8 +311,9 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    resetProxyLifecycleForTests();
+    stopMockedProxylineHandles(installGlobalProxyMock.mock.results);
+    const { getActiveManagedProxyUrl } = await import("../infra/net/proxy/active-proxy-state.js");
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
     wsConstructorObservers.length = 0;
   });
 
@@ -419,16 +414,17 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("keeps gateway-only loopback bypass active only during WebSocket construction", () => {
+  it("installs inherited loopback routing before WebSocket construction and forwards errors", () => {
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
     process.env.HTTP_PROXY = "http://127.0.0.1:3128";
     const onConnectError = vi.fn();
-    const bypassActiveDuringConstruction: boolean[] = [];
-    wsConstructorObservers.push(() => {
-      bypassActiveDuringConstruction.push(
-        proxylineRegisterBypassMock.mock.calls.length === 1 &&
-          proxylineUnregisterBypassMock.mock.calls.length === 0,
+    const bypassDecisions: Array<boolean | undefined> = [];
+    wsConstructorObservers.push((url) => {
+      const policy = installGlobalProxyMock.mock.lastCall?.[0].bypassPolicy;
+      bypassDecisions.push(
+        policy?.({ url, surface: "websocket" }),
+        policy?.({ url: "wss://external.example/", surface: "websocket" }),
       );
     });
     const client = new GatewayClient({
@@ -438,39 +434,13 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
-    expect(bypassActiveDuringConstruction).toEqual([true]);
-    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    expect(bypassDecisions).toEqual([true, false]);
     const ws = getLatestWs();
-
-    ws.emitOpen();
-
-    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     expect(onConnectError).not.toHaveBeenCalled();
-    client.stop();
-  });
+    ws.emitError(new Error("loopback connection failed"));
 
-  it("clears gateway-only loopback bypass when WebSocket connection errors before opening", () => {
-    process.env.OPENCLAW_PROXY_ACTIVE = "1";
-    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
-    process.env.HTTP_PROXY = "http://127.0.0.1:3128";
-    const onConnectError = vi.fn();
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      onConnectError,
-    });
-
-    client.start();
-
-    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
-    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
-    const ws = getLatestWs();
-
-    ws.emitError(new Error("proxy connection failed"));
-
-    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "proxy connection failed" }),
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "loopback connection failed" }),
     );
     client.stop();
   });
@@ -2527,12 +2497,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws, connect } = await startClientAndConnect({ client });
-    emitConnectFailure(
-      ws,
-      connect.id,
-      { code: "AUTH_UNAUTHORIZED" },
-      "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
-    );
+    emitConnectFailure(ws, connect.id, { code: "AUTH_UNAUTHORIZED" }, createAuthFailureMessage());
 
     await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));

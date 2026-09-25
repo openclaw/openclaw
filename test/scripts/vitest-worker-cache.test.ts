@@ -167,6 +167,23 @@ function cachedProbe(root: string, directory: string): string {
 }
 
 describe("compiled worker content cache", () => {
+  it("propagates namespace rejection evidence without publishing a cache signature", async () => {
+    const f = fixture();
+    const owner = await f.cache();
+    expect(await owner.restore()).toBeUndefined();
+    const manifest = f.prepare();
+    f.write(".workflow-shell-fixture.mjs", "export {};\n");
+
+    await expect(owner.seal(manifest)).rejects.toThrow(
+      'Boundary configuration or resolution topology changed during compilation: {"category":"namespace","changes":[{"change":"added","path":".workflow-shell-fixture.mjs"}],"omitted":0}',
+    );
+    expect(manifest.cacheSignature).toBeUndefined();
+    expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
+    expect(
+      fs.existsSync(path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0/stamp.json")),
+    ).toBe(false);
+  });
+
   it.each([
     "NODE_PATH",
     "NAPI_RS_NATIVE_LIBRARY_PATH",
@@ -174,6 +191,21 @@ describe("compiled worker content cache", () => {
     "NAPI_RS_FORCE_WASI",
   ])("honors the explicitly selected compiler through %s", (name) => {
     expect(useVitestWorkerCache({ [name]: "override" })).toBe(false);
+    expect(
+      useVitestWorkerCache({ CI: "1", OPENCLAW_VITEST_WORKER_CACHE: "1", [name]: "override" }),
+    ).toBe(false);
+  });
+  it("requires an explicit CI cache opt-in without overriding custom loaders", () => {
+    for (const ciEnv of [{ CI: "1" }, { GITHUB_ACTIONS: "true" }]) {
+      expect(useVitestWorkerCache(ciEnv)).toBe(false);
+      expect(useVitestWorkerCache({ ...ciEnv, OPENCLAW_VITEST_WORKER_CACHE: "0" })).toBe(false);
+      const enabled = { ...ciEnv, OPENCLAW_VITEST_WORKER_CACHE: "1" };
+      expect(useVitestWorkerCache(enabled)).toBe(!process.versions.bun);
+      expect(useVitestWorkerCache({ ...enabled, NODE_OPTIONS: "--import=./loader.mjs" })).toBe(
+        false,
+      );
+      expect(useVitestWorkerCache(enabled, ["--require", "./loader.cjs"])).toBe(false);
+    }
   });
   it("restores identical executable bytes into the same reserved generation path", async () => {
     const f = fixture();

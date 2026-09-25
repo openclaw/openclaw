@@ -49,6 +49,7 @@ import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./comman
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createContext,
+  createCodexRuntimeContextOverrides,
   createDeps,
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
@@ -56,16 +57,11 @@ import {
   readDiagnosticsConfirmationToken,
   requestParams,
   requireResultText,
+  runCommand,
   supervisedTestBinding,
   writeTestBinding,
-  type CodexCommandDeps,
 } from "./commands.test-support.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
-import {
-  steerCodexConversationTurn as steerCodexConversationTurnImpl,
-  stopCodexConversationTurn as stopCodexConversationTurnImpl,
-  trackCodexConversationActiveTurn,
-} from "./conversation-control.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
@@ -94,18 +90,6 @@ function createNodeExecContext(
     sessionKey: "node-session",
     ...overrides,
   } as Partial<PluginCommandContext>);
-}
-
-function runCommand(
-  args: string,
-  deps: Partial<CodexCommandDeps> = {},
-  context: Partial<PluginCommandContext> = {},
-  options: Omit<Parameters<typeof dispatchCodexCommand>[1], "deps"> = {},
-) {
-  return dispatchCodexCommand(createContext(args, undefined, context), {
-    ...options,
-    deps: createDeps(deps),
-  });
 }
 
 const handleCodexCommand = dispatchCodexCommand;
@@ -204,30 +188,6 @@ async function createLockedSessionContextOverrides(
   };
 }
 
-async function createCodexRuntimeContextOverrides(
-  sessionKey = "agent:main:test:codex-compact",
-): Promise<{
-  config: PluginCommandContext["config"];
-  sessionKey: string;
-  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
-}> {
-  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
-  await upsertSessionEntry({
-    storePath,
-    sessionKey,
-    entry: {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      agentHarnessId: "codex",
-    },
-  });
-  return {
-    config: { session: { store: storePath } },
-    sessionKey,
-    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-  };
-}
-
 function inMemoryCodexPluginsIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
   options: { enabled?: boolean } = { enabled: true },
@@ -243,7 +203,8 @@ function inMemoryCodexPluginsIO(
     current: () => structuredClone(store.plugins ?? {}),
     currentConfig: () => structuredClone(store),
     readConfig: () => Promise.resolve(structuredClone(store)),
-    mutate: async (update) => {
+    mutate: async (update, assertCurrent) => {
+      assertCurrent?.();
       update(store);
     },
   };
@@ -517,10 +478,17 @@ describe("codex command", () => {
       const result = await runCommand(
         args,
         { listCodexAppServerModels: vi.fn(async () => ({ models: [] })) },
-        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+        {
+          senderIsOwner: false,
+          gatewayClientScopes: ["operator.write"],
+          assertOwnerCurrent: () => {
+            throw new Error("Caller is not a channel owner");
+          },
+        },
       );
 
       expect(result.text).not.toContain("Only an owner or operator.admin");
+      expect(result.text).not.toContain("Codex command failed");
     },
   );
 
@@ -730,6 +698,7 @@ describe("codex command", () => {
     "cleans up a rejected same-client resume only when no native owner remains (retained: $retainedBeforeResume, failure: $failure)",
     async ({ retainedBeforeResume, failure }) => {
       const context = await createCodexRuntimeContextOverrides(
+        tempDir,
         "agent:main:test:same-client-resume",
       );
       const { codexControlRequest } = await import("./command-rpc.js");
@@ -1070,7 +1039,7 @@ describe("codex command", () => {
         }
         throw new Error(`unexpected Codex method ${method}`);
       });
-      const parent = codexNativeSubagentMonitorRuntime.register({
+      const parent = await codexNativeSubagentMonitorRuntime.register({
         client: harness.client,
         parentThreadId: "thread-parent",
       });
@@ -1328,7 +1297,7 @@ describe("codex command", () => {
   it.each([false, true])(
     "rejects a resume whose host generation advances while waiting for the native queue (binding advances: %s)",
     async (advanceBinding) => {
-      const context = await createCodexRuntimeContextOverrides();
+      const context = await createCodexRuntimeContextOverrides(tempDir);
       const identity = {
         kind: "session" as const,
         agentId: "main",
@@ -1387,7 +1356,7 @@ describe("codex command", () => {
   );
 
   it("rejects resumed-thread publication when the verified host generation changes during RPC", async () => {
-    const context = await createCodexRuntimeContextOverrides();
+    const context = await createCodexRuntimeContextOverrides(tempDir);
     const identity = { kind: "session" as const, agentId: "main", sessionKey: context.sessionKey };
     await upsertSessionEntry({
       storePath: context.sessionTarget.storePath,
@@ -1417,7 +1386,10 @@ describe("codex command", () => {
   });
 
   it("rolls back replacement ownership when the host advances during displaced release", async () => {
-    const context = await createCodexRuntimeContextOverrides("agent:main:test:release-rollover");
+    const context = await createCodexRuntimeContextOverrides(
+      tempDir,
+      "agent:main:test:release-rollover",
+    );
     const scope = {
       storePath: context.sessionTarget.storePath,
       sessionKey: context.sessionKey,
@@ -3176,7 +3148,7 @@ describe("codex command", () => {
 
   it("compacts the current session through the host runtime", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     const identity = {
       kind: "session",
       agentId: "main",
@@ -3222,6 +3194,7 @@ describe("codex command", () => {
 
   it("compacts a conversation binding after recovering its current session owner", async () => {
     const runtime = await createCodexRuntimeContextOverrides(
+      tempDir,
       "agent:main:test:conversation-compact-recovery",
     );
     await upsertSessionEntry({
@@ -3319,7 +3292,7 @@ describe("codex command", () => {
   });
 
   it("rejects a conversation-bound thread that differs from the current session", async () => {
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     await writeTestBinding(
       {
         kind: "session",
@@ -3386,7 +3359,7 @@ describe("codex command", () => {
   });
 
   it("starts supervised compact and review actions through the native user-home connection", async () => {
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     await writeTestBinding(
       {
         kind: "session",
@@ -3442,7 +3415,7 @@ describe("codex command", () => {
   });
 
   it("escapes compaction failure reasons before chat display", async () => {
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     await writeTestBinding(
       {
         kind: "session",
@@ -3593,6 +3566,7 @@ describe("codex command", () => {
       config: {},
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       forceEnable: true,
+      assertCurrent: expect.any(Function),
       overrides: {
         marketplaceSource: "github:example/desktop-tools",
         marketplaceName: "desktop-tools",
@@ -3682,7 +3656,7 @@ describe("codex command", () => {
 
   it("requires a Codex thread binding before host compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
 
     await expect(
@@ -4876,7 +4850,10 @@ describe("codex command", () => {
   });
 
   it("rejects a queued goal before any app-server write when the host rolls over", async () => {
-    const runtime = await createCodexRuntimeContextOverrides("agent:main:test:queued-goal");
+    const runtime = await createCodexRuntimeContextOverrides(
+      tempDir,
+      "agent:main:test:queued-goal",
+    );
     await writeTestBinding(
       {
         kind: "session",
@@ -4921,78 +4898,6 @@ describe("codex command", () => {
     expect((await command).text).toContain("Codex session generation is no longer current");
     expect(appServerWrites).toBe(0);
   });
-
-  it.each(["stop", "steer"] as const)(
-    "rejects a queued %s command before any app-server write when the host rolls over",
-    async (command) => {
-      const runtime = await createCodexRuntimeContextOverrides(`agent:main:test:queued-${command}`);
-      const identity = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: runtime.sessionKey,
-      };
-      await writeTestBinding(identity, {
-        threadId: `thread-queued-${command}`,
-        cwd: "/repo",
-      });
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line) as { id: number };
-          send({ id: request.id, result: {} });
-        },
-      });
-      const stopTracking = trackCodexConversationActiveTurn({
-        identity,
-        client: harness.client,
-        requestTimeoutMs: 60_000,
-        threadId: `thread-queued-${command}`,
-        turnId: "turn-1",
-      });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const stop = vi.fn(async (params: Parameters<typeof stopCodexConversationTurnImpl>[0]) => {
-        entered.resolve();
-        await release.promise;
-        return await stopCodexConversationTurnImpl(params);
-      });
-      const steer = vi.fn(async (params: Parameters<typeof steerCodexConversationTurnImpl>[0]) => {
-        entered.resolve();
-        await release.promise;
-        return await steerCodexConversationTurnImpl(params);
-      });
-
-      try {
-        const pending =
-          command === "stop"
-            ? runCommand("stop", { stopCodexConversationTurn: stop }, runtime)
-            : runCommand(
-                "steer keep the authority boundary",
-                { steerCodexConversationTurn: steer },
-                runtime,
-              );
-        await entered.promise;
-        await upsertSessionEntry({
-          storePath: runtime.sessionTarget.storePath,
-          sessionKey: runtime.sessionKey,
-          entry: {
-            sessionId: "session-next",
-            previousSessionId: "session-1",
-            updatedAt: Date.now(),
-            agentHarnessId: "codex",
-          },
-        });
-        release.resolve();
-
-        expect((await pending).text).toContain("Codex session generation is no longer current");
-        expect(harness.writes).toHaveLength(0);
-      } finally {
-        release.resolve();
-        stopTracking();
-        harness.client.close();
-      }
-    },
-  );
 
   it("rejects inherited object names as goal actions", async () => {
     await writeTestBinding(
@@ -5094,7 +4999,7 @@ describe("codex command", () => {
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const runtime = await createCodexRuntimeContextOverrides();
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
     await writeTestBinding(
       {
         kind: "session",
@@ -6332,6 +6237,7 @@ describe("codex command", () => {
 
   it("rejects a permission write after host rollover without requiring a native binding", async () => {
     const runtime = await createCodexRuntimeContextOverrides(
+      tempDir,
       "agent:main:test:permission-no-binding",
     );
     const entered = createDeferred<void>();

@@ -8,7 +8,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectSecretInputAssignment,
   pushWarning,
   type ResolverContext,
   type SecretDefaults,
@@ -34,10 +34,10 @@ function resolveAuthProfileOwnerContract(
 }
 
 function collectAuthStoreSecretInputAssignment(
-  params: Parameters<typeof collectRuntimeSecretInputAssignment>[0],
+  params: Parameters<typeof collectSecretInputAssignment>[0],
 ): void {
   const previousCount = params.context.assignments.length;
-  collectRuntimeSecretInputAssignment(params);
+  collectSecretInputAssignment(params);
   for (const assignment of params.context.assignments.slice(previousCount)) {
     setSecretAssignmentSource(assignment, "auth-store");
   }

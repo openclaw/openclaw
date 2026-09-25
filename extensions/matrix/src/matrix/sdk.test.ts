@@ -1081,12 +1081,13 @@ describe("MatrixClient request hardening", () => {
   });
 
   it.each([
-    { operation: "delete", revokeAuthority: false },
-    { operation: "unsupported algorithm", revokeAuthority: false },
-    { operation: "delete", revokeAuthority: true },
+    { operation: "delete", revokeAuthority: false, failNetworkOnce: false },
+    { operation: "unsupported algorithm", revokeAuthority: false, failNetworkOnce: false },
+    { operation: "delete", revokeAuthority: true, failNetworkOnce: false },
+    { operation: "delete", revokeAuthority: false, failNetworkOnce: true },
   ] as const)(
-    "settles recovery persistence before SDK secret $operation dispatch (revoke authority: $revokeAuthority)",
-    async ({ operation, revokeAuthority }) => {
+    "settles recovery persistence before SDK secret $operation dispatch (revoke authority: $revokeAuthority, transient network failure: $failNetworkOnce)",
+    async ({ operation, revokeAuthority, failNetworkOnce }) => {
       clearMatrixSyncApiForNeverStartedClient();
       const recoveryKeyPath = path.join(
         tempDirs.make("matrix-recovery-dispatch-"),
@@ -1100,8 +1101,20 @@ describe("MatrixClient request hardening", () => {
           throw authorityError;
         }
       });
+      let networkFailurePending = failNetworkOnce;
+      let retryTimersInstalled = false;
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         expect((await readStoredRecoveryKey(recoveryKeyPath))?.keyId).toBe("SSSSKEY");
+        if (networkFailurePending) {
+          networkFailurePending = false;
+          // Persistence and the first request stay real; only SDK backoff is virtual.
+          vi.useFakeTimers({
+            toFake: ["setTimeout", "clearTimeout"],
+            shouldClearNativeTimers: true,
+          });
+          retryTimersInstalled = true;
+          throw new TypeError("Synthetic network interruption");
+        }
         return Response.json(
           init?.method === "GET" && requestUrl(input).includes("m.secret_storage.key.")
             ? { algorithm: "unsupported.synthetic" }
@@ -1120,37 +1133,10 @@ describe("MatrixClient request hardening", () => {
       const sdk = await vi.importActual<typeof import("matrix-js-sdk/lib/matrix.js")>(
         "matrix-js-sdk/lib/matrix.js",
       );
-      const fetchFn = options.fetchFn;
-      if (!fetchFn) {
-        throw new Error("expected Matrix SDK guarded fetch");
-      }
-      const firstRefusal = createDeferred<void>();
-      let guardedAttempts = 0;
-      let retryTimersInstalled = false;
-      const sdkClient = sdk.createClient({
-        ...options,
-        fetchFn: revokeAuthority
-          ? async (input, init) => {
-              guardedAttempts++;
-              try {
-                return await fetchFn(input, init);
-              } catch (error) {
-                if (!retryTimersInstalled) {
-                  // Persistence and the first guarded request stay real. Capture only
-                  // subsequent SDK waits, while native request timers can still be cleared.
-                  vi.useFakeTimers({
-                    toFake: ["setTimeout", "clearTimeout"],
-                    shouldClearNativeTimers: true,
-                  });
-                  retryTimersInstalled = true;
-                  firstRefusal.resolve();
-                }
-                throw error;
-              }
-            }
-          : fetchFn,
-      });
+      const sdkClient = sdk.createClient(options);
+      const accountDataRequest = vi.spyOn(sdkClient.http, "authedRequest");
       let operationSettled: Promise<PromiseSettledResult<void>[]> | undefined;
+      let outcome: PromiseSettledResult<void> | undefined;
       let retryDriver: Promise<void> | undefined;
       try {
         await persistence.admitted.promise;
@@ -1159,16 +1145,20 @@ describe("MatrixClient request hardening", () => {
           operation === "delete" ? null : "synthetic-secret",
           ["SSSSKEY"],
         );
-        operationSettled = Promise.allSettled([pending]);
-        if (revokeAuthority) {
+        operationSettled = Promise.allSettled([pending]).then((results) => {
+          outcome = results[0];
+          return results;
+        });
+        const firstRequest = accountDataRequest.mock.results[0];
+        if (firstRequest?.type !== "return") {
+          throw new Error("expected the real SDK account-data request");
+        }
+        if (failNetworkOnce) {
           retryDriver = (async () => {
-            // A missing refusal may settle successfully; do not strand the driver.
-            await Promise.race([firstRefusal.promise, operationSettled]);
+            await Promise.allSettled([firstRequest.value]);
+            await setImmediate();
             if (retryTimersInstalled) {
-              // The first refusal must reach the SDK catch before its sleep exists.
-              // Later attempts reject before I/O: the SDK waits 2 + 4 + 8 + 16 seconds.
-              await setImmediate();
-              await vi.advanceTimersByTimeAsync(30_000);
+              await vi.advanceTimersByTimeAsync(2_000);
             }
           })();
           void retryDriver.catch(() => {});
@@ -1180,11 +1170,15 @@ describe("MatrixClient request hardening", () => {
         authorized = !revokeAuthority;
         persistence.release.resolve();
         if (revokeAuthority) {
-          await retryDriver;
+          await Promise.allSettled([firstRequest.value]);
+          await setImmediate();
+          // A settled authority rejection must not leave the SDK waiting in network backoff.
+          expect(outcome?.status).toBe("rejected");
           await expect(pending).rejects.toThrow(authorityError.message);
-          expect(guardedAttempts).toBe(5);
+          await expect(pending).rejects.toMatchObject({ name: "AbortError" });
           expect(fetchMock).not.toHaveBeenCalled();
         } else {
+          await retryDriver;
           await pending;
           const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
           expect(put).toBeDefined();
@@ -1193,6 +1187,9 @@ describe("MatrixClient request hardening", () => {
             throw new Error("expected SDK JSON account-data body");
           }
           expect(JSON.parse(body)).toEqual(operation === "delete" ? {} : { encrypted: {} });
+          if (failNetworkOnce) {
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+          }
         }
         expect(getSecretStorageKey).not.toHaveBeenCalled();
         expect((await readStoredRecoveryKey(recoveryKeyPath))?.keyId).toBe("SSSSKEY");
@@ -1200,18 +1197,14 @@ describe("MatrixClient request hardening", () => {
         authorized = true;
         persistence.release.resolve();
         try {
-          // The driver remains owned if a blocked-before-dispatch assertion fails.
           await Promise.allSettled([retryDriver, operationSettled]);
         } finally {
           if (retryTimersInstalled) {
             vi.useRealTimers();
           }
+          accountDataRequest.mockRestore();
           sdkClient.stopClient();
-          try {
-            await client.stopWithoutPersist();
-          } finally {
-            getSecretStorageKey.mockRestore();
-          }
+          await client.stopWithoutPersist().finally(() => getSecretStorageKey.mockRestore());
         }
       }
     },
@@ -2180,12 +2173,12 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "42.3.1";
+    manifest.version = "42.4.1";
     try {
       const client = new MatrixClient("https://matrix.example.org", "token");
 
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 42.3.0; found 42.3.1",
+        "Matrix sync quiesce requires matrix-js-sdk 42.4.0; found 42.4.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();

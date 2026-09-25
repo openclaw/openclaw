@@ -90,6 +90,33 @@ export function selectTaskRecordsForOwnerTree(
   return [...tasks.values()].filter((task) => selected.has(task.taskId));
 }
 
+/** Selected rows and every possible parent edge; callers still enforce identity and visibility. */
+export function selectTaskRecordsWithAncestors(
+  tasks: ReadonlyMap<string, TaskRecord>,
+  taskIdsByChildSessionKey: ReadonlyMap<string, ReadonlySet<string>>,
+  taskIds: readonly string[],
+  isRootTask: (task: Readonly<TaskRecord>) => boolean,
+): TaskRecord[] {
+  const selected = new Set(taskIds);
+  const owners = new Set<string>();
+  const records: TaskRecord[] = [];
+  for (const taskId of selected) {
+    const task = tasks.get(taskId);
+    if (!task || task.scopeKind !== "session") {
+      continue;
+    }
+    records.push(task);
+    if (isRootTask(task) || owners.has(task.ownerKey)) {
+      continue;
+    }
+    owners.add(task.ownerKey);
+    for (const parentId of taskIdsByChildSessionKey.get(task.ownerKey) ?? []) {
+      selected.add(parentId);
+    }
+  }
+  return records;
+}
+
 /** Build the derived flow index in snapshot order to retain the latest-task tie break. */
 export function findLatestTaskForFlowInSnapshot(
   tasks: ReadonlyMap<string, TaskRecord>,
@@ -202,24 +229,15 @@ export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): b
   return isDeepStrictEqual(fields(current), fields(next));
 }
 
-export function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
-  return [...source.values()].map((record) => cloneTaskRecord(record));
-}
-
 /** Observer notifications need detached metadata, never runtime-owned detail. */
 export function cloneTaskRecordForObserver(record: TaskRecord): Omit<TaskRecord, "detail"> {
   const { detail: _detail, executionOwner: _executionOwner, ...snapshot } = record;
   return snapshot;
 }
 
-export function normalizeTaskRecord<
-  T extends Pick<
-    TaskRecord,
-    "status" | "createdAt" | "startedAt" | "endedAt" | "lastEventAt" | "runId" | "childSessionKey"
-  >,
+export function normalizeTaskTimestamps<
+  T extends Pick<TaskRecord, "status" | "createdAt" | "startedAt" | "endedAt" | "lastEventAt">,
 >(task: T): T {
-  const runId = normalizeOptionalString(task.runId);
-  const childSessionKey = normalizeOptionalString(task.childSessionKey);
   // Detached runtimes can report lifecycle times captured before the registry
   // inserted or restored the row; keep createdAt as the visible lifecycle floor.
   let createdAt = task.createdAt;
@@ -245,9 +263,7 @@ export function normalizeTaskRecord<
     createdAt === task.createdAt &&
     startedAt === task.startedAt &&
     lastEventAt === task.lastEventAt &&
-    endedAt === task.endedAt &&
-    runId === task.runId &&
-    childSessionKey === task.childSessionKey
+    endedAt === task.endedAt
   ) {
     return task;
   }
@@ -256,16 +272,6 @@ export function normalizeTaskRecord<
     ...task,
     createdAt,
   };
-  if (runId !== undefined) {
-    normalized.runId = runId;
-  } else {
-    delete normalized.runId;
-  }
-  if (childSessionKey !== undefined) {
-    normalized.childSessionKey = childSessionKey;
-  } else {
-    delete normalized.childSessionKey;
-  }
   if (typeof startedAt === "number") {
     normalized.startedAt = startedAt;
   }
@@ -383,7 +389,9 @@ export function buildTaskRecordForCreate(
     scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
-  const record: TaskRecord = normalizeTaskRecord({
+  const runId = normalizeOptionalString(params.runId);
+  const childSessionKey = normalizeOptionalString(params.childSessionKey);
+  const record: TaskRecord = normalizeTaskTimestamps({
     taskId,
     ...(params.executionOwner ? { executionOwner: { ...params.executionOwner } } : {}),
     runtime: params.runtime,
@@ -392,12 +400,12 @@ export function buildTaskRecordForCreate(
     requesterSessionKey,
     ownerKey,
     scopeKind,
-    childSessionKey: params.childSessionKey,
+    ...(childSessionKey ? { childSessionKey } : {}),
     parentFlowId: normalizeOptionalString(params.parentFlowId),
     parentTaskId: normalizeOptionalString(params.parentTaskId),
     agentId,
     requesterAgentId,
-    runId: params.runId,
+    ...(runId ? { runId } : {}),
     label: normalizeOptionalString(params.label),
     task: params.task,
     status,
@@ -439,6 +447,12 @@ export function applyTaskRecordPatch(
     ...(patch.executionOwner ? { executionOwner: { ...patch.executionOwner } } : {}),
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
   };
+  if (Object.hasOwn(patch, "runId")) {
+    updated.runId = normalizeOptionalString(patch.runId);
+  }
+  if (Object.hasOwn(patch, "childSessionKey")) {
+    updated.childSessionKey = normalizeOptionalString(patch.childSessionKey);
+  }
   const becomesTerminal =
     !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(updated.status);
   if (becomesTerminal && patch.endedAt === undefined) {
@@ -454,12 +468,15 @@ export function applyTaskRecordPatch(
   ) {
     updated.lastEventAt = current.lastEventAt;
   }
-  const next = normalizeTaskRecord(updated);
+  const next = normalizeTaskTimestamps(updated);
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }
-  if (Object.hasOwn(patch, "childSessionKey") && patch.childSessionKey === undefined) {
+  if (Object.hasOwn(patch, "childSessionKey") && updated.childSessionKey === undefined) {
     delete next.childSessionKey;
+  }
+  if (Object.hasOwn(patch, "runId") && updated.runId === undefined) {
+    delete next.runId;
   }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const createdAt = next.createdAt ?? now ?? Date.now();

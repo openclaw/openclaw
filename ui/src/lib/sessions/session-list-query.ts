@@ -30,6 +30,7 @@ import {
 
 const ROW_SNAPSHOT_REASONS = new Set([
   "patch",
+  "placement",
   "send",
   "steer",
   "agent.run.started",
@@ -327,16 +328,13 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    query.excludeSubagents !== true &&
+    query.excludeCron !== true &&
+    query.excludeSystem !== true &&
     query.includeGlobal === true &&
     query.includeUnknown === true &&
     query.configuredAgentsOnly === true
   );
-}
-
-export function sessionListQueryAgentId(
-  query: ReturnType<typeof normalizeManagedSessionListQuery>,
-): string | undefined {
-  return typeof query.agentId === "string" ? query.agentId : undefined;
 }
 
 export function isSameSessionListQuery(

@@ -20,6 +20,14 @@ function requireEvidence(condition, message) {
   }
 }
 
+function requireRestSupport(condition, message) {
+  if (!condition) {
+    const error = new Error(`REST merge: ${message}; use GraphQL.`);
+    error.code = "OPENCLAW_REST_UNSUPPORTED";
+    throw error;
+  }
+}
+
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonemptyString = (value) => typeof value === "string" && value.length > 0;
 
@@ -71,6 +79,17 @@ function read(repo, endpoint, paginate = false) {
   );
 }
 
+function readMain(repo) {
+  const reference = read(repo, "/git/ref/heads/main");
+  requireEvidence(
+    reference?.ref === "refs/heads/main" &&
+      reference.object?.type === "commit" &&
+      OID.test(reference.object.sha ?? ""),
+    "main is unavailable",
+  );
+  return reference.object.sha;
+}
+
 function pageArrays(pages) {
   requireEvidence(
     Array.isArray(pages) && pages.length > 0 && pages.every(Array.isArray),
@@ -99,13 +118,14 @@ function readPolicy(repo) {
     }
   }
   const protection = parseGithubResponse(response);
-  requireEvidence(
+  requireRestSupport(
     protection.status === "404" && protection.body?.message === "Branch not protected",
     "classic branch protection is not supported",
   );
   const rules = pageArrays(read(repo, "/rules/branches/main?per_page=100", true));
   for (const rule of rules) {
-    requireEvidence(RULE_TYPES.has(rule?.type), "unsupported or missing effective branch rule");
+    requireEvidence(nonemptyString(rule?.type), "missing effective branch rule");
+    requireRestSupport(RULE_TYPES.has(rule.type), "unsupported effective branch rule");
     if (rule.type === "pull_request") {
       const methods = rule.parameters?.allowed_merge_methods;
       requireEvidence(
@@ -131,9 +151,14 @@ function readPolicy(repo) {
 }
 
 function readPullRequest(repo, authority, pr) {
-  const record = read(repo, `/pulls/${pr}`);
+  // Mergeability depends on the writer; pooled readers can see a different policy projection.
+  const response = parseGithubResponse(
+    execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
+  );
+  const record = response.body;
   requireEvidence(
-    record?.number === pr &&
+    response.status === "200" &&
+      record?.number === pr &&
       nonemptyString(record.node_id) &&
       nonemptyString(record.title) &&
       record.html_url === `${repo.url}/pull/${pr}` &&
@@ -143,6 +168,7 @@ function readPullRequest(repo, authority, pr) {
       record.base.ref === "main" &&
       OID.test(record.base.sha ?? "") &&
       OID.test(record.head?.sha ?? "") &&
+      nonemptyString(record.head?.ref) &&
       ["open", "closed"].includes(record.state) &&
       typeof record.merged === "boolean" &&
       typeof record.draft === "boolean" &&
@@ -153,7 +179,7 @@ function readPullRequest(repo, authority, pr) {
         ["squash", "merge", "rebase"].includes(record.auto_merge?.merge_method)),
     "invalid PR identity or lifecycle evidence",
   );
-  requireEvidence(
+  requireRestSupport(
     record.state !== "open" || (!record.merged && record.auto_merge === null),
     "open PR already has an auto-merge request or inconsistent lifecycle",
   );
@@ -202,24 +228,20 @@ function beginRead(repo, pr, observe) {
       authority.html_url === repo.url,
     "repository identity changed",
   );
-  const branch = read(repo, "/branches/main");
-  requireEvidence(
-    branch?.name === "main" && OID.test(branch.commit?.sha ?? ""),
-    "main is unavailable",
-  );
+  const mainSha = readMain(repo);
   const record = readPullRequest(repo, authority, pr);
   // An already-merged receipt proves a historical action. New protection or
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
-  requireEvidence(
+  requireRestSupport(
     receipt || authority.permissions?.admin === true,
     "policy-reader admin access changed",
   );
   const policy = receipt ? null : readPolicy(repo);
-  return { authority, main: branch.commit.sha, record, policy };
+  return { authority, main: mainSha, record, policy };
 }
 
-function finishRead(repo, pr, snapshot) {
+function finishRead(repo, pr, snapshot, requireStableMain) {
   const current = readPullRequest(repo, snapshot.authority, pr);
   const identity = (record) => {
     const {
@@ -233,14 +255,12 @@ function finishRead(repo, pr, snapshot) {
     JSON.stringify(identity(current)) === JSON.stringify(identity(snapshot.record)),
     "PR identity, head, or lifecycle changed while reading evidence",
   );
-  const mainRef = read(repo, "/branches/main");
+  const mainSha = readMain(repo);
   requireEvidence(
-    mainRef?.name === "main" &&
-      OID.test(mainRef.commit?.sha ?? "") &&
-      (current.merged || mainRef.commit.sha === snapshot.main),
+    !requireStableMain || current.merged || mainSha === snapshot.main,
     "main changed while reading evidence",
   );
-  snapshot.main = mainRef.commit.sha;
+  snapshot.main = mainSha;
   return current;
 }
 
@@ -316,7 +336,7 @@ function latestRequiredChecks(repo, head, checks) {
   }
   const runs = checkPages(
     repo,
-    `/actions/runs?head_sha=${head}&per_page=100`,
+    `/actions/runs?head_sha=${head}&exclude_pull_requests=true&per_page=100`,
     "workflow_runs",
     head,
   );
@@ -383,9 +403,12 @@ function requiredChecks(repo, snapshot) {
       ({ context, app }) => check.name === context && (app === null || check.app.id === app),
     );
   const head = snapshot.record.head.sha;
+  const contexts = new Set(required.map(({ context }) => context));
+  const nameFilter =
+    contexts.size === 1 ? `&check_name=${encodeURIComponent(required[0].context)}` : "";
   const checks = checkPages(
     repo,
-    `/commits/${head}/check-runs?filter=latest&per_page=100`,
+    `/commits/${head}/check-runs?filter=latest${nameFilter}&per_page=100`,
     "check_runs",
     head,
   );
@@ -525,7 +548,7 @@ function mergeBody(value) {
 
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
   requireEvidence(
-    ["observe", "checks", "preview", "merge"].includes(mode) &&
+    ["observe", "observe-admission", "checks", "preview", "merge"].includes(mode) &&
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
@@ -538,10 +561,11 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   );
   const repo = parseRepository(repository);
   const pr = Number(prValue);
+  const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  const snapshot = beginRead(repo, pr, mode === "observe");
+  const snapshot = beginRead(repo, pr, observing);
   const checks =
-    mode === "checks" || (["observe", "merge"].includes(mode) && snapshot.record.state === "open")
+    mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? requiredChecks(repo, snapshot)
       : undefined;
   if (mode !== "checks" && checks !== undefined) {
@@ -551,7 +575,15 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     );
     snapshot.policy.requiredChecks = checks;
   }
-  const current = finishRead(repo, pr, snapshot);
+  const current = finishRead(repo, pr, snapshot, mode === "observe");
+  if (observing && current.state === "open") {
+    // REST can still be calculating after GraphQL is ready. Select the alternate
+    // reader before retaining intent; mutation dispatch never changes transports.
+    requireRestSupport(
+      current.mergeable === true && current.mergeable_state === "clean",
+      "merge projection requires GraphQL admission",
+    );
+  }
   let result;
   if (mode === "checks") {
     result = checks;
@@ -565,6 +597,8 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     result = {
       data: {
         repository: {
+          squashMergeCommitTitle: snapshot.authority.squash_merge_commit_title,
+          squashMergeCommitMessage: snapshot.authority.squash_merge_commit_message,
           pullRequest: {
             headRefOid: current.head.sha,
             author: { login: current.user.login, __typename: current.user.type },
@@ -575,7 +609,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       },
       transport: "rest",
     };
-  } else if (mode === "observe") {
+  } else if (observing) {
     result = {
       data: {
         repository: {
@@ -600,22 +634,20 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
+    const { main: _main, ...expectedFacts } = JSON.parse(expectedObservation);
     requireEvidence(
       JSON.stringify(
         canonical({
-          main: snapshot.main,
           pr: pullRequest(current),
           transport: "rest",
           restPolicy: snapshot.policy,
         }),
-      ) === JSON.stringify(canonical(JSON.parse(expectedObservation))),
-      "PR, main, or policy changed before merge dispatch",
+      ) === JSON.stringify(canonical(expectedFacts)),
+      "PR or policy changed before merge dispatch",
     );
-    const suffix = ` (#${pr})`;
     const payload = {
       sha: head,
       merge_method: "squash",
-      commit_title: current.title.endsWith(suffix) ? current.title : `${current.title}${suffix}`,
       commit_message: body,
     };
     result = execPrGhJson(
@@ -640,6 +672,13 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         ? error.message
         : String(error.stderr || error.message).trim(),
     );
-    process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
+    if (
+      ["observe", "observe-admission", "checks", "preview"].includes(process.argv[2]) &&
+      (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")
+    ) {
+      process.stdout.write('{"restUnavailable":true}\n');
+    } else {
+      process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
+    }
   }
 }

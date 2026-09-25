@@ -145,7 +145,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
       await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
@@ -198,7 +198,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…" }).click();
 
       await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
@@ -370,7 +370,7 @@ suite.define(() => {
       // Active rows can archive through the Gateway's stop-and-drain lifecycle,
       // while Delete keeps its separate active-run guard.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
+      await sidebarMigration.click({ button: "right" });
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(false);
@@ -379,7 +379,7 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await sidebarResearch.click({ button: "right" });
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
@@ -860,7 +860,7 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
+      await sessionTen.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       await submitInputDialog(page, "Gamma");
@@ -910,7 +910,9 @@ suite.define(() => {
         .toBe(10);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
-      const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
+      const alphaToggle = alpha
+        .getByRole("button", { name: "Alpha", exact: true })
+        .and(alpha.locator(".sidebar-session-group-toggle"));
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-session-group-collapsed.png");

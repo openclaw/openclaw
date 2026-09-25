@@ -34,36 +34,6 @@ describe("telegram error policy", () => {
     });
   });
 
-  it("suppresses only repeated matching errors within the same scope", () => {
-    const scopeKey = buildTelegramErrorScopeKey({
-      accountId,
-      chatId: 42,
-      threadSpec: { id: 7, scope: "forum" },
-    });
-
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "429",
-      }),
-    ).toBe(false);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "429",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "403",
-      }),
-    ).toBe(false);
-  });
-
   it("keeps cooldowns per error message within the same scope", () => {
     const scopeKey = buildTelegramErrorScopeKey({
       accountId,

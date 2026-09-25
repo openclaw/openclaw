@@ -37,7 +37,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const callCapture = (action: MeetingBrowserAudioCaptureRequest["action"]) =>
     runMeetingBrowserAct({
-      deadline: Date.now() + 5_000,
+      deadline: performance.now() + 5_000,
       targetId,
       operation: async (timeoutMs) => {
         if (stopped && action !== "stop") {

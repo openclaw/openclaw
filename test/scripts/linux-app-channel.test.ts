@@ -1571,6 +1571,8 @@ it.each([null, tag])(
 
 it.each([
   { releaseTag: nextTag, prerelease: false },
+  { releaseTag: "v2026.6.33", prerelease: false },
+  { releaseTag: "v2026.8.35", prerelease: false },
   { releaseTag: "v2026.9.4-alpha.1", prerelease: true },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {
@@ -1641,8 +1643,8 @@ it("refuses non-latest finalization that would demote the current latest", () =>
 it.each([
   {
     releaseTag: "v2026.6.33",
-    latest: "false",
-    message: "Unsupported core GitHub release train",
+    latest: "true",
+    message: "Extended-stable releases cannot become core latest",
   },
   {
     releaseTag: "v2026.9.04",

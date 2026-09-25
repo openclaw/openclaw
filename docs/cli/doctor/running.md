@@ -62,19 +62,34 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, then restarts the same service once
-and verifies readiness. It preserves the service definition except for
-[eligible installation drift](/cli/doctor/recovery#gateway-service-recovery) in a
-previously running service, reconciled through the native installer. Automatic
-refresh covers installation-only drift; additional native settings, operator edits,
-or uncertain inspection still require interactive confirmation. Services
-confirmed offline before maintenance keep their definitions and stop state; use
-the reported profile-aware `openclaw gateway install --force` command to reconcile
-them (installation may start the service). On Linux, it also
+and verifies readiness. Policy refresh preserves the installed launcher and
+environment. Separately, [eligible installation drift](/cli/doctor/recovery#gateway-service-recovery)
+in a previously running service is reconciled through the native installer.
+Automatic installation refresh covers installation-only drift; other operator
+edits or uncertain inspection still require interactive confirmation. Services
+confirmed offline before maintenance keep their launcher and stop state; Linux
+policy can refresh without activation as described below. Use the reported
+profile-aware `openclaw gateway install --force` command to reconcile their
+installation drift (installation may start the service). On Linux, Doctor also
 restores a previously running service if systemd unloads the stopped unit during
 repair; a changed service definition or manager still blocks restart. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
 resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.
+
+Before a Linux maintenance stop, Doctor backs up and refreshes outdated OpenClaw
+unit policy and confirms `daemon-reload`. Operator drop-ins remain unchanged.
+The current service stop policy is 330 seconds. A resident Gateway can still have
+an older, shorter shutdown budget: published 2026.9.5 cached that budget at startup.
+For a short or unreported resident budget, maintenance asks the Gateway to fence
+new admission and drain existing work, stopping as soon as it reports idle.
+The wait uses the update's existing per-step deadline (30 minutes by default).
+At that deadline, admitted turns may be interrupted with a warning; a reported
+write-custody phase, such as session mutation or terminal persistence, refuses the
+stop and names its owner phase. Older residents without the custody observation
+stop at the deadline with a warning naming active root requests and cron runs;
+unknown custody is not a refusal. An owned service confirmed offline can receive
+the policy refresh without being started.
 
 During [automatic triage](/cli/triage#automatic-failure-handoff), repair can run
 against an offline target when schema and maintenance locks permit it. If repair
@@ -97,7 +112,7 @@ The updater uses this repair path before accepting the installed target.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
 On large fleets it can defer auth and model diagnostics, plugin inspection,
-skills and workspace metadata, session-snapshot cleanup, and advisory lint to
+skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check
 appears as an `update-inspection-deferred` warning in Doctor output and the
 update outcome, with the reason and remaining inspection allowance. A deferred
@@ -116,7 +131,8 @@ Custom state directories remain runtime-only and do not adopt a native service.
 `--force` alone does not select repair mode: `openclaw doctor --force` remains
 guided and still requires interactive consent before an eligible service rewrite.
 With `--fix`, `--repair`, or `--yes`, it allows aggressive config/state repairs
-with the same installation-drift exception above. Force does not bypass service
+with the same installation-drift and Linux policy-refresh rules above. Force does
+not bypass service
 ownership, write-access, or interactive-only confirmation requirements.
 
 <Warning>
@@ -208,28 +224,28 @@ openclaw channels status --probe
 
 ## Options
 
-| Option                          | Effect                                                                                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                           |
-| `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                        |
-| `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Reconcile eligible running-service installation drift; preserve stopped definitions. |
-| `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same service-preservation and drift rules.                                                      |
-| `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                  |
-| `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                |
-| `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                          |
-| `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                    |
-| `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                        |
-| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                |
-| `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                              |
-| `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                              |
-| `--session-sqlite-store <path>` | With `--session-sqlite`: select a SQLite database or legacy `sessions.json` source, subject to the mode's [selection rules](/cli/doctor/sqlite-maintenance#session-sqlite-migration).                  |
-| `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                                  |
-| `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                                |
-| `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                                            |
-| `--json`                        | Emit read-only JSON. Bare `--json` is advisory; combine with `--lint` for threshold-based exit codes. With another machine mode, emit that mode's existing JSON report.                                |
-| `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                                      |
-| `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                                       |
-| `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                                            |
-| `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                             |
+| Option                          | Effect                                                                                                                                                                                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                                                                          |
+| `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                                                                       |
+| `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
+| `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
+| `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
+| `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
+| `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
+| `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
+| `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
+| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
+| `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |
+| `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                                                                             |
+| `--session-sqlite-store <path>` | With `--session-sqlite`: select a SQLite database or legacy `sessions.json` source, subject to the mode's [selection rules](/cli/doctor/sqlite-maintenance#session-sqlite-migration).                                                                 |
+| `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                                                                                 |
+| `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                                                                               |
+| `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                                                                                           |
+| `--json`                        | Emit read-only JSON. Bare `--json` is advisory; combine with `--lint` for threshold-based exit codes. With another machine mode, emit that mode's existing JSON report.                                                                               |
+| `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                                                                                     |
+| `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                                                                                      |
+| `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                                                                                           |
+| `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                                                                            |
 
 `--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`. Other machine modes can still use `--json` for their own output.

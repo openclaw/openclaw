@@ -3,7 +3,7 @@ import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
-import { resolveCloudProfileIcon } from "../../components/provider-icon.ts";
+import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type {
@@ -273,7 +273,7 @@ export function renderCloudProfileMenuItems(params: {
   compact?: boolean;
   onSelect: (profileId: string, useDefaults?: boolean) => void;
 }) {
-  return params.profiles.map((profile) => {
+  return params.profiles.toSorted(compareCloudProfiles).map((profile) => {
     const presentation = resolveCloudProfileIcon(profile);
     const profileDisabledReason = params.profileDisabledReason?.(profile);
     const selected = params.selectedId === profile.id;

@@ -8,11 +8,8 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
-import {
-  linkReaderAuthorHref,
-  linkReaderResponseMatchesTarget,
-  type LinkReaderTarget,
-} from "./link-reader-target.ts";
+import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
+import type { LinkReaderTarget } from "./link-reader-target.ts";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
 
 function safePreviewImage(value: string | undefined): string | undefined {

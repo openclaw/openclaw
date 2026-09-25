@@ -651,7 +651,7 @@ describe("browser.request profile selection", () => {
     const [ok, payload, error] = firstRespondCall(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error?.message).toBe("browser control is disabled");
+    expect(error?.message).toContain("browser control disabled:");
   });
 
   it("uses profile from request body when query profile is missing", async () => {
@@ -791,7 +791,7 @@ describe("browser.request profile selection", () => {
       const [ok, payload, error] = firstRespondCall(respond);
       expect(ok).toBe(false);
       expect(payload).toBeUndefined();
-      expect(error?.message).toBe("browser control is disabled");
+      expect(error?.message).toContain("browser control disabled:");
     },
   );
 
@@ -822,7 +822,7 @@ describe("browser.request profile selection", () => {
 
     expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+    expect(firstRespondCall(respond)[2]?.message).toContain("browser control disabled:");
   });
 
   it("sends Gateway-owned upload bytes without forwarding source paths", async () => {

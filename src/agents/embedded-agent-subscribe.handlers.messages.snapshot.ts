@@ -12,7 +12,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
-  extractAssistantVisibleText,
+  prepareAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
@@ -50,7 +50,7 @@ export function extractAssistantStreamSnapshot(
   let blockSource = "";
   let finalAnswer = true;
   const parts: { separator: string; index?: number }[] = [];
-  const text = extractAssistantVisibleText(observedMessage, (part, final, phase, index) => {
+  const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
       rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
@@ -78,7 +78,17 @@ export function extractAssistantStreamSnapshot(
       : visibleBlockSource,
     { preserveTrailingWhitespace: true },
   );
-  return { text, rawText, state, parts, blockText: blockReply.text, message: observedMessage };
+  let text: string | undefined;
+  return {
+    get text() {
+      return (text ??= renderText());
+    },
+    rawText,
+    state,
+    parts,
+    blockText: blockReply.text,
+    message: observedMessage,
+  };
 }
 
 /** Reconcile one prepared source frame without translating raw or rendered offsets. */
@@ -194,7 +204,7 @@ export function reconcileBlockReplySnapshot(
         }
       }
     }
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
 
@@ -220,7 +230,7 @@ export function reconcileBlockReplySnapshot(
     }
   }
   if (retainedPrefix && nextText.length < consumed && restartPrefix !== next.blockText) {
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
   const sourceBreaks: number[] = [];
@@ -271,6 +281,6 @@ export function reconcileBlockReplySnapshot(
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks);
+  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

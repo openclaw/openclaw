@@ -41,7 +41,9 @@ export class VoicePlugin extends Plugin {
           }
         },
         destroy: () => {
-          this.adapters.delete(guildId);
+          if (this.adapters.get(guildId) === methods) {
+            this.adapters.delete(guildId);
+          }
         },
       };
     };

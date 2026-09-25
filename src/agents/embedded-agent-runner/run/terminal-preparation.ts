@@ -200,7 +200,12 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
-    lastToolError: attempt.lastToolError,
+    // A clean yield is a handoff, not a terminal tool failure. Keep the error
+    // on the attempt for diagnostics without turning the pause into a warning.
+    lastToolError:
+      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
+        ? undefined
+        : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",
@@ -339,9 +344,6 @@ function replacePartialAssistantPayload(input: {
       typeof payload.text === "string" &&
       assistantTextSignatures.has(payload.text.trim()),
   );
-  if (partialPayloadIndex < 0) {
-    return [...payloads, { text: input.recoveredText }];
-  }
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];

@@ -221,7 +221,7 @@ describe("token – federated credentials (certificate)", () => {
       }
 
       const { app } = await loadMSTeamsSdkWithAuth(credentials);
-      expect(app.tokenManager).toBeDefined();
+      expect(app.tokenProvider).toBeDefined();
     } finally {
       rmSync(certificateDirectory, { recursive: true, force: true });
     }

@@ -88,8 +88,8 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  const { version, schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
-  const nodeRuntimeFailure = await checkGitCandidateNodeRuntime(params.packageRoot, version);
+  const { schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
+  const nodeRuntimeFailure = await checkGitCandidateNodeRuntime(params.packageRoot);
   if (nodeRuntimeFailure) {
     throw new Error(
       nodeRuntimeFailure.stderrTail ?? "Node runtime is incompatible with the update.",

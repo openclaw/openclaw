@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -18,12 +19,15 @@ import {
   resolveVerifiedSessionSource,
   type SessionSourceVerification,
 } from "../infra/deferred-plugin-session-sources.js";
+import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
+import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
@@ -32,10 +36,157 @@ import { doctorCommand } from "./doctor.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("retained session source verification", () => {
+  it.each([false, true, "all"] as const)(
+    "rebuilds a missing receipt index and protects changed sources without their owner index (changed: %s)",
+    async (changed) => {
+      await withOpenClawTestState({ label: "deferred-missing-index" }, async (state) => {
+        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+          state,
+          "default",
+          "brave",
+        );
+        const run = () =>
+          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        expect((await run()).totals.importedEntries).toBe(2);
+        const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+        const deletedTranscript = path.join(path.dirname(storePath), "legacy-deleted.jsonl");
+        fs.renameSync(storePath, `${storePath}.preserved`);
+        fs.copyFileSync(transcript, `${transcript}.copy`);
+        fs.renameSync(`${transcript}.copy`, transcript);
+        if (changed) {
+          fs.appendFileSync(transcript, "\n");
+        }
+        if (changed === "all") {
+          fs.appendFileSync(deletedTranscript, "\n");
+        }
+        const result = await run();
+        expect(result.totals.importedEntries).toBe(0);
+        expect(result.totals.validatedEntries).toBe(changed === "all" ? 0 : changed ? 1 : 2);
+        expect(result.totals.archivedTranscriptFiles).toBe(changed === "all" ? 2 : changed ? 1 : 0);
+        const issues = result.targets.flatMap((target) => target.issues);
+        expect(issues).toContainEqual(
+          expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+        );
+        const conflicts = issues.filter((issue) => issue.code === "historical_transcript_deferred");
+        expect(conflicts).toHaveLength(changed === "all" ? 2 : changed ? 1 : 0);
+        const receipt = withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) =>
+            db
+              .prepare(
+                "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+              )
+              .get(),
+          { env: state.env },
+        );
+        const sources = JSON.parse(String(receipt?.report_json)).sources;
+        expect(sources.map((source: { path: string }) => source.path)).not.toContain(storePath);
+        expect(sources.map((source: { path: string }) => source.path)).toContain(transcript);
+        expect(fs.existsSync(storePath)).toBe(false);
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId,
+        ).toBe("legacy-kept");
+        expect((await run()).totals.importedEntries).toBe(0);
+        await deleteSessionEntryLifecycle({
+          ...scope,
+          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+        });
+        recordDeferredPluginMigrations({
+          env: state.env,
+          pending: [],
+          resolvedPluginIds: ["brave"],
+        });
+        const settled = await run();
+        expect(settled.totals.importedEntries).toBe(0);
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
+        ).toBeUndefined();
+        expect(fs.existsSync(transcript)).toBe(false);
+        expect(fs.existsSync(deletedTranscript)).toBe(false);
+        const inspected = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          mode: "inspect",
+          store: storePath,
+        });
+        expect(inspected.targets.flatMap((target) => target.issues)).not.toContainEqual(
+          expect.objectContaining({ code: "plugin_migration_source_retained" }),
+        );
+      });
+    },
+  );
+
+  it("preserves and names a changed index archive while verifying the other receipt sources", async () => {
+    await withOpenClawTestState({ label: "deferred-changed-index-archive" }, async (state) => {
+      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const run = () =>
+        runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      await run();
+      const target = {
+        agentId: "main",
+        storePath,
+        sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+      };
+      const recorded = readDeferredPluginSessionImport({
+        cfg,
+        env: state.env,
+        target,
+        sqlitePath: target.sqlitePath,
+      })!;
+      const index = recorded.sources.find((source) => source.path === storePath)!;
+      const migration = migrationRun.createSessionSqliteMigrationRun(state.env, [target]);
+      const archivePath = path.join(
+        path.dirname(path.dirname(storePath)),
+        "session-sqlite-import-archive",
+        "index.json",
+      );
+      const move: migrationRun.SessionSqliteMigrationMove = {
+        kind: "legacy-store",
+        sourcePath: storePath,
+        archivePath,
+        artifact: {
+          identity: index.identity,
+          classification: "protected",
+          reason: "incomplete-index-import",
+          dependencies: [],
+          disposal: { state: "retained" },
+        },
+      };
+      migrationRun.recordPlannedMigrationMoves(migration, target, [move]);
+      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+      fs.renameSync(storePath, archivePath);
+      migrationRun.recordCompletedMigrationMoves(migration, target, [move]);
+      fs.appendFileSync(archivePath, "\n");
+      const bytes = fs.readFileSync(archivePath);
+      const result = await run();
+      expect(result.totals.importedEntries).toBe(0);
+      expect(result.totals.validatedEntries).toBe(2);
+      expect(result.targets.flatMap((reportTarget) => reportTarget.issues)).toContainEqual(
+        expect.objectContaining({
+          code: "historical_transcript_deferred",
+          message: expect.stringContaining(archivePath),
+        }),
+      );
+      expect(fs.readFileSync(archivePath)).toEqual(bytes);
+      const receipt = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) =>
+          db
+            .prepare(
+              "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+            )
+            .get(),
+        { env: state.env },
+      );
+      expect(JSON.parse(String(receipt?.report_json)).sources).toContainEqual(index);
+    });
+  });
+
   it.each([false, true])(
     "preserves an empty-index receipt for an existing database (unindexed history: %s)",
     async (history) => {
       await withOpenClawTestState({ label: "deferred-empty-index" }, async (state) => {
+        openOpenClawStateDatabase({ env: state.env });
         const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
         const directory = state.sessionsDir("main");
         fs.mkdirSync(directory, { recursive: true });
@@ -137,14 +288,18 @@ describe("retained session source verification", () => {
           });
           expect(
             unexpected.targets.flatMap((target) => target.issues).map((issue) => issue.code),
-          ).toEqual(["plugin_migration_source_retained", "active_sqlite_transcript_jsonl"]);
-          expect(fs.readFileSync(uncaptured, "utf8")).toBe(bytes);
+          ).toEqual(["plugin_migration_source_retained"]);
+          expect(fs.existsSync(uncaptured)).toBe(false);
+          expect(unexpected.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
+          expect(fs.readFileSync(unexpected.targets[0]!.archivedTranscriptFiles[0]!, "utf8")).toBe(
+            bytes,
+          );
         }
       });
     },
   );
 
-  it.each(["none", "archived", "live"] as const)(
+  it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as const)(
     "settles plugin work after index-free canonical session repair (remaining history: %s)",
     async (history) => {
       await withOpenClawTestState(
@@ -156,28 +311,33 @@ describe("retained session source verification", () => {
           },
         },
         async (state) => {
+          openOpenClawStateDatabase({ env: state.env });
           const cfg: OpenClawConfig = {
             agents: { entries: { main: { default: true }, ops: {} } },
             gateway: { mode: "local" },
           };
+          const historyIds =
+            history === "conflicting-archives" ? ["history", "other-history"] : ["history"];
           for (const agentId of ["main", "ops"]) {
             const directory = state.sessionsDir(agentId);
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, "sessions.json"), "{}");
-            fs.writeFileSync(
-              path.join(directory, `${agentId}-history.jsonl`),
-              [
-                { type: "session", version: 3, id: `${agentId}-history` },
-                {
-                  type: "message",
-                  id: `${agentId}-user`,
-                  parentId: null,
-                  message: { role: "user", content: "Canonical history" },
-                },
-              ]
-                .map((entry) => JSON.stringify(entry))
-                .join("\n") + "\n",
-            );
+            for (const historyId of historyIds) {
+              fs.writeFileSync(
+                path.join(directory, `${agentId}-${historyId}.jsonl`),
+                [
+                  { type: "session", version: 3, id: `${agentId}-${historyId}` },
+                  {
+                    type: "message",
+                    id: `${agentId}-user`,
+                    parentId: null,
+                    message: { role: "user", content: "Canonical history" },
+                  },
+                ]
+                  .map((entry) => JSON.stringify(entry))
+                  .join("\n") + "\n",
+              );
+            }
           }
           const imported = await runDoctorSessionSqlite({
             cfg,
@@ -185,7 +345,7 @@ describe("retained session source verification", () => {
             allAgents: true,
             mode: "import",
           });
-          expect(imported.totals.importedEntries).toBe(2);
+          expect(imported.totals.importedEntries).toBe(2 * historyIds.length);
           const manifest = migrationRun.readSessionSqliteMigrationManifest(
             imported.migrationRun!.manifestPath,
           )!;
@@ -194,11 +354,18 @@ describe("retained session source verification", () => {
             expect(fs.existsSync(target.storePath)).toBe(false);
             for (const move of target.completedMoves) {
               originals.set(move.archivePath, fs.readFileSync(move.archivePath));
-              if (history === "live" && move.kind === "transcript") {
+              if (
+                (history === "live" || history === "missing-index") &&
+                move.kind === "transcript"
+              ) {
                 fs.copyFileSync(move.archivePath, move.sourcePath);
               }
+              if (history === "missing-index" && move.kind === "legacy-store") {
+                fs.unlinkSync(move.archivePath);
+                originals.delete(move.archivePath);
+              }
             }
-            if (history === "archived") {
+            if (history === "archived" || history === "conflicting-archives") {
               for (const move of [...target.plannedMoves, ...target.completedMoves]) {
                 if (move.kind !== "transcript") {
                   continue;
@@ -209,8 +376,47 @@ describe("retained session source verification", () => {
                 move.artifact!.reason = "unreferenced-history";
               }
             }
+            if (history === "missing-index") {
+              for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+                if (move.kind === "legacy-store") {
+                  move.artifact!.classification = "protected";
+                  move.artifact!.reason = "incomplete-index-import";
+                }
+              }
+            }
           }
           fs.writeFileSync(imported.migrationRun!.manifestPath, JSON.stringify(manifest));
+          if (history === "conflicting-archives") {
+            const duplicate = structuredClone(manifest);
+            duplicate.runId += "-duplicate";
+            for (const target of duplicate.targets) {
+              target.plannedMoves = target.plannedMoves.filter(
+                (move) => move.kind === "unreferenced-jsonl",
+              );
+              for (const move of target.plannedMoves) {
+                const bytes = Buffer.from(
+                  originals
+                    .get(move.archivePath)!
+                    .toString("utf8")
+                    .replace("Canonical history", "Conflicting history"),
+                );
+                move.archivePath += ".duplicate";
+                fs.writeFileSync(move.archivePath, bytes);
+                move.artifact!.identity = migrationArtifact.readMigrationArtifactIdentity(
+                  move.archivePath,
+                );
+                originals.set(move.archivePath, bytes);
+              }
+              target.completedMoves = structuredClone(target.plannedMoves);
+            }
+            fs.writeFileSync(
+              path.join(
+                path.dirname(imported.migrationRun!.manifestPath),
+                `${duplicate.runId}.json`,
+              ),
+              JSON.stringify(duplicate),
+            );
+          }
           const pluginId = "session-fixture";
           const pluginRoot = state.path("session-plugin");
           fs.mkdirSync(pluginRoot);
@@ -280,38 +486,46 @@ describe("retained session source verification", () => {
           };
           await expect(editConfig()).rejects.toThrow("Cannot edit retained config");
           const repair = noteSessionTranscriptHealth({ cfg, env: state.env, shouldRepair: true });
-          if (history === "live") {
-            await expect(repair).rejects.toThrow(
-              "restore the matching sessions.json from a backup",
-            );
-            expect(readDeferredPluginMigrations({ env: state.env })).toHaveLength(1);
-            await expect(editConfig()).rejects.toThrow("Cannot edit retained config");
+          await repair;
+          expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
+          const row = withExistingOpenClawStateDatabaseReadOnly(
+            ({ db }) =>
+              db
+                .prepare("SELECT status, finished_at FROM migration_runs WHERE id = ?")
+                .get(`deferred-plugin-migration:${pluginId}`),
+            { env: state.env },
+          );
+          expect(row?.status).toBe("completed");
+          expect(row?.finished_at).not.toBeNull();
+          if (history === "conflicting-archives") {
+            const warnings = readSessionSqliteMigrationWarnings(state.env);
+            expect(warnings).toHaveLength(4);
+            for (const agentId of ["main", "ops"]) {
+              for (const historyId of historyIds) {
+                expect(warnings).toContainEqual(
+                  expect.stringContaining(
+                    `${agentId}-${historyId}: multiple primary files claim this identity`,
+                  ),
+                );
+              }
+            }
+          }
+          await editConfig();
+          expect(
+            (await io.readConfigFileSnapshot()).sourceConfig.plugins?.entries?.[pluginId]?.config,
+          ).toEqual({ fixture: false });
+          for (const [file, bytes] of originals) {
+            expect(fs.readFileSync(file)).toEqual(bytes);
+          }
+          if (history === "missing-index" || history === "live") {
             for (const target of manifest.targets) {
+              expect(fs.existsSync(target.storePath)).toBe(false);
               for (const move of target.completedMoves) {
                 if (move.kind === "transcript") {
                   expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
                 }
               }
             }
-          } else {
-            await repair;
-            expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
-            const row = withExistingOpenClawStateDatabaseReadOnly(
-              ({ db }) =>
-                db
-                  .prepare("SELECT status, finished_at FROM migration_runs WHERE id = ?")
-                  .get(`deferred-plugin-migration:${pluginId}`),
-              { env: state.env },
-            );
-            expect(row?.status).toBe("completed");
-            expect(row?.finished_at).not.toBeNull();
-            await editConfig();
-            expect(
-              (await io.readConfigFileSnapshot()).sourceConfig.plugins?.entries?.[pluginId]?.config,
-            ).toEqual({ fixture: false });
-          }
-          for (const [file, bytes] of originals) {
-            expect(fs.readFileSync(file)).toEqual(bytes);
           }
         },
       );
@@ -459,4 +673,32 @@ describe("retained session source verification", () => {
       });
     },
   );
+  it("reverifies a changed retained index without replaying current canonical metadata", async () => {
+    await withOpenClawTestState({ label: "deferred-plugin-source-conflict" }, async (state) => {
+      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+      await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:kept" },
+        { label: "current" },
+      );
+      fs.appendFileSync(storePath, "\n");
+      const retry = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
+      });
+      expect(retry.totals.importedEntries).toBe(0);
+      const issues = retry.targets.flatMap((target) => target.issues);
+      expect(issues).toContainEqual(
+        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+      );
+      expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+      expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
+        "current",
+      );
+      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+      expect(fs.existsSync(storePath)).toBe(true);
+    });
+  });
 });

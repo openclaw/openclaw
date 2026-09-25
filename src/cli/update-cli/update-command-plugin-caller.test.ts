@@ -417,7 +417,7 @@ describe("connected in-process plugin finalization authority", () => {
             reason: "update-executor-settlement-failed",
             steps: [
               {
-                name: "update executor settlement",
+                name: "update-executor-settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
                   scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")

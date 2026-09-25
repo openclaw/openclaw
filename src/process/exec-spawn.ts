@@ -13,6 +13,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
@@ -21,6 +22,7 @@ import {
   type CommandSubprocess,
 } from "./spawn-broker/execa-client.js";
 import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
@@ -203,6 +205,7 @@ function retainCommandProcess(
       }
     }
     killProcessTree(pid, { detached: true, force: true });
+    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
   };
   const initialize = () => {
     pid = child.pid;
@@ -345,6 +348,7 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
+  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child);
   }

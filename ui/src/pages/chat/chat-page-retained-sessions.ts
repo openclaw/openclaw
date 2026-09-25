@@ -182,7 +182,7 @@ export class ChatPageRetainedSessions {
     }
   };
 
-  private findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
+  findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
     return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
       (pane) =>
         pane.paneId === paneId && areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey),
@@ -190,14 +190,16 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (
-      !this.bindings.presented() ||
-      window.location.href !== this.bindings.routeHref() ||
-      !(event instanceof CustomEvent)
-    ) {
+    if (!(event instanceof CustomEvent)) {
       return;
     }
+    // A committed preview can still be waiting for route data after history
+    // advances. New navigation retires it even when this page no longer owns
+    // the URL and cannot preview the replacement itself.
     this.cancelPreview();
+    if (!this.bindings.presented() || window.location.href !== this.bindings.routeHref()) {
+      return;
+    }
     const intent = event.detail as SessionNavigationIntent;
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;

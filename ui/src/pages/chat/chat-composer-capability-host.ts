@@ -4,10 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import "../../components/modal-dialog.ts";
 import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
+import "../../components/modal-dialog.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -39,6 +40,8 @@ import {
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
+
+registerMcpEnglish();
 
 type ComposerMcpServerScope = "session" | "everywhere";
 

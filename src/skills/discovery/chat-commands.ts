@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
@@ -96,17 +97,25 @@ export function listSkillCommandsForWorkspace(
 
 export async function prepareSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
-  return prepareWorkspaceSkillCommandSpecs(
+  assertCurrent?.();
+  await prepareRemoteSkillConnections();
+  assertCurrent?.();
+  const commands = await prepareWorkspaceSkillCommandSpecs(
     params.workspaceDir,
     resolveWorkspaceSkillCommandOptions(params),
+    assertCurrent,
   );
+  assertCurrent?.();
+  return commands;
 }
 
 /** Resolve Gateway-bundled commands with the active Harness eligibility checks. */
 export async function prepareBundledSkillCommandForWorkspace(
   params: WorkspaceSkillCommandParams & { skillName: string },
 ): Promise<SkillCommandSpec | undefined> {
+  await prepareRemoteSkillConnections();
   const commands = await prepareWorkspaceSkillCommandSpecs(params.workspaceDir, {
     ...resolveWorkspaceSkillCommandOptions(params),
     bundledSkillName: params.skillName,
@@ -247,6 +256,8 @@ export function listSkillCommandsForAgents(params: AgentSkillCommandParams): Ski
 export async function prepareSkillCommandsForAgents(
   params: AgentSkillCommandParams & { signal?: AbortSignal },
 ): Promise<SkillCommandSpec[]> {
+  params.signal?.throwIfAborted();
+  await prepareRemoteSkillConnections();
   params.signal?.throwIfAborted();
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];

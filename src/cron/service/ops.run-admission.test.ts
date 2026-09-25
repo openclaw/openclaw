@@ -278,7 +278,7 @@ describe("cron service run admission", () => {
     inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: failingJob.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_scheduled_sibling_activation
+      CREATE TRIGGER reject_scheduled_sibling_activation
       BEFORE UPDATE OF started_at_ms ON cron_run_receipts
       WHEN NEW.job_id = '${failingJob.id}'
       BEGIN
@@ -286,13 +286,16 @@ describe("cron service run admission", () => {
       END;
     `);
 
+    const timerRun = onTimer(state);
     try {
-      const timerRun = onTimer(state);
       await completingStarted.promise;
       releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
-      await expect(timerRun).rejects.toThrow();
+      await expect(timerRun).rejects.toThrow("scheduled sibling activation failed");
     } finally {
+      releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
+      await Promise.allSettled([timerRun]);
       database.exec("DROP TRIGGER IF EXISTS reject_scheduled_sibling_activation");
+      stop(state);
     }
 
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
@@ -953,7 +956,7 @@ describe("cron service run admission", () => {
         dueAt,
       );
     });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
 
     releaseActive.resolve({ status: "ok", summary: "active" });
@@ -961,7 +964,7 @@ describe("cron service run admission", () => {
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       dueAt,
     );
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       dueAt,
     );
@@ -1014,7 +1017,7 @@ describe("cron service run admission", () => {
       );
     });
     now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
     releaseActive.resolve({ status: "ok", summary: "active" });
     await waitingStarted.promise;
@@ -1028,7 +1031,7 @@ describe("cron service run admission", () => {
     ).toBe(waitingStartedAt);
     expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(true);
     now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       waitingStartedAt,
     );

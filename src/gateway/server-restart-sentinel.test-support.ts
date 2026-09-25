@@ -1,4 +1,44 @@
 import { expect } from "vitest";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
+
+type GeneratedMediaDeliveryEntry = Extract<
+  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
+  { kind: "agentTurn" }
+>;
+
+export function createGeneratedMediaDeliveryEntry(
+  overrides: Partial<GeneratedMediaDeliveryEntry> &
+    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
+): GeneratedMediaDeliveryEntry {
+  return {
+    kind: "agentTurn",
+    sessionKey: "agent:main:main",
+    message: "generated image ready",
+    enqueuedAt: 1,
+    retryCount: 0,
+    route: { channel: "discord", to: "channel:123", chatType: "channel" },
+    inputProvenance: {
+      kind: "inter_session",
+      sourceChannel: "internal",
+      sourceTool: "image_generate",
+    },
+    sourceReplyDeliveryMode: "automatic",
+    ...overrides,
+  };
+}
+
+export function expectCapturedQueueContext(stateDir: string) {
+  return expect.objectContaining({
+    environment: expect.objectContaining({ OPENCLAW_STATE_DIR: stateDir }),
+    admission: expect.objectContaining({
+      databasePath: resolveOpenClawStateSqlitePath({
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    }),
+  });
+}
 
 export function expectRecordFields(
   record: unknown,

@@ -4,8 +4,10 @@ import type { TasksListResult } from "../../../../packages/gateway-protocol/src/
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as agentDatabaseReadOnly from "../../../state/openclaw-agent-db-readonly.js";
-import { listTaskRecordsUnsorted } from "../../../tasks/task-registry.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { listTaskRecords } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../../tasks/task-registry.test-support.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../../../test-utils/task-registry-store.js";
@@ -32,13 +34,10 @@ test("preserves task pagination during metadata patches but invalidates new requ
   const initializeTasks = () => {
     resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map([...createTaskSnapshot()].slice(0, 256)),
-          deliveryStates: new Map(),
-        }),
-      },
+      store: createInMemoryTaskRegistryStore({
+        tasks: new Map([...createTaskSnapshot()].slice(0, 256)),
+        deliveryStates: new Map(),
+      }),
     });
   };
   await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
@@ -102,7 +101,7 @@ test("preserves task pagination during metadata patches but invalidates new requ
     });
     expect(afterLabel.ok, JSON.stringify(afterLabel.error)).toBe(true);
     expect(afterLabel.payload?.tasks.map((task) => task.id)).toEqual(
-      expectedTaskIds(listTaskRecordsUnsorted(), 7, 7),
+      expectedTaskIds(listTaskRecords(), 7, 7),
     );
 
     let metadataChurnActive = true;
@@ -126,19 +125,18 @@ test("preserves task pagination during metadata patches but invalidates new requ
     expect(metadataMutationCount).toBeGreaterThan(1);
     expect(duringLabels.ok, JSON.stringify(duringLabels.error)).toBe(true);
     expect(duringLabels.payload?.tasks.map((task) => task.id)).toEqual(
-      expectedTaskIds(listTaskRecordsUnsorted(), 0, 7),
+      expectedTaskIds(listTaskRecords(), 0, 7),
     );
 
-    const metadataTasks = listTaskRecordsUnsorted();
+    const metadataTasks = listTaskRecords();
     const missingSessionKey = "agent:main:tasks-missing";
     const missingSessionTask: TaskRecord = {
-      ...metadataTasks[0]!,
+      ...metadataTasks.find((task) => task.taskId === "task-00000")!,
       taskId: "task-missing-requester",
       requesterSessionKey: missingSessionKey,
       ownerKey: missingSessionKey,
       lastEventAt: TASK_COUNT + 100,
     };
-    resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
       store: {
         ...createInMemoryTaskRegistryStore(),
@@ -148,6 +146,7 @@ test("preserves task pagination during metadata patches but invalidates new requ
         }),
       },
     });
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     const beforeCreation = await sendRpc<TasksListResult>(
       viewer,
       "tasks-before-requester-created",

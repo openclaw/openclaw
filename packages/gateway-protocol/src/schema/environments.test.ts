@@ -11,6 +11,7 @@ import {
   validateEnvironmentsListParams,
   validateEnvironmentsPrepareParams,
   validateEnvironmentsPrepareResult,
+  validateEnvironmentsStatusParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -51,7 +52,49 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
-  it("allows only bounded readonly profile display IDs, never settings", () => {
+  it("accepts only boolean opt-in for prepared details in list and status requests", () => {
+    for (const includePreparedDetails of [undefined, false, true]) {
+      const option = includePreparedDetails === undefined ? {} : { includePreparedDetails };
+      expect(validateEnvironmentsListParams(option)).toBe(true);
+      expect(validateEnvironmentsStatusParams({ environmentId: "worker-1", ...option })).toBe(true);
+    }
+    for (const includePreparedDetails of [null, "true", 1]) {
+      expect(validateEnvironmentsListParams({ includePreparedDetails })).toBe(false);
+      expect(
+        validateEnvironmentsStatusParams({ environmentId: "worker-1", includePreparedDetails }),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: true })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: false })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: "true" })).toBe(false);
+    const gateway = { id: "gateway", type: "local", status: "available" };
+    for (const state of ["ready", "needs-server", "unsupported", "managed"]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [{ ...gateway, desktopSetup: { state } }],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...gateway,
+        desktopSetup: { state: "unsupported", detail: "VNC authentication is required" },
+      }),
+    ).toBe(true);
+    for (const desktopSetup of [
+      {},
+      { state: "unknown" },
+      { state: "ready", password: "hidden" },
+      { state: "unsupported", detail: "" },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...gateway, desktopSetup })).toBe(false);
+    }
+  });
+
+  it("allows only bounded readonly profile metadata, never settings", () => {
     const check = (profile: Record<string, unknown>) =>
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
@@ -60,10 +103,38 @@ describe("worker environment protocol schemas", () => {
     expect(check({})).toBe(true);
     expect(check({ providerDisplayId: "aws" })).toBe(true);
     expect(check({ providerDisplayId: "google-cloud" })).toBe(true);
+    expect(check({ readyWorkers: 0 })).toBe(true);
+    expect(check({ readyWorkers: 2 })).toBe(true);
     for (const providerDisplayId of ["", "AWS", "aws\n", "a".repeat(65), "aws/token", 42, {}]) {
       expect(check({ providerDisplayId })).toBe(false);
     }
+    for (const readyWorkers of [-1, 0.5, "2", null]) {
+      expect(check({ readyWorkers })).toBe(false);
+    }
     expect(check({ providerDisplayId: "aws", settings: { provider: "aws" } })).toBe(false);
+  });
+
+  it("reports unique prepared reservation identities even above a reduced cap", () => {
+    const check = (preparedPool: unknown) =>
+      Value.Check(EnvironmentsListResultSchema, { environments: [], preparedPool });
+    expect(Value.Check(EnvironmentsListResultSchema, { environments: [] })).toBe(true);
+    expect(check({ maxTotal: 0, reservedEnvironmentIds: [] })).toBe(true);
+    expect(check({ maxTotal: 4, reservedEnvironmentIds: ["worker:one", "worker:two"] })).toBe(true);
+    expect(check({ maxTotal: 0, reservedEnvironmentIds: ["worker:one", "worker:two"] })).toBe(true);
+    for (const preparedPool of [
+      {},
+      { maxTotal: 4 },
+      { reservedEnvironmentIds: [] },
+      { maxTotal: -1, reservedEnvironmentIds: [] },
+      { maxTotal: 0.5, reservedEnvironmentIds: [] },
+      { maxTotal: 4, reservedEnvironmentIds: [""] },
+      { maxTotal: 4, reservedEnvironmentIds: [42] },
+      { maxTotal: 4, reservedEnvironmentIds: "worker:one" },
+      { maxTotal: 4, reservedEnvironmentIds: ["worker:one", "worker:one"] },
+      { maxTotal: 4, reservedEnvironmentIds: [], reserved: 0 },
+    ]) {
+      expect(check(preparedPool)).toBe(false);
+    }
   });
 
   it("accepts bounded desktop availability in environment lists and status responses", () => {
@@ -96,22 +167,70 @@ describe("worker environment protocol schemas", () => {
     expect(validateEnvironmentsPrepareResult({ ...result, preparationKey: "" })).toBe(false);
   });
 
-  it("exposes only preparation purpose and key in list and status summaries", () => {
+  it("preserves basic preparation summaries with optional closed lifecycle details", () => {
+    const preparation = { purpose: "build", key: "project-key" };
+    const details = {
+      demandAtMs: 1_000,
+      expiresAtMs: 2_000,
+      consumedAtMs: null,
+    };
+    const baseCommit = "a".repeat(40);
     for (const purpose of ["build", "reserve"] as const) {
       const summary = {
         ...workerSummary("requested"),
-        preparation: { purpose, key: "project-key" },
+        preparation: { ...preparation, purpose },
       };
       expect(Value.Check(EnvironmentsListResultSchema, { environments: [summary] })).toBe(true);
       expect(Value.Check(EnvironmentsStatusResultSchema, summary)).toBe(true);
     }
-    for (const preparation of [
-      { purpose: "unknown", key: "project-key" },
-      { purpose: "build", key: "" },
-      { purpose: "build", key: "project-key", projectPath: "/projects/app" },
+    for (const detail of [
+      details,
+      { ...details, project: { baseCommit } },
+      { ...details, consumedAtMs: 1_500, project: { label: "openclaw", baseCommit } },
     ]) {
       expect(
-        Value.Check(EnvironmentSummarySchema, { ...workerSummary("requested"), preparation }),
+        Value.Check(EnvironmentSummarySchema, {
+          ...workerSummary("attached"),
+          preparation: { ...preparation, details: detail },
+        }),
+      ).toBe(true);
+    }
+    const { demandAtMs: _demandAtMs, ...withoutDemand } = details;
+    const { expiresAtMs: _expiresAtMs, ...withoutExpiry } = details;
+    const { consumedAtMs: _consumedAtMs, ...withoutConsumption } = details;
+    for (const invalid of [
+      {},
+      withoutDemand,
+      withoutExpiry,
+      withoutConsumption,
+      { ...details, demandAtMs: -1 },
+      { ...details, expiresAtMs: 0.5 },
+      { ...details, consumedAtMs: -1 },
+      { ...details, consumedAtMs: "1500" },
+      { ...details, projectPath: "/projects/app" },
+      { ...details, project: {} },
+      { ...details, project: { baseCommit: "" } },
+      { ...details, project: { baseCommit, label: "" } },
+      { ...details, project: { baseCommit, root: "/projects/app" } },
+    ]) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...workerSummary("requested"),
+          preparation: { ...preparation, details: invalid },
+        }),
+      ).toBe(false);
+    }
+    for (const invalid of [
+      { ...preparation, purpose: "unknown" },
+      { ...preparation, key: "" },
+      { ...preparation, projectPath: "/projects/app" },
+      { ...preparation, demandAtMs: 1_000 },
+    ]) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...workerSummary("requested"),
+          preparation: invalid,
+        }),
       ).toBe(false);
     }
   });
@@ -165,6 +284,7 @@ describe("worker environment protocol schemas", () => {
         ...destroyedBase.worker,
         leaseId: "lease-1",
         idleMs: 50,
+        destroyRequestedAtMs: 2_000,
         error: "provider teardown failed",
       },
     };
@@ -512,6 +632,15 @@ describe("worker environment protocol schemas", () => {
         worker: { ...workerSummary("ready", "available").worker, ageMs: -1 },
       }),
     ).toBe(false);
+    for (const destroyRequestedAtMs of [-1, 0.5, "2000", null]) {
+      const summary = workerSummary("destroying");
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...summary,
+          worker: { ...summary.worker, destroyRequestedAtMs },
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("attached", "available"),

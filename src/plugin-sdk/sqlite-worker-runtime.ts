@@ -17,6 +17,7 @@ export {
 } from "../infra/node-sqlite.js";
 export {
   assertTransactionUsable,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 export type {

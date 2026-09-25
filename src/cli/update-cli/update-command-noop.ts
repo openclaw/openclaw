@@ -171,6 +171,20 @@ export async function finishAlreadyCurrentUpdate(
       throw error;
     }
     if (
+      process.platform === "linux" &&
+      stopState?.serviceUpdateVerdict?.kind === "owned" &&
+      !stopState.blockMessage
+    ) {
+      stopState = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...inspection,
+        root: params.managedServiceRoot ?? params.root,
+        handoffRoot: params.managedServiceRoot ? params.root : undefined,
+        phase: "refresh",
+        expectedService: stopState,
+        updateRun: params.opts.run,
+      });
+    }
+    if (
       stopState &&
       (stopState.blockMessage ||
         shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop: stopState }))

@@ -183,13 +183,14 @@ event('complete');\n`,
           );
           // oxlint-disable-next-line typescript/unbound-method -- Capture before spying; every call supplies the lifecycle instance via .call.
           const budget = UpdateFinalizationLifecycle.prototype.budget;
-          vi.spyOn(UpdateFinalizationLifecycle.prototype, "budget").mockImplementation(
-            function (this: UpdateFinalizationLifecycle, phase) {
-              return phase === "plugins" && explicit === undefined
-                ? allowance
-                : budget.call(this, phase);
-            },
-          );
+          vi.spyOn(UpdateFinalizationLifecycle.prototype, "budget").mockImplementation(function (
+            this: UpdateFinalizationLifecycle,
+            phase,
+          ) {
+            return phase === "plugins" && explicit === undefined
+              ? allowance
+              : budget.call(this, phase);
+          });
           await updateFinalizeCommand({
             json: true,
             yes: true,
@@ -216,7 +217,6 @@ event('complete');\n`,
                 requestedChannel: null,
                 opts: { json: true, timeout: explicit, acceptCapabilities: true },
                 timeoutMs: larger ? allowance * 3 : allowance,
-                parentOwnsCompletion: true,
               });
         const events: Array<{ kind: string; pid: number; command: string; planning: boolean }> = (
           await fs.readFile(fixture.events, "utf8")

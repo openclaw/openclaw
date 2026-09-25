@@ -4,10 +4,13 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
@@ -20,6 +23,11 @@ const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const MAX_OPERATOR_ROLE_ASSIGNMENTS = 1_024;
 const operatorRoleAssignments = new Map<string, string | null>();
 const reportedUnknownAssignments = new Set<string>();
+type OperatorRolePolicyChange =
+  | { kind: "assignment"; profileId: string }
+  | { kind: "config"; context: object };
+const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
+let assignmentRevision = 0;
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
   agents: [],
@@ -57,6 +65,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
+  assignmentRevision += 1;
   bumpGatewayAccessRevision();
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
@@ -64,6 +73,24 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
       reportedUnknownAssignments.delete(reported);
     }
   }
+  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+}
+
+export function onOperatorRolePolicyChanged(
+  listener: (change: OperatorRolePolicyChange) => void,
+): () => void {
+  return registerListener(policyListeners, listener);
+}
+
+/** Called after this Gateway's committed runtime reader advances, never at tentative activation. */
+export function publishOperatorRoleConfigChange(context: object | undefined): void {
+  if (context) {
+    notifyListeners([...policyListeners], { kind: "config", context });
+  }
+}
+
+export function readOperatorRolePolicyRevision(): number {
+  return assignmentRevision;
 }
 
 /** An enabled role boundary denies missing identity and unresolvable assignments. */
@@ -148,7 +175,52 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "system") {
     return undefined;
   }
+  const authority = client?.internal?.operatorRunAuthority;
+  if (actor?.kind === "operator" && authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+    if (authority.profileId !== actor.profileId) {
+      throw new Error("Gateway requester profile changed");
+    }
+    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      return undefined;
+    }
+    if (!authority.readCurrentRoleAssignment) {
+      throw new Error("Operator role assignment was not prepared");
+    }
+    return resolveOperatorRolePolicyForAssignment(
+      authority.profileId,
+      authority.readCurrentRoleAssignment(),
+      cfg,
+    );
+  }
+  const prepared = client?.preparedSessionProfile;
+  if (actor?.kind === "operator" && prepared?.aliases.has(actor.profileId)) {
+    return resolveOperatorRolePolicyForAssignment(prepared.profileId, prepared.role, cfg);
+  }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+}
+
+/** A retained caller cannot keep grants removed by the current named role. */
+export function authorizeCurrentOperatorRoleScopes(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): ErrorShape | undefined {
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  if (
+    policy &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: client?.connect.scopes ?? [],
+      allowedScopes: policy.scopes,
+    })
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Your operator role changed; reconnect before continuing.",
+    );
+  }
+  return undefined;
 }
 
 export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawConfig) {
@@ -156,12 +228,31 @@ export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawCo
 }
 
 export function hasOperatorBoundary(client: GatewayClient | null, cfg: OpenClawConfig): boolean {
-  return operatorSessionCap(client, cfg) !== undefined;
+  if (operatorSessionCap(client, cfg) !== undefined) {
+    return true;
+  }
+  if (resolveGatewayOperatorRoleActor(client)?.kind === "system") {
+    return false;
+  }
+  const scopes = client?.connect?.scopes ?? [];
+  return (
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.sessions.read"],
+      allowedScopes: scopes,
+    }) &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.read"],
+      allowedScopes: scopes,
+    })
+  );
 }
 
 /** Enforces the owning agent ceiling for session creation and run-start targets. */
 export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
+  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
   const actor =
     params.actor ??
@@ -170,7 +261,9 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.profileId ?? params.profileId;
-  const role = resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const role = prepared
+    ? prepared.policy
+    : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

@@ -234,9 +234,51 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
   });
 
-  it("uses only the detail contract when an agent is selected", async () => {
+  it.each([false, true])(
+    "preserves typing focus while opening and settling a reader (embedded: %s)",
+    async (embedded) => {
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      composer.focus();
+      const pending = deferredDetail();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockRejectedValueOnce(new Error("Request failed"));
+      const panel = await mount(request, { embedded, presented: embedded });
+      expect(document.activeElement).toBe(composer);
+
+      open(panel, itemUrl(1) + "#comment-4");
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(composer);
+      pending.resolve(item());
+      await pending.promise;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("h1")?.textContent).toBe("Item 1");
+      expect(document.activeElement).toBe(composer);
+
+      open(panel, itemUrl(2));
+      await panel.updateComplete;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector('[role="alert"] h2')?.textContent).toBe(
+        "Could not load item",
+      );
+      expect(document.activeElement).toBe(composer);
+      const address = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+      address.focus();
+      address.value = itemUrl(3);
+      address.dispatchEvent(new Event("input", { bubbles: true }));
+      await panel.updateComplete;
+      expect(panel.shadowRoot?.activeElement).toBe(address);
+    },
+  );
+
+  it("passes the selected agent to the detail identity owner", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (Object.keys(params as object).some((key) => key !== "url" && key !== "refresh")) {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
         throw new Error("Unexpected detail parameter");
       }
       return requestedItem(params);
@@ -247,7 +289,7 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
   });
@@ -495,6 +537,7 @@ describe("Plugin link reader panel", () => {
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.click();
     await panel.updateComplete;
     const input = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+    expect(panel.shadowRoot?.activeElement).toBe(input);
     const form = panel.renderRoot.querySelector("form")!;
     input.value = "https://example.com/not-supported";
     input.dispatchEvent(new Event("input", { bubbles: true }));

@@ -4,6 +4,7 @@ import {
   type KeyboardShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { handlePeopleMenuKeydown } from "./searchable-people-menu.ts";
 
 // Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
 // rendered hint; menu hosts route non-Escape keydowns here so a bare letter
@@ -16,7 +17,21 @@ export function menuShortcutHint(key: string, alias?: KeyboardShortcutCombo) {
 }
 
 export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): boolean {
-  if (event.metaKey || event.ctrlKey || event.altKey) {
+  if (handlePeopleMenuKeydown(event)) {
+    return true;
+  }
+  if (
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target.matches("input, textarea, select, [contenteditable=true]"),
+      )
+  ) {
     return false;
   }
   const key = resolveAsciiShortcutKey(event);

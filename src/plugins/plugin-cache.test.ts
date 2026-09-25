@@ -1,9 +1,15 @@
+import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -23,14 +29,87 @@ import {
   getPluginCacheSource,
   getProcessPluginCache,
   invalidatePluginCacheMetadata,
+  retainPluginCache,
+  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getPluginLoaderCacheState,
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "./registry-lifecycle.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["success", "plugin failure", "module failure", "host failure"] as const)(
+  "keeps adopted instance custody through physical disposal (%s)",
+  async (outcome) => {
+    const originalCache = createPluginCache();
+    const successorCache = createPluginCache();
+    const record = createPluginRecord({ id: "cache-custody" });
+    const original = createEmptyPluginRegistry();
+    original.plugins.push(record);
+    const successor = { ...createEmptyPluginRegistry(), plugins: [record] };
+    const instance = new PluginInstance(record.id, { record, registry: original });
+    const callback = instance.wrap(() => "adopted");
+    markPluginRegistryActive(original);
+    getPluginLoaderCacheState(originalCache).set("original", original);
+    markPluginRegistryActive(successor);
+    getPluginLoaderCacheState(successorCache).set("successor", successor);
+
+    await retirePluginCache(originalCache);
+    expect(originalCache.instances.size).toBe(0);
+    expect(callback()).toBe("adopted");
+    expect(successorCache.instances.has(instance)).toBe(true);
+
+    const failure = new Error(outcome);
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    if (outcome === "plugin failure") {
+      instance.lifecycle.onDispose(() => {
+        throw failure;
+      });
+    }
+    instance.onModuleDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      if (outcome === "module failure") {
+        throw failure;
+      }
+    });
+    markPluginRegistryRetired(successor);
+    const disposal = instance.dispose(
+      outcome === "host failure"
+        ? () => {
+            throw failure;
+          }
+        : undefined,
+    );
+    void disposal.catch(() => {});
+    try {
+      await entered.promise;
+      expect(successorCache.instances.has(instance)).toBe(true);
+      finish.resolve();
+      if (outcome === "host failure") {
+        await expect(disposal).rejects.toBe(failure);
+      } else {
+        await expect(disposal).resolves.toEqual({
+          errors: outcome === "success" ? [] : [failure],
+        });
+      }
+      expect(successorCache.instances.has(instance)).toBe(outcome !== "success");
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([disposal, retirePluginCache(successorCache)]);
+    }
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -640,4 +719,127 @@ describe("plugin package facts", () => {
       });
     },
   );
+});
+
+it("lets the last cache borrower own retirement after the requesting scope closes", async () => {
+  const requester = new AsyncWorkScope();
+  const borrower = new AsyncWorkScope();
+  const cache = createPluginCache();
+  const instance = new PluginInstance("cache-borrower");
+  cache.instances.add(instance);
+  const release = retainPluginCache(cache);
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const cleaned = vi.fn();
+  instance.lifecycle.onDispose(async () => {
+    entered.resolve();
+    await finish.promise;
+    cleaned();
+  });
+  let retirement: ReturnType<typeof retirePluginCache> | undefined;
+  await requester.track(() => {
+    retirement = retirePluginCache(cache);
+    void retirement.catch(() => {});
+  });
+  await requester.drain();
+  let closed = false;
+  const released = borrower.track(release);
+  const drain = borrower.drain().then(() => {
+    closed = true;
+  });
+  try {
+    await Promise.race([entered.promise, retirement]);
+    expect(closed).toBe(false);
+    finish.resolve();
+    await expect(retirement).resolves.toMatchObject({ failures: [] });
+    await drain;
+    expect(cleaned).toHaveBeenCalledOnce();
+    expect(closed).toBe(true);
+  } finally {
+    release();
+    finish.resolve();
+    await Promise.allSettled([retirement, released, drain]);
+  }
+});
+
+it.each([false, true])(
+  "owns cache cleanup when retirement runs in a closed request scope (borrowed: %s)",
+  async (borrowed) => {
+    const requester = new AsyncWorkScope();
+    const cache = createPluginCache();
+    const instance = new PluginInstance("closed-cache-borrower");
+    cache.instances.add(instance);
+    const cleaned = vi.fn();
+    instance.lifecycle.onDispose(() => trackAsyncWork(cleaned));
+    const release = borrowed ? retainPluginCache(cache) : undefined;
+    const run = requester.run(() => AsyncLocalStorage.snapshot());
+    await requester.drain();
+    try {
+      const retirement = run(() => retirePluginCache(cache));
+      void retirement.catch(() => {});
+      run(() => release?.());
+      await expect(retirement).resolves.toMatchObject({ failures: [] });
+      expect(cleaned).toHaveBeenCalledOnce();
+      await expect(requester.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+    } finally {
+      release?.();
+      await instance.dispose();
+    }
+  },
+);
+
+it("retires a cache released by a borrower captured before package replacement", async () => {
+  const requester = new AsyncWorkScope();
+  const cache = createPluginCache();
+  const instance = new PluginInstance("released-cache-borrower");
+  cache.instances.add(instance);
+  retainPluginCache(cache);
+  const retainers = resolveGlobalSingleton(
+    Symbol.for("openclaw.pluginCacheRetainers"),
+    () =>
+      new WeakMap<
+        object,
+        {
+          references: Set<object>;
+          settled: { resolve: () => void };
+          beginRetirement?: () => void;
+        }
+      >(),
+  );
+  const retained = retainers.get(cache);
+  assert(retained);
+  const reference = retained.references.values().next().value;
+  assert(reference);
+  // v2026.9.5 release closures only publish this fact; their code survives replacement.
+  const release = () => {
+    if (retained.references.delete(reference) && retained.references.size === 0) {
+      retained.settled.resolve();
+    }
+  };
+  const finish = createDeferredCore();
+  const cleaned = vi.fn();
+  let cleaning = false;
+  instance.lifecycle.onDispose(async () => {
+    cleaning = true;
+    await finish.promise;
+    cleaned();
+  });
+  const { retirement } = await requester.track(() => ({ retirement: retirePluginCache(cache) }));
+  void retirement.catch(() => {});
+  await requester.drain();
+  try {
+    release();
+    await nextTurn();
+    expect(cleaning).toBe(true);
+    expect(cleaned).not.toHaveBeenCalled();
+    finish.resolve();
+    await expect(retirement).resolves.toMatchObject({ failures: [] });
+    expect(cleaned).toHaveBeenCalledOnce();
+  } finally {
+    release();
+    // Unstick the broken implementation's unpublished cleanup after the regression fails.
+    retained.beginRetirement?.();
+    finish.resolve();
+    await retirement.catch(() => {});
+  }
 });

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
 import * as packageRoot from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -20,6 +20,7 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -73,6 +74,7 @@ async function legacyAgentFixture(postCore: boolean) {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(pathname);
   try {
+    restoreEmptyV21StorageForHistoricalFixture(db);
     removeCanonicalValidationFromHistoricalAgentFixture(db);
     db.exec(`
       DROP TABLE session_transcript_cold_archives;

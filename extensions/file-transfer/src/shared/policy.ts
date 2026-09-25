@@ -347,7 +347,7 @@ function normalizeAskMode(value: unknown): FilePolicyAskMode {
  * Treats backslash and forward slash as equivalent separators so a Windows
  * node can't be hit with "C:\\allowed\\..\\Windows\\system.ini".
  */
-function containsParentRefSegment(p: string): boolean {
+export function containsParentRefSegment(p: string): boolean {
   const unified = p.replace(/\\/gu, "/");
   return unified.split("/").includes("..");
 }
@@ -364,6 +364,7 @@ type FilePolicyInput = {
 function evaluateFilePolicyInternal(
   input: FilePolicyInput,
   constraintsOnly: boolean,
+  pluginPolicy = readFileTransferConfig(input.pluginConfig),
 ): FilePolicyDecision {
   // Reject literal traversal sequences before consulting any allow/deny
   // glob list. minimatch on the raw string can wrongly accept
@@ -376,7 +377,6 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const pluginPolicy = readFileTransferConfig(input.pluginConfig);
   const config = pluginPolicy ? readNodes(pluginPolicy) : null;
   if (!pluginPolicy || !config) {
     return {
@@ -523,6 +523,49 @@ function evaluateFilePolicyInternal(
     maxBytes,
     followSymlinks,
   };
+}
+
+/** Carry only this node's read rules to the host that prepares a Skill bundle. */
+export function snapshotNodeFileReadPolicy(input: {
+  nodeId: string;
+  nodeDisplayName?: string;
+  pluginConfig?: Record<string, unknown>;
+}) {
+  const policy = readFileTransferConfig(input.pluginConfig);
+  const nodes = policy && readNodes(policy);
+  const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
+  if (!resolved) {
+    throw new Error("Node file read policy is unavailable");
+  }
+  const { ask, allowReadPaths, denyPaths, maxBytes, followSymlinks } = resolved.entry;
+  return {
+    nodeId: input.nodeId,
+    pluginConfig: {
+      policyVersion: policy?.policyVersion,
+      nodes: {
+        [input.nodeId]: {
+          ask,
+          allowReadPaths: normalizeGlobs(allowReadPaths),
+          denyPaths: normalizeGlobs(denyPaths),
+          maxBytes,
+          followSymlinks,
+        },
+      },
+    },
+  };
+}
+
+/** A delegated read uses the Gateway snapshot, never the Node process's local policy. */
+export function evaluateFileReadPolicySnapshot(input: {
+  nodeId: string;
+  pluginConfig: Record<string, unknown>;
+  path: string;
+}): FilePolicyDecision {
+  return evaluateFilePolicyInternal(
+    { ...input, kind: "read" },
+    false,
+    readFileTransferConfigFromPluginConfig(input.pluginConfig),
+  );
 }
 
 export function evaluateFilePolicy(input: FilePolicyInput): FilePolicyDecision {

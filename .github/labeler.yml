@@ -25,6 +25,11 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: code-mode-quickjs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/code-mode-quickjs/**"
+          - "docs/plugins/reference/code-mode-quickjs.md"
 "plugin: cua-computer":
   - changed-files:
       - any-glob-to-any-file:
@@ -630,10 +635,15 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: agentsapi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agentsapi/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:

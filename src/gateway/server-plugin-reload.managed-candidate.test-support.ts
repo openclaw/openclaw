@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, vi } from "vitest";
+import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
   disposePluginRegistryInstances,
@@ -91,17 +92,24 @@ export async function verifyManagedCandidateRetirement(
     expect(order).toEqual([]);
     expect(process.listenerCount(event)).toBe(before);
     let retired = false;
-    alternateRetirement = disposePluginRegistryInstances(candidate).then(() => {
+    let logicalRetirement = false;
+    alternateRetirement = disposePluginRegistryInstances(candidate).then(async (result) => {
+      expect(result.failures).toHaveLength(1);
+      const error = result.failures[0]!.error;
+      assert(error instanceof PluginInstanceDrainTimeoutError);
+      logicalRetirement = true;
+      await error.settled;
       retired = true;
     });
     if (action === "shutdown") {
       shuttingDown = fixture.lifetime.stop();
     }
     await vi.advanceTimersByTimeAsync(5_000);
-    // The metadata owner now joins physical retirement instead of accepting a
-    // deferred-consumer acknowledgment; observe its separate bounded wait too.
+    // Logical retirement is bounded; the metadata owner still joins physical service cleanup.
     expect(outcome).toBeUndefined();
+    expect(logicalRetirement).toBe(true);
     expect(retired).toBe(false);
+    expect(instance.lifecycle.signal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     await reloading;
     expect(outcome).toMatchObject({
@@ -109,7 +117,7 @@ export async function verifyManagedCandidateRetirement(
       message: expect.stringContaining("plugin service startup timed out"),
     });
     expect(retired).toBe(false);
-    expect(instance.lifecycle.signal.aborted).toBe(false);
+    expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(() => instance.run(() => "retired dispatch")).toThrow("reloaded or disabled");
     expect(order.filter((entry) => entry.endsWith(":2"))).toEqual([]);
     expect(process.listenerCount(event)).toBe(before);
@@ -202,16 +210,25 @@ export async function verifyPendingServiceCleanupRetry(
   expect(fixture.siblingStop).toHaveBeenCalledOnce();
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);
+  const drainEntered = createDeferredCore();
+  const wait = instance.waitForRetainedWork.bind(instance);
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const draining = wait(...args);
+    drainEntered.resolve();
+    return draining;
+  });
   vi.useFakeTimers();
   let retry: Promise<unknown> | undefined;
   const first = fixture.reload().catch((error: unknown) => error);
   try {
+    await Promise.race([drainEntered.promise, first]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(serviceStop).toHaveBeenCalledOnce();
     expect(starts).toBe(2);
     expect(hookStop).not.toHaveBeenCalled();
     expect(fixture.candidates).toHaveLength(0);
-    expect(await first).toMatchObject({ details: { phase: "prepare", committed: false } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await first).toMatchObject({ details: { phase: "drain", committed: false } });
     expect(instance.run(() => "still serving")).toBe("still serving");
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     startupRelease.resolve();
@@ -240,6 +257,7 @@ export async function verifyPendingServiceCleanupRetry(
     expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
     expect(fixture.siblingStop).toHaveBeenCalledOnce();
   } finally {
+    observation.mockRestore();
     hookRelease.resolve();
     startupRelease.resolve();
     await Promise.allSettled([first, retry, startup]);

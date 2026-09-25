@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatCompletedWorkDisclosure<Content: View>: View {
     let work: ChatTranscriptRow.CompletedWork
     @ViewBuilder let messageContent: (OpenClawChatMessage) -> Content
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded = false
 
     var body: some View {

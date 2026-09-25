@@ -1,7 +1,8 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import "../../components/modal-dialog.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import "../../components/modal-dialog.ts";
+import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -33,7 +34,7 @@ import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -50,6 +51,32 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
+    const state = this.state;
+    const scope = this.captureConnectionScope();
+    if (!state || !scope) {
+      return undefined;
+    }
+    const sessionKey = state.sessionKey;
+    const sessionId = state.currentSessionId;
+    const agentId = resolveChatAgentId(state);
+    return {
+      state: this.progressCard.refreshState,
+      onRefresh: (card) => {
+        const current = this.state;
+        if (
+          current &&
+          this.isConnectionScopeCurrent(scope) &&
+          current.sessionKey === sessionKey &&
+          current.currentSessionId === sessionId &&
+          resolveChatAgentId(current) === agentId
+        ) {
+          this.progressCard.refresh(card);
+        }
+      },
+    };
+  }
+
   private currentSessionArchived: boolean | undefined;
   private archiveFocusOwned = false;
 
@@ -132,11 +159,16 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: ChatPageHost["currentSessionId"];
         agentId: string | undefined;
         card: ProgressCard;
+        lifetime: object | undefined;
         identity: string;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    lifetime: object | undefined;
+    identity: string;
+  } | null {
     const state = this.state;
     if (
       !state ||
@@ -172,6 +204,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
+        lifetime: this.progressCard.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };

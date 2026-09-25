@@ -8,7 +8,7 @@ import {
 } from "../config/utility-model-separation-migration.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { resolveNativeModelPrimary } from "./agent-scope.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
@@ -18,7 +18,7 @@ export function resolveConfiguredPrimaryModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): string | undefined {
-  const primary = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  const primary = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
   if (primary) {
     return primary;
   }
@@ -39,7 +39,7 @@ export function resolveConfiguredSetupModelForAgent(params: {
   if (primary && params.modelTarget !== "utility") {
     return {
       modelRef: primary,
-      ...(!resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim()
+      ...(!resolveNativeModelPrimary(params.cfg, params.agentId)?.trim()
         ? { implicitPrimary: true as const }
         : {}),
     };
@@ -120,8 +120,7 @@ export function resolveUtilityModelRefForAgent(params: {
     cfg: params.cfg,
     primaryProvider: provider,
     primaryModelRef:
-      params.primaryModelRef?.trim() ||
-      resolveAgentEffectiveModelPrimary(params.cfg, params.agentId),
+      params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
     metadataSnapshot: params.metadataSnapshot,
   });
 }

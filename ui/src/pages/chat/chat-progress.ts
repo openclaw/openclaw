@@ -129,15 +129,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
-        }
-      : {}),
     timestamp,
   };
 }
@@ -174,6 +165,7 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
       item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );

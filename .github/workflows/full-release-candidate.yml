@@ -61,7 +61,7 @@ env:
 jobs:
   discover:
     name: Find trusted release candidate
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       state: ${{ steps.discover.outputs.state }}
@@ -77,6 +77,12 @@ jobs:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Discover trusted release candidate
         id: discover
@@ -119,6 +125,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ inputs.ref }}
       prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
       prepare_only: true
@@ -141,7 +148,7 @@ jobs:
     name: Resolve release candidate
     needs: [discover, prepare]
     if: always()
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       state: ${{ steps.result.outputs.state }}
@@ -157,6 +164,13 @@ jobs:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Resolve candidate binding
         if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}

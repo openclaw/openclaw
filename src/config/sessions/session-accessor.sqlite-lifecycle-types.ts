@@ -1,3 +1,4 @@
+import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -10,6 +11,8 @@ import type {
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
 } from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
@@ -32,6 +35,7 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 export type SqliteSessionReclamationCallbacks = {
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
+  afterCommit?: () => void;
 };
 
 export type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
@@ -57,6 +61,17 @@ type SessionReclamationPlanBase = {
 };
 
 export type SqliteSessionReclamationPlan =
+  | (SessionReclamationPlanBase & {
+      kind: "archive-publish-prepare";
+      archiveDirectory: string;
+      requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
+    })
+  | (SessionReclamationPlanBase & {
+      kind: "archive-publish-record";
+      results: readonly TranscriptArchivePublishResult[];
+      nowMs: number;
+    })
+  | (SessionReclamationPlanBase & { kind: "maintenance-pages"; maxPages?: number })
   | (SessionReclamationPlanBase & { kind: "maintenance-statistics" })
   | (SessionReclamationPlanBase & {
       kind: "maintenance-plan";
@@ -92,6 +107,9 @@ export type SqliteSessionReclamationPlan =
     });
 
 export type SqliteSessionReclamationResult =
+  | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
+  | { kind: "archive-publish-record"; value: true }
+  | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
   | { kind: "maintenance-statistics"; value: true }
   | { kind: "maintenance-preservation-required" }
   | {

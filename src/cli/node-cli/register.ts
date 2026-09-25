@@ -7,7 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
-import { addNodeCommandOptions } from "./command-options.js";
+import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
 
@@ -26,15 +26,13 @@ export function registerNodeCli(program: Command) {
       ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
   );
 
-  node
-    .command("worker", { hidden: true })
-    .description("Run the private macOS app node-host worker")
-    .option("--desktop-sharing", "Enable the app's desktop viewer capability")
-    .option("--no-desktop-sharing", "Disable the app's desktop viewer capability")
-    .action(async (opts: { desktopSharing?: boolean }) => {
+  node.addCommand(
+    createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
       const { runNodeHostWorker } = await import("../../node-host/worker.js");
       await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });
-    });
+    }),
+    { hidden: true },
+  );
 
   addNodeCommandOptions(node.command("run").description("Run the headless node host (foreground)"))
     .option(
@@ -125,8 +123,8 @@ export function registerNodeCli(program: Command) {
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
     .option("--json", "Output JSON", false)
-    .action((opts) => {
-      runNodeIdentityShow(opts);
+    .action(async (opts) => {
+      await runNodeIdentityShow(opts);
     });
 
   addNodeCommandOptions(

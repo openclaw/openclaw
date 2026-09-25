@@ -201,6 +201,11 @@ const SystemAgentToolSchema = Type.Object({
   name: Type.Optional(
     Type.String({ description: "Display name for create_agent, separate from agentId" }),
   ),
+  purpose: Type.Optional(
+    Type.String({
+      description: "Operating purpose for a custom agent, saved in its workspace AGENTS.md",
+    }),
+  ),
   role: Type.Optional(
     stringEnum(listAgentRoles(), {
       description: "Bundled role for create_agent; coordinator is the chief of staff",
@@ -389,11 +394,13 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       }
       const workspace = readToolStringParam(params, "workspace")?.trim();
       const name = readToolStringParam(params, "name")?.trim();
+      const purpose = readToolStringParam(params, "purpose")?.trim();
       const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
         ...(name ? { name } : {}),
+        ...(purpose ? { purpose } : {}),
         ...(role ? { role } : {}),
         ...(workspace ? { workspace } : {}),
         ...(model ? { model } : {}),

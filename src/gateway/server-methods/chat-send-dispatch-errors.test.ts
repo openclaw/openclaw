@@ -15,9 +15,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
@@ -84,6 +86,8 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
+    { settlement: "fallback", stateContention: true },
+    { settlement: "restart-safe", stateContention: true },
     {
       settlement: "restart-safe",
       missingProfile: false,
@@ -113,7 +117,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   ])(
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
-    async ({ settlement, missingProfile, policyFailure, sessionChanged }) => {
+    async ({ settlement, missingProfile, policyFailure, sessionChanged, stateContention }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const target = {
           agentId: "main",
@@ -214,21 +218,23 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
         });
 
-        const failure = sessionChanged
-          ? new DispatchSessionRefreshRequiredError(
-              new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
-            )
-          : missingProfile
-            ? createSelectedAuthProfileUnavailableError({
-                profileId: "openai:removed",
-                provider: "openai",
-                modelId: "fixture-model",
-              })
-            : policyFailure
-              ? new AgentHarnessPreflightError("private-policy-diagnostic", {
-                  userMessage: policyMessage,
+        const failure = stateContention
+          ? new StateDatabaseCoordinatorContentionError("state-lifecycle")
+          : sessionChanged
+            ? new DispatchSessionRefreshRequiredError(
+                new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
+              )
+            : missingProfile
+              ? createSelectedAuthProfileUnavailableError({
+                  profileId: "openai:removed",
+                  provider: "openai",
+                  modelId: "fixture-model",
                 })
-              : new Error("Cloud worker unavailable");
+              : policyFailure
+                ? new AgentHarnessPreflightError("private-policy-diagnostic", {
+                    userMessage: policyMessage,
+                  })
+                : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
@@ -255,6 +261,32 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             details: { runId },
           },
         ]);
+        if (stateContention) {
+          const summary =
+            "The turn was interrupted while the server was busy. Check its status before trying again.";
+          const terminal = broadcast.mock.calls.at(-1)?.[1];
+          expect(terminal).toMatchObject({ errorKind: "state_contention" });
+          expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));
+          expect(loadSessionEntry(target)?.lastRunError).toBe(summary);
+          expect(messages[1]).toMatchObject({
+            content: summary,
+            details: { errorKind: "state_contention" },
+          });
+          const notice = messages[1];
+          if (!isRecord(notice)) {
+            throw new Error("Expected a recorded failure notice");
+          }
+          const restored = projectChatDisplayMessages([{ role: "custom", ...notice }]);
+          expect(restored[0]).toMatchObject({
+            content: summary,
+            details: {
+              errorKind: "state_contention",
+              diagnostic: terminal.errorMessage.split("\n\n")[1],
+            },
+          });
+          expect(restored[0]).not.toHaveProperty("details.error");
+          expect(restored[0]).not.toHaveProperty("details.runId");
+        }
         if (missingProfile) {
           const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
           const storedError = loadSessionEntry(target)?.lastRunError;
@@ -351,74 +383,78 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
   });
 
-  it("terminalizes an admitted queued followup as successful despite later dispatch failure", async () => {
-    const broadcast = vi.fn();
-    const cleanupAdmittedRun = vi.fn();
-    const removeChatRun = vi.fn();
-    const warn = vi.fn();
-    const dedupe = new Map();
-    const lifecycle = createChatSendDispatchErrorLifecycle({
-      admission: {
-        sessionBinding: {
-          sessionId: "run-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
+  it.each([false, true])(
+    "preserves queued refresh completion after a later dispatch failure (completed=%s)",
+    async (completed) => {
+      const broadcast = vi.fn();
+      const cleanupAdmittedRun = vi.fn();
+      const removeChatRun = vi.fn();
+      const warn = vi.fn();
+      const dedupe = new Map();
+      const lifecycle = createChatSendDispatchErrorLifecycle({
+        admission: {
+          sessionBinding: {
+            sessionId: "run-1",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: "test-generation",
+          },
+          activeRunAbort: {
+            cleanup: vi.fn(),
+            controller: new AbortController(),
+            entry: undefined,
+            registered: true,
+          } as never,
+          cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
         },
-        activeRunAbort: {
-          cleanup: vi.fn(),
-          controller: new AbortController(),
-          entry: undefined,
-          registered: true,
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState: createChatRunState(),
+          dedupe,
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn },
+          nodeSendToSession: vi.fn(),
+          removeChatRun,
         } as never,
-        cleanupAdmittedRun,
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState: createChatRunState(),
-        dedupe,
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn },
-        nodeSendToSession: vi.fn(),
-        removeChatRun,
-      } as never,
-      isQueuedFollowupEnqueued: () => true,
-      isAgentRunStarted: () => false,
-      persistUserTurnTranscript: vi.fn(),
-      session: {
-        agentId: "main",
-        backingSessionId: undefined,
-        cfg: {},
-        clientRunId: "run-1",
-        now: 1,
-        rawSessionKey: "agent:main:main",
-        sessionKey: "agent:main:main",
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-      userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
-    });
+        isQueuedFollowupEnqueued: () => true,
+        isQueuedFollowupCompleted: () => completed,
+        isAgentRunStarted: () => false,
+        persistUserTurnTranscript: vi.fn(),
+        session: {
+          agentId: "main",
+          backingSessionId: undefined,
+          cfg: {},
+          clientRunId: "run-1",
+          now: 1,
+          rawSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+        userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
+      });
 
-    await lifecycle.handleError(new Error("late failure"));
-    await lifecycle.finalize();
+      await lifecycle.handleError(new Error("late failure"));
+      await lifecycle.finalize();
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("dispatch failed after followup queue admission"),
-    );
-    expect(dedupe.get("chat:run-1")).toMatchObject({
-      ok: true,
-      payload: { runId: "run-1", status: "ok" },
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId: "run-1", state: "final" }),
-      { sessionKeys: ["agent:main:main"] },
-    );
-    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-    expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
-  });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("dispatch failed after followup queue admission"),
+      );
+      expect(dedupe.get("chat:run-1")).toMatchObject({
+        ok: true,
+        payload: { runId: "run-1", status: completed ? "completed" : "ok" },
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: "run-1", state: "final" }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+      expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
+    },
+  );
 
   it.each(["resolves", "rejects"])(
     "preserves an explicitly aborted terminal when its dispatch later %s",

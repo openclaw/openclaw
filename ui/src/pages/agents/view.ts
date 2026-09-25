@@ -1,20 +1,8 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import type {
-  AgentIdentityResult,
-  AgentsFilesListResult,
-  AgentsListResult,
-  ChannelsStatusSnapshot,
-  CronJob,
-  CronStatus,
-  ModelCatalogEntry,
-  SkillStatusReport,
-  ToolsCatalogResult,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
-import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
@@ -28,69 +16,22 @@ import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
-import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentsPanel, AgentsState } from "../../lib/agents/index.ts";
+import type { ChannelsState } from "../../lib/channels/index.ts";
+import {
+  currentConfigObject,
+  type RuntimeConfigState,
+} from "../../lib/config/config-state-model.ts";
+import type { CronState } from "../../lib/cron/types.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import type { AgentFilesViewState } from "./files.ts";
+import { renderAgentFiles } from "./panels-files.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
-import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
-import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
-
-type ConfigState = {
-  form: Record<string, unknown> | null;
-  loading: boolean;
-  saving: boolean;
-  dirty: boolean;
-  error: string | null;
-};
-
-type ChannelsState = {
-  snapshot: ChannelsStatusSnapshot | null;
-  loading: boolean;
-  error: string | null;
-  lastSuccess: number | null;
-};
-
-type CronState = {
-  status: CronStatus | null;
-  jobs: CronJob[];
-  jobsTotal: number;
-  jobsHasMore: boolean;
-  jobsLoadingMore: boolean;
-  scopedTotal: number | null;
-  scopedNextWakeAtMs: number | null;
-  loading: boolean;
-  error: string | null;
-};
-
-type AgentFilesState = {
-  list: AgentsFilesListResult | null;
-  loading: boolean;
-  error: string | null;
-  active: string | null;
-  contents: Record<string, string>;
-  drafts: Record<string, string>;
-  saving: boolean;
-  conflict: string | null;
-};
-
-type AgentSkillsState = {
-  report: SkillStatusReport | null;
-  loading: boolean;
-  error: string | null;
-  agentId: string | null;
-  filter: string;
-};
-
-type ToolsCatalogState = {
-  loading: boolean;
-  error: string | null;
-  result: ToolsCatalogResult | null;
-};
-
-type ToolsEffectiveState = {
-  loading: boolean;
-  error: string | null;
-  result: ToolsEffectiveResult | null;
-};
+import { renderAgentSkills } from "./panels-skills.ts";
+import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
+import { renderAgentTools } from "./panels-tools-skills.ts";
+import type { AgentSkillsState } from "./skills.ts";
 
 type AgentsProps = {
   access: {
@@ -107,10 +48,33 @@ type AgentsProps = {
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   activePanel: AgentsPanel;
-  config: ConfigState;
-  channels: ChannelsState;
-  cron: CronState;
-  agentFiles: AgentFilesState;
+  config: Pick<
+    RuntimeConfigState,
+    | "configForm"
+    | "configSnapshot"
+    | "configLoading"
+    | "configSaving"
+    | "configFormDirty"
+    | "lastError"
+  >;
+  channels: Pick<
+    ChannelsState,
+    "channelsSnapshot" | "channelsLoading" | "channelsError" | "channelsLastSuccess"
+  >;
+  cron: Pick<
+    CronState,
+    | "cronStatus"
+    | "cronJobs"
+    | "cronJobsTotal"
+    | "cronJobsHasMore"
+    | "cronJobsLoadingMore"
+    | "cronScopedTotal"
+    | "cronScopedNextWakeAtMs"
+    | "cronLoading"
+    | "cronError"
+  >;
+  agentFiles: AgentFilesViewState;
+  agentFilesListError: string | null;
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -118,15 +82,24 @@ type AgentsProps = {
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
   identityError: string | null;
-  agentSkills: AgentSkillsState;
-  toolsCatalog: ToolsCatalogState;
-  toolsEffective: ToolsEffectiveState;
+  agentSkills: Pick<
+    AgentSkillsState,
+    "agentSkillsReport" | "agentSkillsLoading" | "agentSkillsError" | "agentSkillsAgentId"
+  > & { skillsFilter: string };
+  tools: Pick<
+    AgentsState,
+    | "toolsCatalogLoading"
+    | "toolsCatalogError"
+    | "toolsCatalogResult"
+    | "toolsEffectiveLoading"
+    | "toolsEffectiveError"
+    | "toolsEffectiveResult"
+  >;
   githubIdentity: GitHubIdentityController;
   onOpenGitHubConnections: () => void;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  decisionModels: DecisionModelEntry[];
+  modelCatalog: ModelCatalogPresentation;
   modelCatalogStatus: PanelRefreshStatus;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
@@ -167,6 +140,7 @@ type AgentsProps = {
 };
 
 export function renderAgents(props: AgentsProps) {
+  const config = currentConfigObject(props.config);
   const agents = props.agentsList?.agents ?? [];
   const defaultId = props.agentsList?.selectionRequired
     ? null
@@ -176,16 +150,16 @@ export function renderAgents(props: AgentsProps) {
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
   const selectedSkillCount =
-    selectedId && props.agentSkills.agentId === selectedId
-      ? (props.agentSkills.report?.skills?.length ?? null)
+    selectedId && props.agentSkills.agentSkillsAgentId === selectedId
+      ? (props.agentSkills.agentSkillsReport?.skills?.length ?? null)
       : null;
 
-  const channelEntryCount = props.channels.snapshot
-    ? Object.keys(props.channels.snapshot.channelAccounts ?? {}).length
+  const channelEntryCount = props.channels.channelsSnapshot
+    ? Object.keys(props.channels.channelsSnapshot.channelAccounts ?? {}).length
     : null;
-  const cronJobCount = selectedId ? props.cron.jobsTotal : null;
+  const cronJobCount = selectedId ? props.cron.cronJobsTotal : null;
   const tabCounts: Record<string, number | null> = {
-    files: props.agentFiles.list?.files?.length ?? null,
+    files: props.agentFiles.agentFilesList?.files?.length ?? null,
     skills: selectedSkillCount,
     channels: channelEntryCount,
     cron: cronJobCount || null,
@@ -296,8 +270,10 @@ export function renderAgents(props: AgentsProps) {
                   aria-labelledby=${`agents-tab-${props.activePanel}`}
                 >
                   ${
-                    props.config.error
-                      ? html`<div class="callout danger" role="alert">${props.config.error}</div>`
+                    props.config.lastError
+                      ? html`<div class="callout danger" role="alert">
+                          ${props.config.lastError}
+                        </div>`
                       : nothing
                   }
                   ${
@@ -308,8 +284,8 @@ export function renderAgents(props: AgentsProps) {
                             agent: selectedAgent,
                             basePath: props.basePath,
                             defaultId,
-                            configForm: props.config.form,
-                            agentFilesList: props.agentFiles.list,
+                            configForm: config,
+                            agentFilesList: props.agentFiles.agentFilesList,
                             agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
                             agentIdentityError: props.agentIdentityError,
                             agentIdentityLoading: props.agentIdentityLoading,
@@ -319,11 +295,13 @@ export function renderAgents(props: AgentsProps) {
                             identityError: props.identityError,
                             canUpdateConfig: props.access.canUpdateConfig,
                             canUpdateIdentity: props.access.canUpdateIdentity,
-                            configLoading: props.config.loading,
-                            configSaving: props.config.saving,
-                            configDirty: props.config.dirty,
-                            modelCatalog: props.modelCatalog,
-                            decisionModels: props.decisionModels,
+                            configLoading: props.config.configLoading,
+                            configSaving: props.config.configSaving,
+                            configDirty: props.config.configFormDirty,
+                            modelCatalog: props.modelCatalog.models,
+                            decisionModels: props.modelCatalog.decisionModels ?? [],
+                            modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
+                            modelCatalogRetired: props.modelCatalog.retired,
                             modelCatalogStatus: props.modelCatalogStatus,
                             onConfigReload: props.onConfigReload,
                             onConfigSave: props.onConfigSave,
@@ -343,14 +321,15 @@ export function renderAgents(props: AgentsProps) {
                     props.activePanel === "files"
                       ? renderAgentFiles({
                           agentId: selectedAgent.id,
-                          agentFilesList: props.agentFiles.list,
-                          agentFilesLoading: props.agentFiles.loading,
-                          agentFilesError: props.agentFiles.error,
-                          agentFileActive: props.agentFiles.active,
-                          agentFileContents: props.agentFiles.contents,
-                          agentFileDrafts: props.agentFiles.drafts,
-                          agentFileSaving: props.agentFiles.saving,
-                          agentFileConflict: props.agentFiles.conflict,
+                          agentFilesList: props.agentFiles.agentFilesList,
+                          agentFilesLoading: props.agentFiles.agentFilesLoading,
+                          agentFilesError:
+                            props.agentFiles.agentFilesError ?? props.agentFilesListError,
+                          agentFileActive: props.agentFiles.agentFileActive,
+                          agentFileContents: props.agentFiles.agentFileContents,
+                          agentFileDrafts: props.agentFiles.agentFileDrafts,
+                          agentFileSaving: props.agentFiles.agentFileSaving,
+                          agentFileConflict: props.agentFiles.agentFileConflict,
                           canWrite: props.access.canWriteFiles,
                           onLoadFiles: props.onLoadFiles,
                           onSelectFile: props.onSelectFile,
@@ -366,16 +345,16 @@ export function renderAgents(props: AgentsProps) {
                     props.activePanel === "tools"
                       ? renderAgentTools({
                           agentId: selectedAgent.id,
-                          configForm: props.config.form,
-                          configLoading: props.config.loading,
-                          configSaving: props.config.saving,
-                          configDirty: props.config.dirty,
-                          toolsCatalogLoading: props.toolsCatalog.loading,
-                          toolsCatalogError: props.toolsCatalog.error,
-                          toolsCatalogResult: props.toolsCatalog.result,
-                          toolsEffectiveLoading: props.toolsEffective.loading,
-                          toolsEffectiveError: props.toolsEffective.error,
-                          toolsEffectiveResult: props.toolsEffective.result,
+                          configForm: config,
+                          configLoading: props.config.configLoading,
+                          configSaving: props.config.configSaving,
+                          configDirty: props.config.configFormDirty,
+                          toolsCatalogLoading: props.tools.toolsCatalogLoading,
+                          toolsCatalogError: props.tools.toolsCatalogError,
+                          toolsCatalogResult: props.tools.toolsCatalogResult,
+                          toolsEffectiveLoading: props.tools.toolsEffectiveLoading,
+                          toolsEffectiveError: props.tools.toolsEffectiveError,
+                          toolsEffectiveResult: props.tools.toolsEffectiveResult,
                           runtimeSessionKey: props.runtimeSessionKey,
                           runtimeSessionMatchesSelectedAgent:
                             props.runtimeSessionMatchesSelectedAgent,
@@ -393,15 +372,15 @@ export function renderAgents(props: AgentsProps) {
                     props.activePanel === "skills"
                       ? renderAgentSkills({
                           agentId: selectedAgent.id,
-                          report: props.agentSkills.report,
-                          loading: props.agentSkills.loading,
-                          error: props.agentSkills.error,
-                          activeAgentId: props.agentSkills.agentId,
-                          configForm: props.config.form,
-                          configLoading: props.config.loading,
-                          configSaving: props.config.saving,
-                          configDirty: props.config.dirty,
-                          filter: props.agentSkills.filter,
+                          report: props.agentSkills.agentSkillsReport,
+                          loading: props.agentSkills.agentSkillsLoading,
+                          error: props.agentSkills.agentSkillsError,
+                          activeAgentId: props.agentSkills.agentSkillsAgentId,
+                          configForm: config,
+                          configLoading: props.config.configLoading,
+                          configSaving: props.config.configSaving,
+                          configDirty: props.config.configFormDirty,
+                          filter: props.agentSkills.skillsFilter,
                           canPatchConfig: props.access.canPatchConfig,
                           canUpdateConfig: props.access.canUpdateConfig,
                           onFilterChange: props.onSkillsFilterChange,
@@ -419,16 +398,16 @@ export function renderAgents(props: AgentsProps) {
                       ? renderAgentChannels({
                           context: buildAgentContext(
                             selectedAgent,
-                            props.config.form,
-                            props.agentFiles.list,
+                            config,
+                            props.agentFiles.agentFilesList,
                             defaultId,
                             props.agentIdentityById[selectedAgent.id] ?? null,
                           ),
-                          configForm: props.config.form,
-                          snapshot: props.channels.snapshot,
-                          loading: props.channels.loading,
-                          error: props.channels.error,
-                          lastSuccess: props.channels.lastSuccess,
+                          configForm: config,
+                          snapshot: props.channels.channelsSnapshot,
+                          loading: props.channels.channelsLoading,
+                          error: props.channels.channelsError,
+                          lastSuccess: props.channels.channelsLastSuccess,
                           onRefresh: props.onChannelsRefresh,
                           onSelectPanel: props.onSelectPanel,
                         })
@@ -440,21 +419,21 @@ export function renderAgents(props: AgentsProps) {
                           basePath: props.basePath,
                           context: buildAgentContext(
                             selectedAgent,
-                            props.config.form,
-                            props.agentFiles.list,
+                            config,
+                            props.agentFiles.agentFilesList,
                             defaultId,
                             props.agentIdentityById[selectedAgent.id] ?? null,
                           ),
                           agentId: selectedAgent.id,
-                          jobs: props.cron.jobs,
-                          jobsTotal: props.cron.jobsTotal,
-                          jobsHasMore: props.cron.jobsHasMore,
-                          jobsLoadingMore: props.cron.jobsLoadingMore,
-                          status: props.cron.status,
-                          scopedTotal: props.cron.scopedTotal,
-                          scopedNextWakeAtMs: props.cron.scopedNextWakeAtMs,
-                          loading: props.cron.loading,
-                          error: props.cron.error,
+                          jobs: props.cron.cronJobs,
+                          jobsTotal: props.cron.cronJobsTotal,
+                          jobsHasMore: props.cron.cronJobsHasMore,
+                          jobsLoadingMore: props.cron.cronJobsLoadingMore,
+                          status: props.cron.cronStatus,
+                          scopedTotal: props.cron.cronScopedTotal,
+                          scopedNextWakeAtMs: props.cron.cronScopedNextWakeAtMs,
+                          loading: props.cron.cronLoading,
+                          error: props.cron.cronError,
                           canRunNow: props.access.canRunCron,
                           onRefresh: props.onCronRefresh,
                           onLoadMore: props.onCronLoadMore,

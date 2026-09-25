@@ -376,6 +376,47 @@ suite.define(() => {
     },
   );
 
+  it("selects fetched models while the next catalog request stays held", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "fixture/one",
+      models: ["one", "two"].map((id) => ({
+        id,
+        name: `Retained ${id}`,
+        provider: "fixture",
+        available: true,
+      })),
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const trigger = page.locator('.new-session-page__composer [data-chat-model-select="true"]');
+      await expect.poll(() => trigger.textContent()).toContain("Retained one");
+      const reads = (await gateway.getRequests("models.list")).length;
+      await gateway.deferNext("models.list");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect
+        .poll(async () => (await gateway.getRequests("models.list")).length)
+        .toBe(reads + 1);
+      await trigger.click();
+      await page.getByRole("combobox", { name: "Search models" }).fill("Retained");
+      await page.locator('[data-chat-model-option="fixture/two"]').click();
+      await expect.poll(() => trigger.textContent()).toContain("Retained two");
+      expect(await trigger.getAttribute("aria-busy")).toBe("false");
+      expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
+      if (captureUiProof) {
+        await trigger.click();
+        await page.getByRole("combobox", { name: "Search models" }).fill("Retained");
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "selected-during-held-refresh.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -513,7 +554,7 @@ suite.define(() => {
     }
   });
 
-  it("shows the default and accepts a draft while model metadata loads", async () => {
+  it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
     }
@@ -538,9 +579,10 @@ suite.define(() => {
       const modelTrigger = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await expect.poll(() => modelTrigger.textContent()).toContain("gpt-5.6-luna");
-      expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
-      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
+      await expect.poll(() => modelTrigger.getAttribute("aria-busy")).toBe("true");
+      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
+      expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
+      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
       await page
         .locator(".new-session-page__message")
         .fill("Start without waiting for the catalog");
@@ -566,6 +608,8 @@ suite.define(() => {
       }
 
       await gateway.resolveDeferred("models.list");
+      await expect.poll(() => modelTrigger.textContent()).toContain("GPT-5.6 Luna");
+      expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",
       );

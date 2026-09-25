@@ -18,7 +18,7 @@ export function isRetainedExecutionOwnerBinding(
   return result === "bound" || result === "already-bound";
 }
 
-type ExecutionOwnerBinding = Readonly<{
+export type ExecutionOwnerBinding = Readonly<{
   contextId: string;
   executionId: string;
 }>;

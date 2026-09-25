@@ -17,6 +17,7 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
+import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
@@ -58,7 +59,10 @@ export async function discardPreparedInboundMedia(
   refs: readonly Pick<OffloadedRef, "id">[],
   log?: { warn: (message: string) => void },
 ): Promise<void> {
-  const results = await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  const deletion = Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  // Request cleanup can detach after ACK or rejection; shutdown still owns its file removals.
+  registerMediaCleanupDrain(deletion.then(() => undefined));
+  const results = await deletion;
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected" && log) {
       log.warn(
@@ -320,6 +324,8 @@ export async function parseMessageWithAttachments(
     supportsImages?: boolean | (() => Promise<boolean>);
     supportsInlineImages?: boolean;
     acceptNonImage?: boolean;
+    /** Ephemeral image-only callers keep bounded image bytes in their request, not the media store. */
+    imageStorage?: "inline";
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
@@ -439,7 +445,9 @@ export async function parseMessageWithAttachments(
       }
 
       const shouldOffload =
-        shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
+        shouldForceImageOffload ||
+        !isImage ||
+        (opts?.imageStorage !== "inline" && sizeBytes > OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
         images.push({ type: "image", data: b64, mimeType: finalMime, sourceIndex: idx });

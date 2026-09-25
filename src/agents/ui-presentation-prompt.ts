@@ -36,7 +36,7 @@ export function buildUiPresentationPrompt(params: {
       : []),
     ...(clawHubMessageToolName
       ? [
-          `\`${clawHubMessageToolName}\`: When the user asks to install an integration or whether you can perform an action, check ClawHub first with \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`, omitting channel and target. This presents official plugin or skill cards, including when it is already installed. Report availability and installation state from the result. An installed desktop app does not establish that its OpenClaw plugin is installed. Treat an unqualified service install request as an OpenClaw capability request unless the user explicitly asks for a desktop app.`,
+          `\`${clawHubMessageToolName}\`: Tools/skills first. For explicit plugin/skill search/install or missing capability, use ClawHub: \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`. Skip routine tasks, tool errors, permissions. Omit channel/target. Trust result status.`,
         ]
       : []),
     ...(showWidgetToolName

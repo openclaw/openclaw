@@ -49,6 +49,34 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("fetches the default base without advancing an explicitly selectable local branch", async () => {
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    const remoteHead = await git(
+      repo,
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote update",
+    );
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    await git(repo, "fetch", "origin");
+    await git(repo, "remote", "set-head", "origin", "-a");
+    await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
+
+    const explicit = await service.create({ repoRoot: repo, name: "local-base", baseRef: "main" });
+    expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
+
+    const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
+    expect(defaultBase.baseRef).toBe("origin/main");
+    expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
+    expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+  });
+
   it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
     const disk = fsSync.statfsSync(root);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
@@ -110,6 +138,26 @@ describe("ManagedWorktreeService branch discovery", () => {
         includeRepositoryStatus: true,
       }),
     ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+
+    const unborn = path.join(root, "unborn");
+    await fs.mkdir(unborn);
+    await git(unborn, "init", "-b", "main", `--template=${path.join(root, "git-template")}`);
+    await expect(
+      service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+    ).resolves.toEqual({ branches: [], repositoryStatus: "not_git" });
+    await expect(service.listRepositoryBranches(unborn)).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+    await expect(service.create({ repoRoot: unborn, name: "requires-commit" })).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+
+    for (const ref of ["broken-ref\n", `${"a".repeat(40)}\n`]) {
+      await fs.writeFile(path.join(unborn, ".git", "refs", "heads", "main"), ref);
+      await expect(
+        service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+      ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+    }
   });
 
   it.skipIf(process.platform !== "win32")(

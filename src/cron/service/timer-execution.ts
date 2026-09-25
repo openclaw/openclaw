@@ -315,7 +315,7 @@ async function executeMainSessionCronJob(
 
 async function executeDetachedCronJob(
   state: CronServiceState,
-  job: CronJob,
+  job: CronStoredJob,
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
@@ -391,6 +391,15 @@ async function executeDetachedCronJob(
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
+    admissionSource:
+      job.owner?.sessionKey ||
+      job.owner?.accountId ||
+      job.scheduledToolPolicy?.mode === "account" ||
+      job.payload.externalContentSource ||
+      job.toolsAllowProvenance?.channelRequester ||
+      (job.toolsAllowProvenance && job.toolsAllowProvenance.callerOrigin?.kind !== "local")
+        ? "requester-schedule"
+        : "operator-schedule",
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,

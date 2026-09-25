@@ -20,9 +20,10 @@ type WorkerRuntimeState = {
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
 type WorkerCleanupHelpers = {
+  drainOpenClawAgentWriteQueuesForTest: typeof import("../src/state/openclaw-agent-write-admission.test-support.js").drainOpenClawAgentWriteQueuesForTest;
   clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
-  drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.js").drainSessionStoreWriterQueuesForTest;
+  drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.test-support.js").drainSessionStoreWriterQueuesForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
@@ -56,6 +57,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       modelsConfigState,
       preparedModelRuntime,
       sessionStoreWriterState,
+      sessionStoreWriterTestState,
+      agentWriteAdmission,
       fileLock,
     ] = await Promise.all([
       vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
@@ -70,13 +73,21 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
         "../src/config/sessions/store-writer-state.js",
       ),
+      vi.importActual<typeof import("../src/config/sessions/store-writer-state.test-support.js")>(
+        "../src/config/sessions/store-writer-state.test-support.js",
+      ),
+      vi.importActual<typeof import("../src/state/openclaw-agent-write-admission.test-support.js")>(
+        "../src/state/openclaw-agent-write-admission.test-support.js",
+      ),
       vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
     ]);
     return {
+      drainOpenClawAgentWriteQueuesForTest:
+        agentWriteAdmission.drainOpenClawAgentWriteQueuesForTest,
       clearSessionStoreCacheForTest: sessionStoreWriterState.clearSessionStoreCacheForTest,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
-        sessionStoreWriterState.drainSessionStoreWriterQueuesForTest,
+        sessionStoreWriterTestState.drainSessionStoreWriterQueuesForTest,
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
@@ -329,6 +340,16 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
   return workerRuntimeState.defaultPluginRegistry;
 }
 
+async function settlePluginCacheRetirements(): Promise<void> {
+  const { waitForPluginCacheRetirement } = await vi.importActual<
+    typeof import("../src/plugins/plugin-cache.js")
+  >("../src/plugins/plugin-cache.js");
+  const { failures } = await waitForPluginCacheRetirement();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Plugin cache retirement failed during test cleanup");
+  }
+}
+
 async function installDefaultPluginRegistry(): Promise<void> {
   // Worker module resets retire the lifecycle maps. Activate through the current
   // real module, never a cached closure or a suite's partial runtime mock.
@@ -338,6 +359,7 @@ async function installDefaultPluginRegistry(): Promise<void> {
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
+  await settlePluginCacheRetirements();
 }
 
 // Some suites import channel/plugin consumers at module top level, before
@@ -351,6 +373,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   const {
+    drainOpenClawAgentWriteQueuesForTest,
     clearSessionStoreCacheForTest,
     drainFileLockStateForTest,
     drainSessionStoreWriterQueuesForTest,
@@ -359,6 +382,7 @@ afterEach(async () => {
     resetModelsJsonReadyCacheForTest,
     resetPreparedModelRuntimeSnapshotsForTest,
   } = await loadWorkerCleanupHelpers();
+  await drainOpenClawAgentWriteQueuesForTest();
   await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
@@ -370,8 +394,15 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const { clearSessionStoreCacheForTest, drainFileLockStateForTest } =
-    await loadWorkerCleanupHelpers();
+  const {
+    clearSessionStoreCacheForTest,
+    drainFileLockStateForTest,
+    drainOpenClawAgentWriteQueuesForTest,
+    drainSessionStoreWriterQueuesForTest,
+  } = await loadWorkerCleanupHelpers();
+  await drainOpenClawAgentWriteQueuesForTest();
+  await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
+  await settlePluginCacheRetirements();
 });

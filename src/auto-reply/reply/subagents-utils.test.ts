@@ -1,7 +1,7 @@
 // Tests subagent utility helpers for label, routing, and transcript handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
-import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
+import { buildSubagentRunView } from "../../agents/subagents/registry/subagent-run-view.js";
 import { resolveSubagentEntryForToken } from "./commands-subagents/shared.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
@@ -41,7 +41,10 @@ function resolveTarget(
   entry?: SubagentRunRecord;
   error?: string;
 } {
-  const result = resolveSubagentEntryForToken(runs, token);
+  const result = resolveSubagentEntryForToken(
+    buildSubagentRunView({ runs, countPendingDescendantRuns: () => 0, recentMinutes: 30 }),
+    token,
+  );
   return "entry" in result ? result : { error: result.reply.reply?.text };
 }
 
@@ -73,12 +76,16 @@ describe("subagents utils", () => {
   });
 
   it("sorts by startedAt then createdAt descending", () => {
-    const sorted = sortSubagentRuns([
-      makeRun({ runId: "a", createdAt: 10 }),
-      makeRun({ runId: "b", startedAt: 15, createdAt: 5 }),
-      makeRun({ runId: "c", startedAt: 12, createdAt: 20 }),
-    ]);
-    expect(sorted.map((entry) => entry.runId)).toEqual(["b", "c", "a"]);
+    const view = buildSubagentRunView({
+      runs: [
+        makeRun({ runId: "a", createdAt: 10 }),
+        makeRun({ runId: "b", startedAt: 15, createdAt: 5 }),
+        makeRun({ runId: "c", startedAt: 12, createdAt: 20 }),
+      ],
+      recentMinutes: 30,
+      countPendingDescendantRuns: () => 0,
+    });
+    expect(view.latest.map((entry) => entry.runId)).toEqual(["b", "c", "a"]);
   });
 
   it("selects last from sorted runs", () => {

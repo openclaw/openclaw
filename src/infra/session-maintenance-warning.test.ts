@@ -36,7 +36,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: mocks.normalizeMessageChannel,
   isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
 }));
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.read.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
 }));
 vi.mock("./outbound/deliver-runtime.js", () => ({

@@ -1,14 +1,19 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
+import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -19,14 +24,20 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
+import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
+import {
+  stoppedSystemdBinding,
+  useDoctorMaintenanceRuntimeDirectory,
+} from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
+  resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimeDirectory: "",
+  runtimePath: "",
   installPlanBuilt: false,
   audit: vi.fn<typeof import("../daemon/service-audit.js").auditGatewayServiceConfig>(),
   confirm: vi.fn(),
@@ -35,6 +46,23 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
+vi.mock("../gateway/call.js", async (original) => {
+  const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../gateway/call.js")>()),
+    callGatewayCli: gatewayMaintenanceResponse(() => mocks.resident()),
+  };
+});
+
+vi.mock("../daemon/systemd-exec.js", async (original) => {
+  const { gatewayMaintenanceSystemdShow } =
+    await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../daemon/systemd-exec.js")>()),
+    execSystemctlUser: gatewayMaintenanceSystemdShow,
+  };
+});
+
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.confirm,
@@ -57,7 +85,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
     mocks.installPlanBuilt = true;
     return {
       programArguments: [
-        process.execPath,
+        mocks.runtimePath,
         path.join(mocks.activeRoot, "dist/index.js"),
         "gateway",
         "--port",
@@ -71,6 +99,17 @@ vi.mock("./daemon-install-helpers.js", () => ({
     };
   },
 }));
+// Installation consent owns the launcher drift; runtime capability is a separate probe.
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
+  resolveNodeRuntimeInfo: async () => ({
+    status: "supported" as const,
+    version: "26.8.1",
+    sqliteVersion: "3.53.4",
+    sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    nodeSharedSqlite: false,
+  }),
+}));
 vi.mock("../daemon/service-audit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-audit.js")>()),
   auditGatewayServiceConfig: mocks.audit,
@@ -80,38 +119,23 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    ...actual,
-    acquireGatewayLifecycleCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayLifecycleCoordinator>[0],
-    ) =>
-      actual.acquireGatewayLifecycleCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) =>
-      actual.acquireGatewayMaintenanceCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) =>
-      actual.acquireStateDatabaseCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let handoffBinding: ReturnType<typeof createManagedHandoffTestBinding>;
+useDoctorMaintenanceRuntimeDirectory(() => {
+  mocks.runtimeDirectory = realpathSync(tempDirs.make("openclaw-doctor-installation-runtime-"));
+  handoffBinding = createManagedHandoffTestBinding(mocks.runtimeDirectory);
+  vi.stubEnv(
+    "NODE_OPTIONS",
+    `${process.env.NODE_OPTIONS ?? ""} ${handoffBinding.nodeOption}`.trim(),
+  );
+  return mocks.runtimeDirectory;
+});
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
+  handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
+  mocks.resident.mockReset();
   mocks.audit.mockResolvedValue({ ok: true, issues: [] });
   mocks.installPlanBuilt = false;
   for (const native of [mocks.suspend, mocks.resume]) {
@@ -138,6 +162,7 @@ async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
   installFails?: boolean;
+  tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable";
   revoked?: "unchanged" | "restored" | "recovery-pending" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
@@ -151,7 +176,7 @@ async function runInstallationCase(params: {
     aggressive: boolean;
     approved: boolean;
     interactive: boolean;
-    mixed?: "stale-native" | "custom-argv";
+    mixed?: "stale-native" | "custom-argv" | "version-managed-runtime";
   };
 }) {
   const { installFails, initiallyStopped } = params;
@@ -184,7 +209,10 @@ async function runInstallationCase(params: {
   mockProcessPlatform(params.platform);
   mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
-  mocks.runtimeDirectory = home;
+  mocks.runtimePath =
+    params.consent?.mixed === "version-managed-runtime"
+      ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
+      : path.join(home, "runtime", "node");
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
   mocks.activeRoot = path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
@@ -226,7 +254,7 @@ async function runInstallationCase(params: {
       }
       let command: GatewayServiceCommandConfig = {
         programArguments: [
-          process.execPath,
+          mocks.runtimePath,
           path.join(oldRoot, "dist/index.js"),
           ...(params.consent?.aggressive ? ["node", "run"] : ["gateway"]),
           "--port",
@@ -236,17 +264,23 @@ async function runInstallationCase(params: {
         environment: {
           HOME: home,
           PATH: "/usr/bin:/bin",
+          ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
           ...(params.profile ? { OPENCLAW_PROFILE: params.profile } : {}),
         },
       };
       const originalCommand = structuredClone(command);
       let running = !initiallyStopped;
+      const pid = 4200;
+      mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
       let inspectionClock = 0;
       let inspectingRuntime = false;
       let competingUpdateStarted = false;
       const installationInspectionElapsedMs: number[] = [];
       const events: string[] = [];
+      let writerContext: Awaited<ReturnType<typeof prepareWriterContext>> | undefined;
+      let configPath: string | undefined;
+      let originalConfig: string | undefined;
       const service = createMockGatewayService({
         isAbsent: async () => false,
         isLoaded: async () => true,
@@ -299,7 +333,11 @@ async function runInstallationCase(params: {
               }
             }
           }
-          return { status: running ? "running" : "stopped", systemd: { managerUid: 2001 } };
+          return {
+            status: running ? "running" : "stopped",
+            ...(running ? { pid } : {}),
+            systemd: { managerUid: 2001 },
+          };
         },
         stop: async () => {
           events.push("stop");
@@ -312,6 +350,14 @@ async function runInstallationCase(params: {
         install: async (plan) => {
           expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
           events.push("install");
+          if (params.tokenRecovery) {
+            expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toBe(
+              "maintenance-fixture-token",
+            );
+            expect(JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token).toBe(
+              "maintenance-fixture-token",
+            );
+          }
           if (params.revoked) {
             throw new GatewayServiceAuthorityError(
               new Error("Doctor custody was released"),
@@ -341,6 +387,11 @@ async function runInstallationCase(params: {
             runtime,
             options: { repair: true, nonInteractive: !params.consent?.interactive },
           }),
+          {
+            writeConfig: async () => {
+              throw new Error("Installation-only repair must not request a config write.");
+            },
+          },
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
@@ -382,6 +433,14 @@ async function runInstallationCase(params: {
         }
         return;
       }
+      if (params.tokenRecovery) {
+        configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", port: 19989 },
+          plugins: { enabled: false },
+        });
+        originalConfig = await fs.readFile(configPath, "utf8");
+        writerContext = await prepareWriterContext(configPath);
+      }
       const maintenance = await beginDoctorMaintenance({
         root: mocks.activeRoot,
         options: { repair: true, nonInteractive: true },
@@ -389,6 +448,18 @@ async function runInstallationCase(params: {
       });
       if (params.inspectionScenario) {
         vi.spyOn(performance, "now").mockImplementation(() => inspectionClock);
+        // Charge both fresh byte validation and fallback snapshots: reusing decoded
+        // rows does not remove the fresh read at each native authority boundary.
+        const readVersion = sqliteSnapshotSource.readSqliteSourceContentVersionSync;
+        vi.spyOn(sqliteSnapshotSource, "readSqliteSourceContentVersionSync").mockImplementation(
+          (pathname) => {
+            const version = readVersion(pathname);
+            if (inspectingRuntime) {
+              inspectionClock += 100;
+            }
+            return version;
+          },
+        );
         const prepareSnapshot = sqliteSnapshotSource.prepareSqliteReadOnlyLocationSync;
         vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation(
           (pathname) => {
@@ -411,16 +482,53 @@ async function runInstallationCase(params: {
         }
         let finishError: unknown;
         try {
-          await maintenance?.finish({
-            gateway: { auth: { mode: "token", token: "synthetic-doctor-token" } },
-          });
+          await maintenance?.finish(
+            writerContext?.cfg ?? {
+              gateway: { auth: { mode: "token", token: "synthetic-doctor-token" } },
+            },
+            writerContext && params.tokenRecovery !== "writer-unavailable"
+              ? async (nextConfig) => {
+                  events.push("write-config");
+                  return writeDoctorGatewayConfig(
+                    writerContext!,
+                    params.tokenRecovery === "refused"
+                      ? { ...nextConfig, gateway: { ...nextConfig.gateway, port: 0 } }
+                      : nextConfig,
+                  );
+                }
+              : undefined,
+          );
         } catch (error) {
           finishError = error;
+        }
+        if (params.tokenRecovery) {
+          expect(finishError).toBeUndefined();
+          const bytes = await fs.readFile(configPath!, "utf8");
+          const refused =
+            params.tokenRecovery === "refused" || params.tokenRecovery === "writer-unavailable";
+          expect(events).toEqual([
+            "stop",
+            "repair-state",
+            ...(params.tokenRecovery === "writer-unavailable" ? [] : ["write-config"]),
+            ...(refused ? [] : ["install"]),
+          ]);
+          if (refused) {
+            expect(bytes).toBe(originalConfig);
+            expect(writerContext?.cfg.gateway?.auth?.token).toBeUndefined();
+            expect(running).toBe(false);
+            expect(command).toEqual(originalCommand);
+            expect(mocks.health).not.toHaveBeenCalled();
+          } else {
+            expect(JSON.parse(bytes).gateway.auth.token).toBe("maintenance-fixture-token");
+            expect(writerContext?.cfgForPersistence).toEqual(writerContext?.cfg);
+            expect(running).toBe(!installFails);
+          }
+          return;
         }
         if (params.inspectionScenario === "competing-update") {
           expect(competingUpdateStarted).toBe(true);
           expect(finishError).toMatchObject({
-            message: expect.stringContaining("is still in progress"),
+            message: expect.stringContaining("remains recorded as running"),
           });
           expect(events).toEqual(["stop", "repair-state"]);
           expect(running).toBe(false);
@@ -521,6 +629,17 @@ async function runInstallationCase(params: {
   );
 }
 
+it.each(["success", "refused", "service-failure", "writer-unavailable"] as const)(
+  "delegates maintenance token recovery before native service mutation (%s)",
+  async (tokenRecovery) =>
+    runInstallationCase({
+      platform: "linux",
+      mode: "maintenance",
+      tokenRecovery,
+      installFails: tokenRecovery === "service-failure",
+    }),
+);
+
 it.each(["success", "install-failed", "already-stopped"] as const)(
   "Doctor handles two-prefix drift through maintenance finish (%s)",
   async (scenario) =>
@@ -575,6 +694,9 @@ it.each([
   { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
   { aggressive: false, approved: true, interactive: true, mixed: "custom-argv" },
   { aggressive: false, approved: false, interactive: false, mixed: "custom-argv" },
+  { aggressive: false, approved: false, interactive: true, mixed: "version-managed-runtime" },
+  { aggressive: false, approved: true, interactive: true, mixed: "version-managed-runtime" },
+  { aggressive: false, approved: false, interactive: false, mixed: "version-managed-runtime" },
 ] as const)(
   "requires consent beyond installation drift (aggressive=$aggressive, mixed=$mixed, approved=$approved, interactive=$interactive)",
   async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),

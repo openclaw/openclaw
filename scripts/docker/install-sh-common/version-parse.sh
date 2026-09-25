@@ -3,7 +3,7 @@
 extract_openclaw_semver() {
   local raw="${1:-}"
   raw="${raw//$'\r'/}"
-  if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
+  if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
     printf '%s' "${BASH_REMATCH[1]}"
   fi
 }

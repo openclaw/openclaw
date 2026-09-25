@@ -53,14 +53,6 @@ function parseGeneratedEnvValue(value: string): string {
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
 }
 
-function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes(token));
-}
-
-function includesGeneratedEnvironmentDirToken(value: string | undefined): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes("/service-env/"));
-}
-
 function resolveSiblingGeneratedEnvFilePath(
   envFilePath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
@@ -104,11 +96,13 @@ function isExpectedGeneratedEnvWrapperPair(
   }
   // Legacy/corrupted plists may preserve the label-derived wrapper name inside
   // a mangled service-env path. Still unwrap it so the next rewrite can repair.
+  const normalizedWrapper = wrapperPath.replaceAll("\\", "/");
+  const normalizedEnvFile = envFilePath.replaceAll("\\", "/");
   return (
-    includesGeneratedEnvironmentDirToken(wrapperPath) &&
-    includesGeneratedEnvironmentDirToken(envFilePath) &&
-    includesGeneratedEnvironmentPathToken(wrapperPath, `${label}-env-wrapper.sh`) &&
-    includesGeneratedEnvironmentPathToken(envFilePath, `${label}.env`)
+    normalizedWrapper.includes("/service-env/") &&
+    normalizedEnvFile.includes("/service-env/") &&
+    normalizedWrapper.includes(`${label}-env-wrapper.sh`) &&
+    normalizedEnvFile.includes(`${label}.env`)
   );
 }
 
@@ -132,14 +126,12 @@ function resolveGeneratedEnvWrapperLayout(
 }
 
 async function readLaunchAgentEnvironmentFile(
-  programArguments: string[],
+  envFilePath: string | undefined,
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<Record<string, string>> {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
+  if (envFilePath === undefined) {
     return {};
   }
-  const envFilePath = layout.envFilePath;
   let content = "";
   const candidateEnvFilePaths = options?.requireEffective
     ? [envFilePath]
@@ -208,17 +200,6 @@ async function readLaunchAgentEnvironmentFile(
   return environment;
 }
 
-function unwrapGeneratedEnvWrapperArgs(
-  programArguments: string[],
-  options?: ReadLaunchAgentProgramArgumentsOptions,
-): string[] {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
-    return programArguments;
-  }
-  return programArguments.slice(layout.commandStartIndex);
-}
-
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
   if (!env) {
     return "";
@@ -239,30 +220,33 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
 };
 
+export async function normalizeLaunchdPlistXml(
+  contents: Uint8Array,
+  timeoutMs = 5_000,
+): Promise<string> {
+  const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "--", "-"], {
+    input: contents,
+    timeoutMs: Math.max(1, Math.min(timeoutMs, 5_000)),
+    maxBuffer: 1024 * 1024,
+    logOutput: false,
+  });
+  return stdout;
+}
+
 export async function decodeLaunchdPlistMetadata(
   contents: Uint8Array,
   timeoutMs?: number,
 ): Promise<Record<string, unknown> | undefined> {
   const deadline = performance.now() + Math.min(timeoutMs ?? 5_000, 5_000);
-  let decoded = "";
-  for (const format of ["xml1", "json"]) {
-    // Validate captured bytes before normalizing native-only scalar types. Numeric
-    // placeholders remain invalid command fields; native XML escapes literal tag text.
-    ({ stdout: decoded } = await runExec(
-      "/usr/bin/plutil",
-      ["-convert", format, "-o", "-", "--", "-"],
-      {
-        input:
-          format === "xml1"
-            ? contents
-            : decoded.replace(/<(data|date)>[\s\S]*?<\/\1>/g, "<integer>0</integer>"),
-        timeoutMs: Math.max(1, deadline - performance.now()),
-        maxBuffer: 1024 * 1024,
-        logOutput: false,
-      },
-    ));
-  }
-  return asOptionalRecord(JSON.parse(decoded));
+  const xml = await normalizeLaunchdPlistXml(contents, deadline - performance.now());
+  // Native XML escapes literal tag text; placeholders remain invalid command fields.
+  const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+    input: xml.replace(/<(data|date)>[\s\S]*?<\/\1>/g, "<integer>0</integer>"),
+    timeoutMs: Math.max(1, deadline - performance.now()),
+    maxBuffer: 1024 * 1024,
+    logOutput: false,
+  });
+  return asOptionalRecord(JSON.parse(stdout));
 }
 
 export async function readLaunchAgentProgramArgumentsFromFile(
@@ -300,8 +284,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     ) {
       throw new Error("Invalid LaunchAgent command fields");
     }
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(args, options);
-    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
+    const layout = resolveGeneratedEnvWrapperLayout(args, options);
+    const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
+    const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
     if (options?.requireEffective && !effectiveProgramArguments[0]) {
       throw new Error("Missing LaunchAgent command");
     }

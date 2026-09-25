@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -101,6 +101,78 @@ if [ "${1-}" = "--dev-wrapper" ]; then
   shift
 fi
 requested_subcommand="${1-}"
+
+# This bootstrap cannot load helpers from an unverified extracted tree.
+pr_batch_wrapper_git() {
+  node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
+import { spawnSync } from "node:child_process";
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
+const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
+function git(directory, args, input) {
+  const result = spawnSync(binary, ["-C", directory, ...args], {
+    input, maxBuffer: Infinity, stdio: ["pipe", "pipe", "ignore"],
+  });
+  if (result.error || result.signal || result.status !== 0) throw new Error("Git read failed");
+  return result.stdout;
+}
+const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+try {
+  if (operation === "differences") {
+    const queries = paths.flatMap(path => [`HEAD:${path}`, `${revision}:${path}`]);
+    const rows = git(repository, ["cat-file", "--batch-check=%(objectname)"], queries.join("\n") + "\n")
+      .toString("utf8").split("\n");
+    if (rows.pop() !== "" || rows.length !== queries.length) throw new Error("Incomplete revisions");
+    process.stdout.write(paths.filter((_, index) => {
+      const [head, anchor] = rows.slice(index * 2, index * 2 + 2);
+      return !oid.test(head) || !oid.test(anchor) || head !== anchor;
+    }).join("\n"));
+  } else if (operation === "verify") {
+    const [directory, ...components] = paths;
+    const listing = git(repository, ["ls-tree", "-r", "-z", "--full-tree", revision, "--", ...components]);
+    const text = listing.toString("utf8");
+    const rows = text.split("\0");
+    if (!Buffer.from(text).equals(listing) || rows.pop() !== "" || rows.length === 0) {
+      throw new Error("Incomplete anchor listing");
+    }
+    const names = new Set();
+    const directories = new Set();
+    const expected = [];
+    if (!lstatSync(directory).isDirectory()) throw new Error("Invalid extraction root");
+    for (const row of rows) {
+      const entry = /^(100644|100755) blob ([a-f0-9]+)\t([^\0]+)$/.exec(row);
+      if (!entry || !oid.test(entry[2])) throw new Error("Invalid anchor entry");
+      const [, , hash, path] = entry;
+      if (names.has(path) || path.split("/").some(part => !part || part === "." || part === "..")) {
+        throw new Error("Invalid anchor path");
+      }
+      let parent = "";
+      for (const part of path.split("/").slice(0, -1)) {
+        parent = parent ? `${parent}/${part}` : part;
+        if (!directories.has(parent)) {
+          if (!lstatSync(join(directory, parent)).isDirectory()) throw new Error("Non-directory anchor parent");
+          directories.add(parent);
+        }
+      }
+      if (!lstatSync(join(directory, path)).isFile()) throw new Error("Non-regular anchor file");
+      names.add(path);
+      expected.push(hash);
+    }
+    if (components.some(path => !names.has(path) && !directories.has(path))) throw new Error("Incomplete anchor components");
+    // Git's stdin path quoting uses C/octal escapes, not JSON's Unicode escapes.
+    const input = [...names].map(path => '"' + join(directory, path).replace(/[\x00-\x1f\x7f\\"]/g, char =>
+      char === "\\" || char === '"' ? "\\" + char : "\\" + char.charCodeAt(0).toString(8).padStart(3, "0"),
+    ) + '"').join("\n") + "\n";
+    const actual = git(repository, ["hash-object", "--no-filters", "--stdin-paths"], input);
+    if (!actual.equals(Buffer.from(expected.join("\n") + "\n"))) throw new Error("Anchor bytes differ");
+  } else {
+    throw new Error("Unknown wrapper Git operation");
+  }
+} catch {
+  process.exitCode = 1;
+}
+EOF_WRAPPER_GIT
+}
 
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
@@ -323,25 +395,13 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" 2>/dev/null &&
             tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir" 2>/dev/null; then
             rm "$anchor_exec_dir/anchor.tar"
-            anchor_extraction_valid=1
-            anchor_verified_entries=0
             # Verify every extracted file byte-matches its anchor blob so an
             # archive/extract fault can never smuggle different code past the
             # trust boundary. The temp dir is 0700 and exec'd immediately —
             # the same TOCTOU class as the canonical-substitution exec above.
-            while IFS=$'\t' read -r anchor_meta anchor_path; do
-              anchor_blob="${anchor_meta##* }"
-              extracted_blob=$(pr_git -C "$anchor_git_root" hash-object -- \
-                "$anchor_exec_dir/$anchor_path" 2>/dev/null || true)
-              if [ -z "$extracted_blob" ] || [ "$extracted_blob" != "$anchor_blob" ]; then
-                anchor_extraction_valid=0
-                break
-              fi
-              anchor_verified_entries=$((anchor_verified_entries + 1))
-            done < <(pr_git -C "$anchor_git_root" ls-tree -r --full-tree "$anchor_commit" -- "${anchor_components[@]}")
-            # An empty listing means the anchor read failed; never exec unverified bytes.
-            if [ "$anchor_verified_entries" = "0" ]; then
-              anchor_extraction_valid=0
+            if pr_batch_wrapper_git verify "$anchor_git_root" "$anchor_commit" \
+              "$anchor_exec_dir" "${anchor_components[@]}"; then
+              anchor_extraction_valid=1
             fi
           fi
           if [ "$anchor_extraction_valid" = "1" ] &&
@@ -371,16 +431,16 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so
         # the working tree matches HEAD and this list matches what was rejected.
-        differing_wrapper_components=()
-        for wrapper_component in "${pr_wrapper_components[@]}"; do
-          linked_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
-          anchor_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "refs/remotes/origin/main:$wrapper_component" 2>/dev/null || true)
-          if [ -z "$linked_component_revision" ] ||
-            [ -z "$anchor_component_revision" ] ||
-            [ "$linked_component_revision" != "$anchor_component_revision" ]; then
-            differing_wrapper_components+=("$wrapper_component")
-          fi
-        done
+        # An absent anchor differs at every path without launching another Git read.
+        differing_wrapper_components=("${pr_wrapper_components[@]}")
+        if [ -n "$anchor_commit" ] &&
+          differing_components=$(pr_batch_wrapper_git differences "$script_parent_dir" \
+            "$anchor_commit" "${pr_wrapper_components[@]}"); then
+          differing_wrapper_components=()
+          while IFS= read -r wrapper_component; do
+            [ -z "$wrapper_component" ] || differing_wrapper_components+=("$wrapper_component")
+          done <<< "$differing_components"
+        fi
         if [ "$linked_matches_anchor" = "1" ]; then
           echo "scripts/pr wrapper matches origin/main, but its linked checkout has no node_modules directory." >&2
         else
@@ -401,7 +461,7 @@ readonly canonical_repo_root
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -422,7 +482,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -460,6 +520,8 @@ Usage:
   scripts/pr review-validate-artifacts <PR>
   scripts/pr review-tests <PR> <test-file> [<test-file> ...]
   scripts/pr prepare-init <PR>
+  scripts/pr prepare-correction-init <PR>
+  scripts/pr prepare-correction-review-init <PR>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR>
@@ -469,16 +531,20 @@ Usage:
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
-    --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
+    --auto-merge selects pinned immediate squash for CLEAN, auto for BEHIND/BLOCKED (MERGEABLE only).
+    OPENCLAW_PR_GATES_REMOTE=github prepare-run defers required CI to this auto-merge handoff.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
     Empty files are valid. Explicit/source co-authors and preview credit backed by tree-changing PR commits or PR authorship are retained; known machine credit is excluded. Queue merges reject it.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
+    --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
+    Cancels a matching active request once, or records an already absent request without sending cancellation.
+    Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
     Posts a first completion comment only from merged; uncertain comment attempts are lookup-only.
@@ -515,7 +581,8 @@ require_cmds() {
 require_main_target_pr() {
   local pr="$1"
   local base base_json
-  base_json=$(read_pr_view_json "$pr" "baseRefName") || exit 1
+  pr_observe "$pr" || exit 1
+  base_json="$PR_OBSERVATION"
   base=$(pr_view_string_field "$base_json" "baseRefName" "$pr" "Retry the scripts/pr command.") || exit 1
   if [ "$base" != "main" ]; then
     echo "scripts/pr prepare and merge commands only support PRs targeting main; PR #$pr targets $base." >&2
@@ -577,7 +644,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory=""
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory=""
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -588,6 +655,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --cancel-auto)
+            [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
+            cancel_auto=true
+            shift
+            ;;
           --auto-merge)
             [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
             auto_merge=true
@@ -596,6 +668,11 @@ main() {
           --body-file)
             [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$body_path" ] || { usage; exit 2; }
             body_path="$2"
+            shift 2
+            ;;
+          --pre-dispatch-refusal)
+            [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$refusal_directory" ] || { usage; exit 2; }
+            refusal_directory="$2"
             shift 2
             ;;
           --legacy-refusal)
@@ -616,9 +693,11 @@ main() {
         auto_merge=true
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
+      [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
+      [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -632,6 +711,7 @@ main() {
   case "$cmd" in
     review-validate-artifacts) review_artifact_preflight "${1-}" || return 1 ;;
     prepare-init | prepare-run) review_artifact_preflight "${1-}" true || return 1 ;;
+    prepare-correction-init) review_artifact_preflight "${1-}" correction || return 1 ;;
   esac
 
   # merge-run reconciles retained outcomes before reading disposable artifacts or base guards.
@@ -703,10 +783,18 @@ main() {
       shift || true
       review_tests "$pr" "$@"
       ;;
+    prepare-correction-init)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
+      prepare_init "$1" "${PR_OBSERVATION:-}" correction
+      ;;
+    prepare-correction-review-init)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
+      prepare_correction_review_init "$1"
+      ;;
     prepare-init)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_init "$pr"
+      prepare_init "$pr" "${PR_OBSERVATION:-}"
       ;;
     prepare-validate-commit)
       local pr="${1-}"
@@ -731,7 +819,7 @@ main() {
     prepare-run)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_run "$pr"
+      prepare_run "$pr" "${PR_OBSERVATION:-}"
       ;;
     ci-dispatch)
       local pr="${1-}"
@@ -742,10 +830,10 @@ main() {
     merge-verify)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      merge_verify "$pr"
+      merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

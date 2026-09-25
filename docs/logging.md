@@ -682,7 +682,10 @@ reclamation operations also include `sessionIdHash` (when targeting one session)
 `error` (the redacted message and causes), and `errorFrame` (the first stack frame).
 These failures emit one warning even below one second, named
 `SQLite reclamation Worker failed`; slower failures use the existing slow-operation
-warning. Session identifiers use the same hash as other session SQLite diagnostics;
+warning. Automatic maintenance that a newer session write supersedes before commit
+is not a Worker failure: maintenance retries after the write quiet window, and a
+fast superseded Worker logs `SQLite reclamation Worker superseded by newer inputs`
+at debug level. Session identifiers use the same hash as other session SQLite diagnostics;
 the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
@@ -692,17 +695,25 @@ identity and numbered admission fields.
 ### SQLite transaction timing
 
 The `sqlite/transaction` warnings `slow SQLite transaction hold`,
-`slow SQLite transaction lock wait`, and `SQLite transaction lock wait failed`
-include `pid`, Node's `threadId`, and `isMainThread` for the thread executing the
-transaction. Inspect the original `raw` record in `openclaw logs --json` to
+`slow SQLite transaction step`, and `SQLite transaction lock wait failed`
+include `database`, `operation`, `pid`, Node's `threadId`, and `isMainThread` for
+the thread executing the transaction. Explicit labels take precedence; otherwise
+diagnostics use the native database path and the current Worker operation.
+An in-memory database is `:memory:`, a retired handle is `unavailable`, and a
+caller without operation context is `unlabeled`. Hold warnings also include
+`mode` (`deferred` or `immediate`). Inspect the original `raw` record in `openclaw logs --json` to
 distinguish the main thread from Workers sharing the same process. `async: false`
 describes the synchronous transaction helper; it does not identify the thread.
 
-Hold time covers the synchronous callback and its result checks after `BEGIN`
-and before `COMMIT`, including any JavaScript consumer work inside that callback.
-It excludes database opening and the separately timed begin and commit steps.
-These elapsed durations do not measure SQL CPU time or establish a causal link
-to a nearby request.
+Hold time starts after `BEGIN` succeeds and includes the synchronous callback,
+result checks, and commit or rollback. It excludes database opening and the
+begin step. Host admission waits inside a transaction count toward its hold;
+overlapping deferred read holds do not establish that multiple writers held a lock.
+Successful begin and commit step timings include native execution, storage work,
+and scheduling delays; they do not establish lock contention. The separate
+`SQLite transaction lock wait failed` warning identifies caught SQLite lock
+errors. These elapsed durations do not measure SQL CPU time or establish a
+causal link to a nearby request.
 
 The operation `session.reclamation.commit-settlement` identifies the parent's
 synchronous join after it authorizes a reclamation Worker to commit. Its lock

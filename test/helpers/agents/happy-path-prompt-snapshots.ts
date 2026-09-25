@@ -489,6 +489,8 @@ function createDynamicTools(params: {
     modelProvider: "openai",
     modelId: MODEL_ID,
     modelApi: "responses",
+    // Codex owns hosted-search selection, matching its dynamic-tool builder.
+    suppressManagedWebSearch: false,
     modelContextWindowTokens: 272_000,
     forceMessageTool: true,
     enableHeartbeatTool: params.trigger === "heartbeat",

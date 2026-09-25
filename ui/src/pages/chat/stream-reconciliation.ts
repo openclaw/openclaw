@@ -1,4 +1,5 @@
 import {
+  projectSessionTerminalReplyMessage,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
@@ -194,7 +195,7 @@ export function appendTerminalAssistantMessage(
     ...(terminalRunId ? { runId: terminalRunId } : {}),
     ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
   });
-  const terminalText = extractText(message)?.trim() ?? "";
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim() ?? "";
   const removedIndexes = new Set<number>();
   const currentFallbackIndexes: number[] = [];
   let terminalCursor = 0;
@@ -455,7 +456,7 @@ export function terminalMessageReplacesVisibleStream(
   state: StreamReconciliationState,
   opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
 ): boolean {
-  const terminalText = extractText(message)?.trim();
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim();
   if (!terminalText) {
     return false;
   }

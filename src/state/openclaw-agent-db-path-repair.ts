@@ -1,6 +1,6 @@
 import path from "node:path";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { readActiveUpdateRun } from "../infra/update-run-reader.js";
+import { readActiveUpdateRun } from "../infra/update-run-read.kernel.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";

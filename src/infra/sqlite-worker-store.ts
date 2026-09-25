@@ -3,7 +3,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
-  PreparedSqliteWorkerOpen,
+  SqliteWorkerInputPreparation,
+  SqliteWorkerOpenCustody,
   SqliteWorkerStoreOptions,
 } from "./sqlite-worker-broker.types.js";
 import {
@@ -74,6 +75,13 @@ function resolveSqliteWorkerBroker() {
     () => new SqliteWorkerBroker(),
     (broker) => withCallerErrors(broker.close()),
   );
+}
+
+export type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
+
+/** Charge captured input before actor preparation can yield, then hand it to normal dispatch. */
+export function reserveSqliteWorkerInputPreparation(bytes: number): SqliteWorkerInputPreparation {
+  return resolveSqliteWorkerBroker().reserveInputPreparation(bytes);
 }
 
 /**
@@ -176,7 +184,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   custody: {
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
-    onNativeStopped?: (stopped: Promise<void>) => void;
+    onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     assertCurrent(): void;
     createAdmission: SqliteWorkerAdmissionFactory;
   },
@@ -206,7 +214,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
   options: Omit<SqliteWorkerStoreOptions, "input">,
   stateContext: SqliteWorkerStateContext,
   assertCurrent?: () => void,
-  lifecycle?: Pick<PreparedSqliteWorkerOpen, "maintenanceScope" | "retainCleanup">,
+  lifecycle?: SqliteWorkerOpenCustody,
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
   if (!isMainThread) {
     return Promise.reject(

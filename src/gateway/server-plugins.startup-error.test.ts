@@ -6,7 +6,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -117,9 +117,10 @@ it.each(["module-load", "entry-open"] as const)(
         },
       }),
     );
-    const port = await getFreePort();
     const recovery = vi.fn(() => ({ status: "emitted" as const }));
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",
@@ -130,11 +131,14 @@ it.each(["module-load", "entry-open"] as const)(
       await server.startupSettled;
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
-      await expect
-        .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
-          timeout: 30_000,
-        })
-        .toMatchObject({ reloadSettled: true });
+      const waitForReloadSettlement = async () => {
+        await expect
+          .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
+            timeout: 30_000,
+          })
+          .toMatchObject({ reloadSettled: true });
+      };
+      await waitForReloadSettlement();
       const initial = getActivePluginRegistry();
       assert(initial);
       const broken = initial.plugins.find((record) => record.id === "startup-broken");
@@ -196,6 +200,8 @@ it.each(["module-load", "entry-open"] as const)(
         sessionsId: after.payload?.sessionsId,
         placementId: after.payload?.placementId,
       });
+      // A rejected reload leaves config reconciliation queued after its RPC lease releases.
+      await waitForReloadSettlement();
 
       const registrationsBeforeRepair = coordinator.runtimes.length;
       if (failureKind === "entry-open") {
@@ -247,6 +253,7 @@ it.each(["module-load", "entry-open"] as const)(
         ),
       ).toEqual(diagnostics);
 
+      await waitForReloadSettlement();
       const disabled = await rpcReq(socket, "plugins.setEnabled", {
         pluginId: "instance-binding-probe",
         enabled: false,

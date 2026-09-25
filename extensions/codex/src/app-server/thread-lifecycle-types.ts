@@ -1,8 +1,13 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
+import type {
+  CodexAppServerLiveThreadOwnership,
+  CodexEphemeralThreadPolicy,
+} from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
+import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
+import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
@@ -22,6 +27,8 @@ import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
+  /** This live thread leaves the durable binding unchanged and owns no submission store. */
+  preserveExistingBinding?: true;
   rotatedContextEngineBinding?: boolean;
   activeTurnIds?: string[];
 };
@@ -29,16 +36,17 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
-  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
-  liveThreadEphemeralPolicy?: string;
+  /** Policy a live ephemeral thread was told; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: CodexEphemeralThreadPolicy;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
 };
 
-type CodexThreadFinalConfigPatchDecision =
+export type CodexThreadFinalConfigPatchDecision = (
   | { action: "resume"; binding: CodexAppServerThreadBinding }
-  | { action: "start" };
+  | { action: "start" }
+) & { nativeModelInputTools?: CodexNativeModelInputTools };
 
 export type CodexThreadFinalConfigPatchResult = {
   configPatch?: JsonObject;
@@ -58,6 +66,7 @@ export type CodexPluginThreadConfigProvider = {
 
 export type CodexStartOrResumeThreadParams = {
   inferenceRoute?: CodexInferenceProxy;
+  inferenceProviderRoutes?: CodexInferenceProviderRoutes;
   client: CodexAppServerClient;
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
@@ -75,9 +84,12 @@ export type CodexStartOrResumeThreadParams = {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
+  skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
@@ -86,6 +98,8 @@ export type CodexStartOrResumeThreadParams = {
   nativeHookRelayGeneration?: string;
   /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
   nativeHookRelayRequired?: boolean;
+  /** A retained operator source can keep legacy hooks off only while its model policy is absent. */
+  nativeModelAdmission?: "required" | "optional" | "disabled";
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
@@ -104,6 +118,7 @@ export type CodexStartOrResumeThreadParams = {
 };
 
 export type CodexThreadRequestContext = {
+  nativeModelInputTools?: CodexNativeModelInputTools;
   bindingIdentity: CodexAppServerBindingIdentity;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   startModelProvider?: string;
@@ -132,6 +147,7 @@ export type CodexThreadRequestContext = {
 };
 
 export type CodexThreadResumePreparation = {
+  modelProvider?: string | null;
   assertConfigured: () => void;
   assertCurrent: () => void;
   dispose: () => void;

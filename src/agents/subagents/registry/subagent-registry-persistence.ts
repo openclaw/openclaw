@@ -4,7 +4,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.sqlite.js";
+import { bindCapturedSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type PendingRegistryWrite = { runIds: Set<string>; superseded: Set<string> };
@@ -59,7 +59,7 @@ export async function persistSubagentRegistryChangesAsync(
     }
     const write = {
       writeId: randomUUID(),
-      values: [...snapshot.values()].map(bindSubagentRunRecord),
+      values: [...snapshot.values()].map(bindCapturedSubagentRunRecord),
       deleteRunIds: runIds.filter((runId) => !snapshot.has(runId)),
     };
     const { context } = options;

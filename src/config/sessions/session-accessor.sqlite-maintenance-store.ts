@@ -31,6 +31,7 @@ import {
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import {
   resolveSessionMaintenancePreserveKeys,
@@ -49,7 +50,7 @@ export function readSessionTranscriptJsonlBytesInDatabase(
       .select([
         "session_id",
         /* kysely-allow-raw: exact JSONL bytes bound maintenance worker batches. */
-        sql<number | bigint>`SUM(OCTET_LENGTH(event_json) + 1)`.as("jsonl_bytes"),
+        sql<number | bigint>`SUM(${transcriptEventReadBytesSql()} + 1)`.as("jsonl_bytes"),
       ])
       .where("session_id", "in", sessionIds)
       .groupBy("session_id"),
@@ -85,10 +86,10 @@ export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan 
 }
 
 /** Only a current age fact can avoid planning; pressure and force still require a pass. */
-export function canSkipSessionEntryMaintenanceInDatabase(
+function canSkipSessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
-  entryCount?: number,
+  entryCount: number,
 ): boolean {
   if (params.maintenance.mode === "warn") {
     return true;
@@ -101,7 +102,7 @@ export function canSkipSessionEntryMaintenanceInDatabase(
     ageFact !== undefined &&
     Date.now() < ageFact.next.at &&
     !shouldRunSessionEntryMaintenance({
-      entryCount: entryCount ?? readSessionEntryCount(database, { includeArchived: false }),
+      entryCount,
       maxEntries: params.maintenance.maxEntries,
       force: params.forceMaintenance,
     })
@@ -228,6 +229,7 @@ export function applySessionEntryMaintenanceInDatabase(
     database,
     excludedSessionKeys: removals.map((removal) => removal.sessionKey),
     projectedStore: {},
+    candidateSessionIds: [...removedSessionIds],
   });
   const deletePlans: SessionStateDeletePlan[] = [];
   for (const sessionId of removedSessionIds) {

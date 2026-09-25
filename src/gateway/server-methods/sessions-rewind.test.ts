@@ -52,7 +52,6 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
@@ -314,7 +313,14 @@ function linkToUpstreamConversation(): void {
   ).toBe(true);
 }
 
-function installUpstreamForkHarness(): void {
+function installUpstreamForkHarness(
+  executionEnvironment?: "host-only",
+  contract: "dual" | "legacy" | "v2" = "v2",
+): void {
+  const sessionFork = {
+    upstreamKinds: ["codex-app-server" as const],
+    fork: mocks.upstreamFork,
+  };
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "test-harness",
@@ -325,10 +331,17 @@ function installUpstreamForkHarness(): void {
       runAttempt: async () => {
         throw new Error("not used");
       },
-      sessionFork: {
-        upstreamKinds: ["codex-app-server"],
-        fork: mocks.upstreamFork,
-      },
+      ...(contract !== "v2"
+        ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
+        : {}),
+      ...(contract !== "legacy"
+        ? {
+            sessionForkV2: {
+              ...(executionEnvironment ? { executionEnvironment } : {}),
+              ...sessionFork,
+            },
+          }
+        : {}),
       supports: () => ({ supported: false }),
     },
   });
@@ -757,7 +770,7 @@ describe("session message-cut methods", () => {
 
   it("delegates complete upstream fork materialization to the harness", async () => {
     linkToUpstreamConversation();
-    installUpstreamForkHarness();
+    installUpstreamForkHarness(undefined, "dual");
     mocks.upstreamFork.mockResolvedValue({
       status: "created",
       key: "agent:main:dashboard:forked",
@@ -772,6 +785,7 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.upstreamFork).toHaveBeenCalledWith(
       expect.objectContaining({
+        assertCurrent: expect.any(Function),
         source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
         targetKey: expect.stringMatching(/^agent:main:dashboard:/),
         upstream: expect.objectContaining({
@@ -784,64 +798,87 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("preserves the authenticated creator and required sandbox when a harness materializes an upstream fork", async () => {
-    const profile = ensureProfileForEmail("sandbox-required-upstream-fork@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.read", "operator.write"],
-              sandbox: "required",
+  it.each(["created", "failed"] as const)(
+    "expires native-write authority when the upstream fork settles %s",
+    async (outcome) => {
+      linkToUpstreamConversation();
+      installUpstreamForkHarness();
+      let retainedAssertCurrent: (() => void) | undefined;
+      mocks.upstreamFork.mockImplementation(
+        async ({ assertCurrent }: { assertCurrent: () => void }) => {
+          assertCurrent();
+          retainedAssertCurrent = assertCurrent;
+          return outcome === "created"
+            ? { status: "created", key: "agent:main:dashboard:forked" }
+            : {
+                status: "failed",
+                code: "upstream-unavailable",
+                message: "Codex is offline. Try again.",
+              };
+        },
+      );
+
+      await invoke("sessions.fork", "user-entry");
+
+      const nativeWrites = vi.fn();
+      expect(() => {
+        expectDefined(retainedAssertCurrent, "retained native-write authority")();
+        nativeWrites();
+      }).toThrow("Session initialization source is closed");
+      expect(nativeWrites).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dual", "legacy", "v2"] as const)(
+    "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
+    async (contract) => {
+      const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
+      setUserProfileRole(profile.id, "guest");
+      const client = {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+      } as GatewayClient;
+      const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.read", "operator.write"],
+                sandbox: "required",
+              },
             },
           },
         },
-      },
-    });
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockImplementation(async ({ targetKey }: { targetKey: string }) => {
-      const created = await createRuntimeAgent().session.createSessionEntry({
-        cfg: runtimeConfig(),
-        key: targetKey,
-        initialEntry: { agentHarnessId: "test-harness" },
       });
-      return { status: "created", key: created.key };
-    });
-
-    const fork = await withPluginRuntimeGatewayRequestScope(
-      { client, isWebchatConnect: () => false },
-      () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
-    );
-    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
-
-    expect(fork).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionKey: expect.any(String) }),
-      undefined,
-    );
-    expect(mocks.upstreamFork).toHaveBeenCalledWith(
-      expect.objectContaining({ sandbox: "required" }),
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
-      sandbox: "required",
-    });
-  });
+      linkToUpstreamConversation();
+      installUpstreamForkHarness("host-only", contract);
+      const fork = await withPluginRuntimeGatewayRequestScope(
+        { client, isWebchatConnect: () => false },
+        () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
+      );
+      expect(fork).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: expect.objectContaining({
+            code: "AGENT_RUNTIME_RESTRICTED",
+            reason: "sandbox-required",
+          }),
+        }),
+      );
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+      expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+    },
+  );
 
   it("does not mutate the local session when the upstream fork fails", async () => {
     linkToUpstreamConversation();

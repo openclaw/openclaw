@@ -15,6 +15,8 @@ import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -119,8 +121,15 @@ export function selectMessageRows(
         .where("active.message_position", "<", selection.endExclusive);
 }
 
-export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>) {
-  return query.select(["active.event_seq", "active.message_position", "event.event_json"]);
+export function selectMessagePayload(
+  database: CurrentTranscriptProjection["database"],
+  query: ReturnType<typeof selectMessageRows>,
+) {
+  return query.select([
+    "active.event_seq",
+    "active.message_position",
+    transcriptEventJsonSql(database.db, "event").as("event_json"),
+  ]);
 }
 
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {
@@ -128,7 +137,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .select([
       "active.message_position",
       /* kysely-allow-raw: byte caps include each event's JSONL newline. */
-      sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+      sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
     .$narrowType<{ message_position: number }>();
 }
@@ -158,6 +167,7 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
+        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -176,6 +186,7 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
+        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),

@@ -132,6 +132,29 @@ describe("buildStatusMessageParts presentation", () => {
     expect(parts.presentation.blocks.some((block) => block.type === "text")).toBe(false);
   });
 
+  it("shows the sanitized endpoint in text and tables", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      selectedEndpoint: "https://user:secret@api.openai.com/v1?token=private#private",
+    });
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    const rows = new Map(table?.type === "table" ? table.rows.map((row) => [row[0], row[1]]) : []);
+    expect(parts.text).toContain("Endpoint: https://api.openai.com/v1");
+    expect(rows.get("🌐 Endpoint")).toBe("https://api.openai.com/v1");
+    expect(JSON.stringify(parts)).not.toMatch(/secret|private|user:/);
+  });
+
+  it("does not infer endpoints from a model or credential label without route facts", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      modelAuth: "oauth (codex)",
+    });
+    expect(parts.text).toContain("Endpoint: unknown");
+    expect(JSON.stringify(parts)).not.toContain("https://");
+  });
+
   it("shows a context meter and a pressure warning when the window runs hot", () => {
     const parts = buildStatusMessageParts({
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),

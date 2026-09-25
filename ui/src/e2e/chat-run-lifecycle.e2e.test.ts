@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -16,6 +17,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 const rosterMatch = { includeGlobal: true };
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -34,6 +36,9 @@ async function openMockAbortableRun(currentPage: Page, runId: string) {
   const sessionKey = "agent:main:main";
   const sessionInfo = {
     key: sessionKey,
+    sessionId: `session:${sessionKey}`,
+    kind: "direct",
+    updatedAt: 1,
     hasActiveRun: true,
     activeRunIds: [runId],
     status: "running",
@@ -152,36 +157,72 @@ suite.define(() => {
     const reply = {
       role: "assistant",
       content: "Success after the earlier failure.",
-      timestamp: firstStartedAt + 994_000,
+      // Creation precedes the long final request; lifecycle owns completion.
+      timestamp: firstStartedAt + 983_000,
       __openclaw: { id: "successful-reply", runId },
     };
     messages.push(reply);
     // The same canonical history must survive a full page reload, not just
     // the live terminal projection or its retained local timestamps.
+    const completedSession = {
+      key: sessionKey,
+      sessionId: `session:${sessionKey}`,
+      kind: "direct",
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "done",
+      lastRunId: runId,
+      startedAt: firstStartedAt + 981_000,
+      endedAt: firstStartedAt + 994_000,
+      runtimeMs: 13_000,
+      updatedAt: firstStartedAt + 994_000,
+    };
+    // A terminal event also refreshes the roster; every read must retain its timing.
+    await gateway.setSessionsListResponse({ sessions: [completedSession] });
     await gateway.setMethodResponse("chat.history", {
       ...prepareChatHistoryFixture(messages),
       sessionId: `session:${sessionKey}`,
-      sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
+      sessionInfo: completedSession,
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      ...completedSession,
+      reason: "lifecycle",
+    });
     const replyBody = currentPage
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
-    await elapsedLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("1 command");
-    expect.soft(await elapsedLabel.textContent()).toBe("13s");
+    const refreshedSession = await currentPage.evaluate(async (key) => {
+      const app = document.querySelector<
+        HTMLElement & { runtime?: { context?: ApplicationContext } }
+      >("openclaw-app");
+      const sessions = app?.runtime?.context?.sessions;
+      if (!sessions) {
+        throw new Error("Session capability is missing");
+      }
+      await sessions.refresh({ agentId: "main", force: true });
+      return sessions.state.result?.sessions.find((row) => row.key === key);
+    }, sessionKey);
+    expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
+    await operationLabel.waitFor();
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13s");
+    await captureMockStopProof(currentPage, "completed-work-heading");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
-    await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("1 command");
-    expect(await elapsedLabel.textContent()).toBe("13s");
+    await operationLabel.waitFor();
+    expect(await operationLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
+    await operationLabel.click();
+    await expect
+      .poll(() => currentPage.locator(".chat-work-group > button").getAttribute("aria-expanded"))
+      .toBe("true");
+    await currentPage.locator(".chat-thread").getByText("bash", { exact: true }).waitFor();
+    expect(await replyBody.isVisible()).toBe(true);
   });
 
   it("keeps a continuing run inside its latest assistant reply", async () => {
@@ -367,6 +408,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: false,
         activeRunIds: [],
         lastRunId: runId,
@@ -438,6 +482,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: true,
         activeRunIds: [runId],
         status: "running",
@@ -542,6 +589,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: false,
         activeRunIds: [],
         lastRunId: runId,
@@ -581,6 +631,7 @@ suite.define(() => {
       const activeUpdatedAt = Date.now();
       const sessionInfo = {
         key: sessionKey,
+        kind: "direct",
         updatedAt: activeUpdatedAt,
         hasActiveRun: activity === "direct",
         hasActiveSubagentRun: activity === "descendant",
@@ -603,6 +654,8 @@ suite.define(() => {
         sessionId: `session:${sessionKey}`,
         sessionInfo: {
           key: sessionKey,
+          sessionId: `session:${sessionKey}`,
+          kind: "direct",
           updatedAt: activeUpdatedAt + 1,
           hasActiveRun: false,
           hasActiveSubagentRun: false,
@@ -717,7 +770,7 @@ suite.define(() => {
       const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
         .length;
       await gateway.deferNext("sessions.list", rosterMatch);
-      const activeUpdatedAt = Date.now();
+      const activeUpdatedAt = await currentPage.evaluate(() => Date.now());
       const activeStartedAt = activeUpdatedAt - 1_000;
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [runId],
@@ -729,6 +782,7 @@ suite.define(() => {
         status: "running",
         updatedAt: activeUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeActive);
@@ -806,16 +860,18 @@ suite.define(() => {
         await gateway.getRequests("sessions.list", rosterMatch)
       ).length;
       await gateway.deferNext("sessions.list", rosterMatch);
+      const staleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [runId],
         hasActiveRun: true,
         key: "agent:main:main",
         kind: "direct",
         reason: "lifecycle",
-        startedAt: Date.now() - 1_000,
+        startedAt: staleActiveUpdatedAt - 1_000,
         status: "running",
-        updatedAt: Date.now(),
+        updatedAt: staleActiveUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeStaleActive);
@@ -841,6 +897,7 @@ suite.define(() => {
         reason: "lifecycle",
         updatedAt: otherSessionUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeOtherSession);
@@ -866,6 +923,7 @@ suite.define(() => {
         status: "running",
         updatedAt: lateStaleActiveUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeLateStaleActive);
@@ -879,6 +937,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
+    await currentPage.clock.install();
     const gateway = await installMockGateway(currentPage, {
       historyMessages: [
         {
@@ -911,16 +970,18 @@ suite.define(() => {
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
       .length;
     await gateway.deferNext("sessions.list", rosterMatch);
+    const activeUpdatedAt = await currentPage.evaluate(() => Date.now());
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
       key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
-      startedAt: Date.now() - 1_000,
+      startedAt: activeUpdatedAt - 1_000,
       status: "running",
-      updatedAt: Date.now(),
+      updatedAt: activeUpdatedAt,
     });
+    await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeActive);

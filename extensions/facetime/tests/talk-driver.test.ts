@@ -310,13 +310,17 @@ describe("FaceTime talk driver lifecycle", () => {
   it("does not forward caller audio before final activation", async () => {
     const driver = await startReadyFaceTimeTalkDriver();
 
-    mocks.pumpParams?.onInputAudio(Buffer.from([1, 2]));
-    expect(mocks.bridge.sendAudio).not.toHaveBeenCalled();
+    try {
+      mocks.pumpParams?.onInputAudio(Buffer.from([1, 2]));
+      expect(mocks.bridge.sendAudio).not.toHaveBeenCalled();
 
-    driver.activate();
-    mocks.pumpParams?.onInputAudio(Buffer.from([3, 4]));
-    expect(mocks.bridge.sendAudio).toHaveBeenCalledOnce();
-    expect(mocks.bridge.sendAudio).toHaveBeenCalledWith(Buffer.from([3, 4]));
+      driver.activate();
+      mocks.pumpParams?.onInputAudio(Buffer.from([3, 4]));
+      expect(mocks.bridge.sendAudio).toHaveBeenCalledOnce();
+      expect(mocks.bridge.sendAudio).toHaveBeenCalledWith(Buffer.from([3, 4]));
+    } finally {
+      await driver.close();
+    }
   });
 
   it("reports an audio-child failure to the owning runtime", async () => {

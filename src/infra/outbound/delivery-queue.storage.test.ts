@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -69,178 +70,186 @@ describe("delivery-queue storage", () => {
 
   describe("enqueue + ack lifecycle", () => {
     it("fences stale same-millisecond terminal mutations without releasing newer owner media", async () => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(new Date("2026-07-20T10:00:00.000Z"));
-        const stateDir = tmpDir();
-        const id = "cron-direct-delivery:v1:fenced-stale-terminal-media";
-        const artifact = path.join(
-          stateDir,
-          "delivery-queue-media",
-          "00000000-0000-4000-8000-000000000090.ogg",
-        );
-        await fs.mkdir(path.dirname(artifact), { recursive: true });
-        await fs.writeFile(artifact, "newer owner still needs these bytes");
-        await enqueueDeliveryOnce(
-          {
-            channel: "directchat",
-            to: "+1555",
-            payloads: [{ text: "x".repeat(64 * 1024), mediaUrl: artifact, audioAsVoice: true }],
-            completionRetention: {
-              idPrefix: "cron-direct-delivery:v1:",
-              maxAgeMs: 24 * 60 * 60_000,
-              maxEntries: 2_000,
-            },
+      const stateDir = tmpDir();
+      const id = "cron-direct-delivery:v1:fenced-stale-terminal-media";
+      const artifact = path.join(
+        stateDir,
+        "delivery-queue-media",
+        "00000000-0000-4000-8000-000000000090.ogg",
+      );
+      await fs.mkdir(path.dirname(artifact), { recursive: true });
+      await fs.writeFile(artifact, "newer owner still needs these bytes");
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "x".repeat(64 * 1024), mediaUrl: artifact, audioAsVoice: true }],
+          completionRetention: {
+            idPrefix: "cron-direct-delivery:v1:",
+            maxAgeMs: 24 * 60 * 60_000,
+            maxEntries: 2_000,
           },
-          id,
+        },
+        id,
+        stateDir,
+      );
+      const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
+      if (!unclaimedSnapshot) {
+        throw new Error("test invariant: the unclaimed bounded row must be readable");
+      }
+      const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+      if (!firstAttemptId) {
+        throw new Error("test invariant: first platform owner must claim the durable row");
+      }
+      const lostClaim = `Delivery platform claim was lost: ${id}`;
+      // Admission snapshots taken before ownership must CAS the unclaimed
+      // state; a producer that claimed meanwhile retains its media and row.
+      await expect(
+        ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: null }),
+      ).rejects.toThrow(lostClaim);
+      await expect(moveToFailed(id, stateDir, null)).rejects.toThrow(lostClaim);
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            entry: unclaimedSnapshot,
+          },
           stateDir,
-        );
-        const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
-        if (!unclaimedSnapshot) {
-          throw new Error("test invariant: the unclaimed bounded row must be readable");
-        }
-        const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-        if (!firstAttemptId) {
-          throw new Error("test invariant: first platform owner must claim the durable row");
-        }
-        const lostClaim = `Delivery platform claim was lost: ${id}`;
-        // Admission snapshots taken before ownership must CAS the unclaimed
-        // state; a producer that claimed meanwhile retains its media and row.
-        await expect(
-          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: null }),
-        ).rejects.toThrow(lostClaim);
-        await expect(moveToFailed(id, stateDir, null)).rejects.toThrow(lostClaim);
-        await expect(
-          failPendingDelivery(
-            {
-              id,
-              entry: unclaimedSnapshot,
-            },
-            stateDir,
-          ),
-        ).resolves.toEqual({ status: "not_pending" });
-        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
-        await markDeliveryPlatformSendAttemptStarted(
-          id,
-          stateDir,
-          { replyToId: null },
-          firstAttemptId,
-        );
-        const sameStartedAt = Date.now();
-        const secondAttemptId = await claimDeliveryPlatformSendAttempt(
-          id,
-          stateDir,
-          sameStartedAt,
-          firstAttemptId,
-        );
-        if (!secondAttemptId) {
-          throw new Error("test invariant: reconciled replacement must claim the durable row");
-        }
-        await markDeliveryPlatformSendAttemptStarted(
-          id,
-          stateDir,
-          { replyToId: null },
-          secondAttemptId,
-        );
-
-        await expect(
-          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: firstAttemptId }),
-        ).rejects.toThrow(lostClaim);
-        await expect(failDelivery(id, "stale failure", stateDir, firstAttemptId)).rejects.toThrow(
-          lostClaim,
-        );
-        await expect(
-          failDeliveryBeforePlatformSend(id, "stale pre-send", stateDir, firstAttemptId),
-        ).rejects.toThrow(lostClaim);
-        await expect(
-          failDeliveryAfterPlatformSend(id, "stale post-send", stateDir, firstAttemptId),
-        ).rejects.toThrow(lostClaim);
-        await expect(
-          markDeliveryPlatformOutcomeUnknown(id, stateDir, firstAttemptId),
-        ).rejects.toThrow(lostClaim);
-        await expect(
-          markDeliveryPlatformSendDispatched(id, stateDir, { replyToId: null }, firstAttemptId),
-        ).rejects.toThrow(lostClaim);
-        await expect(moveToFailed(id, stateDir, firstAttemptId)).rejects.toThrow(lostClaim);
-        await expect(reserveDeliveryAttempt(id, 5, stateDir, firstAttemptId)).rejects.toThrow(
-          lostClaim,
-        );
-        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
-        const pending = await loadPendingDelivery(id, stateDir);
-        if (!pending) {
-          throw new Error("Expected the replacement platform owner to remain pending");
-        }
-        expect(pending).toMatchObject({
-          recoveryState: "send_attempt_started",
-          platformSendAttemptId: secondAttemptId,
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
+      expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        stateDir,
+        { replyToId: null },
+        firstAttemptId,
+      );
+      const sameStartedAt = (await loadPendingDelivery(id, stateDir))?.platformSendStartedAt;
+      if (typeof sameStartedAt !== "number") {
+        throw new Error("Expected the first worker attempt to record its start time");
+      }
+      const secondAttemptId = await claimDeliveryPlatformSendAttempt(
+        id,
+        stateDir,
+        sameStartedAt,
+        firstAttemptId,
+      );
+      if (!secondAttemptId) {
+        throw new Error("test invariant: reconciled replacement must claim the durable row");
+      }
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        stateDir,
+        { replyToId: null },
+        secondAttemptId,
+      );
+      const fixtureDatabase = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      // Preserve a same-millisecond collision across independent worker attempts.
+      updateDeliveryQueueEntryInDatabase(
+        fixtureDatabase,
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+        (entry) => ({
+          ...entry,
           platformSendStartedAt: sameStartedAt,
+        }),
+      );
+
+      await expect(
+        ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: firstAttemptId }),
+      ).rejects.toThrow(lostClaim);
+      await expect(failDelivery(id, "stale failure", stateDir, firstAttemptId)).rejects.toThrow(
+        lostClaim,
+      );
+      await expect(
+        failDeliveryBeforePlatformSend(id, "stale pre-send", stateDir, firstAttemptId),
+      ).rejects.toThrow(lostClaim);
+      await expect(
+        failDeliveryAfterPlatformSend(id, "stale post-send", stateDir, firstAttemptId),
+      ).rejects.toThrow(lostClaim);
+      await expect(
+        markDeliveryPlatformOutcomeUnknown(id, stateDir, firstAttemptId),
+      ).rejects.toThrow(lostClaim);
+      await expect(
+        markDeliveryPlatformSendDispatched(id, stateDir, { replyToId: null }, firstAttemptId),
+      ).rejects.toThrow(lostClaim);
+      await expect(moveToFailed(id, stateDir, firstAttemptId)).rejects.toThrow(lostClaim);
+      await expect(reserveDeliveryAttempt(id, 5, stateDir, firstAttemptId)).rejects.toThrow(
+        lostClaim,
+      );
+      expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+      const pending = await loadPendingDelivery(id, stateDir);
+      if (!pending) {
+        throw new Error("Expected the replacement platform owner to remain pending");
+      }
+      expect(pending).toMatchObject({
+        recoveryState: "send_attempt_started",
+        platformSendAttemptId: secondAttemptId,
+        platformSendStartedAt: sameStartedAt,
+      });
+      expect(readStatus(id)).toBe("pending");
+
+      const { db } = fixtureDatabase;
+      const retryCount = db.prepare(
+        "UPDATE delivery_queue_entries SET retry_count = ? WHERE queue_name = ? AND id = ?",
+      );
+      retryCount.run(9007199254740992n, OUTBOUND_DELIVERY_QUEUE_NAME, id);
+      try {
+        let readError: unknown;
+        try {
+          await loadPendingDelivery(id, stateDir);
+        } catch (error) {
+          readError = error;
+        }
+        if (!(readError instanceof Error)) {
+          throw new Error("Expected the full pending reader to reject the unsafe integer");
+        }
+        expect(readError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+        let ackError: unknown;
+        try {
+          await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+        } catch (error) {
+          ackError = error;
+        }
+        expect(ackError).toBeInstanceOf(Error);
+        expect(ackError).toMatchObject({
+          code: "ERR_OUT_OF_RANGE",
+          name: readError.name,
+          message: readError.message,
         });
         expect(readStatus(id)).toBe("pending");
-
-        const { db } = openOpenClawStateDatabase({
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        });
-        const retryCount = db.prepare(
-          "UPDATE delivery_queue_entries SET retry_count = ? WHERE queue_name = ? AND id = ?",
-        );
-        retryCount.run(9007199254740992n, OUTBOUND_DELIVERY_QUEUE_NAME, id);
-        try {
-          let readError: unknown;
-          try {
-            await loadPendingDelivery(id, stateDir);
-          } catch (error) {
-            readError = error;
-          }
-          if (!(readError instanceof Error)) {
-            throw new Error("Expected the full pending reader to reject the unsafe integer");
-          }
-          expect(readError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-          let ackError: unknown;
-          try {
-            await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
-          } catch (error) {
-            ackError = error;
-          }
-          expect(ackError).toBeInstanceOf(Error);
-          expect(ackError).toMatchObject({
-            code: "ERR_OUT_OF_RANGE",
-            name: readError.name,
-            message: readError.message,
-          });
-          expect(readStatus(id)).toBe("pending");
-          expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
-        } finally {
-          retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
-        }
-        const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
-        const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
-          /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
-            ? "queue"
-            : null,
-        );
-        try {
-          // Count the native kernel's reads; the public ACK now runs in a separate worker.
-          const spoolPaths = runOpenClawStateWriteTransaction(
-            (database) =>
-              ackDeliveryInDatabase(database, id, stateDir, {
-                expectedPlatformSendAttemptId: secondAttemptId,
-              }),
-            { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
-          );
-          await releaseSpoolArtifacts(spoolPaths, stateDir);
-          expect(reads.rowCounts.queue).toBeGreaterThan(0);
-          expect(reads.textBytes.queue).toBeGreaterThan(0);
-          expect.soft(reads.counts.queue).toBeLessThanOrEqual(3);
-          // One full pending row plus the existing compact receipt ownership reads.
-          expect.soft(reads.textBytes.queue).toBeLessThan(entryTextBytes + 4096);
-        } finally {
-          reads.restore();
-        }
-        expect(readStatus(id)).toBe("completed");
-        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
       } finally {
-        vi.useRealTimers();
+        retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
       }
+      const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
+      const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
+        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+          ? "queue"
+          : null,
+      );
+      try {
+        // Count the native kernel's reads; the public ACK now runs in a separate worker.
+        const spoolPaths = runOpenClawStateWriteTransaction(
+          (database) =>
+            ackDeliveryInDatabase(database, id, stateDir, {
+              expectedPlatformSendAttemptId: secondAttemptId,
+            }),
+          { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+        );
+        await releaseSpoolArtifacts(spoolPaths, stateDir);
+        expect(reads.rowCounts.queue).toBeGreaterThan(0);
+        expect(reads.textBytes.queue).toBeGreaterThan(0);
+        expect.soft(reads.counts.queue).toBeLessThanOrEqual(3);
+        // One full pending row plus the existing compact receipt ownership reads.
+        expect.soft(reads.textBytes.queue).toBeLessThan(entryTextBytes + 4096);
+      } finally {
+        reads.restore();
+      }
+      expect(readStatus(id)).toBe("completed");
+      await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
     it("persists a producer-specific retry budget", async () => {
@@ -307,6 +316,12 @@ describe("delivery-queue storage", () => {
         payloads: [{ text: "attempt-budget" }],
         maxRetries: 2,
       });
+
+      for (const maxAttempts of [0, Number.NaN]) {
+        await expect(reserveDeliveryAttempt(id, maxAttempts, tmpDir())).rejects.toThrow(
+          `Invalid delivery attempt budget: ${maxAttempts}`,
+        );
+      }
 
       await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
         status: "reserved",
@@ -567,74 +582,51 @@ describe("delivery-queue storage", () => {
     });
 
     it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
-        const stateDir = tmpDir();
-        const id = "cron-direct-delivery:v1:unknown-owner-lease";
-        await enqueueDeliveryOnce(
-          {
-            channel: "forum",
-            to: "123",
-            payloads: [{ text: "test" }],
-            completionRetention: {
-              idPrefix: "cron-direct-delivery:v1:",
-              maxAgeMs: 24 * 60 * 60_000,
-              maxEntries: 2_000,
-            },
-            requiresProducerClaim: true,
-          },
-          id,
-          stateDir,
-        );
-        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-        if (!claimId) {
-          throw new Error("test invariant: explicit producer must own the stable row");
-        }
-        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
-        const started = readQueuedEntry(stateDir, id);
-        const originalExpiry = started.availableAt;
-        vi.setSystemTime(Date.now() + 1_000);
-
-        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
-
-        expect(readQueuedEntry(stateDir, id)).toMatchObject({
-          recoveryState: "unknown_after_send",
-          platformSendAttemptId: claimId,
-          availableAt: originalExpiry,
-        });
-        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
-          Date.now() + 60_000,
-        );
-        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 60_000);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("refreshes the attempt timestamp immediately before provider I/O", async () => {
-      const id = await enqueueTextDelivery(
+      const stateDir = tmpDir();
+      const id = "cron-direct-delivery:v1:unknown-owner-lease";
+      await enqueueDeliveryOnce(
         {
           channel: "forum",
           to: "123",
           payloads: [{ text: "test" }],
+          completionRetention: {
+            idPrefix: "cron-direct-delivery:v1:",
+            maxAgeMs: 24 * 60 * 60_000,
+            maxEntries: 2_000,
+          },
+          requiresProducerClaim: true,
         },
-        tmpDir(),
+        id,
+        stateDir,
+      );
+      const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+      if (!claimId) {
+        throw new Error("test invariant: explicit producer must own the stable row");
+      }
+      await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+      const originalExpiry = Date.now() + 10_000;
+      updateDeliveryQueueEntryInDatabase(
+        openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+        (entry) => ({
+          ...entry,
+          availableAt: originalExpiry,
+        }),
       );
 
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(1_000);
-        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-        vi.setSystemTime(9_000);
-        await markDeliveryPlatformSendDispatched(id, tmpDir());
-      } finally {
-        vi.useRealTimers();
-      }
+      await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
 
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.platformSendStartedAt).toBe(9_000);
-      expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(readQueuedEntry(stateDir, id)).toMatchObject({
+        recoveryState: "unknown_after_send",
+        platformSendAttemptId: claimId,
+        availableAt: originalExpiry,
+      });
+      const beforeRenewal = Date.now();
+      const renewedUntil = await renewDeliveryPlatformSendLease(id, stateDir, claimId);
+      expect(renewedUntil).toBeGreaterThanOrEqual(beforeRenewal + 60_000);
+      expect(renewedUntil).toBeLessThanOrEqual(Date.now() + 60_000);
+      expect(readQueuedEntry(stateDir, id).availableAt).toBe(renewedUntil);
     });
 
     it("keeps ambiguous post-send evidence across a later unclaimed batch dispatch", async () => {

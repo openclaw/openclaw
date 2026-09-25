@@ -19,11 +19,12 @@ import {
 } from "../../../tasks/task-registry.store.kernel.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
   deleteSubagentRunRowInDatabase,
   upsertSubagentRunRowInDatabase,
 } from "./subagent-registry.store.kernel.js";
-import { bindSubagentRunRecord, readSubagentRun } from "./subagent-registry.store.sqlite.js";
+import { readSubagentRun } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function assertReplacementCorrelation(params: {
@@ -114,7 +115,7 @@ export function commitSubagentTaskReplacement(params: {
     deferredObserverEvents,
   });
   if (flow) {
-    publishTaskFlowAfterAtomicStore(flow, deferredObserverEvents);
+    publishTaskFlowAfterAtomicStore(flow);
   }
   for (const emitObserverEvent of deferredObserverEvents) {
     emitObserverEvent();

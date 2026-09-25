@@ -8,6 +8,7 @@ import {
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { threadRead } from "./native-subagent-monitor.test-support.js";
 
@@ -157,14 +158,17 @@ describe("automatic native task history ownership", () => {
       const { client } = fixture;
       ensureCodexAppServerClientRuntime(client, { agentDir: stateDir });
       const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-      const parent = codexNativeSubagentMonitorRuntime.register({
+      const parent = await codexNativeSubagentMonitorRuntime.register({
         client,
         parentThreadId: owner?.parentThreadId ?? "current-parent",
         requesterSessionKey,
         taskRuntimeScope: scope,
         agentId: "main",
         ...(owner ? { historyOwner: owner } : {}),
-        runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+        runtime: {
+          ...defaultNativeSubagentMonitorRuntime,
+          deliverAgentHarnessTaskCompletion: deliver,
+        },
       });
       try {
         await parent.unregister();
@@ -288,9 +292,12 @@ it.each([
       agentId: "main",
       taskRuntimeScope,
       historyOwner: { ...originalHistory, parentThreadId: currentParent },
-      runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+      runtime: {
+        ...defaultNativeSubagentMonitorRuntime,
+        deliverAgentHarnessTaskCompletion: deliver,
+      },
     };
-    let replacement = codexNativeSubagentMonitorRuntime.register(registration);
+    let replacement = await codexNativeSubagentMonitorRuntime.register(registration);
     replacement.bindTurn("replacement-parent-turn");
     try {
       // Wait for actual recovered native custody, not just a scheduled history request.
@@ -309,7 +316,7 @@ it.each([
         await replacement.unregister();
       }
       if (reregisterReplacement) {
-        replacement = codexNativeSubagentMonitorRuntime.register(registration);
+        replacement = await codexNativeSubagentMonitorRuntime.register(registration);
       }
       if (retireReplacement) {
         codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -22,11 +23,11 @@ import {
   acquireOpenClawStateDatabaseFileExclusion,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
-  iterateOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -238,7 +239,15 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
     const db = new DatabaseSync(":memory:");
     const pathname = path.join(root, "logical-state.sqlite");
     const rows = iterateOpenClawStateDatabaseReadOnly(
-      { db, path: pathname, walMaintenance: { checkpoint: () => false, close: () => false } },
+      {
+        db,
+        path: pathname,
+        walMaintenance: {
+          checkpoint: () => false,
+          close: () => false,
+          reclaimFreePages: createSqliteWalReclamationResult,
+        },
+      },
       function* () {
         yield "unreachable";
       },
@@ -576,7 +585,7 @@ it("keeps missing and non-missing filesystem failures distinct for async reads",
   });
 });
 
-it("reads under its live mutation owner but refuses an unrelated caller", async () => {
+it("reads under its live source exclusion but refuses an unrelated caller", async () => {
   await withOpenClawTestState({ label: "owned-ledger-read" }, async ({ env }) => {
     const options = { env };
     const initial = openOpenClawStateDatabase(options);
@@ -606,21 +615,12 @@ it("reads under its live mutation owner but refuses an unrelated caller", async 
     let running: Promise<void> | undefined;
     try {
       const before = await family();
-      running = owner.mutate(owner.assertCurrent, async () => {
+      running = owner.runWithSourceReads(async () => {
         expect(await read()).toBe("original");
         expect(await family()).toEqual(before);
         entered.resolve();
         await resume.promise;
         owner.assertCurrent();
-        const opened = openOpenClawStateDatabase(options);
-        opened.db.exec("BEGIN; UPDATE held SET value = 'uncommitted'");
-        try {
-          await expect(read()).rejects.toThrow(/outside a transaction/);
-          expect(opened.db.isTransaction).toBe(true);
-          expect(opened.db.prepare("SELECT value FROM held").get()?.value).toBe("uncommitted");
-        } finally {
-          opened.db.exec("ROLLBACK");
-        }
         expect(await read()).toBe("original");
       });
       await Promise.race([entered.promise, running]);

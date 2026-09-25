@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -33,6 +34,7 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
@@ -42,7 +44,6 @@ import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
   resolveTargetVersion,
-  tryResolveInvocationCwd,
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
@@ -86,7 +87,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (timeoutMs === null) {
     return;
   }
-  const env = resolveServiceRefreshEnv(process.env, tryResolveInvocationCwd());
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
   assertConfigWriteAllowedInCurrentMode({ env });
   await assertOpenClawStateWriteAllowedAtPath({
@@ -239,7 +240,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     currentHistory.incomplete
   ) {
     throw new Error(
-      "Update repair needs post-core maintenance. Stop the Gateway service through its owner before retrying; repair will not stop or restart it.",
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
     );
   }
   const reconciled = activeRuns.length

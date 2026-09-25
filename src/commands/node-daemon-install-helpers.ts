@@ -3,11 +3,13 @@ import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
-  emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
 } from "./daemon-install-plan.shared.js";
-import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
+import {
+  emitNodeRuntimeWarning,
+  type DaemonInstallWarnFn,
+} from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type NodeInstallPlan = {
@@ -76,10 +78,10 @@ export async function buildNodeInstallPlan(params: {
     wrapperPath,
   });
 
-  await emitDaemonInstallRuntimeWarning({
+  await emitNodeRuntimeWarning({
     env: params.env,
     runtime: params.runtime,
-    programArguments,
+    nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Node daemon runtime",
   });

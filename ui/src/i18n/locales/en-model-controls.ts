@@ -57,6 +57,8 @@ const enModelControls = {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
+      refreshingModels: "Refreshing models…",
+      refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",
       modelStarting: "Starting…",
       modelsUnavailable: "Models unavailable",
@@ -64,6 +66,9 @@ const enModelControls = {
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",
+      noPermittedModels: "No models are permitted by your administrator.",
+      selectionRequired: "Choose a model",
+      restrictedModelsHelp: "Your administrator centrally configures the models available here.",
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
       useDefaultReasoning: "Use default reasoning ({level})",

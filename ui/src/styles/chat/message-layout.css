@@ -977,6 +977,64 @@
   line-height: 1.4;
 }
 
+.chat-pairing-qr-notices {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-pairing-qr-expired {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.chat-pairing-qr-expired .chat-assistant-attachment-card__reason {
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.chat-pairing-qr-expired__icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 1.5em;
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.chat-pairing-qr-expired__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pairing-qr-expired__content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.chat-pairing-qr-expired__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  line-height: 1.5;
+}
+
+.chat-pairing-qr-expired__title {
+  min-width: 0;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.chat-pairing-qr-expired__badge {
+  min-width: 0;
+  color: var(--danger);
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
 .chat-assistant-attachment-card__retry {
   color: currentColor;
 }

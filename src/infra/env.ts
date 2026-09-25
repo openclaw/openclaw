@@ -1,11 +1,9 @@
 // Normalizes env flag values and logs env warnings lazily.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
-let log: SubsystemLogger | null = null;
 const loadLog = createLazyPromise(
   () =>
     import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
@@ -15,13 +13,6 @@ const loadLog = createLazyPromise(
 );
 const loggedEnv = new Set<string>();
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
-
-async function getLog(): Promise<SubsystemLogger> {
-  if (!log) {
-    log = await loadLog();
-  }
-  return log;
-}
 
 type AcceptedEnvOption = {
   key: string;
@@ -54,7 +45,7 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  void getLog()
+  void loadLog()
     .then((logger) => {
       logger.info(
         `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,

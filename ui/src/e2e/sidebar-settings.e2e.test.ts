@@ -60,6 +60,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,

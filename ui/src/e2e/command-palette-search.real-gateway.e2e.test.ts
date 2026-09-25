@@ -94,7 +94,11 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
-  for (const fixture of fixtures) {
+  // The database owner retains one idle writer; finish each agent before switching.
+  const fixturesByAgent = fixtures.toSorted(
+    (left, right) => agentIds.indexOf(left.agentId) - agentIds.indexOf(right.agentId),
+  );
+  for (const fixture of fixturesByAgent) {
     const sessionId = randomUUID();
     const target = { agentId: fixture.agentId, sessionKey: fixture.key, env: owner.env };
     const created = await createSessionEntryWithTranscript(
@@ -433,7 +437,10 @@ suite.define(() => {
               .poll(() => rpc.slice(start).every((entry) => entry.elapsedMs !== undefined))
               .toBe(true);
             await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-            const notices = await palette.getByRole("status").allTextContents();
+            const notices = await palette
+              .locator(".cmd-palette__search")
+              .getByRole("status")
+              .allTextContents();
             const traffic = rpc.slice(start);
             const searches = traffic.filter((entry) => entry.method === "sessions.search");
             // The sidebar can fetch lineage concurrently; identify this query

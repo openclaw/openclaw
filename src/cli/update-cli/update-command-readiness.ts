@@ -3,7 +3,10 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "../../infra/startup-migration-checkpoint.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
-import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
+import {
+  GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+  resolveGatewayRestartProbeContext,
+} from "../daemon-cli/restart-health-probe.js";
 import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
@@ -14,7 +17,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
@@ -116,12 +119,15 @@ export type UpdateGatewayReadinessParams = {
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
   timeoutMs?: number;
+  deadlineMs?: number;
   observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
   requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
+  /** A failure before activation observes existing health without waiting for startup. */
+  waitForStartup?: boolean;
   settle?: { probes: number };
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -156,16 +162,25 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
 
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
 export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
+  const waitForStartup = params.waitForStartup !== false;
   // The canary measures this host's startup; leave tenfold IO headroom without shortening
   // the existing startup watchdog or overriding an operator's explicit allowance.
   const timeoutMs =
     params.timeoutMs ??
     Math.max(STARTUP_MIGRATION_LEASE_TTL_MS, (params.observedStartupMs ?? 0) * 10);
   const settle = params.settle ?? { probes: 12 };
-  const settleDurationMs = (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const settleDurationMs = waitForStartup
+    ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
+    : 0;
   const startedAtMs = performance.now();
   const remainingMs = () =>
-    Math.max(0, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+    Math.max(
+      0,
+      Math.min(startedAtMs + timeoutMs + settleDurationMs, params.deadlineMs ?? Infinity) -
+        performance.now(),
+    );
+  const probeTimeoutMs = () =>
+    waitForStartup ? remainingMs() : Math.min(remainingMs(), GATEWAY_RESTART_PROBE_TIMEOUT_MS);
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -181,8 +196,16 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };
-  const waitForHealthy = async () => {
+  const readHealth = async () => {
     assertCurrent();
+    if (!waitForStartup) {
+      const health = await inspectGatewayRestart({
+        ...probeParams,
+        timeoutMs: Math.max(1, probeTimeoutMs()),
+      });
+      assertCurrent();
+      return health;
+    }
     const supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
       service,
       env: params.serviceEnv,
@@ -192,6 +215,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       ...probeParams,
       // The restart owner adds settling itself; reserve it once in the shared deadline.
       timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
+      deadlineMs: params.deadlineMs,
       requireRunningService: params.requireRunningService,
       settle,
       supervisorKeepsAlive,
@@ -199,15 +223,16 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     assertCurrent();
     return health;
   };
-  let health = params.health ?? (await waitForHealthy());
+  let health = params.health ?? (await readHealth());
   let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
   if (params.recoverHealth && !gatewayReadinessPending(health)) {
-    ({ health, launchAgentRecovery } = await params.recoverHealth(health, waitForHealthy));
+    ({ health, launchAgentRecovery } = await params.recoverHealth(health, readHealth));
     assertCurrent();
   }
   if (
     !health.healthy &&
-    ((health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
+    (!waitForStartup ||
+      (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
       health.versionMismatch ||
       health.buildIdMismatch ||
       health.activatedPluginErrors?.length ||
@@ -221,9 +246,9 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const http = await waitForGatewayHttpReadiness({
     config: context.config,
     port: params.gatewayPort,
-    attempts: Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS),
+    attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
     deadlineAt: Date.now() + remainingMs(),
-    probeTimeoutMs: remainingMs(),
+    probeTimeoutMs: probeTimeoutMs(),
     delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
@@ -236,7 +261,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       inspectGatewayRestart({
         ...probeParams,
         probeContext: context,
-        timeoutMs: Math.max(1, remainingMs()),
+        timeoutMs: Math.max(1, probeTimeoutMs()),
       });
     const inspected = await inspect();
     assertCurrent();
@@ -258,9 +283,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     health = {
       ...health,
       healthy: false,
-      waitOutcome: "timeout",
-      elapsedMs: performance.now() - startedAtMs,
-      ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
+      ...(waitForStartup
+        ? {
+            waitOutcome: "timeout" as const,
+            elapsedMs: performance.now() - startedAtMs,
+            ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
+          }
+        : {}),
     };
   }
   return { health, readyz, http, launchAgentRecovery };

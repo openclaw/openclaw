@@ -134,8 +134,13 @@ export function createWorkerMachineCatalog(
   };
 
   const readMachineShape = (
-    record: WorkerEnvironmentRecord,
+    record:
+      | Pick<WorkerEnvironmentRecord, "profileSnapshot" | "profileId" | "providerId">
+      | undefined,
   ): SessionPlacementMachine | undefined => {
+    if (!record) {
+      return undefined;
+    }
     const snapshot = record.profileSnapshot;
     const machineClass =
       typeof snapshot.machineClass === "string" ? snapshot.machineClass : undefined;

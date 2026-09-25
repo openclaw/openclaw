@@ -32,7 +32,7 @@ Channels can redeliver the same message after a reconnect. OpenClaw keeps an in-
 
 ## Inbound debouncing
 
-Rapid consecutive text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs.
+Rapid text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs. It is a quiet-window heuristic, not a guarantee that every part of a long message will arrive in one turn.
 
 ```json5
 {
@@ -51,8 +51,9 @@ Rapid consecutive text messages from the same sender can be batched into one age
 
 - Debounce applies to text-only messages; media/attachments flush immediately.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
-- For non-forwarded Telegram text, a near-limit fragment starts a separate batch and flushes earlier ordinary text from the same sender and conversation. This preserves order without merging the two batches.
-- Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
+- Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
+- `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.
+- For non-forwarded Telegram text, messages of at least 4000 characters allow up to 1500ms for continuations. Short and long messages share the same batch, without requiring consecutive message IDs. This automatic long-paste assembly remains active when ordinary batching is disabled.
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
 Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without
@@ -166,12 +167,12 @@ The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is ne
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Unaddressed groups/channels allow silence by default. Mentions and authorized commands require a response. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
-- Internal helper turns can remain silent.
+- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
+- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
 
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply` can override group/internal policy per surface.
 
-Generic internal runner failures stay quiet for optional turns that have not shown visible output, so unaddressed groups do not receive gateway boilerplate. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
+Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 
 Reply requirements come from admission, not model control tokens. Confirmed delivery or still-owned delivery prevents duplicate recovery; see [Reply shaping](/concepts/agent-loop#reply-shaping).
 

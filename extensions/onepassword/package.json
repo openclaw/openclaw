@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/onepassword",
-  "version": "2026.9.5",
+  "version": "2026.9.6",
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.16.0"
+    "@openclaw/fs-safe": "0.18.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -29,7 +29,7 @@
           "output": "onepassword-secret-id.js"
         }
       ],
-      "openclawVersion": "2026.9.5"
+      "openclawVersion": "2026.9.6"
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/onepassword",
@@ -38,7 +38,7 @@
       "minHostVersion": ">=2026.9.4"
     },
     "compat": {
-      "pluginApi": ">=2026.9.5"
+      "pluginApi": ">=2026.9.6"
     },
     "release": {
       "publishToClawHub": true,

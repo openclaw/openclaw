@@ -9,9 +9,11 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
+import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -19,8 +21,6 @@ import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
-  type JsonObject,
-  isJsonObject,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
@@ -51,8 +51,75 @@ import {
   resolveCodexAppServerThreadModelSelection,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
-import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createLeasedCodexLifecycleHarness,
+  createThreadRequestAppServerOptions as createAppServerOptions,
+  createThreadRequestAttemptParams as createAttemptParams,
+  disabledMcpServerStatus,
+  writeNativeCatalogFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
+
+it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
+  const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
+  const profile = params.authProfileStore!.profiles["openai:sharing"]!;
+  params.authProfileStore!.profiles["openai:sharing"] = {
+    ...profile,
+    authFlow: "chatgpt-token-sharing",
+  } as typeof profile;
+  params.runtimePlan = {
+    ...params.runtimePlan,
+    auth: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "oauth",
+      selectedAuthFlow: "chatgpt-token-sharing",
+    },
+  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+  const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  expect(nativeCodeModeEnabled).toBe(false);
+  const start = buildThreadStartParams(params, {
+    appServer: createAppServerOptions() as never,
+    cwd: "/repo",
+    dynamicTools: [],
+    nativeCodeModeEnabled,
+    nativeProviderWebSearchSupport: "supported",
+    webSearchAllowed: true,
+  });
+  expect(start.environments).toEqual([]);
+  expect(start.modelProvider).toBe("openclaw_token_sharing");
+  expect(
+    buildThreadResumeParams(params, {
+      appServer: createAppServerOptions() as never,
+      threadId: "thread-1",
+    }).modelProvider,
+  ).toBe("openclaw_token_sharing");
+  expect(start.config).toMatchObject({
+    "features.code_mode": false,
+    "features.apps": false,
+    "features.multi_agent": false,
+    "features.multi_agent_v2": false,
+    "features.plugins": false,
+    "orchestrator.skills.enabled": false,
+    "skills.bundled.enabled": false,
+    web_search: "cached",
+    "features.standalone_web_search": false,
+  });
+  expect(start.developerInstructions).not.toContain("tool_search");
+  expect(start.developerInstructions).not.toContain("spawn_agent");
+  params.pluginHarnessToolPolicyRestricted = true;
+  params.scheduledRuntimeAuthority = {} as NonNullable<
+    EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]
+  >;
+  const restricted = buildThreadStartParams(params, {
+    appServer: createAppServerOptions() as never,
+    cwd: "/repo",
+    dynamicTools: [],
+    nativeCodeModeEnabled,
+  });
+  expect(restricted.config?.["features.apps"]).toBe(false);
+  expect(restricted.config?.["orchestrator.mcp.enabled"]).toBe(false);
+});
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
@@ -143,177 +210,6 @@ describe("Codex context window config", () => {
       expect(request.config).not.toHaveProperty("model_context_window");
     }
   });
-});
-
-describe("Codex managed shell environment", () => {
-  it.each([
-    { action: "start" as const, inherit: "none" },
-    { action: "resume" as const, inherit: "core" },
-  ])(
-    "applies the host environment last for thread/$action with inherit=$inherit",
-    ({ action, inherit }) => {
-      const options = {
-        appServer: createAppServerOptions() as never,
-        config: {
-          allow_login_shell: true,
-          shell_environment_policy: {
-            inherit,
-            experimental_use_profile: true,
-            exclude: ["GIT_*"],
-            set: { GH_CONFIG_DIR: "/user-selected", KEEP_ME: "yes" },
-            include_only: ["PATH"],
-          },
-        },
-        shellEnvironment: {
-          GH_CONFIG_DIR: "/host-selected",
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
-          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
-          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
-        },
-        disableLoginShell: true,
-      };
-      const request =
-        action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
-
-      const shellEnvironmentPolicy = request.config?.shell_environment_policy;
-      if (!isJsonObject(shellEnvironmentPolicy)) {
-        throw new Error("expected shell environment policy");
-      }
-      expect(shellEnvironmentPolicy).toMatchObject({
-        inherit,
-        experimental_use_profile: false,
-        exclude: ["GIT_*"],
-        set: {
-          GH_CONFIG_DIR: "/host-selected",
-          KEEP_ME: "yes",
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
-          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
-          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
-        },
-      });
-      expect(request.config?.allow_login_shell).toBe(false);
-      const includeOnly = shellEnvironmentPolicy.include_only;
-      expect(includeOnly).toHaveLength(8);
-      expect(includeOnly).toEqual(
-        expect.arrayContaining([
-          "PATH",
-          "GH_CONFIG_DIR",
-          "GITHUB_TOKEN",
-          "GH_TOKEN",
-          "PREVIEW_SERVICE_TOKEN",
-          "OPENCLAW_STATE_DIR",
-          "OPENCLAW_CONFIG_PATH",
-          "OPENCLAW_WORKSPACE_DIR",
-        ]),
-      );
-      expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
-      expect(shellEnvironmentPolicy).not.toHaveProperty("use_profile");
-    },
-  );
-
-  it.each(["start", "resume"] as const)(
-    "disables login profiles only for protected thread/%s environments",
-    (action) => {
-      const build = (
-        config: JsonObject,
-        shellEnvironment?: Readonly<Record<string, string>>,
-        disableLoginShell?: boolean,
-      ) => {
-        const options = {
-          appServer: createAppServerOptions() as never,
-          config,
-          shellEnvironment,
-          disableLoginShell,
-        };
-        return action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
-      };
-
-      expect(build({ allow_login_shell: true }).config?.allow_login_shell).toBe(true);
-      expect(build({}).config).not.toHaveProperty("allow_login_shell");
-      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }).config).not.toHaveProperty(
-        "allow_login_shell",
-      );
-      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }, true).config?.allow_login_shell).toBe(
-        false,
-      );
-    },
-  );
-
-  it.each(["start", "resume"] as const)(
-    "admits host values through restrictive filters for thread/%s",
-    (action) => {
-      const options = {
-        appServer: createAppServerOptions() as never,
-        config: {
-          allow_login_shell: false,
-          shell_environment_policy: {
-            experimental_use_profile: true,
-            filters: { PATH: "include", "GIT_*": "exclude" },
-            set: { KEEP_ME: "yes" },
-          },
-        },
-        shellEnvironment: {
-          GH_CONFIG_DIR: "/host-selected",
-          GH_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-        },
-        disableLoginShell: true,
-      };
-      const request =
-        action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
-
-      expect(request.config?.shell_environment_policy).toMatchObject({
-        experimental_use_profile: false,
-        set: {
-          KEEP_ME: "yes",
-          GH_CONFIG_DIR: "/host-selected",
-          GH_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-        },
-        filters: {
-          PATH: "include",
-          "GIT_*": "exclude",
-          GH_CONFIG_DIR: "include",
-          GH_TOKEN: "include",
-          PREVIEW_SERVICE_TOKEN: "include",
-        },
-      });
-      expect(request.config?.shell_environment_policy).not.toHaveProperty("include_only");
-    },
-  );
 });
 
 describe("Codex ring-zero thread config", () => {
@@ -830,70 +726,6 @@ function startOrResumeThread(
 
 let tempDir: string;
 
-function createAttemptParams(params: {
-  provider: string;
-  authProfileId?: string;
-  authProfileType?: "oauth" | "api_key";
-  authProfileProvider?: string;
-  authProfileProviders?: Record<string, string>;
-  runtimeExternalProfileIds?: string[];
-  bootstrapContextMode?: "full" | "lightweight";
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  images?: EmbeddedRunAttemptParams["images"];
-  modelId?: string;
-}): EmbeddedRunAttemptParams {
-  const authProfileProviders =
-    params.authProfileProviders ??
-    (params.authProfileId
-      ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
-      : {});
-  const authProfileType = params.authProfileType ?? "oauth";
-  return {
-    hostCapabilities: createCodexTestHostCapabilities(),
-    provider: params.provider,
-    modelId: params.modelId ?? "gpt-5.4",
-    prompt: "test prompt",
-    authProfileId: params.authProfileId,
-    ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
-    ...(params.bootstrapContextRunKind
-      ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
-      : {}),
-    ...(params.images ? { images: params.images } : {}),
-    authProfileStore: {
-      version: 1,
-      profiles: Object.fromEntries(
-        Object.entries(authProfileProviders).map(([profileId, provider]) => [
-          profileId,
-          authProfileType === "api_key"
-            ? {
-                type: "api_key" as const,
-                provider,
-                key: "sk-test",
-              }
-            : {
-                type: "oauth" as const,
-                provider,
-                access: "access-token",
-                refresh: "refresh-token",
-                expires: Date.now() + 60_000,
-              },
-        ]),
-      ),
-      ...(params.runtimeExternalProfileIds
-        ? { runtimeExternalProfileIds: params.runtimeExternalProfileIds }
-        : {}),
-    },
-  } as EmbeddedRunAttemptParams;
-}
-
-function createAppServerOptions() {
-  return {
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-  };
-}
-
 function createNetworkProxyAppServerOptions() {
   const configPatch = {
     "features.network_proxy.enabled": true,
@@ -1101,29 +933,6 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
     model,
     modelProvider,
     thread: { ...response.thread, modelProvider },
-  };
-}
-
-async function writeNativeCatalogFixture(
-  rolloutPath: string,
-  threadId: string,
-  dynamicTools: unknown,
-) {
-  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
-  await fs.writeFile(
-    rolloutPath,
-    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
-  );
-}
-
-function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
   };
 }
 
@@ -2374,22 +2183,18 @@ describe("Codex app-server turn input image sanitizing", () => {
     );
   });
 
-  it("places memory collaboration instructions before skills", () => {
+  it("places workspace collaboration instructions before memory", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,
       turnScopedDeveloperInstructions: "SOUL.md turn-only context",
       memoryCollaborationInstructions: "MEMORY.md pointer",
-      skillsCollaborationInstructions: "<available_skills>",
     });
     const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
 
     expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
       developerInstructions.indexOf("MEMORY.md pointer"),
-    );
-    expect(developerInstructions.indexOf("MEMORY.md pointer")).toBeLessThan(
-      developerInstructions.indexOf("<available_skills>"),
     );
   });
 
@@ -3691,6 +3496,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
         return written;
       });
       try {
+        if (fault === "unsubscribe timeout") {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        }
         const outcome = startOrResumeThread({
           client: harness.client,
           abandonClient,
@@ -3703,6 +3511,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
+        if (fault === "unsubscribe timeout") {
+          expect(JSON.parse(await harness.waitForWrite(4))).toMatchObject({
+            method: "thread/unsubscribe",
+            params: { threadId: probeThreadId },
+          });
+          await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+        }
         const settled = await outcome;
         const requests = harness.writes.map((line) => JSON.parse(line));
         expect(source).toEqual(before);
@@ -3756,7 +3571,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
           modelProvider: "openai",
         });
       } finally {
-        harness.client.close();
+        try {
+          harness.client.close();
+        } finally {
+          if (fault === "unsubscribe timeout") {
+            vi.useRealTimers();
+          }
+        }
       }
     },
   );

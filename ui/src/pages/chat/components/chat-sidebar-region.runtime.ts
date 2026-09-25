@@ -77,6 +77,7 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 }
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
+  @property({ attribute: false }) panelIdPrefix = "";
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
@@ -90,6 +91,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
+  private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
   private nativeCloseListeners: AbortController | undefined;
@@ -106,12 +108,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     document.addEventListener("pointerdown", this.trackFocus, options);
     document.addEventListener("focusin", this.trackFocus, options);
     window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     this.nativeCloseListeners?.abort();
     this.nativeCloseListeners = undefined;
     this.focusedSurface = null;
+    if (this.geometryFrame !== null) {
+      cancelAnimationFrame(this.geometryFrame);
+      this.geometryFrame = null;
+    }
     super.disconnectedCallback();
   }
 
@@ -320,12 +327,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       }
       return null;
     };
-    const tabs = sidePanels.flatMap((panel): PanelTabStripTab[] => {
+    const tabs = sidePanels.flatMap((panel): (PanelTabStripTab & { contentId: string })[] => {
+      const contentId = `${this.panelIdPrefix}-${encodeURIComponent(panel.slot)}`;
       const hosted = hostedPanels.find((entry) => entry.panel.id === panel.id);
       if (hosted?.tabs.length) {
         return hosted.tabs.map((tab) => ({
           id: `hosted:${panel.id}:${tab.id}`,
-          domId: `side-panel-tab-${panel.id}-${tab.id}`,
+          domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(JSON.stringify([panel.id, tab.id]))}`,
+          contentId,
           label: tab.label,
           labelTooltip: tab.label,
           title: tab.title,
@@ -343,7 +352,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return [
         {
           id: panel.id,
-          domId: `side-panel-tab-${panel.id}`,
+          domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(panel.id)}`,
+          contentId,
           label: type.label,
           labelTooltip:
             panel.slot === "dashboard"
@@ -384,7 +394,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${renderPanelTabStrip({
             tabs,
             activeId,
-            ariaControls: "chat-side-panel-content",
+            ariaControls: (tab) => tab.contentId,
             onSelect: (panelId) => {
               const hosted = resolveHostedTab(panelId);
               if (hosted) {
@@ -483,12 +493,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       </div>`;
     }
     return html`<div class="side-panel-empty side-panel-empty--selector">
-      <div class="side-panel-empty__types" role="list">
+      <div class="side-panel-empty__types">
         ${this.panelTypes().map(
           (type) => html`<button
             class="side-panel-empty__type"
             type="button"
-            role="listitem"
             @click=${() => this.callbacks?.openSlot(type.slot)}
           >
             ${renderPanelTypeOption(type)}
@@ -499,7 +508,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderBody(column?: SidebarColumn) {
-    return html`<div id="chat-side-panel-content" class="side-panel__body">
+    return html`<div class="side-panel__body">
       ${repeat(
         // Tab reordering must not physically move live iframe/custom-element roots.
         this.panelDefinitions.flatMap((definition) =>
@@ -509,7 +518,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ),
         (panel) => panel.id,
         (panel) => html`<div
+          id=${`${this.panelIdPrefix}-${encodeURIComponent(panel.slot)}`}
           class="side-panel__panel"
+          role="region"
+          aria-label=${panelType(this.panelDefinitions, panel.slot).label}
           data-panel-slot=${panel.slot}
           data-region=${panel.id === this.layout.mainPanelId ? "main" : "side"}
           ?hidden=${!isSidebarSlotVisible(this.layout, panel.slot)}
@@ -593,21 +605,37 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ? this.renderDivider(column)
           : nothing
       }
-      <section class="side-panel" aria-label=${t("chat.sidePanel.label")}>
+      <div class="side-panel">
         ${column && sidebarSidePanels(this.layout).length > 0 ? this.renderHeader(column) : nothing}
         ${this.contentMounted ? this.renderBody(column) : nothing}
-      </section>`;
+      </div>`;
   }
 
   protected override updated() {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
       renderTemplate(this.renderPanel(), root);
-      const panel = root.querySelector<HTMLElement>(".side-panel");
+      this.scheduleGeometryCommit();
+    }
+  }
+
+  private scheduleGeometryCommit() {
+    if (this.geometryFrame !== null) {
+      return;
+    }
+    // Nested panels commit after this host. Measure their final geometry once,
+    // rather than forcing layout in the middle of each parent/child update.
+    this.geometryFrame = requestAnimationFrame(() => {
+      this.geometryFrame = null;
+      const shell = this.parentElement;
+      if (!this.isConnected || !shell) {
+        return;
+      }
+      const panel = shell.querySelector<HTMLElement>(
+        ".sidebar-region__right-runtime > .side-panel",
+      );
       const geometry = Array.from(
-        this.parentElement!.querySelectorAll<HTMLElement>(
-          ".sidebar-region__primary, .side-panel__panel",
-        ),
+        shell.querySelectorAll<HTMLElement>(".sidebar-region__primary, .side-panel__panel"),
         (content) =>
           `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
       ).join(":");
@@ -623,7 +651,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }),
       );
       this.previousGeometry = geometry;
-    }
+    });
   }
 
   override render() {

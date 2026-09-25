@@ -13,6 +13,8 @@ import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import { reportExtensionHandlerError } from "./handler-error.js";
+import { bindExtensionMetadataActions } from "./metadata-actions.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -284,9 +286,8 @@ export class ExtensionRunner {
     this.runtime.setActiveTools = actions.setActiveTools;
     this.runtime.refreshTools = actions.refreshTools;
     this.runtime.getCommands = actions.getCommands;
-    this.runtime.setModel = actions.setModel;
+    bindExtensionMetadataActions(this.sessionManager, this.runtime, actions);
     this.runtime.getThinkingLevel = actions.getThinkingLevel;
-    this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
     // Context actions (required)
     this.getModel = contextActions.getModel;
@@ -477,6 +478,7 @@ export class ExtensionRunner {
     if (this.staleMessage) {
       throw new Error(this.staleMessage);
     }
+    this.runtime.assertActive();
   }
 
   onError(listener: ExtensionErrorListener): () => void {
@@ -668,12 +670,7 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
-          this.emitError({
-            extensionPath: ext.path,
-            event: eventType,
-            error: coerceErrorMessage(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
+          reportExtensionHandlerError(err, ext.path, eventType, (error) => this.emitError(error));
         }
       }
     }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
@@ -8,6 +7,7 @@ import {
 } from "./session-cost-usage-projection.js";
 import {
   USAGE_COST_ROLLUP_VERSION,
+  encodeUsageCostRollup,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
@@ -15,6 +15,7 @@ import {
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const pricingFingerprint = "synthetic-pricing";
 const dayStart = Date.UTC(2026, 8, 18);
@@ -37,7 +38,7 @@ function createRow(
   contributions: Array<{ timestamp?: number; cost: number }>,
   scannedAt = 100,
   version = USAGE_COST_ROLLUP_VERSION,
-): SessionCostUsageRollupRow {
+): SessionCostUsageRollupRow & { blob: Uint8Array } {
   const rollup = createSessionUsageRollupData();
   for (const contribution of contributions) {
     appendSessionUsageRollupContribution(rollup, {
@@ -72,26 +73,28 @@ function createRow(
       .length,
     rollup,
   };
-  return { key: file.filePath, valueJson: JSON.stringify(entry), updatedAt: scannedAt + 10_000 };
+  return { key: file.filePath, ...encodeUsageCostRollup(entry), updatedAt: scannedAt + 10_000 };
 }
 
 function createSource(
-  rows: SessionCostUsageRollupRow[],
+  rows: Array<SessionCostUsageRollupRow & { blob?: Uint8Array }>,
   files: ReadonlyArray<UsageCostTranscriptFile | undefined>,
 ): UsageCostRollupRowSource {
   const byPath = new Map(rows.map((row) => [row.key, row]));
   const requestedPaths = new Set(files.flatMap((file) => (file ? [file.filePath] : [])));
   return {
     readRow: (filePath) => byPath.get(filePath),
+    readBody: (row) => byPath.get(row.key)?.blob ?? null,
+    onInvalidBody: () => {},
     remainingRows: rows.filter((row) => !requestedPaths.has(row.key)),
   };
 }
 
 describe("usage cache projections", () => {
-  it("requests a refresh for rollups computed before pricing availability was preserved", () => {
+  it("requests a refresh for rollups computed before pricing availability was preserved", async () => {
     const file = createFile("old-pricing");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0 }], 100, 5)];
-    const result = projectSessionCostSummaries({
+    const result = await projectSessionCostSummaries({
       ...createSource(rows, [file]),
       sessions: [{ sessionId: "old-pricing", sessionFile: file.filePath }],
       files: [file],
@@ -104,7 +107,7 @@ describe("usage cache projections", () => {
     expect(result.cacheStatus.cachedFiles).toBe(0);
   });
 
-  it("preserves file-major and timestamp-major addition, including duplicate files", () => {
+  it("preserves file-major and timestamp-major addition, including duplicate files", async () => {
     const largeFile = createFile("large");
     const smallFile = createFile("small");
     const orphanFile = createFile("orphan");
@@ -121,7 +124,7 @@ describe("usage cache projections", () => {
       ]),
       { key: "broken-orphan", valueJson: "{", updatedAt: 99_999 },
     ];
-    const result = projectCostUsageSummary({
+    const result = await projectCostUsageSummary({
       ...createSource(rows, files),
       files,
       pricingFingerprint,
@@ -145,7 +148,7 @@ describe("usage cache projections", () => {
     });
   });
 
-  it("keeps fractional boundary costs and zero-filled calendar days without unrelated history", () => {
+  it("keeps fractional boundary costs and zero-filled calendar days without unrelated history", async () => {
     const file = createFile("fractional");
     const startMs = dayStart + 12 * 60 * 60 * 1_000;
     const endMs = Date.UTC(2026, 8, 21, 11, 59, 59, 999);
@@ -158,7 +161,7 @@ describe("usage cache projections", () => {
         { cost: 500 },
       ]),
     ];
-    const result = projectCostUsageSummary({
+    const result = await projectCostUsageSummary({
       ...createSource(rows, [file]),
       files: [file],
       pricingFingerprint,
@@ -177,7 +180,7 @@ describe("usage cache projections", () => {
     ]);
   });
 
-  it("keeps selected identities and strict freshness for duplicate canonical files", () => {
+  it("keeps committed totals and freshness for duplicate canonical files", async () => {
     const file = createFile("selected");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0.5 }, { cost: 0.25 }], 300)];
     const sessions = [
@@ -193,7 +196,7 @@ describe("usage cache projections", () => {
       [{ startMs: dayStart, endMs: dayStart }, 0.5],
       [{ startMs: dayStart + 1, endMs: dayStart + 1 }, 0],
     ] as const) {
-      const result = projectSessionCostSummaries({
+      const result = await projectSessionCostSummaries({
         ...createSource(rows, files),
         ...range,
         sessions,
@@ -205,7 +208,13 @@ describe("usage cache projections", () => {
 
       expect(result.summaries).toMatchObject([
         { sessionId: "first", sessionFile: "first-archive-alias", totalCost: expectedCost },
-        null,
+        {
+          sessionId: "stale",
+          totalCost: expectedCost,
+          computedAt: 300,
+          refreshing: true,
+          staleSince: file.mtimeMs,
+        },
         { sessionId: "second", sessionFile: "second-archive-alias", totalCost: expectedCost },
         null,
         null,
@@ -215,13 +224,13 @@ describe("usage cache projections", () => {
       expect(result.staleSessionFiles).toEqual([file.sourcePath, "missing-transcript"]);
       expect(result.cacheStatus).toEqual({
         status: "refreshing",
-        cachedFiles: 2,
+        cachedFiles: 3,
         pendingFiles: 2,
         staleFiles: 2,
         refreshedAt: 300,
       });
     }
-    const fresh = projectSessionCostSummaries({
+    const fresh = await projectSessionCostSummaries({
       ...createSource(rows, [file]),
       sessions: [{ sessionFile: "fresh-archive-alias" }],
       files: [file],

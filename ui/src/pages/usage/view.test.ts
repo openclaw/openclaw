@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
+import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.ts";
@@ -12,6 +13,17 @@ function insightCard(container: ParentNode, title: string): Element | undefined 
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
     (card) => card.querySelector(".usage-insight-title")?.textContent === title,
   );
+}
+
+function averageCostSummary(container: ParentNode) {
+  const hint = container.querySelector("#usage-summary-hint-average-cost");
+  return {
+    hint: hint?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
+    value: hint
+      ?.closest(".usage-summary-card")
+      ?.querySelector(".usage-summary-value")
+      ?.textContent?.trim(),
+  };
 }
 
 it.each([
@@ -123,6 +135,77 @@ it("renders shared skeletons while initial usage is loading", () => {
 });
 
 describe("renderUsage", () => {
+  it.each([
+    { name: "known zero", sessionIndex: 0, value: "$0.00", missing: false },
+    { name: "known positive", sessionIndex: 1, value: "$0.10", missing: false },
+    { name: "unknown zero", sessionIndex: 2, value: "$0.00", missing: true },
+    { name: "mixed positive", sessionIndex: null, value: "$0.03", missing: true },
+  ])("respects recorded cost availability for $name", ({ sessionIndex, value, missing }) => {
+    const base = createUsageProps();
+    const fixture = createRecordedCostUsage();
+    const sessions = sessionIndex === null ? fixture.sessions : [fixture.sessions[sessionIndex]!];
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...base.data,
+            sessions,
+            totals: sessionIndex === null ? fixture.totals : sessions[0]!.usage!,
+            aggregates: buildAggregatesFromSessions(sessions),
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(averageCostSummary(container)).toEqual({
+      hint: missing
+        ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+        : "Average cost per message when providers report costs.",
+      value,
+    });
+  });
+
+  it.each(["query", "session", "day"] as const)(
+    "restores the range warning after clearing a known-zero %s filter",
+    (filter) => {
+      const base = createUsageProps();
+      const fixture = createRecordedCostUsage();
+      const zeroSession = fixture.sessions[0]!;
+      const selected: Partial<UsageProps["filters"]> =
+        filter === "query"
+          ? { query: 'label:"Known zero"', queryDraft: 'label:"Known zero"' }
+          : filter === "session"
+            ? { selectedSessions: [zeroSession.key] }
+            : { selectedDays: zeroSession.usage!.activityDates! };
+      const props = createUsageProps({
+        data: {
+          ...base.data,
+          ...fixture,
+          aggregates: buildAggregatesFromSessions(fixture.sessions),
+        },
+        filters: { ...base.filters, startDate: fixture.costDaily[0]!.date },
+      });
+      const clearedFilters = { ...props.filters };
+      const container = document.createElement("div");
+      for (const { filters, missing, value } of [
+        { filters: clearedFilters, missing: true, value: "$0.03" },
+        { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
+        { filters: clearedFilters, missing: true, value: "$0.03" },
+      ]) {
+        props.filters = filters;
+        render(renderUsage(props), container);
+        expect(averageCostSummary(container)).toEqual({
+          hint: missing
+            ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+            : "Average cost per message when providers report costs.",
+          value,
+        });
+      }
+    },
+  );
+
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = document.createElement("div");
     const base = createUsageProps();
@@ -145,16 +228,16 @@ describe("renderUsage", () => {
 
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });
@@ -454,8 +537,14 @@ describe("renderUsage", () => {
         )!
         .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
     const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+    const chartModeButton = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+        (button) => button.textContent?.trim() === label,
+      );
 
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
     expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
       "second",
@@ -466,6 +555,8 @@ describe("renderUsage", () => {
 
     props.display.chartMode = "cost";
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
     props.filters.agentId = "main";
     // The replacement report is already scoped by the Gateway.

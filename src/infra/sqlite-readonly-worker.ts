@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +13,10 @@ import {
 } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
+import {
+  readOnlyWorkerScope,
+  type SqliteReadOnlyWorkerScope,
+} from "./sqlite-readonly-worker-context.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   readSqliteReadOnlyWorkerValue,
@@ -118,22 +121,6 @@ export function sqliteInspectionTimeoutError(
   );
 }
 
-type SqliteReadOnlyWorkerScope = {
-  active: boolean;
-  busy: boolean;
-  controller: AbortController;
-  pending: Set<Promise<SqliteReadOnlyWorkerValue>>;
-  deadlineOwnedByCaller: boolean;
-  worker?: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
-  authWorker?: {
-    source: SqliteAuthProfileReadOptions["source"];
-    launch: SqliteReadOnlyWorkerLaunch;
-    session: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
-  };
-  authTail: Promise<void>;
-};
-const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
-
 /** Reuse child imports until the lifecycle owner closes; reads reacquire source admission. */
 export function createSqliteReadOnlyWorkerScope(options?: {
   signal: AbortSignal;
@@ -217,7 +204,11 @@ function sqliteReadOnlyWorkerRequestArgs(pathname: string, options: SqliteReadOn
 }
 
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeWorkerUrl(
+    options.mode === "content-version"
+      ? runtimeProcessEntrypoints.sqliteSourceRevision
+      : runtimeProcessEntrypoints.sqliteReadOnly,
+  );
   return [
     ...resolveRuntimeWorkerArgv(workerUrl),
     SQLITE_READONLY_CHILD_ARG,
@@ -297,9 +288,9 @@ export function runSqliteReadOnlyWorker(
       ? AbortSignal.any([options.signal, scope.controller.signal])
       : scope.controller.signal,
   };
-  // Native backup promises can stall with a persistent IPC handle on Node 26.
-  // Keep async backups one-shot; concurrent raw reads need separate processes
-  // for POSIX lock isolation.
+  // Native backups can stall with persistent IPC on Node 26. Only artifact-
+  // preserving raw sync reads reuse a child; backups and concurrent readers
+  // stay one-shot, preserving POSIX source-lock isolation.
   const useScopedWorker = options.mode === "sync" && !scope.busy;
   if (useScopedWorker) {
     scope.busy = true;
@@ -511,8 +502,8 @@ function runSqliteReadOnlyWorkerOnce(
 
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
-  stagingRoot: string,
-  mode: "sync" | "sync-fallback" = "sync",
+  stagingRoot: string | undefined,
+  mode: "sync" | "content-version" = "sync",
 ): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
@@ -534,11 +525,7 @@ export function runSqliteReadOnlyWorkerSync(
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
   return readSqliteReadOnlyWorkerValue(
-    {
-      failure,
-      stderr: result.stderr,
-      stdout: result.stdout,
-    },
+    { failure, stderr: result.stderr, stdout: result.stdout },
     mode,
   );
 }

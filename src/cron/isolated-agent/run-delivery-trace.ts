@@ -3,6 +3,7 @@ import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mc
 import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   SourceDeliveryOutcome,
@@ -83,8 +84,8 @@ export function buildCronDeliveryTargetRuntimeContext(params: {
 }
 
 const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-delivery.runtime.js"));
-const codexNativeWebSearchLoader = createLazyImportLoader(
-  () => import("../../agents/codex-native-web-search.js"),
+const nativeWebSearchLoader = createLazyImportLoader(
+  () => import("../../agents/native-web-search.js"),
 );
 const webToolRuntimeContextLoader = createLazyImportLoader(
   () => import("../../agents/tools/web-tool-runtime-context.js"),
@@ -95,8 +96,8 @@ export async function loadCronDeliveryRuntime() {
   return await cronDeliveryRuntimeLoader.load();
 }
 
-async function loadCodexNativeWebSearch() {
-  return await codexNativeWebSearchLoader.load();
+async function loadNativeWebSearch() {
+  return await nativeWebSearchLoader.load();
 }
 
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
@@ -244,9 +245,9 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
     return undefined;
   }
   try {
-    const { shouldSuppressManagedWebSearchTool } = await loadCodexNativeWebSearch();
+    const { resolveNativeWebSearchRoute } = await loadNativeWebSearch();
     if (
-      shouldSuppressManagedWebSearchTool({
+      resolveNativeWebSearchRoute({
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
@@ -254,7 +255,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentDir: params.agentDir,
-      })
+        runtimeToolAllowlist: toolsAllow,
+      }).kind === "native"
     ) {
       return undefined;
     }
@@ -291,7 +293,10 @@ export async function resolveCronDeliveryContext(params: {
   agentId: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (deliveryPlan.mode === "webhook") {
+  if (
+    deliveryPlan.mode === "webhook" ||
+    (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan))
+  ) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -299,33 +304,20 @@ export async function resolveCronDeliveryContext(params: {
       accountId: undefined,
       threadId: undefined,
       mode: "implicit" as const,
-      error: new Error("webhook delivery has no chat target"),
+      error: new Error(
+        deliveryPlan.mode === "webhook"
+          ? "webhook delivery has no chat target"
+          : "delivery is disabled",
+      ),
     };
     return {
       deliveryPlan,
-      deliveryRequested: deliveryPlan.requested,
+      deliveryRequested: deliveryPlan.mode === "webhook" ? deliveryPlan.requested : false,
       resolvedDelivery,
       sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
     };
   }
-  if (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan)) {
-    const resolvedDelivery = {
-      ok: false as const,
-      channel: undefined,
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit" as const,
-      error: new Error("delivery is disabled"),
-    };
-    return {
-      deliveryPlan,
-      deliveryRequested: false,
-      resolvedDelivery,
-      sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
-    };
-  }
-  const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
+  const { resolveDeliveryTarget, resolveOutboundChannelPlugin } = await loadCronDeliveryRuntime();
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     ...deliveryPlan,
     sessionTarget: params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined,
@@ -333,12 +325,63 @@ export async function resolveCronDeliveryContext(params: {
     // delivery session rather than the creator's last conversation.
     sessionKey: resolveCronDeliverySessionKey(params.job),
   });
+  // Announce runs have no inbound message. Take formatting hints from the same plugin
+  // that delivers the output, which can be a cold bootstrap outside the active registry.
+  const deliveryPlugin =
+    deliveryPlan.requested && resolvedDelivery.ok
+      ? resolveOutboundChannelPlugin({
+          channel: resolvedDelivery.channel,
+          cfg: params.cfg,
+          agentId: params.agentId,
+          allowBootstrap: true,
+        })
+      : undefined;
   return {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
+    deliverySystemPrompt: deliveryPlugin
+      ? buildCronDeliveryMetaSystemPrompt({
+          cfg: params.cfg,
+          plugin: deliveryPlugin,
+          accountId: resolvedDelivery.accountId,
+        })
+      : undefined,
     sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
   };
+}
+
+/**
+ * Builds trusted system metadata that gives a run the delivering channel's formatting
+ * hints. Returns undefined when the plugin has none, so the system prompt stays unchanged.
+ */
+function buildCronDeliveryMetaSystemPrompt(params: {
+  cfg: OpenClawConfig;
+  plugin: Pick<ChannelPlugin, "id" | "agentPrompt">;
+  accountId?: string;
+}): string | undefined {
+  const responseFormat = params.plugin.agentPrompt?.inboundFormattingHints?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (!responseFormat) {
+    return undefined;
+  }
+  const payload = {
+    schema: "openclaw.delivery_meta.v1",
+    account_id: params.accountId,
+    channel: params.plugin.id,
+    response_format: responseFormat,
+  };
+  return [
+    "### Delivery Context",
+    "The JSON below is generated by OpenClaw. Your visible output for this run is delivered to this channel; follow its response_format.",
+    "",
+    "```json",
+    JSON.stringify(payload, null, 2),
+    "```",
+    "",
+  ].join("\n");
 }
 
 export function appendCronDeliveryInstruction(params: {

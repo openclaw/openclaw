@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -14,7 +15,6 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -198,8 +198,6 @@ export async function publishPreparedBackupArchive(params: {
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,
         expectedSourceIdentity: prepared.identity,
-        // fs-safe 0.16 guards bigint receipt inputs but declares only numeric Stats.
-        // @ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.
         parentReceipt: plan.parentReceipt,
         strategy: "link-required",
         onSyncFailure: "preserve",

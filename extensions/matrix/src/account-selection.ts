@@ -82,33 +82,6 @@ function resolveEffectiveMatrixAccountSources(params: {
   });
 }
 
-function hasUsableEffectiveMatrixAccountSource(params: {
-  channel: Record<string, unknown> | null;
-  accountId: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  return hasUsableResolvedMatrixAuth(resolveEffectiveMatrixAccountSources(params));
-}
-
-function hasFreshEffectiveMatrixAccountSource(params: {
-  channel: Record<string, unknown> | null;
-  accountId: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  return hasFreshResolvedMatrixAuth(resolveEffectiveMatrixAccountSources(params));
-}
-
-function hasConfiguredDefaultMatrixAccountSource(params: {
-  channel: Record<string, unknown> | null;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  return hasFreshEffectiveMatrixAccountSource({
-    channel: params.channel,
-    accountId: DEFAULT_ACCOUNT_ID,
-    env: params.env,
-  });
-}
-
 export function resolveMatrixChannelConfig(cfg: OpenClawConfig): Record<string, unknown> | null {
   return isRecord(cfg.channels?.matrix) ? cfg.channels.matrix : null;
 }
@@ -130,6 +103,25 @@ export function findMatrixAccountEntry(
   return isRecord(entry) ? entry : null;
 }
 
+export function hasImplicitMatrixAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const normalized = normalizeAccountId(accountId);
+  return (
+    (normalized === DEFAULT_ACCOUNT_ID ||
+      listMatrixEnvAccountIds(env).some((id) => normalizeAccountId(id) === normalized)) &&
+    hasUsableResolvedMatrixAuth(
+      resolveEffectiveMatrixAccountSources({
+        channel: resolveMatrixChannelConfig(cfg),
+        accountId: normalized,
+        env,
+      }),
+    )
+  );
+}
+
 export function resolveConfiguredMatrixAccountIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -139,13 +131,18 @@ export function resolveConfiguredMatrixAccountIds(
     accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
     normalizeAccountId,
   });
-  if (hasConfiguredDefaultMatrixAccountSource({ channel, env })) {
+  const hasDefaultAuth = hasFreshResolvedMatrixAuth(
+    resolveEffectiveMatrixAccountSources({ channel, accountId: DEFAULT_ACCOUNT_ID, env }),
+  );
+  if (hasDefaultAuth) {
     configuredAccountIds.push(DEFAULT_ACCOUNT_ID);
   }
   const readyEnvAccountIds = listMatrixEnvAccountIds(env).filter((accountId) =>
     normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID
-      ? hasConfiguredDefaultMatrixAccountSource({ channel, env })
-      : hasUsableEffectiveMatrixAccountSource({ channel, accountId, env }),
+      ? hasDefaultAuth
+      : hasUsableResolvedMatrixAuth(
+          resolveEffectiveMatrixAccountSources({ channel, accountId, env }),
+        ),
   );
   return listCombinedAccountIds({
     configuredAccountIds,

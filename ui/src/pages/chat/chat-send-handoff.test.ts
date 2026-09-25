@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -11,18 +10,9 @@ import { readQueuedMessageById, updateVolatileQueuedMessage } from "./chat-queue
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { admitInitialTurnHandoff, prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+useChatSendBrowserFixture();
 
 it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ attachment, peer }))))(
   "retains foreground leaf ownership during input handoff (attachment: $attachment, peer: $peer)",
@@ -100,6 +90,37 @@ it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ att
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   },
 );
+
+it.each(
+  (["steer", "followup", "collect", undefined] as const).flatMap((queueMode) =>
+    ["started", "in_flight"].map((status) => ({ queueMode, status })),
+  ),
+)("keeps the active reply on a $queueMode $status custody ACK", async ({ queueMode, status }) => {
+  const acknowledgement = createDeferred<{ runId: string; status: string }>();
+  const host = makeChatHost({
+    chatMessage: "A follow-up while another participant's reply is streaming",
+    chatRunId: "active-reply",
+    chatStream: "Already visible response text",
+    chatStreamStartedAt: 100,
+    chatStreamSegments: [{ text: "Earlier live commentary", ts: 90, itemId: "commentary" }],
+    chatRunStartup: { state: "activity", runId: "active-reply" },
+    requestHandlers: { "chat.send": () => acknowledgement.promise },
+  });
+  const sending = handleSendChat(host, undefined, {
+    followUpMode: queueMode,
+  });
+  await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()));
+  expect(host.chatStream).toBe("Already visible response text");
+  acknowledgement.resolve({ runId: "accepted-input", status });
+  await sending;
+  expect(host.chatRunId).toBe("active-reply");
+  expect(host.chatStream).toBe("Already visible response text");
+  expect(host.chatStreamStartedAt).toBe(100);
+  expect(host.chatStreamSegments).toEqual([
+    { text: "Earlier live commentary", ts: 90, itemId: "commentary" },
+  ]);
+  expect(host.chatRunStartup).toEqual({ state: "activity", runId: "active-reply" });
+});
 
 it.each([false, true])(
   "retries only the confirmed first-message version after history settles (edited: %s)",

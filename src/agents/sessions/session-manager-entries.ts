@@ -1,28 +1,37 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   readActiveTranscriptEntryAnchor,
-  readTranscriptEventAtSeqSync,
   readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
-import {
-  copyCodeModeSourceAppend,
-  getCodeModeSourceAppend,
-  copyCodeModeSourceAppendOptions,
-} from "../transcript-code-mode-source.js";
+import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
+import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
+import {
+  prepareCurrentTurnReplayWitness,
+  resolveCurrentTurnEntryId,
+  sessionManagerPrepareCurrentTurnReplay,
+} from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
-import { SessionManagerPersistence } from "./session-manager-persistence.js";
+import {
+  canonicalizeSessionEntry,
+  isSqliteTranscriptMutationConflict,
+  type PersistRecordResult,
+  type PersistWorkerRecordResult,
+} from "./session-manager-persistence.js";
+import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
   BranchSummaryEntry,
@@ -30,77 +39,24 @@ import type {
   CustomEntry,
   CustomMessageEntry,
   LabelEntry,
-  ModelChangeEntry,
   ResetEntry,
   ResetReason,
   SessionContext,
   SessionEntry,
   SessionInfoEntry,
   SessionMessageEntry,
-  SessionHeader,
   SessionLeafControl,
-  SessionTreeNode,
-  ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
-function isSqliteTranscriptMutationConflict(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
-    if (current.name === "SqliteTranscriptMutationConflictError") {
-      return true;
-    }
-    current = current.cause;
-  }
-  return false;
-}
-
-function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
-  if (
-    entry.type !== "message" ||
-    (entry.message.role !== "user" && entry.message.role !== "assistant")
-  ) {
-    return false;
-  }
-  const provenance: unknown = Reflect.get(entry.message, "provenance");
-  return (
-    isRecord(provenance) &&
-    provenance.kind === "realtime_voice" &&
-    provenance.sourceChannel === "talk"
-  );
-}
-
-export class SessionManagerEntries extends SessionManagerPersistence {
+export class SessionManagerEntries extends SessionManagerSuffixPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
-    const canonicalEntry = JSON.parse(JSON.stringify(entry)) as T;
-    if (!isIndexedSessionEntry(canonicalEntry)) {
-      throw new Error(`Invalid session transcript entry: ${entry.type}`);
-    }
-    if (entry.type === "message" && canonicalEntry.type === "message") {
-      if (
-        entry.message.role === "toolResult" &&
-        canonicalEntry.message.role === "toolResult" &&
-        Array.isArray(entry.message.content) &&
-        Array.isArray(canonicalEntry.message.content)
-      ) {
-        const canonicalContent = canonicalEntry.message.content;
-        entry.message.content.forEach((block, index) => {
-          const canonicalBlock = canonicalContent[index];
-          if (block?.type === "text" && canonicalBlock?.type === "text") {
-            copyPreparedModelVisibleToolText(block, canonicalBlock);
-          }
-        });
-      }
-      copyCodeModeSourceAppend(
-        entry.message,
-        canonicalEntry.message,
-        getCodeModeSourceAppend(options),
-        (source) => source,
-      );
-    }
+    this.assertTranscriptViewAvailable();
+    const canonicalEntry = canonicalizeSessionEntry(entry, options);
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
@@ -135,9 +91,29 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         expectedMutationAt: validatedMutationAt,
       });
     }
+    // Keep preparation local to this append: retries must not redact the payload again or
+    // consume its code-mode source token against a different message object.
+    const preparedMessage =
+      this.persistenceTarget && canonicalEntry.type === "message"
+        ? prepareTranscriptMessageAppend(
+            copyCodeModeSourceAppendOptions(options, {
+              message: canonicalEntry.message,
+              config: options?.config,
+            }),
+            {
+              scope: this.persistenceTarget,
+              envelope: {
+                type: "message",
+                id: canonicalEntry.id,
+                parentId: canonicalEntry.parentId,
+                timestamp: canonicalEntry.timestamp,
+              },
+            },
+          )
+        : undefined;
     let persistenceResult;
     try {
-      persistenceResult = this.persist(canonicalEntry, attemptOptions);
+      persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
     } catch (error) {
       const deliberateBranchAppend = this.pendingDeliberateAppend;
       const sideBranchAppend =
@@ -180,10 +156,56 @@ export class SessionManagerEntries extends SessionManagerPersistence {
             })()
           : copyCodeModeSourceAppendOptions(persistenceOptions, {
               ...persistenceOptions,
-              expectedMutationAt: this.readPersistedTranscriptMutationAt(),
+              expectedMutationAt: this.persistenceTarget
+                ? readTranscriptMutationAtSync(this.persistenceTarget)
+                : null,
             });
-      persistenceResult = this.persist(canonicalEntry, retryOptions);
+      persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
+    return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
+  }
+
+  protected adoptWorkerCommittedEntry<T extends SessionEntry>(
+    entry: T,
+    committed: PersistWorkerRecordResult,
+    admittedUserId?: string,
+  ): {
+    entry: T;
+    anchor?: TranscriptEntryAnchor;
+    lifecycleRevision?: string;
+    appended: boolean;
+    viewWasSuperseded?: true;
+  } {
+    if (this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
+      // A native SDK append can publish a later view before the worker receipt arrives.
+      return {
+        entry: {
+          ...entry,
+          parentId:
+            committed.result?.effectiveParentId !== undefined
+              ? committed.result.effectiveParentId
+              : entry.parentId,
+        },
+        anchor: committed.result?.anchor,
+        lifecycleRevision: committed.result?.lifecycleRevision,
+        appended: committed.result?.appended ?? true,
+        viewWasSuperseded: true,
+      };
+    }
+    if (committed.viewFailure) {
+      throw committed.viewFailure;
+    }
+    this.transcriptVersion = committed.committedVersion;
+    this.transcriptMutationAt = committed.committedVersion.updatedAt;
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, committed.reload);
+  }
+
+  protected adoptPersistedEntry<T extends SessionEntry>(
+    canonicalEntry: T,
+    persistenceResult: PersistRecordResult,
+    admittedUserId?: string,
+    preparedReload?: PreparedSessionTranscriptReload,
+  ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     if (persistenceResult?.adoptedMessageId) {
       this.reloadPersistedTranscript();
       // Context-excluded users have no payload in byId. The exact SQLite replay
@@ -207,11 +229,21 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         if (this.transcriptMutationAt === undefined) {
           throw new Error("Session transcript append mutation fence was not returned");
         }
-        this.reloadPersistedTranscriptAfterAppend(
-          this.transcriptMutationAt,
-          canonicalEntry.id,
-          admittedUserId,
-        );
+        if (preparedReload) {
+          this.adoptPreparedTranscriptReload(preparedReload, {
+            expectedMutationAt: this.transcriptMutationAt,
+            expectedEntryId: canonicalEntry.id,
+            admittedUserId,
+          });
+        } else {
+          this.reloadPersistedTranscriptAfterAppend(
+            this.transcriptMutationAt,
+            canonicalEntry.id,
+            admittedUserId,
+          );
+        }
+      } else if (preparedReload) {
+        this.adoptPreparedTranscriptReload(preparedReload);
       } else {
         this.reloadPersistedTranscript();
       }
@@ -250,13 +282,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     };
   }
 
-  private readPersistedTranscriptMutationAt(): number | null {
-    if (!this.persistenceTarget) {
-      return null;
-    }
-    return readTranscriptMutationAtSync(this.persistenceTarget);
-  }
-
   private createTranscriptMutationConflictError(): Error {
     const error = new Error(
       `SQLite transcript changed while preparing rewrite for ${this.persistenceTarget?.sessionId ?? this.sessionId}`,
@@ -265,52 +290,48 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return error;
   }
 
+  // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
     options?: { includeOmittedCustomMessages?: boolean },
   ): string | null {
+    this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
-    let parentId = this.appendParentId;
-    let remainingAncestors = includeOmitted
-      ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
-      : this.byId.size;
-    // Compaction rewrites context without consuming the current user turn.
-    // Walk physical parents: opaque/context-excluded users still close older
-    // turns. Replay may read its omitted activity, never skip unidentified rows.
-    while (parentId && remainingAncestors-- > 0) {
-      const parent =
-        this.byId.get(parentId) ??
-        (includeOmitted ? this.readOmittedCustomMessage(parentId) : undefined);
-      if (
-        !parent ||
-        parent.id !== parentId ||
-        (!isSessionContextMetadataEntry(parent) &&
-          parent.type !== "compaction" &&
-          !isInterruptedTail?.(parent))
-      ) {
-        break;
-      }
-      parentId = parent.parentId;
-    }
-    return parentId;
+    return resolveCurrentTurnEntryId(
+      {
+        target: this.persistenceTarget,
+        entries: this.byId,
+        parentId: this.appendParentId,
+        remainingAncestors: includeOmitted
+          ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
+          : this.byId.size,
+        isInterruptedTail,
+      },
+      includeOmitted,
+    );
   }
 
-  private readOmittedCustomMessage(entryId: string): SessionMessageEntry | undefined {
-    if (!this.persistenceTarget) {
-      return undefined;
-    }
-    const anchor = readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId });
-    if (!anchor) {
-      return undefined;
-    }
-    const event = readTranscriptEventAtSeqSync(this.persistenceTarget, anchor.rawSeq)?.event;
-    return isIndexedSessionEntry(event) &&
-      event.type === "message" &&
-      event.message.role === "custom" &&
-      event.id === anchor.entryId &&
-      event.parentId === anchor.effectiveParentId
-      ? event
-      : undefined;
+  [sessionManagerPrepareCurrentTurnReplay](
+    isInterruptedTail: (entry: SessionEntry) => boolean,
+    matchesUser: (entry: SessionEntry | undefined) => boolean,
+    signal?: AbortSignal,
+  ) {
+    return prepareCurrentTurnReplayWitness(
+      () => {
+        this.assertTranscriptViewAvailable();
+        return {
+          target: this.persistenceTarget,
+          version: this.transcriptVersion,
+          entries: this.byId,
+          parentId: this.appendParentId,
+          remainingAncestors:
+            this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
+          isInterruptedTail,
+        };
+      },
+      matchesUser,
+      signal,
+    );
   }
 
   appendMessage(
@@ -318,6 +339,102 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     options?: AppendPersistenceOptions,
   ): string {
     return this.appendMessageWithTranscriptAnchor(message, options).entryId;
+  }
+
+  async appendMessageAsync(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): Promise<string | undefined> {
+    return (await this.appendMessageWithTranscriptAnchorAsync(message, options)).entryId;
+  }
+
+  async appendMessageWithTranscriptAnchorAsync(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): Promise<
+    ReturnType<SessionManagerEntries["appendMessageWithTranscriptAnchor"]> & {
+      viewWasSuperseded?: true;
+    }
+  > {
+    return await withSessionManagerWrite(this, async (admission) => {
+      this.assertTranscriptWriteActive();
+      // User custody and process-local incognito storage retain their native owners.
+      // The synchronous SDK also permits a transaction-local fresh-message callback.
+      if (
+        !admission ||
+        isIncognitoSessionKey(this.persistenceTarget?.sessionKey) ||
+        (message.role !== "assistant" && message.role !== "toolResult") ||
+        options?.beforeFreshMessageCommit
+      ) {
+        return this.appendMessageWithTranscriptAnchor(message, options);
+      }
+      applyAssistantDeliveryDirectives(message);
+      const canonical = canonicalizeSessionEntry<SessionMessageEntry>(
+        {
+          type: "message",
+          id: generateSessionEntryId(),
+          parentId: this.appendParentId,
+          timestamp: new Date().toISOString(),
+          message,
+        },
+        options,
+      );
+      const activeBranchAppend =
+        !this.pendingDeliberateAppend &&
+        this.appendMode !== "side" &&
+        !isSessionTranscriptSideAppendEntry(canonical);
+      const prepared = prepareTranscriptMessageAppend(
+        copyCodeModeSourceAppendOptions(options, {
+          message: canonical.message,
+          config: options?.config,
+        }),
+      );
+      if (!prepared) {
+        throw new Error("Session message append requires prepared storage bytes");
+      }
+      const target = this.getSessionTarget();
+      const sessionId = this.getSessionId();
+      const admittedUserId = target
+        ? resolveSessionTranscriptReadFence(target)?.entryId
+        : undefined;
+      const committed = await this.persistWorkerRecord(
+        canonical,
+        activeBranchAppend ? "active-branch" : undefined,
+        admission,
+        {
+          prepared,
+          cwd: this.cwd,
+          validateTurn: activeBranchAppend,
+          idempotencyLookup: options?.idempotencyLookup,
+        },
+      );
+      try {
+        if (
+          this.getSessionId() !== sessionId ||
+          !sameSessionTranscriptTargetBinding(target, this.getSessionTarget())
+        ) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        const appended = this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+        return {
+          entryId: appended.entry.id,
+          message: appended.entry.message,
+          anchor: appended.anchor,
+          lifecycleRevision: appended.lifecycleRevision,
+          appended: appended.appended,
+          ...(appended.viewWasSuperseded ? { viewWasSuperseded: true as const } : {}),
+        };
+      } catch (cause) {
+        const error = new Error(
+          "Session message committed, but its view could not be adopted; do not replay the append",
+          { cause },
+        );
+        error.name = "SessionMessageCommittedError";
+        recordModelFallbackStop(error);
+        this.invalidateTranscriptView(error);
+        throw error;
+      }
+    });
   }
 
   appendMessageWithTranscriptAnchor(
@@ -384,31 +501,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     };
   }
 
-  appendThinkingLevelChange(thinkingLevel: string): string {
-    const entry: ThinkingLevelChangeEntry = {
-      type: "thinking_level_change",
-      id: generateSessionEntryId(),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      thinkingLevel,
-    };
-    this.appendEntry(entry);
-    return entry.id;
-  }
-
-  appendModelChange(provider: string, modelId: string): string {
-    const entry: ModelChangeEntry = {
-      type: "model_change",
-      id: generateSessionEntryId(),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      provider,
-      modelId,
-    };
-    this.appendEntry(entry);
-    return entry.id;
-  }
-
   appendCompaction(
     summary: string,
     firstKeptEntryId: string,
@@ -416,6 +508,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     details?: unknown,
     fromHook?: boolean,
     metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
   ): string {
     const entry: CompactionEntry = {
       type: "compaction",
@@ -425,6 +518,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       summary,
       firstKeptEntryId,
       tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
       ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
@@ -473,14 +567,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return entry.id;
   }
 
-  getSessionName(): string | undefined {
-    const sessionInfo = this.fileEntries.findLast(
-      (entry): entry is SessionInfoEntry =>
-        entry.type === "session_info" && this.byId.has(entry.id),
-    );
-    return sessionInfo?.name?.trim() || undefined;
-  }
-
   appendCustomMessageEntry(
     customType: string,
     content: string | (TextContent | ImageContent)[],
@@ -501,15 +587,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return entry.id;
   }
 
-  getLeafId(): string | null {
-    return this.leafId;
-  }
-
   appendLeafControl(params: {
     targetId: string | null;
     appendParentId: string | null;
     appendMode?: "side";
   }): SessionLeafControl {
+    this.assertTranscriptViewAvailable();
     if (params.targetId !== null && !this.byId.has(params.targetId)) {
       throw new Error(`Entry ${params.targetId} not found`);
     }
@@ -537,31 +620,8 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return entry;
   }
 
-  getLeafEntry(): SessionEntry | undefined {
-    return this.leafId ? this.getEntry(this.leafId) : undefined;
-  }
-
-  getEntry(id: string): SessionEntry | undefined {
-    const entry = this.byId.get(id);
-    return entry ? this.normalizeEntryParent(entry) : undefined;
-  }
-
-  getChildren(parentId: string): SessionEntry[] {
-    const children: SessionEntry[] = [];
-    for (const entry of this.byId.values()) {
-      const normalizedEntry = this.normalizeEntryParent(entry);
-      if (normalizedEntry.parentId === parentId) {
-        children.push(normalizedEntry);
-      }
-    }
-    return children;
-  }
-
-  getLabel(id: string): string | undefined {
-    return this.labelsById.get(id);
-  }
-
   appendLabelChange(targetId: string, label: string | undefined): string {
+    this.assertTranscriptViewAvailable();
     if (!this.byId.has(targetId)) {
       throw new Error(`Entry ${targetId} not found`);
     }
@@ -588,63 +648,8 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
-  getBoundaryCount(): number {
-    return (
-      this.persistedBoundaryCount ??
-      this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
-        .length
-    );
-  }
-
-  getHeader(): SessionHeader | null {
-    return this.fileEntries.find((entry) => entry.type === "session") ?? null;
-  }
-
-  getEntries(): SessionEntry[] {
-    return this.fileEntries
-      .filter((entry): entry is SessionEntry => entry.type !== "session" && this.byId.has(entry.id))
-      .map((entry) => this.normalizeEntryParent(entry));
-  }
-
-  getTree(): SessionTreeNode[] {
-    const entries = this.getEntries();
-    const nodeMap = new Map<string, SessionTreeNode>();
-    const roots: SessionTreeNode[] = [];
-    for (const entry of entries) {
-      nodeMap.set(entry.id, {
-        entry,
-        children: [],
-        label: this.labelsById.get(entry.id),
-        labelTimestamp: this.labelTimestampsById.get(entry.id),
-      });
-    }
-    for (const entry of entries) {
-      const node = nodeMap.get(entry.id)!;
-      const parentId = this.resolveCanonicalParentId(entry.parentId);
-      if (parentId === null || parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
-      }
-    }
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      node.children.sort(
-        (left, right) =>
-          new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
-      );
-      stack.push(...node.children);
-    }
-    return roots;
-  }
-
   branch(branchFromId: string): void {
+    this.assertTranscriptViewAvailable();
     if (!this.byId.has(branchFromId)) {
       this.ensureCompletePersistedHistory();
     }
@@ -659,6 +664,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   resetLeaf(): void {
+    this.assertTranscriptViewAvailable();
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;

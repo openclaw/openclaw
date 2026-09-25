@@ -56,6 +56,7 @@ import {
   type GatewayRequestHandlers,
   type NodeSession,
 } from "../core-api.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -431,7 +432,11 @@ export async function handleBrowserGatewayRequest({
   // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable()),
+    );
     return;
   }
 
@@ -461,36 +466,25 @@ export async function handleBrowserGatewayRequest({
     await assertDashboardCurrent?.(profile);
     assertRequesterCurrent();
   };
+  const dispatch = (timeoutSignal?: AbortSignal) =>
+    dispatcher.dispatch({
+      method: methodRaw,
+      path,
+      query,
+      body,
+      signal:
+        timeoutSignal && requestSignal
+          ? AbortSignal.any([timeoutSignal, requestSignal])
+          : (timeoutSignal ?? requestSignal),
+      ...(requester ? { requester } : {}),
+      assertCurrent,
+    });
   let result;
   try {
     await assertCurrent();
     result = timeoutMs
-      ? await withTimeout(
-          (timeoutSignal) =>
-            dispatcher.dispatch({
-              method: methodRaw,
-              path,
-              query,
-              body,
-              signal:
-                timeoutSignal && requestSignal
-                  ? AbortSignal.any([timeoutSignal, requestSignal])
-                  : (timeoutSignal ?? requestSignal),
-              ...(requester ? { requester } : {}),
-              assertCurrent,
-            }),
-          timeoutMs,
-          "browser request",
-        )
-      : await dispatcher.dispatch({
-          method: methodRaw,
-          path,
-          query,
-          body,
-          signal: requestSignal,
-          ...(requester ? { requester } : {}),
-          assertCurrent,
-        });
+      ? await withTimeout(dispatch, timeoutMs, "browser request")
+      : await dispatch();
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     return;

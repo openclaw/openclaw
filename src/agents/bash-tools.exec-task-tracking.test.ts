@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 
 const taskRuntime = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  finalizeTaskRunByRunId: vi.fn(),
+  prepareRunningTaskRun: vi.fn(),
 }));
 
 vi.mock("../tasks/detached-task-runtime.js", () => taskRuntime);
@@ -15,9 +14,90 @@ import {
 
 describe("background exec task tracking", () => {
   beforeEach(() => {
-    taskRuntime.createRunningTaskRun.mockReset();
-    taskRuntime.finalizeTaskRunByRunId.mockReset();
+    taskRuntime.prepareRunningTaskRun.mockReset();
   });
+
+  it("keeps the captured V1 runtime creation and finalization synchronous", () => {
+    const finalizeRun = vi.fn();
+    taskRuntime.prepareRunningTaskRun.mockReturnValue({
+      kind: "legacy",
+      task: { taskId: "task-v1" },
+      finalizeRun,
+    });
+    const assertCurrent = vi.fn();
+    const handle = createBackgroundExecTask({
+      processSessionId: "legacy-exec",
+      command: "echo done",
+      sessionKey: "agent:main:main",
+      startedAt: 100,
+      assertCurrent,
+    });
+    if (!handle || handle instanceof Promise) {
+      throw new Error("V1 creation must complete synchronously");
+    }
+    const pending = finalizeBackgroundExecTask({
+      handle,
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 25,
+        aggregated: "",
+        timedOut: false,
+      },
+    });
+    expect(pending).toBeUndefined();
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "exec:legacy-exec",
+        runtime: "cli",
+        sessionKey: "agent:main:main",
+        status: "succeeded",
+        clearError: true,
+        detail: { exitCode: 0 },
+      }),
+    );
+  });
+
+  it.each(["create", "finalize"] as const)(
+    "settles a worker %s rejection without a synchronous fallback",
+    async (phase) => {
+      const finalizeActive = vi.fn(async () => {
+        throw new Error("worker terminal write refused");
+      });
+      taskRuntime.prepareRunningTaskRun.mockReturnValue({
+        kind: "receipt",
+        create: async () => {
+          if (phase === "create") {
+            throw new Error("worker creation refused");
+          }
+          return { task: { taskId: "refused-worker" }, finalizeActive };
+        },
+      });
+      const handle = await createBackgroundExecTask({
+        processSessionId: "refused-exec",
+        command: "echo done",
+        sessionKey: "agent:main:main",
+        startedAt: 100,
+        assertCurrent() {},
+      });
+      await finalizeBackgroundExecTask({
+        handle,
+        outcome: {
+          status: "completed",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 25,
+          aggregated: "",
+          timedOut: false,
+        },
+      });
+      expect(finalizeActive).toHaveBeenCalledTimes(phase === "create" ? 0 : 1);
+      expect(taskRuntime.prepareRunningTaskRun).toHaveBeenCalledOnce();
+      expect(handle === null).toBe(phase === "create");
+    },
+  );
 
   it.each([
     {
@@ -41,39 +121,48 @@ describe("background exec task tracking", () => {
     { command: " \n\t ", label: "CLI command" },
   ])(
     "creates a silent CLI ledger row with a bounded, redacted command: $label",
-    ({ command, label, task = label }) => {
-      taskRuntime.createRunningTaskRun.mockReturnValue({ taskId: "task-1" });
+    async ({ command, label, task = label }) => {
+      taskRuntime.prepareRunningTaskRun.mockReturnValue({
+        kind: "receipt",
+        create: async () => ({ task: { taskId: "task-1" }, finalizeActive: vi.fn() }),
+      });
 
-      const handle = createBackgroundExecTask({
+      const assertCurrent = vi.fn();
+      const handle = await createBackgroundExecTask({
         processSessionId: "amber-reef",
         command,
         sessionKey: "agent:main:main",
         agentId: "main",
         startedAt: 100,
+        assertCurrent,
       });
 
       expect(handle).toEqual({
         taskId: "task-1",
         runId: "exec:amber-reef",
         sessionKey: "agent:main:main",
+        finalize: expect.any(Function),
       });
-      expect(taskRuntime.createRunningTaskRun).toHaveBeenCalledWith({
-        runtime: "cli",
-        taskKind: "exec",
-        sourceId: "amber-reef",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        agentId: "main",
-        requesterAgentId: "main",
-        runId: "exec:amber-reef",
-        label,
-        task,
-        notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
-        startedAt: 100,
-        lastEventAt: 100,
-      });
+      expect(taskRuntime.prepareRunningTaskRun).toHaveBeenCalledWith(
+        {
+          runtime: "cli",
+          taskKind: "exec",
+          sourceId: "amber-reef",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          agentId: "main",
+          requesterAgentId: "main",
+          runId: "exec:amber-reef",
+          label,
+          task,
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+          startedAt: 100,
+          lastEventAt: 100,
+        },
+        assertCurrent,
+      );
     },
   );
 
@@ -138,31 +227,26 @@ describe("background exec task tracking", () => {
     },
   ])(
     "finalizes $label before wake without persisting process output",
-    ({ outcome, status, error }) => {
-      finalizeBackgroundExecTask({
+    async ({ outcome, status, error }) => {
+      const finalize = vi.fn();
+      await finalizeBackgroundExecTask({
         handle: {
           taskId: "task-1",
           runId: "exec:amber-reef",
           sessionKey: "agent:main:main",
+          finalize,
         },
         outcome,
       });
 
-      expect(taskRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect(finalize).toHaveBeenCalledWith(
         expect.objectContaining({
-          runId: "exec:amber-reef",
-          runtime: "cli",
-          sessionKey: "agent:main:main",
           status,
           ...(error ? { error } : { clearError: true }),
         }),
       );
-      expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
-        "secret output",
-      );
-      expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
-        "processSessionId",
-      );
+      expect(JSON.stringify(finalize.mock.calls)).not.toContain("secret output");
+      expect(JSON.stringify(finalize.mock.calls)).not.toContain("processSessionId");
     },
   );
 });

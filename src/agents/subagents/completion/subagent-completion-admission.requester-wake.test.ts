@@ -17,11 +17,9 @@ import {
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import {
-  bindSubagentRunRecord,
-  loadSubagentRegistryFromSqlite,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
@@ -850,17 +848,16 @@ describe("persisted subagent requester wakes", () => {
         reopenOwners();
         const restored = subagentRuns.get(input.subagent.runId)!;
         expect(restored.execution).toEqual(before.execution);
-        expect(restored.cleanupCompletedAt).toBe(endedAt);
+        expect(restored.cleanupCompletedAt).toBe(
+          change === "unchanged" ? restored.delivery?.discardedAt : endedAt,
+        );
         if (change === "unchanged") {
           expect(restored.requesterSettleWake).toBeUndefined();
-          expect(restored.completion).toEqual({
-            required: true,
-            resultText: null,
-            capturedAt: endedAt,
-          });
+          expect(restored.completion).toEqual(before.completion);
           expect(restored.delivery).toMatchObject({
-            status: "failed",
-            lastError: "requester unavailable",
+            status: "discarded",
+            discardReason: "task-missing",
+            discardedAt: expect.any(Number),
           });
           expect(restored.suppressCompletionDelivery).toBe(true);
         } else {

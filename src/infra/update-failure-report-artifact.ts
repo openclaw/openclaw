@@ -1,5 +1,5 @@
 /** Filesystem lifecycle for a non-authoritative, sanitized update report body. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
 import { writeTextAtomic } from "./json-files.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
@@ -18,12 +19,17 @@ import type { PreparedUpdateFailureReport } from "./update-failure-report-prepar
 import type { UpdateRunReport } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
+function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
+  // Shipped support redactors must not mistake a numeric UUID tail for an account ID.
+  return `openclaw-update-${kind}-${id.replaceAll("-", "_")}.json`;
+}
+
 /** Complete sanitized inventories are named artifacts, never restored-runtime input. */
 async function writeUpdateFailureLintArtifact(
   inventory: TriageUpdateFailure,
   directory: string,
 ): Promise<string> {
-  const outputPath = path.join(directory, `openclaw-update-lint-${randomUUID()}.json`);
+  const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
   await writeTextAtomic(outputPath, `${JSON.stringify(inventory)}\n`, {
     mode: 0o600,
     dirMode: 0o700,
@@ -39,7 +45,7 @@ export async function writeTriageUpdateFailure(
   const stateDir = resolveStateDir(env);
   const outputPath =
     options.outputPath ??
-    path.join(stateDir, "logs", "support", `openclaw-update-failure-${randomUUID()}.json`);
+    path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
   const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
   if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
     const detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
@@ -68,7 +74,11 @@ export async function writeUpdateRunReportArtifact(params: {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const id = (!params.detached && z.uuid().safeParse(params.result.runId).data) || randomUUID();
-  const directory = params.detached ? os.tmpdir() : path.join(stateDir, "update-reports");
+  // Atomic writes enforce their parent mode; never apply private report permissions
+  // to the shared temporary root. Returned reports remain available to the operator.
+  const directory = params.detached
+    ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-"))
+    : path.join(stateDir, "update-reports");
   const outputPath = path.join(directory, `${id}.md`);
   const failurePath =
     classifyUpdateOutcome(params.result) === "failed"
@@ -77,7 +87,7 @@ export async function writeUpdateRunReportArtifact(params: {
           {
             env,
             outputPath: params.detached
-              ? path.join(directory, `openclaw-update-failure-${id}.json`)
+              ? path.join(directory, updateDiagnosticArtifactName("failure", id))
               : undefined,
           },
         )
@@ -109,9 +119,7 @@ export function bindSavedReportArtifact(
   previewDigest = prepared.previewDigest,
 ): PreparedUpdateFailureReport {
   const parsed = path.parse(prepared.savedReportPath);
-  const artifactKey = createHash("sha256")
-    .update(`${reservationId}\0${previewDigest}`)
-    .digest("hex");
+  const artifactKey = sha256Hex(`${reservationId}\0${previewDigest}`);
   return {
     ...prepared,
     savedReportPath: path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`),
@@ -144,18 +152,6 @@ function isAttemptArtifactName(base: path.ParsedPath, entry: string): boolean {
     withoutStageSuffix.length - base.ext.length,
   );
   return /^[a-f0-9]{64}$/u.test(artifactKey);
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 export async function discardSavedUpdateFailureReport(
@@ -230,10 +226,8 @@ export async function savePreparedUpdateFailureReport(
   };
   const reportDir = path.dirname(prepared.savedReportPath);
   ensureCurrentAuthority();
-  const reportDirExisted = await pathExists(reportDir);
-  ensureCurrentAuthority();
-  await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
-  saved.reportDirCreated = !reportDirExisted;
+  const created = await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
+  saved.reportDirCreated = created !== undefined;
   ensureCurrentAuthority();
   try {
     await fs.writeFile(stagedReportPath(prepared), prepared.body, {

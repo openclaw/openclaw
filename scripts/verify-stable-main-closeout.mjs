@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
+  findAppcastWithdrawal,
+  requiresThinMacArtifacts,
   requiresLinuxUpdaterObservation,
   verifyReleaseEvidenceChecksum,
   verifyStableMainCloseout,
@@ -50,6 +52,17 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+function readOptionalText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function gitSha(dir) {
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], {
     encoding: "utf8",
@@ -83,13 +96,46 @@ function main() {
   const existingManifest = args["existing-manifest"]
     ? readJson(resolve(args["existing-manifest"]))
     : undefined;
+  const thinMacAppcasts = requiresThinMacArtifacts(args.tag)
+    ? {
+        mainArm64Appcast: readOptionalText(resolve(mainDir, "appcast-arm64.xml")),
+        mainX86_64Appcast: readOptionalText(resolve(mainDir, "appcast-x86_64.xml")),
+        ...(args["published-appcast-arm64"]
+          ? {
+              publishedArm64Appcast: readFileSync(resolve(args["published-appcast-arm64"]), "utf8"),
+            }
+          : {}),
+        ...(args["published-appcast-x86-64"]
+          ? {
+              publishedX86_64Appcast: readFileSync(
+                resolve(args["published-appcast-x86-64"]),
+                "utf8",
+              ),
+            }
+          : {}),
+      }
+    : {};
+  const repository = process.env.GITHUB_REPOSITORY ?? "openclaw/openclaw";
+  const mainSha = gitSha(mainDir);
   const linuxUpdaterObservation = requiresLinuxUpdaterObservation({ release, existingManifest })
-    ? inspectLinuxUpdaterManifest({
-        repository: process.env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
-        carrierTag: args.tag,
-      })
+    ? inspectLinuxUpdaterManifest({ repository, carrierTag: args.tag })
     : undefined;
   const result = verifyStableMainCloseout({
+    // Replay reads the current main feed, so its withdrawal marker lives on main too.
+    findAppcastWithdrawal: (withdrawnVersion) =>
+      findAppcastWithdrawal(
+        JSON.parse(
+          execFileSync(
+            "gh",
+            [
+              "api",
+              `repos/${repository}/commits?sha=${existingManifest ? "main" : mainSha}&path=appcast.xml&per_page=100`,
+            ],
+            { encoding: "utf8" },
+          ),
+        ),
+        withdrawnVersion,
+      ),
     tag: args.tag,
     mainPackageJson: readJson(resolve(mainDir, "package.json")),
     tagPackageJson,
@@ -99,13 +145,16 @@ function main() {
     publishedAppcast: args["published-appcast"]
       ? readFileSync(resolve(args["published-appcast"]), "utf8")
       : undefined,
+    ...thinMacAppcasts,
     release,
     linuxUpdaterObservation,
     releaseTagSha: gitSha(tagDir),
-    mainSha: gitSha(mainDir),
+    mainSha,
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
     fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],
+    stableSoakWaiver: args["stable-soak-waiver"] ?? "",
+    laneWaiver: args["lane-waiver"] ?? "",
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",

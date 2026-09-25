@@ -6,6 +6,7 @@ import { deviceIcons } from "../../components/icons-devices.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { resolveCloudProfileIcon } from "../../components/provider-icon.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
@@ -322,7 +323,7 @@ export function renderWhereChip(params: {
         <span class="new-session-page__trigger-label">${label}</span>
         ${
           configurationSummary
-            ? html`<span class="new-session-page__trigger-summary">· ${configurationSummary}</span>`
+            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
             : nothing
         }
         <span
@@ -338,6 +339,7 @@ export function renderWhereChip(params: {
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
       for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
       placement="bottom-start"

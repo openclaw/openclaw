@@ -57,7 +57,7 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     vi.setSystemTime(new Date(firstDueAt + 5));
 
     // Simulate the user running `cron list` while the job is past-due.
-    // Before the fix, this would call recomputeNextRuns() which silently
+    // Before the fix, load-time schedule repair would silently
     // advances nextRunAtMs to the next occurrence (00:02:00) without
     // executing the job.
     const listedBefore = await cron.list({ includeDisabled: true });

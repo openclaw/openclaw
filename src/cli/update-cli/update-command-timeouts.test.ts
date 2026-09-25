@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
@@ -30,7 +31,7 @@ it.each(
       target: "2026.9.4",
       version: "2026.9.4",
       nodeEngine: null,
-      schemaVersions: { state: 17, agent: 20 },
+      schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 },
     });
     vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
@@ -43,7 +44,14 @@ it.each(
         return null;
       });
 
-    await updateCommand({ tag: "2026.9.4", yes: true, json: true, restart: false, timeout });
+    await updateCommand({
+      admission: "installed",
+      tag: "2026.9.4",
+      yes: true,
+      json: true,
+      restart: false,
+      timeout,
+    });
 
     const stepTimeoutMs =
       timeout === undefined ? (trigger === "campaign" ? 45 : 30) * 60_000 : 3_600_000;

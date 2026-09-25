@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover plugin service plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./config/config.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 import { createBrowserPluginService } from "./plugin-service.js";
 
 const SERVICE_CONTEXT = {
@@ -135,14 +135,14 @@ describe("createBrowserPluginService", () => {
   });
 });
 
-describe("isDefaultBrowserPluginEnabled", () => {
+describe("resolveBrowserPluginEnableState", () => {
   it("defaults to enabled", () => {
-    expect(isDefaultBrowserPluginEnabled({} as OpenClawConfig)).toBe(true);
+    expect(resolveBrowserPluginEnableState({} as OpenClawConfig)).toEqual({ enabled: true });
   });
 
   it("respects explicit plugin disablement", () => {
     expect(
-      isDefaultBrowserPluginEnabled({
+      resolveBrowserPluginEnableState({
         plugins: {
           entries: {
             browser: {
@@ -151,6 +151,6 @@ describe("isDefaultBrowserPluginEnabled", () => {
           },
         },
       } as OpenClawConfig),
-    ).toBe(false);
+    ).toEqual({ enabled: false, reason: "disabled in config" });
   });
 });

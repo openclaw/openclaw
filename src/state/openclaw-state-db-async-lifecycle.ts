@@ -48,6 +48,7 @@ type MaintenanceResource = {
   phase:
     | "agent-resources"
     | "agent-handles"
+    | "shared-leases"
     | "shared-resources"
     | "shared-references"
     | "shared-handles";
@@ -66,8 +67,9 @@ type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
-  assertOwnerCurrent(): void;
-  assertAdmission(): void;
+  assertOwnerCurrent(this: void, access?: "read"): void;
+  assertAdmission(this: void): void;
+  assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
   assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
   run<T>(operation: () => T): T;
@@ -165,25 +167,48 @@ export function createOpenClawDatabaseMaintenanceScope(
   const schemaMigrationChecks = new Set<(migration: AgentSchemaMigration) => void>();
   const resources = new Map<object, MaintenanceResource>();
   let closed = false;
+  let checkingOwner = false;
   let closing: Promise<void> | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Database maintenance resource scope is closed");
     }
   };
+  const assertAdmissionLifecycle = () => {
+    assertOpen();
+    const inherited = maintenanceResources.current.getStore();
+    if (closing && !(inherited?.scope === scope && inherited.active)) {
+      throw new Error("Database maintenance resource admission is closed");
+    }
+  };
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance: schemaDelegateFactory !== undefined,
-    assertOwnerCurrent() {
-      parent?.assertOwnerCurrent();
-      assertOwnerCurrent?.();
+    assertOwnerCurrent(access) {
+      if (checkingOwner) {
+        if (access === "read") {
+          return;
+        }
+        throw new Error("Database maintenance authority check cannot admit a nested effect");
+      }
+      checkingOwner = true;
+      try {
+        parent?.assertOwnerCurrent(access);
+        assertOwnerCurrent?.();
+      } finally {
+        checkingOwner = false;
+      }
     },
     assertAdmission() {
       assertOpen();
       scope.assertOwnerCurrent();
-      const inherited = maintenanceResources.current.getStore();
-      if (closing && !(inherited?.scope === scope && inherited.active)) {
-        throw new Error("Database maintenance resource admission is closed");
-      }
+      assertAdmissionLifecycle();
+    },
+    assertReadAdmission() {
+      assertAdmissionLifecycle();
+      // Current authority needs policy rows from this same store. Keep its resource
+      // custody, but do not recurse into a check already evaluating those rows.
+      scope.assertOwnerCurrent("read");
+      assertAdmissionLifecycle();
     },
     addAgentSchemaMigrationCheck(check) {
       scope.assertAdmission();
@@ -249,6 +274,7 @@ export function createOpenClawDatabaseMaintenanceScope(
             for (const phase of [
               "agent-resources",
               "agent-handles",
+              "shared-leases",
               "shared-resources",
               "shared-references",
               "shared-handles",
@@ -321,6 +347,29 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       );
     }
   };
+  const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
+    const record = records.get(identity.key);
+    if (
+      !record ||
+      !identity.key.startsWith("file:") ||
+      record.paths.has(identity.canonicalPath) ||
+      isSealed(record)
+    ) {
+      return record;
+    }
+    // A closed, deleted database can leave an inode that a new path reuses.
+    // Only cold identity binding probes aliases; warmed captures stay unchanged.
+    if (
+      [...record.paths].some(
+        (pathname) => inspectDatabasePathIdentitySync(pathname)?.key === identity.key,
+      )
+    ) {
+      return record;
+    }
+    invalidate(record);
+    forget(record);
+    return undefined;
+  };
   const resolve = (pathname: string, preparedIdentity?: DatabasePathIdentity): IdentityRecord => {
     const resolvedPath = path.resolve(pathname);
     const cached = known(resolvedPath);
@@ -331,7 +380,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         : cached;
     }
     const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
-    let record = records.get(identity.key);
+    let record = findPhysicalRecord(identity);
     if (!record && identity.key.startsWith("file:")) {
       // A first creation can become visible through an alias before publication.
       // Reconcile unresolved creation facts here, never on warmed captures.
@@ -398,7 +447,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       const resolvedPath = path.resolve(pathname);
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = known(resolvedPath);
-      let record = records.get(identity.key);
+      let record = findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.

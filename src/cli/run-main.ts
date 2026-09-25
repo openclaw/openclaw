@@ -20,7 +20,7 @@ import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
-import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { getPluginCache } from "../plugins/plugin-cache.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   normalizeGeneratedHelpCommandArgv,
@@ -57,7 +57,10 @@ import {
   getCoreCliCommandNamesCore,
 } from "./program/core-command-descriptors.js";
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
+import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
+  isAgentExecInvocation,
+  isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
@@ -66,23 +69,16 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
+import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
+import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
+  configureCliStartupDiagnostics,
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
-
-export {
-  rewriteUpdateFlagArgv,
-  shouldHandleBareRoot,
-  shouldEnsureCliPath,
-  shouldStartProxyForCli,
-  shouldUseRootHelpFastPath,
-  shouldUseSetupOnboardConfigureHelpFastPath,
-} from "./run-main-policy.js";
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -93,19 +89,6 @@ const CLI_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
-
-const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
-const loadRootHelpMetadataModule = async () => await import("./root-help-metadata.js");
-const loadLoggingModule = async () => await import("../logging/console.js");
-const loadCliRegistryLoaderModule = async () => await import("../plugins/cli-registry-loader.js");
-const loadManifestCommandAliasesRuntimeModule = async () =>
-  await import("../plugins/manifest-command-aliases.runtime.js");
-const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
-const loadProgressModule = async () => await import("./progress.js");
-
-function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
-  return primary === "agent" && !argv.includes("--local");
-}
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -635,10 +618,6 @@ function shouldLoadCliDotEnv(
   return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
-function isAgentExecInvocation(commandPath: string[]): boolean {
-  return commandPath[0] === "agent" && commandPath[1] === "exec";
-}
-
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   if (!error || typeof error !== "object") {
     return false;
@@ -796,7 +775,7 @@ async function resolvePluginMachineOutput(params: {
   if (!primary || isKnownBuiltInCommandRoot(primary)) {
     return false;
   }
-  const { loadPluginCliDescriptors } = await loadCliRegistryLoaderModule();
+  const { loadPluginCliDescriptors } = await import("../plugins/cli-registry-loader.js");
   const descriptors = await loadPluginCliDescriptors({
     cfg: params.config,
     env: process.env,
@@ -814,7 +793,7 @@ async function isPluginCliRoot(params: {
   session?: PluginCliLoadSession;
 }): Promise<boolean | null> {
   try {
-    const { resolvePluginCliRootOwnerIds } = await loadCliRegistryLoaderModule();
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
     const ownerIds = await resolvePluginCliRootOwnerIds({
       cfg: params.config,
       env: process.env,
@@ -844,7 +823,8 @@ async function resolveCliCommandSurfaceOwner(params: {
   primary: string;
   config: OpenClawConfig;
 }): Promise<string | undefined> {
-  const { resolveManifestCliCommandSurfaceOwner } = await loadManifestCommandAliasesRuntimeModule();
+  const { resolveManifestCliCommandSurfaceOwner } =
+    await import("../plugins/manifest-command-aliases.runtime.js");
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
@@ -854,7 +834,7 @@ async function resolveCliCommandSurfaceOwner(params: {
     return manifestOwner;
   }
   try {
-    const { resolvePluginCliRootOwnerIds } = await loadCliRegistryLoaderModule();
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
     return (
       await resolvePluginCliRootOwnerIds({
         cfg: createAllowlistAgnosticCliLookupConfig(params.config),
@@ -907,7 +887,7 @@ async function resolveUnownedCliPrimaryError(params: {
   config: OpenClawConfig;
 }): Promise<Error> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
-    await loadManifestCommandAliasesRuntimeModule();
+    await import("../plugins/manifest-command-aliases.runtime.js");
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
   const pluginPolicyMessage = resolveMissingPluginCommandMessage(params.primary, params.config, {
     resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
@@ -969,6 +949,9 @@ export async function runCli(
 ) {
   const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
   const originalArgv = normalizeWindowsArgv(argv);
+  if (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(originalArgv))) {
+    return;
+  }
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
@@ -1012,9 +995,7 @@ export async function runCli(
       // Nested registrars and late actions share this lightweight owner, even when no
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
       const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
-      return withCliCommandCleanup(gatewayRun, (cleanup) =>
-        gatewayRun ? run() : withPluginCache(createPluginCache(), () => run(cleanup)),
-      );
+      return withCliPluginInvocation(gatewayRun, run);
     },
     {
       machineOutput: builtInMachineOutput,
@@ -1044,7 +1025,7 @@ async function runCliWithPreparedOutputMode(
     if (consoleCaptureInstalled) {
       return;
     }
-    const { enableConsoleCapture } = await loadLoggingModule();
+    const { enableConsoleCapture } = await import("../logging/console.js");
     enableConsoleCapture();
     consoleCaptureInstalled = true;
   };
@@ -1187,9 +1168,9 @@ async function runCliWithPreparedOutputMode(
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   let pluginCliSession: PluginCliLoadSession | undefined;
   const getPluginCliSession = async () => {
-    pluginCliSession ??= (await loadCliRegistryLoaderModule()).createPluginCliLoadSession(
-      getPluginCache(),
-    );
+    pluginCliSession ??= (
+      await import("../plugins/cli-registry-loader.js")
+    ).createPluginCliLoadSession(getPluginCache());
     return pluginCliSession;
   };
   const isolateProxyConfigEnv = isGatewayRunInvocation;
@@ -1258,7 +1239,7 @@ async function runCliWithPreparedOutputMode(
     proxyHandle = null;
     const stop = async () => {
       if (handle) {
-        const { stopProxy } = await loadProxyLifecycleModule();
+        const { stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
         await stopProxy(handle);
       }
     };
@@ -1292,7 +1273,7 @@ async function runCliWithPreparedOutputMode(
   };
   const replaceStartedProxy = async (config: OpenClawConfig["proxy"]) => {
     await stopStartedProxy();
-    const { startProxy } = await loadProxyLifecycleModule();
+    const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     proxyHandle = await startProxy(config);
     proxyStopPromise = undefined;
     installProxySignalHandlers();
@@ -1301,17 +1282,11 @@ async function runCliWithPreparedOutputMode(
   let unhandledRejectionHandlerInstalled = false;
 
   try {
-    const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-      (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
-    );
-    if (
-      !isDatabaseInvocation &&
-      (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
-        Boolean,
-      )
-    ) {
-      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-      await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+    if (!isDatabaseInvocation) {
+      await configureCliStartupDiagnostics(
+        [startupTrace, options.additionalStartupTrace],
+        isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
+      );
     }
     if (
       !isHelpOrVersionInvocation &&
@@ -1325,7 +1300,7 @@ async function runCliWithPreparedOutputMode(
           resolvePluginMachineOutput({ argv: normalizedArgv, config, session: pluginCliSession }),
         )
       ) {
-        const { routeLogsToStderr } = await loadLoggingModule();
+        const { routeLogsToStderr } = await import("../logging/console.js");
         routeLogsToStderr();
       }
     }
@@ -1358,12 +1333,12 @@ async function runCliWithPreparedOutputMode(
 
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
-        await loadRootHelpLiveConfigModule();
+        await import("./root-help-live-config.js");
       const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
         process.env,
       );
       if (!liveRootHelpOptions) {
-        const { outputPrecomputedRootHelpText } = await loadRootHelpMetadataModule();
+        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
         if (outputPrecomputedRootHelpText()) {
           return;
         }
@@ -1547,7 +1522,7 @@ async function runCliWithPreparedOutputMode(
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
     const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
-    const { createCliProgress } = await loadProgressModule();
+    const { createCliProgress } = await import("./progress.js");
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
@@ -1633,7 +1608,7 @@ async function runCliWithPreparedOutputMode(
           const { getProgramContext } = await import("./program/program-context.js");
           const ctx = getProgramContext(program);
           if (ctx) {
-            const { registerCoreCliByName } = await import("./program/command-registry.js");
+            const { registerCoreCliByName } = await import("./program/command-registry-core.js");
             await registerCoreCliByName(program, ctx, primary);
           }
           const { registerSubCliByName } = await import("./program/register.subclis.js");
@@ -1674,7 +1649,7 @@ async function runCliWithPreparedOutputMode(
           )
         ) {
           const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
-            await loadManifestCommandAliasesRuntimeModule();
+            await import("../plugins/manifest-command-aliases.runtime.js");
           const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
             primary,
             config,

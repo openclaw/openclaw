@@ -382,8 +382,7 @@ export async function removeStaleJobFamily(
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
-    opts?.commitGuard?.();
-    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
+    return await removeStaleCronJobFamilyRows(state.deps.storePath, family, opts);
   });
 }
 
@@ -582,7 +581,7 @@ export async function remove(
   const cleanup = async () => {
     try {
       const shouldRemove = await locked(state, async () => {
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         return !state.store?.jobs.some((job) => job.id === id);
       });
       if (shouldRemove) {

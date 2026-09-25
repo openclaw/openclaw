@@ -471,6 +471,7 @@ export async function executeSystemAgentOperation(
                   : {}),
               },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }
@@ -545,9 +546,8 @@ export async function executeSystemAgentOperation(
         },
       });
     case "doctor": {
-      const runDoctor =
-        opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
-      await runDoctor(runtime, { nonInteractive: true });
+      const { runDoctorProcess } = await import("../commands/doctor.js");
+      await runDoctorProcess(runtime);
       return { applied: false };
     }
     case "doctor-fix":

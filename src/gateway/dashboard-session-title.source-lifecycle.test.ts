@@ -252,24 +252,21 @@ describe("worktree title source lifecycle", () => {
           throw new Error("title completed before generation started");
         }),
       ]);
-      const duplicate = await context.run("duplicate", () =>
+      const duplicate = context.run("duplicate", () =>
         duplicateOwner.run(() =>
           maybeGenerateSessionTitle({ ...params, withSource: duplicateSource }),
         ),
       );
-      expect(duplicate.kind).toBe("in-flight");
-      if (duplicate.kind !== "in-flight") {
-        throw new Error("expected the canonical in-flight title request");
-      }
       context.run("duplicate", () => duplicateOwner.beginClose(new Error("duplicate closed")));
       await duplicateOwner.drain();
       expect(signal?.aborted).toBe(false);
       expect(duplicateSources).toBe(0);
 
       const originalClosed = new Error("original title owner closed");
+      const duplicateRejected = expect(duplicate).rejects.toBe(originalClosed);
       context.run("unrelated", () => owner.beginClose(originalClosed));
       await expect(first).rejects.toBe(originalClosed);
-      await expect(duplicate.settled).rejects.toBe(originalClosed);
+      await duplicateRejected;
       expect(signal?.reason).toBe(originalClosed);
       expect(cancellationContext).toBe("owner");
       expect(mocks.generate).toHaveBeenCalledOnce();

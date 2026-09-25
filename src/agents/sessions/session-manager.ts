@@ -5,40 +5,45 @@
  * behavior are split into focused internal modules.
  */
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import {
-  appendTranscriptMessageSync,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
+  type SessionModelContextLimits,
   validateSessionTranscriptContextAdmission,
   validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
-import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import {
+  assertCurrentSessionTranscriptHeader,
+  findSessionTranscriptHeader,
+} from "../../config/sessions/session-entry-codec.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
 import type {
   SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
-} from "./session-manager-core.js";
-import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
+} from "./session-manager-view-types.js";
 
 export { CURRENT_SESSION_VERSION };
 export {
@@ -74,7 +79,7 @@ export class SessionManager extends SessionManagerBranching {
   private constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
-    loadedEntries?: FileEntry[],
+    loadedEntries?: readonly unknown[],
     boundedContext?: SessionManagerBoundedContext,
     transcriptMutationAt?: number | null,
     version?: SessionTranscriptContextVersion,
@@ -178,6 +183,47 @@ export class SessionManager extends SessionManagerBranching {
     };
   }
 
+  /** Opens an existing store off-thread; empty transcripts keep lazy header initialization. */
+  static async openAsync(
+    target: SessionTranscriptRuntimeTarget,
+    cwdOverride?: string,
+    contextLimits?: SessionManagerBoundedContextLimits,
+    signal?: AbortSignal,
+  ): Promise<SessionManager> {
+    if (contextLimits) {
+      return await SessionManager.openBoundedAsync(target, {
+        ...contextLimits,
+        cwd: cwdOverride,
+        signal,
+      });
+    }
+    const hydration = prepareSessionTranscriptHydration(target, undefined, signal);
+    const cwd = cwdOverride ?? process.cwd();
+    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
+    assertOwned();
+    const prepared = await hydration.read().catch((error: unknown) => {
+      assertOwned();
+      throw error;
+    });
+    signal?.throwIfAborted();
+    assertOwned();
+    hydration.assertCurrent();
+    if (prepared.kind !== "full") {
+      throw new Error("Expected a full transcript snapshot");
+    }
+    const entries = prepared.snapshot.events;
+    const header = findSessionTranscriptHeader(entries);
+    return new SessionManager(
+      cwdOverride ?? header?.cwd ?? cwd,
+      hydration.target,
+      entries,
+      undefined,
+      prepared.snapshot.version.updatedAt,
+      prepared.snapshot.version,
+    );
+  }
+
+  /** @deprecated Runtime callers should await openAsync. */
   static open(
     target: SessionTranscriptRuntimeTarget,
     cwdOverride?: string,
@@ -189,14 +235,15 @@ export class SessionManager extends SessionManagerBranching {
         ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
       });
     }
-    const snapshot = loadTranscriptReadSnapshotSync(target);
+    const capturedTarget = captureSessionTranscriptTargetBinding(target);
+    const snapshot = loadTranscriptReadSnapshotSync(capturedTarget);
     const entries = snapshot.events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
     return new SessionManager(
       cwdOverride ?? header?.cwd ?? process.cwd(),
-      target,
+      capturedTarget,
       entries,
       undefined,
       snapshot.version.updatedAt,
@@ -204,13 +251,14 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Opens only the selected model-context tail while preserving the complete durable transcript. */
+  /** @deprecated Runtime callers should await openBoundedAsync. */
   static openBounded(
     target: SessionTranscriptRuntimeTarget,
     options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
   ): SessionManager {
     const { cwd, onTruncated, ...limits } = options;
-    const context = readSessionTranscriptBoundedActiveContextCore(target, limits);
+    const capturedTarget = captureSessionTranscriptTargetBinding(target);
+    const context = readSessionTranscriptBoundedActiveContextCore(capturedTarget, limits);
     if (context.truncated) {
       onTruncated?.();
     }
@@ -219,13 +267,65 @@ export class SessionManager extends SessionManagerBranching {
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), target, entries, {
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), capturedTarget, entries, {
       ...context,
       limits,
     });
   }
 
-  /** Consumes a fresh bounded read as a detached branch, without copying its owned payloads. */
+  /** Reads an existing store's bounded view under the history worker's database custody. */
+  static async openBoundedAsync(
+    target: SessionTranscriptRuntimeTarget,
+    options: SessionManagerBoundedContextLimits & {
+      cwd?: string;
+      onTruncated?: () => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<SessionManager> {
+    const { cwd, onTruncated, signal, ...limits } = options;
+    const fallbackCwd = cwd ?? process.cwd();
+    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
+    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
+    assertOwned();
+    const prepared = await hydration.read().catch((error: unknown) => {
+      // Callers may interpret typed absence; that result still needs its live owner.
+      assertOwned();
+      throw error;
+    });
+    signal?.throwIfAborted();
+    assertOwned();
+    hydration.assertCurrent();
+    if (prepared.kind !== "bounded") {
+      throw new Error("Expected a bounded transcript snapshot");
+    }
+    const context = prepared.snapshot;
+    if (context.truncated) {
+      onTruncated?.();
+    }
+    signal?.throwIfAborted();
+    assertOwned();
+    hydration.assertCurrent();
+    const entries = context.events;
+    const header = findSessionTranscriptHeader(entries);
+    return new SessionManager(cwd ?? header?.cwd ?? fallbackCwd, hydration.target, entries, {
+      ...context,
+      limits,
+    });
+  }
+
+  /** Detach the prepared bounded branch without retaining database custody. */
+  static async openDetachedBoundedAsync(
+    target: SessionTranscriptRuntimeTarget,
+    options: Parameters<typeof SessionManager.openBoundedAsync>[1],
+  ): Promise<SessionManager> {
+    const source = await SessionManager.openBoundedAsync(target, options);
+    return SessionManager.fromSelectedEntries(
+      [source.getHeader(), ...source.getBranch()],
+      source.getCwd(),
+    );
+  }
+
+  /** @deprecated Runtime callers should await openDetachedBoundedAsync. */
   static openDetachedBounded(
     target: SessionTranscriptRuntimeTarget,
     options: Parameters<typeof SessionManager.openBounded>[1],
@@ -245,7 +345,7 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
@@ -262,7 +362,7 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };
@@ -323,7 +423,10 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Appends to the current transcript leaf without hydrating its history. */
+  /**
+   * @deprecated Retained for the v2026.9.5 plugin SDK contract.
+   * Removal requires a versioned SDK replacement and plugin migration window.
+   */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,
     message: Message | CustomMessage | BashExecutionMessage,

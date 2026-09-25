@@ -10,6 +10,7 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -20,6 +21,7 @@ import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
   observedSystemdManagerUid,
@@ -49,6 +51,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
     assertCurrent: () => void;
+    outputPaths?: readonly string[];
   },
   publish: (assertPublicationCurrent: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
@@ -60,9 +63,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       assertNative();
     };
     const refuse = (cause?: unknown): never => {
+      const inspectionDetail =
+        cause instanceof ServiceInspectionError && cause.reason === "windows-task-inspection-failed"
+          ? `${cause.message} `
+          : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        "Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run `openclaw gateway status --deep`, stop the affected Gateway through its service owner, and retry the update.",
+        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the update.`,
         { cause },
       );
     };
@@ -103,21 +110,24 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     const same = (a: PathIdentity, b: PathIdentity) =>
       a.real === b.real ||
       Boolean(a.stat && b.stat && a.stat.dev === b.stat.dev && a.stat.ino === b.stat.ino);
-    const outputPaths = [
+    const outputPaths = params.outputPaths ?? [
       "dist-runtime",
       path.join("dist", "extensions", "node_modules", "openclaw"),
     ];
+    const parentPaths = new Set([""]);
+    for (const output of outputPaths) {
+      for (let parent = path.dirname(output); parent !== "."; parent = path.dirname(parent)) {
+        if (!outputPaths.some((replaced) => isPathInside(replaced, parent))) {
+          parentPaths.add(parent);
+        }
+      }
+    }
     const readInspection = async () => {
       assertCurrent();
       // Parents are stable across publication; output roots themselves are renamed.
       // Record missing descendants too, so creating them cannot redirect a later effect.
       const parents = await Promise.all(
-        [
-          "",
-          "dist",
-          path.join("dist", "extensions"),
-          path.join("dist", "extensions", "node_modules"),
-        ].map((relative) =>
+        [...parentPaths].map((relative) =>
           relative ? outputIdentity(path.join(params.root, relative)) : identity(params.root),
         ),
       );

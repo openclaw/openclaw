@@ -1,3 +1,4 @@
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginMetadataSnapshotCandidate,
@@ -49,7 +50,7 @@ type CurrentPluginMetadataSnapshotOptions = {
   workspaceDir?: string;
 };
 
-type CurrentPluginMetadataSnapshotParams = {
+export type CurrentPluginMetadataSnapshotParams = {
   /** Stop before policy-state validation so async owners can prepare it before retrying. */
   allowSynchronousPolicyRead?: boolean;
   config?: OpenClawConfig;
@@ -60,6 +61,7 @@ type CurrentPluginMetadataSnapshotParams = {
   workspaceDir?: string;
   allowWorkspaceScopedSnapshot?: boolean;
   requireDefaultDiscoveryContext?: boolean;
+  requireAgentWorkspaceCompatibility?: boolean;
 };
 
 export type PluginMetadataSnapshotScopeRunner = <T>(
@@ -74,10 +76,12 @@ function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
   options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
 ): string {
-  return resolvePluginControlPlaneFingerprint({
-    config,
-    ...options,
-  });
+  return resolvePluginControlPlaneFingerprint({ config, ...options });
+}
+
+function resolveAgentWorkspaceFingerprint(config: OpenClawConfig, env?: NodeJS.ProcessEnv): string {
+  // Discovery order determines schema precedence; retain the canonical resolver's order.
+  return JSON.stringify(listAgentWorkspaceDirs(config, env));
 }
 
 function prepareCurrentPluginMetadataSnapshotPublication(
@@ -105,6 +109,10 @@ function prepareCurrentPluginMetadataSnapshotPublication(
     snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
     Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
   const envFingerprint = resolvePluginMetadataEnvFingerprint(options.env);
+  const agentWorkspaceFingerprint =
+    owner === "gateway" && options.config
+      ? resolveAgentWorkspaceFingerprint(options.config, options.env)
+      : undefined;
   const configIdentities = [...(options.compatibleConfigs ?? [])];
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
@@ -131,6 +139,7 @@ function prepareCurrentPluginMetadataSnapshotPublication(
       owner,
       envFingerprint,
       defaultDiscoveryCompatible,
+      agentWorkspaceFingerprint,
     );
     for (const config of configIdentities) {
       currentPluginMetadataConfigIdentityCache.add(config);
@@ -376,6 +385,46 @@ function resolveCompatiblePluginMetadataSnapshot(
     return undefined;
   }
   return snapshot;
+}
+
+/** Reads Gateway-owned metadata from an operation cache only when its inputs still match. */
+export function getCompatibleProcessGatewayPluginMetadataSnapshot(
+  params: CurrentPluginMetadataSnapshotParams = {},
+): PluginMetadataSnapshot | undefined {
+  const {
+    snapshot,
+    owner,
+    configFingerprint,
+    agentWorkspaceFingerprint,
+    envFingerprint,
+    defaultDiscoveryCompatible,
+    compatiblePolicyHashes,
+    compatibleConfigFingerprints,
+  } = getCurrentPluginMetadataSnapshotState();
+  if (owner !== "gateway") {
+    return undefined;
+  }
+  if (
+    params.requireAgentWorkspaceCompatibility === true &&
+    (!params.config ||
+      agentWorkspaceFingerprint !== resolveAgentWorkspaceFingerprint(params.config, params.env))
+  ) {
+    return undefined;
+  }
+  const compatible = resolveCompatiblePluginMetadataSnapshot(
+    {
+      // SAFETY: Gateway publication accepts only a complete typed metadata snapshot.
+      snapshot: snapshot as PluginMetadataSnapshot | undefined,
+      configFingerprint,
+      envFingerprint,
+      defaultDiscoveryCompatible,
+      compatiblePolicyHashes,
+      compatibleConfigFingerprints,
+      hasConfigIdentity: (config) => currentPluginMetadataConfigIdentityCache.has(config),
+    },
+    params,
+  );
+  return compatible === NEEDS_PREPARED_POLICY ? undefined : compatible;
 }
 
 export function isCurrentPluginMetadataSnapshotRuntimeGeneration(

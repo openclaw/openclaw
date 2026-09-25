@@ -12,7 +12,10 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  expectRegisteredSubagentRun,
+  supportedSpawnModelChoice,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -38,8 +41,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
@@ -661,23 +664,21 @@ describe("sessions_spawn tool", () => {
         worktreeName: "issue-review",
         worktreeBaseRef: "main",
       });
-      expect(registerRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-visible",
-          requesterTurnRunId: "run-requester-visible-worktree",
-          childSessionKey: "agent:main:dashboard:child",
-          requesterSessionKey: "agent:main:main",
-          requesterOrigin: {
-            channel: "slack",
-            to: "channel:C-current",
-            threadId: "current-thread",
-          },
-          cleanup: "keep",
-          runTimeoutSeconds: 120,
-          expectsCompletionMessage: true,
-          spawnMode: "run",
-        }),
-      );
+      expectRegisteredSubagentRun(registerRun, {
+        runId: "run-visible",
+        requesterTurnRunId: "run-requester-visible-worktree",
+        childSessionKey: "agent:main:dashboard:child",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C-current",
+          threadId: "current-thread",
+        },
+        cleanup: "keep",
+        runTimeoutSeconds: 120,
+        expectsCompletionMessage: true,
+        spawnMode: "run",
+      });
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
       expect(work).toHaveLength(1);
       expect(work[0]).toMatchObject({
@@ -981,9 +982,10 @@ describe("sessions_spawn tool", () => {
         "sessions.create",
         expect.objectContaining({ timeoutMs: seconds * 1000 }),
       );
-      expect(registerRun).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: seconds }),
-      );
+      expectRegisteredSubagentRun(registerRun, {
+        runId: "run-visible-timed",
+        runTimeoutSeconds: seconds,
+      });
     },
   );
 
@@ -1294,12 +1296,10 @@ describe("sessions_spawn tool", () => {
       },
       undefined,
     );
-    expect(registerRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        childSessionKey: "agent:main:dashboard:restricted-child",
-        runId: "run-visible-restricted",
-      }),
-    );
+    expectRegisteredSubagentRun(registerRun, {
+      childSessionKey: "agent:main:dashboard:restricted-child",
+      runId: "run-visible-restricted",
+    });
   });
 
   it("blocks unsandboxed visible targets for a sandboxed caller runtime", async () => {

@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -55,7 +56,7 @@ function panelParams(
     context: {
       basePath: "",
       navigate: vi.fn(),
-      gateway: { snapshot: undefined },
+      gateway: createGatewayHarness(client(vi.fn(async () => ({})))).gateway,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {

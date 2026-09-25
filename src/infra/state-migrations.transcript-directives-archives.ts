@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -18,7 +19,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
 
@@ -143,11 +143,13 @@ function listArchiveBatch(
     .orderBy("generation", "asc")
     .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
   if (cursor.sessionId) {
+    // Seek the composite key; OR branches rescan the visited prefix on every page.
     query = query.where((eb) =>
-      eb.or([
-        eb("session_id", ">", cursor.sessionId),
-        eb.and([eb("session_id", "=", cursor.sessionId), eb("generation", ">", cursor.generation)]),
-      ]),
+      eb(
+        eb.refTuple("session_id", "generation"),
+        ">",
+        eb.tuple(cursor.sessionId, cursor.generation),
+      ),
     );
   }
   return executeSqliteQuerySync(database, query).rows.map((row) => {

@@ -20,6 +20,9 @@ import { AcpxRuntime } from "./runtime.js";
 const { runtimeRegistry } = vi.hoisted(() => ({
   runtimeRegistry: new Map<string, { runtime: unknown; healthy?: () => boolean }>(),
 }));
+const { availableParallelismMock } = vi.hoisted(() => ({
+  availableParallelismMock: vi.fn(() => 4),
+}));
 const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
   prepareAcpxCodexAuthConfigMock: vi.fn(
     async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
@@ -83,6 +86,11 @@ vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
 }));
 
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: availableParallelismMock,
+}));
+
 vi.mock("./runtime.js", () => ({
   ACPX_BACKEND_ID: "acpx",
   AcpxRuntime: acpxRuntimeConstructorMock,
@@ -120,6 +128,7 @@ const previousEnv = {
   OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE: process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE,
   OPENCLAW_SKIP_ACPX_RUNTIME: process.env.OPENCLAW_SKIP_ACPX_RUNTIME,
   OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE,
+  TOKIO_WORKER_THREADS: process.env.TOKIO_WORKER_THREADS,
 };
 
 function restoreEnv(name: keyof typeof previousEnv): void {
@@ -149,9 +158,12 @@ afterEach(async () => {
   acpxRuntimeConstructorMock.mockClear();
   createAgentRegistryMock.mockClear();
   createFileSessionStoreMock.mockClear();
+  availableParallelismMock.mockReturnValue(4);
   restoreEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE");
   restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME");
   restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE");
+  restoreEnv("TOKIO_WORKER_THREADS");
+  vi.restoreAllMocks();
   await testWorkspace.cleanup();
 });
 
@@ -220,7 +232,6 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
     runTurn: vi.fn(),
     cancel: vi.fn(),
     close: vi.fn(),
-    probeAvailability: vi.fn(async () => {}),
     isHealthy: vi.fn(() => true),
     doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
     ...overrides,
@@ -270,6 +281,7 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
     throw new Error("Expected runtimeFactory to be called with an options object");
   }
   return input as {
+    getProbeAgent: () => string | undefined;
     pluginConfig: {
       timeoutSeconds?: number;
       probeAgent?: string;
@@ -551,6 +563,41 @@ describe("createAcpxRuntimeService", () => {
   });
 
   it.each([
+    { parallelism: 4, expected: "4" },
+    { parallelism: 64, expected: "8" },
+  ])(
+    "bounds default ACPX Tokio workers at host parallelism $parallelism",
+    async ({ parallelism, expected }) => {
+      process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+      delete process.env.TOKIO_WORKER_THREADS;
+      availableParallelismMock.mockReturnValue(parallelism);
+      const ctx = createServiceContext(testWorkspace.dir);
+      const service = createAcpxRuntimeService(ctx);
+
+      await service.start(ctx);
+
+      expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentProcessEnv: { TOKIO_WORKER_THREADS: expected } }),
+      );
+      await service.stop?.(ctx);
+    },
+  );
+
+  it("preserves an explicit ACPX Tokio worker override", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+    process.env.TOKIO_WORKER_THREADS = "12";
+    const ctx = createServiceContext(testWorkspace.dir);
+    const service = createAcpxRuntimeService(ctx);
+
+    await service.start(ctx);
+
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentProcessEnv: undefined }),
+    );
+    await service.stop?.(ctx);
+  });
+
+  it.each([
     [0.001, 1],
     [Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS],
   ])(
@@ -585,7 +632,6 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(doctor).toHaveBeenCalledOnce();
-    expect(runtime.probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(true);
 
     await service.stop?.(ctx);
@@ -617,7 +663,6 @@ describe("createAcpxRuntimeService", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
       expect(runtime.doctor).toHaveBeenCalledOnce();
-      expect(runtime.probeAvailability).not.toHaveBeenCalled();
       expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
       expect(ctx.logger.warn).toHaveBeenCalledWith(
         "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
@@ -638,11 +683,13 @@ describe("createAcpxRuntimeService", () => {
     "resolves probe $expected and the default timeout",
     async ({ allowedAgents, probeAgent, expected }) => {
       const ctx = createServiceContext(testWorkspace.dir);
-      ctx.config = { acp: { allowedAgents } };
+      ctx.config = { acp: { allowedAgents: ["claude"] } };
+      let currentAllowedAgents: readonly string[] | undefined = allowedAgents;
       const runtime = createMockRuntime();
       const runtimeFactory = vi.fn(() => runtime as never);
       const service = createAcpxRuntimeService(ctx, {
         pluginConfig: { probeAgent },
+        getAllowedAgents: () => currentAllowedAgents,
         runtimeFactory,
       });
       try {
@@ -650,7 +697,13 @@ describe("createAcpxRuntimeService", () => {
         expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig).toMatchObject({
           timeoutSeconds: 120,
         });
-        expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe(expected);
+        const input = readFirstRuntimeFactoryInput(runtimeFactory);
+        expect(input.getProbeAgent()).toBe(expected);
+        currentAllowedAgents = ["gemini"];
+        expect(input.getProbeAgent()).toBe(probeAgent ?? "gemini");
+        currentAllowedAgents = undefined;
+        expect(input.getProbeAgent()).toBe(probeAgent);
+        expect(runtime.shutdown).not.toHaveBeenCalled();
       } finally {
         await service.stop?.(ctx);
       }

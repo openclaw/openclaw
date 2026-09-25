@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -61,6 +62,7 @@ async function createFixture() {
       onTransaction,
       postVerifyStep: undefined as UpdateParams["postVerifyStep"],
       timeoutMs: 1000,
+      workTimeoutMs: undefined as UpdateParams["workTimeoutMs"],
     },
   };
 }
@@ -69,8 +71,9 @@ type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
 async function runUpdate(
   fixture: Fixture,
-  prepareCandidate: (packageRoot: string) => Promise<void>,
+  prepareCandidate: (packageRoot: string, prefix: string) => Promise<void>,
   runLifecycleStep?: UpdateParams["runStep"],
+  admission: Pick<UpdateParams, "beforeVerifyCandidate" | "resolveLifecycleNodeRunner"> = {},
 ) {
   const stages: { prefix: string; packageRoot: string; bytes: string[] }[] = [];
   const lifecycleCalls: string[] = [];
@@ -83,8 +86,9 @@ async function runUpdate(
   });
   const result = await runGlobalPackageUpdateSteps({
     ...fixture.params,
+    ...admission,
     runStep: async (step) => {
-      if (step.name === "global update") {
+      if (step.name === "package-install") {
         const prefixIndex = step.argv.indexOf("--prefix");
         const prefix = step.argv[prefixIndex + 1];
         if (prefixIndex < 0 || !prefix) {
@@ -97,7 +101,7 @@ async function runUpdate(
           path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
           pendingBytes,
         );
-        await prepareCandidate(packageRoot);
+        await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
         return success(step);
       }
@@ -105,7 +109,7 @@ async function runUpdate(
       if (runLifecycleStep) {
         return await runLifecycleStep(step);
       }
-      if (step.name === "npm package postinstall" && step.cwd) {
+      if (step.name === "npm-package-postinstall" && step.cwd) {
         await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
       }
       return success(step);
@@ -147,10 +151,113 @@ async function writeUncertainLock(
 }
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
+  it.each([
+    ["legacy", undefined, 1000],
+    ["unbounded", null, undefined],
+    ["explicit", 5000, 5000],
+  ] as const)(
+    "carries the %s work budget to both lifecycle scripts",
+    async (_, workTimeoutMs, expectedTimeout) => {
+      const fixture = await createFixture();
+      fixture.params.workTimeoutMs = workTimeoutMs;
+      const scriptTimeouts: Array<number | undefined> = [];
+      const { result, lifecycleCalls } = await runUpdate(
+        fixture,
+        async () => {},
+        async (step) => {
+          scriptTimeouts.push(step.timeoutMs);
+          if (step.name === "npm-package-postinstall" && step.cwd) {
+            await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+          }
+          return {
+            name: step.name,
+            command: step.argv.join(" "),
+            cwd: step.cwd ?? fixture.packageRoot,
+            durationMs: 0,
+            exitCode: 0,
+          };
+        },
+      );
+      expect(result.failedStep).toBeNull();
+      expect(result.afterVersion).toBe("2.0.0");
+      expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);
+      expect(scriptTimeouts).toEqual([expectedTimeout, expectedTimeout]);
+    },
+  );
+  it("runs pending lifecycle only after admission with the newly selected Node runner", async () => {
+    const fixture = await createFixture();
+    const selectedNode = path.join(fixture.globalRoot, "selected-node");
+    let nodeRunner: string | undefined;
+    let admitted = false;
+    const { result, lifecycleCalls } = await runUpdate(
+      fixture,
+      async () => {},
+      async (step) => {
+        expect(admitted).toBe(true);
+        expect(step.argv[0]).toBe(selectedNode);
+        expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
+        if (step.name === "npm-package-postinstall" && step.cwd) {
+          await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        return {
+          name: step.name,
+          command: step.argv.join(" "),
+          cwd: step.cwd!,
+          durationMs: 0,
+          exitCode: 0,
+        };
+      },
+      {
+        beforeVerifyCandidate: async (root) => {
+          await expect(
+            fs.readFile(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+          ).resolves.toBe(pendingBytes);
+          nodeRunner = selectedNode;
+          admitted = true;
+        },
+        resolveLifecycleNodeRunner: () => nodeRunner,
+      },
+    );
+    expect(result.failedStep).toBeNull();
+    expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);
+    expect(result.afterVersion).toBe("2.0.0");
+  });
+
+  it("does not activate after a zero-exit output-limited postinstall", async () => {
+    const fixture = await createFixture();
+    const { result } = await runUpdate(
+      fixture,
+      async () => {},
+      async ({ name, argv, cwd }) => {
+        const outputLimitExceeded = name === "npm-package-postinstall";
+        if (outputLimitExceeded && cwd) {
+          await fs.rm(path.join(cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? fixture.packageRoot,
+          durationMs: 0,
+          exitCode: 0,
+          outputLimitExceeded,
+        };
+      },
+    );
+    expect(result.failedStep).toMatchObject({
+      name: "npm-package-postinstall",
+      exitCode: 0,
+      outputLimitExceeded: true,
+    });
+    expectNoActivation(fixture);
+    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+    await expectSiblingUntouched(fixture);
+  });
+
   it.each(["legacy directory", "malformed file"] as const)(
     "retains the exact pending candidate with an uncertain %s lock",
     async (shape) => {
       const fixture = await createFixture();
+      fixture.params.workTimeoutMs = null;
       const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
         await writeUncertainLock(packageRoot, shape);
       });
@@ -158,15 +265,15 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       expect(result).toMatchObject({
         activePackageRoot: fixture.packageRoot,
         afterVersion: null,
-        failedStep: { name: "npm package lifecycle", exitCode: 1, cwd: stage.packageRoot },
+        failedStep: { name: "npm-package-lifecycle", exitCode: 1, cwd: stage.packageRoot },
         recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
       expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
       expect(result.failedStep?.stderrTail).toContain(stage.packageRoot);
       expect(result.failedStep?.stderrTail).toContain(path.join(stage.packageRoot, lockName));
       expect(result.steps.map((step) => step.name)).toEqual([
-        "global update",
-        "npm package lifecycle",
+        "package-install",
+        "npm-package-lifecycle",
       ]);
       expect(lifecycleCalls).toEqual([]);
       expectNoActivation(fixture);
@@ -194,7 +301,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
     });
     expect(result).toMatchObject({
-      failedStep: { name: "npm package lifecycle", exitCode: 1 },
+      failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     });
     expect(lifecycleCalls).toEqual([]);
@@ -270,7 +377,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           expect(result.reason).toBe("already-current");
           expect(result.failedStep).toBeNull();
         } else {
-          expect(result.failedStep?.name).toBe("global install verify");
+          expect(result.failedStep?.name).toBe("package-verify");
         }
       }
     } finally {
@@ -307,7 +414,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       });
       const observed: { stage?: string; oldPending?: string; orphan?: string } = {};
       const runStep = vi.fn<UpdateParams["runStep"]>(async (step) => {
-        expect(step.name).toBe("global update");
+        expect(step.name).toBe("package-install");
         const stage = stageArgs(step.argv).project;
         if (!stage) {
           throw new Error("missing native stage");
@@ -384,7 +491,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         throw new Error("missing stage observation");
       }
       if (state === "absent") {
-        expect(result.failedStep?.name).toBe("global update");
+        expect(result.failedStep?.name).toBe("package-install");
         await expect(fs.access(observed.stage)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
@@ -405,25 +512,39 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     "classifies disposable prefix cleanup refusal after %s verification",
     async (phase) => {
       const fixture = await createFixture();
-      const rm = fs.rm;
-      let retainedPrefix: string | undefined;
+      const disposalRoot = await fsSafeRoot(fixture.globalRoot);
+      const prototype = Object.getPrototypeOf(disposalRoot) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const removeEntry = prototype.remove;
       let removalAttempts = 0;
       try {
-        const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
-          if (phase === "pre-commit") {
-            await writePackageRoot(packageRoot, "3.0.0");
-          }
-          retainedPrefix = path.resolve(packageRoot, "../../..");
-          vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
-            if (file === retainedPrefix) {
-              removalAttempts++;
-              throw Object.assign(new Error("disposable prefix cleanup denied"), {
-                code: "EACCES",
-              });
+        const { result, stage, lifecycleCalls } = await runUpdate(
+          fixture,
+          async (packageRoot, prefix) => {
+            if (phase === "pre-commit") {
+              await writePackageRoot(packageRoot, "3.0.0");
             }
-            return rm(file, options);
-          });
-        });
+            const retainedPrefix = await fs.realpath(prefix);
+            vi.spyOn(prototype, "remove").mockImplementation(async function (
+              this: Root,
+              relativePath,
+              options,
+            ) {
+              const target = path.resolve(this.rootReal, relativePath);
+              // Refuse disposal before its first leaf removal so pending evidence survives.
+              if (
+                this.rootReal === disposalRoot.rootReal &&
+                (target === retainedPrefix || target.startsWith(`${retainedPrefix}${path.sep}`))
+              ) {
+                removalAttempts++;
+                throw Object.assign(new Error("disposable prefix cleanup denied"), {
+                  code: "EACCES",
+                });
+              }
+              return removeEntry.call(this, relativePath, options);
+            });
+          },
+        );
         expect(removalAttempts).toBeGreaterThan(0);
         await expect(fs.access(stage.prefix)).resolves.toBeUndefined();
         await expectSiblingUntouched(fixture);
@@ -451,7 +572,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "2.0.0" });
           expect(result.steps).toContainEqual(
             expect.objectContaining({
-              name: "package stage cleanup",
+              name: "package-stage-cleanup",
               stderrTail: expect.stringContaining(stage.prefix),
               advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
             }),
@@ -532,7 +653,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       expect(lifecycleCalls).toEqual([]);
       expect(result).toMatchObject({
         activePackageRoot: fixture.packageRoot,
-        failedStep: { name: "global install verify", exitCode: 1 },
+        failedStep: { name: "package-verify", exitCode: 1 },
         recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
       expect(result.failedStep?.stderrTail).toContain("3.0.0");
@@ -571,11 +692,11 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     );
     expect(result).toMatchObject({
       activePackageRoot: fixture.packageRoot,
-      failedStep: { name: "npm package lifecycle", exitCode: 1 },
+      failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     });
     expect(result.failedStep?.stderrTail).toContain("lock generation changed");
-    expect(lifecycleCalls).toEqual(["npm package preinstall"]);
+    expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
     expectNoActivation(fixture);
     expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(
       "replacement generation\n",
@@ -600,7 +721,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     expect(result).toMatchObject({
       activePackageRoot: fixture.packageRoot,
       afterVersion: null,
-      failedStep: { name: "npm package lifecycle", exitCode: 1 },
+      failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     });
     expectNoActivation(fixture);
@@ -644,13 +765,13 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         failedStep: {
           name:
             failure === "settled script failure"
-              ? "npm package preinstall"
-              : "npm package lifecycle",
+              ? "npm-package-preinstall"
+              : "npm-package-lifecycle",
           exitCode: 1,
         },
         recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
-      expect(lifecycleCalls).toEqual(["npm package preinstall"]);
+      expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
       expectNoActivation(fixture);
       expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
       await expect(fs.access(stage.prefix)).rejects.toMatchObject({ code: "ENOENT" });

@@ -9,7 +9,7 @@ import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-pol
 import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
-export function relativePathEscapesRoot(relativePath: string): boolean {
+function relativePathEscapesRoot(relativePath: string): boolean {
   return (
     relativePath === ".." ||
     relativePath.startsWith("../") ||
