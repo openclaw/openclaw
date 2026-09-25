@@ -28,9 +28,9 @@ async function makeTestState(): Promise<OpenClawTestState> {
 async function writeProfiles(
   state: OpenClawTestState,
   profile: Record<string, unknown>,
-  options: { agentDir?: string; order?: boolean } = {},
+  options: { order?: boolean } = {},
 ): Promise<string> {
-  const authPath = path.join(options.agentDir ?? state.agentDir(), "auth-profiles.json");
+  const authPath = path.join(state.agentDir(), "auth-profiles.json");
   fs.mkdirSync(path.dirname(authPath), { recursive: true });
   fs.writeFileSync(
     authPath,
