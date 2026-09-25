@@ -1,3 +1,4 @@
+import { validateToolCall } from "@openclaw/llm-core/validation";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
@@ -33,6 +34,78 @@ const batch = {
 };
 
 describe("compact OpenAI tool references", () => {
+  it.each(["$defs", "definitions"])("coerces tool calls without expanding %s", (table) => {
+    const ref = (name: string) => ({ $ref: `#/${table}/${name}` });
+    const schema = {
+      type: "object",
+      properties: { tags: ref("tags"), records: ref("records"), settings: ref("settings") },
+      required: ["tags", "records", "settings"],
+      [table]: {
+        tags: { type: "array", items: { type: "string" } },
+        records: { type: "array", items: ref("settings") },
+        settings: {
+          type: "object",
+          properties: { enabled: { type: "boolean" }, count: { type: "integer" } },
+          required: ["enabled", "count"],
+        },
+      },
+    };
+    const parameters = normalizeToolParameterSchema(schema, { modelProvider: "openai" });
+    const before = structuredClone(parameters);
+    const args = {
+      tags: '["a","b"]',
+      records: '[{"enabled":"true","count":"2"}]',
+      settings: '{"enabled":"false","count":"3"}',
+    };
+    const input = structuredClone(args);
+    expect(
+      validateToolCall([{ name: "reference_probe", description: "", parameters }], {
+        type: "toolCall",
+        id: "reference-call",
+        name: "reference_probe",
+        arguments: args,
+      }),
+    ).toEqual({
+      tags: ["a", "b"],
+      records: [{ enabled: true, count: 2 }],
+      settings: { enabled: false, count: 3 },
+    });
+    expect(args).toEqual(input);
+    expect(parameters).toEqual(before);
+    expect(parameters).toHaveProperty([table, "settings"]);
+    expect(parameters).toHaveProperty("properties.tags.$ref", `#/${table}/tags`);
+  });
+
+  it.each(["root identifier", "nested definition table"])(
+    "keeps host coercion through the inline fallback for %s",
+    (shape) => {
+      const settings = {
+        type: "object",
+        properties: { count: { type: "integer" } },
+        required: ["count"],
+        ...(shape === "nested definition table" ? { $defs: { unused: { type: "string" } } } : {}),
+      };
+      const parameters = normalizeToolParameterSchema(
+        {
+          type: "object",
+          properties: { settings: { $ref: "#/$defs/settings" } },
+          $defs: { settings },
+          ...(shape === "root identifier" ? { $id: "https://example.invalid/tool" } : {}),
+        },
+        { modelProvider: "openai" },
+      );
+      expect(JSON.stringify(parameters)).not.toContain('"$ref"');
+      expect(
+        validateToolCall([{ name: "fallback_probe", description: "", parameters }], {
+          type: "toolCall",
+          id: "fallback-call",
+          name: "fallback_probe",
+          arguments: { settings: '{"count":"2"}' },
+        }),
+      ).toEqual({ settings: { count: 2 } });
+    },
+  );
+
   it.each(["$defs", "definitions"])(
     "inlines malformed %s tables instead of preserving them",
     (key) => {
