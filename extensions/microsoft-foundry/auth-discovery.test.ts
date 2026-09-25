@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import type { ProviderAuthMethod, ProviderPlugin } from "openclaw/plugin-sdk/core";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { buildFoundryAuthResult } from "./shared.js";
