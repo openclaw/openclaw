@@ -1,7 +1,7 @@
 import { isVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { GatewayPlugin } from "../internal/gateway.js";
+import type { GatewayPluginContract } from "../internal/plugin-contract.js";
 
-function formatDiscordStartupGatewayState(gateway?: GatewayPlugin): string {
+function formatDiscordStartupGatewayState(gateway?: GatewayPluginContract): string {
   if (!gateway) {
     return "gateway=missing";
   }
@@ -15,7 +15,7 @@ export function logDiscordStartupPhase(params: {
   accountId: string;
   phase: string;
   startAt: number;
-  gateway?: GatewayPlugin;
+  gateway?: GatewayPluginContract;
   details?: string;
   isVerbose?: () => boolean;
 }) {

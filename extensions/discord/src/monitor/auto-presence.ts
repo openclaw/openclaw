@@ -11,7 +11,7 @@ import type {
   DiscordAutoPresenceConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
-import type { UpdatePresenceData } from "../internal/gateway.js";
+import type { UpdatePresenceData } from "../internal/plugin-contract.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 const DEFAULT_INTERVAL_MS = 30_000;

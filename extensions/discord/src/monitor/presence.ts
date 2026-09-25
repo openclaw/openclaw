@@ -1,6 +1,6 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
+import type { Activity, UpdatePresenceData } from "../internal/plugin-contract.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;
 const CUSTOM_STATUS_NAME = "Custom Status";

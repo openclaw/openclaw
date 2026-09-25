@@ -6,18 +6,17 @@ import { ComponentRegistry } from "./component-registry.js";
 import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
-import type { GatewayPlugin } from "./gateway.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
+import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
-import type { VoicePlugin } from "./voice.js";
 
 export abstract class Plugin {
   abstract readonly id: string;
   registerClient?(client: Client): Promise<void> | void;
 }
 
-export type RegisteredPlugin = GatewayPlugin | VoicePlugin;
+export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
 
 type AnyListener = {
   type: string;
@@ -100,8 +99,8 @@ export class Client {
     }
   }
 
-  getPlugin(id: "gateway"): GatewayPlugin | undefined;
-  getPlugin(id: "voice"): VoicePlugin | undefined;
+  getPlugin(id: "gateway"): GatewayPluginContract | undefined;
+  getPlugin(id: "voice"): VoicePluginContract | undefined;
   getPlugin(id: string): RegisteredPlugin | undefined;
   getPlugin(id: string): RegisteredPlugin | undefined {
     return this.plugins.find((plugin) => plugin.id === id);
