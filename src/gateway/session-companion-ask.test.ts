@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
+import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,7 +29,10 @@ const resolveSelection = vi.hoisted(() =>
   vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
 );
 const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
-  prepareCliRunContext: vi.fn(async (params: unknown) => ({ params, preparedBackend: {} })),
+  prepareCliRunContext: vi.fn(async (params: RunCliAgentParams) => ({
+    params,
+    preparedBackend: {},
+  })),
   executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
 }));
 
@@ -342,8 +349,22 @@ describe("session companion embedded invocation", () => {
       ],
     });
     const companion = createCompanion(cfg);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "companion-reader",
+      scopes: ["operator.read"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["anthropic/claude-haiku-4-5"] },
+        manifestPlugins: [],
+      }),
+    });
+    prepareCliRunContext.mockImplementationOnce(async (params) => ({
+      params: prepareCliRunModelAuthority(params),
+      preparedBackend: {},
+    }));
     try {
-      await expect(companion.ask(question)).resolves.toMatchObject({
+      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
         answer: "The session is fixing a bug.",
       });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
