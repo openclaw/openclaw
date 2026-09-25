@@ -145,14 +145,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       backfill.remove(id);
       dirty.delete(id);
     },
-    prepare(row) {
-      metadata.prepare(epoch, cfg, matching, put, referenced);
-      const current = acquireEntry(row, readSessionRowEntry(row));
-      if (current && materialize(current)) {
-        backfill.enqueue(records.identity(current));
-      }
-      return current;
-    },
   });
   const markRelated = (row: records.Row, includeChildren = true) =>
     archive.markRelated(row, indexes, includeChildren);
@@ -633,6 +625,17 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return findSessionRowById(query, { disposed, lookup, matching });
     },
     describe,
+    readMembership(query: records.Lookup) {
+      if (disposed) {
+        return undefined;
+      }
+      const row = lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        return describe(query)?.membership;
+      }
+      const members = row && membership.membership(row.storeTarget.storePath, row.key);
+      return members ? new Set(members) : undefined;
+    },
     ...createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),
       referenced,
