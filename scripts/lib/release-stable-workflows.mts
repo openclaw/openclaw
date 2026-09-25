@@ -77,6 +77,32 @@ export async function dispatchReleaseWorkflow(
       ],
     );
   }
+  if (!ctx.state.operator.login) {
+    const identity = await ctx.run("gh", ["api", "user", "--jq", ".login"], {
+      dryRunStdout: "operator",
+    });
+    const login = identity.stdout.trim();
+    if (!login) {
+      throw new ReleaseRefusal("Cannot identify the workflow dispatching operator.", [
+        ctx.resume(phase),
+      ]);
+    }
+    ctx.state.operator.login = login;
+    ctx.save();
+  }
+  const next = [
+    shellCommand("gh", [
+      "run",
+      "list",
+      "--repo",
+      repo,
+      "--workflow",
+      workflow,
+      "--json",
+      "databaseId,createdAt,headBranch,displayTitle",
+    ]),
+    ctx.resume(phase),
+  ];
   const dispatchedAt = previous?.at ?? new Date().toISOString();
   const args = [
     "workflow",
@@ -102,7 +128,7 @@ export async function dispatchReleaseWorkflow(
   const id = await pollRelease(ctx, {
     label: `dispatch of ${workflow}`,
     timeoutMs: 10 * 60 * 1_000,
-    next: [ctx.resume(phase)],
+    next,
     probe: async () => {
       const runs = await listReleaseRuns(
         ctx,
@@ -114,40 +140,38 @@ export async function dispatchReleaseWorkflow(
         }
         return workflow.includes("validate") ? "201" : workflow.includes("macos") ? "202" : "203";
       }
-      const candidates = runs
-        .filter(
-          (run) =>
-            run.head_branch === ref &&
-            !params.excludeRunIds?.includes(String(run.id)) &&
-            typeof run.created_at === "string" &&
-            Date.parse(run.created_at) >= Date.parse(dispatchedAt) - 60_000 &&
-            (typeof run.display_title !== "string" ||
-              !run.display_title.match(/v\d{4}\.\d{1,2}\.\d+(?:-[a-z0-9.]+)?/gu)?.length ||
-              run.display_title
-                .match(/v\d{4}\.\d{1,2}\.\d+(?:-[a-z0-9.]+)?/gu)
-                ?.includes(ctx.state.tag)) &&
-            positiveInteger(run.id),
-        )
-        .toSorted((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      const candidates = runs.filter(
+        (run) =>
+          typeof run.path === "string" &&
+          run.path.endsWith(`/${workflow}`) &&
+          run.head_branch === ref &&
+          run.event === "workflow_dispatch" &&
+          isRecord(run.actor) &&
+          run.actor.login === ctx.state.operator.login &&
+          !params.excludeRunIds?.includes(String(run.id)) &&
+          typeof run.created_at === "string" &&
+          Date.parse(run.created_at) >= Date.parse(dispatchedAt) - 60_000 &&
+          Date.parse(run.created_at) <= Date.parse(dispatchedAt) + 10 * 60_000 &&
+          (typeof run.display_title !== "string" ||
+            !run.display_title.match(/v\d{4}\.\d{1,2}\.\d+(?:-[a-z0-9.]+)?/gu)?.length ||
+            run.display_title
+              .match(/v\d{4}\.\d{1,2}\.\d+(?:-[a-z0-9.]+)?/gu)
+              ?.includes(ctx.state.tag)) &&
+          positiveInteger(run.id),
+      );
+      if (candidates.length > 1) {
+        throw new ReleaseRefusal(
+          `Ambiguous dispatch of ${workflow}: runs ${candidates.map((run) => run.id).join(", ")}`,
+          next,
+        );
+      }
       if (candidates[0]) {
         return String(candidates[0].id);
       }
       if (++polls >= 10) {
         throw new ReleaseRefusal(
           `Could not reconcile ${workflow}; the dispatch may have been accepted.`,
-          [
-            shellCommand("gh", [
-              "run",
-              "list",
-              "--repo",
-              repo,
-              "--workflow",
-              workflow,
-              "--json",
-              "databaseId,createdAt,headBranch,displayTitle",
-            ]),
-            ctx.resume(phase),
-          ],
+          next,
         );
       }
       return undefined;
@@ -211,4 +235,23 @@ export async function approveReleaseGates(
     ctx.state.publish.approvedGates.push(receipt);
     ctx.save();
   }
+}
+
+export function manualSweepCommands(ctx: ReleaseContext): string[] {
+  const repo = ctx.state.repo;
+  const endpoint = `repos/${repo}/actions/runs/<child>/pending_deployments`;
+  return [
+    "# Inspect ownership; reject and cancel only superseded children of this publish parent.",
+    ...["waiting", "queued"].map((status) =>
+      shellCommand("gh", [
+        "api",
+        `repos/${repo}/actions/runs?status=${status}&per_page=100`,
+        "--jq",
+        '.workflow_runs[] | select(.event=="workflow_dispatch" and .actor.login=="github-actions[bot]") | select(.name | test("plugin-clawhub|Plugin ClawHub Release|Plugin NPM Release|OpenClaw NPM Release|openclaw-npm-release")) | [.id,.name,.created_at] | @tsv',
+      ]),
+    ),
+    `env_id=$(${shellCommand("gh", ["api", endpoint, "--jq", ".[0].environment.id"])})`,
+    `${shellCommand("gh", ["api", "-X", "POST", endpoint, "-f", "state=rejected", "-f", "comment=Reject stale release gate"])} -F "environment_ids[]=$env_id"`,
+    shellCommand("gh", ["run", "cancel", "<child>", "--repo", repo]),
+  ];
 }

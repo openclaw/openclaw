@@ -39,12 +39,14 @@ const releaseStateSchema = z.strictObject({
   startedAt: timestamp,
   operator: z.strictObject({
     name: z.string(),
+    login: z.string().min(1).optional(),
     cutShaConfirmed: sha.nullable(),
     publicationApproved: timestamp.nullable(),
   }),
   capabilities: z
     .strictObject({
       parentSyncsBetaDistTag: z.boolean(),
+      parentSweepsStaleChildren: z.boolean().optional(),
       parentApprovalReceipt: z.boolean(),
       closeoutResolvesWaivers: z.boolean(),
       probedAt: timestamp,
@@ -133,9 +135,11 @@ export function acquireReleaseLock(stateDir: string): () => void {
   const next = [`# wait for it or remove ${path} if that pid is gone`];
   const contents = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
   mkdirSync(stateDir, { recursive: true });
-  for (;;) {
+  let acquired = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
+      acquired = true;
       break;
     } catch (error) {
       if (!isRecord(error) || error.code !== "EEXIST") {
@@ -181,9 +185,19 @@ export function acquireReleaseLock(stateDir: string): () => void {
         next,
       );
     }
-    if (readFileSync(path, "utf8") === previous) {
-      rmSync(path);
+    try {
+      if (readFileSync(path, "utf8") === previous) {
+        rmSync(path);
+      }
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "ENOENT") {
+        throw error;
+      }
     }
+    continue;
+  }
+  if (!acquired) {
+    throw new ReleaseRefusal(`Could not acquire release lock ${path} after three attempts.`, next);
   }
   const release = () => {
     process.off("SIGINT", onSignal);
@@ -461,7 +475,11 @@ export async function confirmRelease(
   }
 }
 export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string): Promise<void> {
-  if (!ctx.options.dryRun && ctx.state.capabilities?.toolingSha === toolingSha) {
+  if (
+    !ctx.options.dryRun &&
+    ctx.state.capabilities?.toolingSha === toolingSha &&
+    ctx.state.capabilities.parentSweepsStaleChildren !== undefined
+  ) {
     return;
   }
   const publisher = await ctx.run(
@@ -480,6 +498,10 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
     { allowFailure: true },
   );
   ctx.state.capabilities = {
+    parentSweepsStaleChildren:
+      !ctx.options.dryRun &&
+      children.exitCode === 0 &&
+      children.stdout.includes("sweep_superseded_children"),
     parentSyncsBetaDistTag:
       !ctx.options.dryRun &&
       ((publisher.exitCode === 0 && publisher.stdout.includes("sync_beta_to_stable")) ||

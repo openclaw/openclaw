@@ -164,12 +164,18 @@ describe("release:stable post-publication CLI", () => {
           workflow_runs: [
             {
               id: 202,
+              path: ".github/workflows/openclaw-macos-publish.yml",
+              event: "workflow_dispatch",
+              actor: { login: "release-test" },
               head_branch: "main",
               display_title: `Preflight v${RELEASE}`,
               created_at: new Date(Date.now() + 1_000).toISOString(),
             },
             {
               id: 203,
+              path: ".github/workflows/openclaw-macos-publish.yml",
+              event: "workflow_dispatch",
+              actor: { login: "release-test" },
               head_branch: "main",
               display_title: `Publish v${RELEASE}`,
               created_at: new Date().toISOString(),

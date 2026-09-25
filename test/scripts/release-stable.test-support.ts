@@ -27,6 +27,7 @@ export type FakeStep = {
   stderr?: string;
   exit?: number;
   times?: number;
+  verifyLock?: boolean;
   request?: { phase: string; run?: { id: number; attempt: number } };
 };
 type FakeCall = { bin: string; args: string[] };
@@ -50,7 +51,12 @@ export function phaseState(phase: ReleasePhase): ReleaseState {
     repo: REPOSITORY,
     releasesRepo: "openclaw/releases",
     startedAt: date,
-    operator: { name: "release-test", cutShaConfirmed: CUT_SHA, publicationApproved: date },
+    operator: {
+      name: "release-test",
+      login: "release-test",
+      cutShaConfirmed: CUT_SHA,
+      publicationApproved: date,
+    },
     phases: {
       cut: { status: "completed" },
       validate: { status: "completed" },
@@ -95,6 +101,7 @@ export function postState(phase: ReleasePhase): ReleaseState {
     toolingSha: TOOLING_SHA,
     probedAt: state.startedAt,
     parentSyncsBetaDistTag: false,
+    parentSweepsStaleChildren: false,
     parentApprovalReceipt: false,
     closeoutResolvesWaivers: false,
   };
@@ -128,6 +135,8 @@ export function workflowDispatch(
           {
             id,
             path: `.github/workflows/${workflow}`,
+            event: "workflow_dispatch",
+            actor: { login: "release-test" },
             head_branch: "main",
             display_title: displayTitle,
             created_at: new Date().toISOString(),
@@ -186,6 +195,32 @@ export const CANDIDATE_COMMAND =
   -f 'lane_waiver=Deferred fixture lanes' \
   -f publish_openclaw_npm=true \
   -f wait_for_clawhub=true`.replaceAll("\\`", "`");
+
+export const publishParentRun = () => ({
+  id: 301,
+  path: ".github/workflows/openclaw-release-publish.yml",
+  event: "workflow_dispatch",
+  actor: { login: "release-test" },
+  head_branch: "release-publish/bbbbbbbbbbbb-123",
+  display_title: `Publish v${RELEASE}`,
+  created_at: new Date().toISOString(),
+});
+
+export const publishChild = (
+  id: number,
+  name = "Plugin NPM Release",
+  workflow = "plugin-npm-release.yml",
+) => ({
+  id,
+  name,
+  path: `.github/workflows/${workflow}`,
+  head_branch: "release-publish/bbbbbbbbbbbb-123",
+  event: "workflow_dispatch",
+  status: "waiting",
+  created_at: new Date(Date.now() + 60_000).toISOString(),
+  actor: { login: "github-actions[bot]" },
+  display_title: name,
+});
 
 export function publishState(receipt = false): ReleaseState {
   const state = postState("publish");
@@ -259,7 +294,7 @@ export function releaseFixture(root: string) {
   mkdirSync(binDir);
   mkdirSync(join(root, "tmp"));
   const fake = `#!${node}
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve, sep } from 'node:path';
 const root = process.env.FIXTURE_ROOT;
 const bin = basename(process.argv[1]);
@@ -276,6 +311,13 @@ if (!expected || expected.bin !== bin || !expected.match.every((word, index) => 
 if ((expected.times ?? 1) > 1) expected.times -= 1;
 else script.shift();
 writeFileSync(root + '/script.json', JSON.stringify(script));
+if (expected.verifyLock) {
+  const locks = readdirSync(root + '/release').filter((name) => name.endsWith('.lock'));
+  const lock = JSON.parse(readFileSync(root + '/release/state.lock', 'utf8'));
+  if (locks.length !== 1 || locks[0] !== 'state.lock' || lock.pid !== process.ppid || !Number.isFinite(Date.parse(lock.startedAt))) {
+    throw new Error('Release process does not exclusively own the replacement lock');
+  }
+}
 if (expected.request) {
   const index = args.indexOf('--request-file');
   if (bin !== 'pnpm' || args[0] !== 'ci:full-release' || index < 0) throw new Error('Invalid request writer');

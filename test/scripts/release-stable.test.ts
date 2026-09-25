@@ -17,6 +17,8 @@ import {
   pendingGates,
   phaseState,
   publishPreparation,
+  publishParentRun as parentRun,
+  publishChild as child,
   publishState,
   releaseFixture,
   step,
@@ -92,35 +94,8 @@ const parentRuns = (runs: object[]) =>
     ],
     JSON.stringify({ workflow_runs: runs }),
   );
-const parentRun = () => ({
-  id: 301,
-  path: `.github/workflows/${publishWorkflow}`,
-  head_branch: toolingTag,
-  display_title: `Publish v${RELEASE}`,
-  created_at: new Date().toISOString(),
-});
-const child = (id: number, name = "Plugin NPM Release", workflow = "plugin-npm-release.yml") => ({
-  id,
-  name,
-  path: `.github/workflows/${workflow}`,
-  head_branch: toolingTag,
-  event: "workflow_dispatch",
-  actor: { login: "github-actions[bot]" },
-  display_title: name,
-});
 const children = (runs: object[]) =>
   step("gh", ["api", "*"], JSON.stringify({ workflow_runs: runs }));
-const sweep = (startedAt: string, waiting: object[] = [], queued: object[] = []) =>
-  ["waiting", "queued"].map((status, index) =>
-    step(
-      "gh",
-      [
-        "api",
-        `repos/${REPOSITORY}/actions/runs?status=${status}&per_page=100&created=>=${startedAt}`,
-      ],
-      JSON.stringify({ workflow_runs: index === 0 ? waiting : queued }),
-    ),
-  );
 
 describe("release:stable CLI", () => {
   it("previews all seven phases without executing a binary or writing release state", () => {
@@ -350,7 +325,9 @@ describe("release:stable CLI", () => {
     expect(readFileSync(lock, "utf8")).toBe(live);
     expect(() => process.kill(999999, 0)).toThrow();
     writeFileSync(lock, JSON.stringify({ pid: 999999, startedAt: "2000-01-01T00:00:00.000Z" }));
-    const resumed = release.run(newCut());
+    const cutSteps = newCut();
+    cutSteps[0] = { ...fetchMain(), verifyLock: true };
+    const resumed = release.run(cutSteps);
     expect(resumed.status, resumed.output).toBe(0);
     expect(release.readState().phases.cut.status).toBe("completed");
     expect(existsSync(lock)).toBe(false);
@@ -360,12 +337,14 @@ describe("release:stable CLI", () => {
     const release = fixture();
     const state = publishState();
     state.operator.publicationApproved = null;
+    delete state.operator.login;
     delete state.publish.macosValidateRunId;
     delete state.publish.macosPreflightRunId;
     release.seed(state);
     release.candidate(CANDIDATE_COMMAND);
     const result = release.run([
       ...publishPreparation(true),
+      step("gh", ["api", "user", "--jq", ".login"], "release-test\n"),
       ...workflowDispatch("openclaw-macos-validate.yml", "openclaw/releases", 201),
       ...workflowDispatch("openclaw-macos-publish.yml", "openclaw/releases", 202),
     ]);
@@ -380,6 +359,8 @@ describe("release:stable CLI", () => {
     expect(result.stdout).toContain(`tooling tag=${toolingTag}`);
     expect(result.stdout).toContain("lane_waiver=Deferred fixture lanes");
     const retained = release.readState();
+    expect(retained.operator.login).toBe("release-test");
+    expect(result.calls.filter((call) => call.args[1] === "user")).toHaveLength(1);
     expect(retained.operator.publicationApproved).toBeNull();
     expect(retained.phases.publish.status).toBe("refused");
     expect(retained.publish).toMatchObject({
@@ -404,10 +385,13 @@ describe("release:stable CLI", () => {
     ]);
   });
 
-  it("sweeps stale children, approves only npm gates, and resumes a failed parent without redispatch", () => {
+  it("prints child approval guidance, approves only parent gates, and resumes without redispatch", () => {
     const release = fixture();
     const state = publishState();
     state.operator.publicationApproved = null;
+    if (state.capabilities) {
+      state.capabilities.parentSyncsBetaDistTag = true;
+    }
     release.seed(state);
     release.candidate(CANDIDATE_COMMAND);
     const ignored = [
@@ -415,15 +399,9 @@ describe("release:stable CLI", () => {
       { ...child(611), actor: { login: "human" } },
       { ...child(612), event: "push" },
       child(613, "Unrelated workflow", "unrelated.yml"),
+      { ...child(614), created_at: "2000-01-01T00:00:00.000Z" },
+      { ...child(615), status: "completed" },
     ];
-    const [waiting, queued] = sweep(
-      state.startedAt,
-      [child(601, "Plugin ClawHub Release", "plugin-clawhub-release.yml"), ...ignored],
-      [child(602)],
-    );
-    if (!waiting || !queued) {
-      throw new Error("Missing stale-child fixture");
-    }
     const parentGates = [
       { id: 71, name: "npm-release" },
       { id: 72, name: "clawhub-plugin-release" },
@@ -433,6 +411,7 @@ describe("release:stable CLI", () => {
     const childGates = [
       { id: 81, name: "npm-release" },
       { id: 82, name: "clawhub-plugin-release" },
+      { id: 81, name: "npm-release" },
     ];
     const liveChildren = [
       child(701),
@@ -443,24 +422,6 @@ describe("release:stable CLI", () => {
     const failed = release.run(
       [
         ...publishPreparation(),
-        waiting,
-        pendingGates(601, [{ id: 61, name: "clawhub-plugin-release" }]),
-        step("gh", [
-          "api",
-          "-X",
-          "POST",
-          `repos/${REPOSITORY}/actions/runs/601/pending_deployments`,
-          "-f",
-          "state=rejected",
-          "-f",
-          `comment=Superseded by ${RELEASE} stable publish`,
-          "-F",
-          "environment_ids[]=61",
-        ]),
-        step("gh", ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/601/cancel`]),
-        queued,
-        pendingGates(602),
-        step("gh", ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/602/cancel`]),
         parentDispatch(),
         parentRuns([parentRun()]),
         pendingGates(301, parentGates),
@@ -468,9 +429,15 @@ describe("release:stable CLI", () => {
         gateApproval(301, 73),
         children(liveChildren),
         pendingGates(701, childGates),
-        gateApproval(701, 81),
         pendingGates(703, [{ id: 83, name: "npm-release" }]),
-        gateApproval(703, 83),
+        npmVisibility(false),
+        step(
+          "gh",
+          ["api", `repos/${REPOSITORY}/actions/runs/301`],
+          JSON.stringify({ status: "in_progress", conclusion: null, run_attempt: 3 }),
+        ),
+        pendingGates(301, parentGates),
+        children(liveChildren),
         npmVisibility(false),
         actionRun(REPOSITORY, 301, "failure", 3),
       ],
@@ -482,10 +449,24 @@ describe("release:stable CLI", () => {
       `pnpm release:publish-preflight --tag v${RELEASE} --full-release-validation-run-id 101 --full-release-validation-run-attempt 3 --npm-dist-tag latest --workflow-ref ${toolingTag}`,
     );
     expect(failed.stderr).toContain(`pnpm release:stable ${RELEASE} --from publish`);
+    for (const output of [failed.stdout, failed.stderr]) {
+      expect(output).toContain("status=waiting&per_page=100");
+      expect(output).toContain("status=queued&per_page=100");
+      expect(output).toContain("state=rejected");
+      expect(output).toContain("gh run cancel '<child>'");
+    }
+    for (const id of [701, 703]) {
+      expect(failed.stdout.match(new RegExp(`publish: child ${id} `, "gu"))).toHaveLength(1);
+    }
+    expect(failed.stdout).toContain("approve only if it belongs to parent 301:");
+    expect(failed.stdout).toContain("'environment_ids[]=81'");
+    for (const run of ignored) {
+      expect(failed.stdout).not.toContain(`child ${run.id} `);
+    }
     const refused = release.readState();
     expect(refused.operator.publicationApproved).toEqual(expect.any(String));
     expect(refused.publish.npmVisibleAt).toBeUndefined();
-    expect(refused.publish.approvedGates).toEqual(["301:71", "301:73", "701:81", "703:83"]);
+    expect(refused.publish.approvedGates).toEqual(["301:71", "301:73"]);
     expect(refused.phases.publish.status).toBe("refused");
     const resumed = release.run([
       ...publishPreparation(),
@@ -524,11 +505,14 @@ describe("release:stable CLI", () => {
     expect(helper?.args).toContain("--skip-dispatch");
     expect(helper?.args).toContain("--skip-parallels");
     expect(helper?.args).toContain("--skip-telegram");
-    expect(resumed.calls.filter((call) => call.args.includes("state=approved"))).toHaveLength(4);
+    expect(resumed.calls.filter((call) => call.args.includes("POST"))).toEqual([
+      { bin: "gh", args: gateApproval(301, 71).match },
+      { bin: "gh", args: gateApproval(301, 73).match },
+    ]);
     const childReads = resumed.calls.filter((call) =>
-      call.args[1]?.includes("?event=workflow_dispatch&per_page=100"),
+      call.args[1]?.includes("?status=waiting&event=workflow_dispatch&per_page=100"),
     );
-    expect(childReads).toHaveLength(2);
+    expect(childReads).toHaveLength(3);
     expect(
       childReads.every((call) =>
         call.args[1]?.endsWith(`created=>=${refused.publish.dispatchedAt}`),
@@ -537,7 +521,7 @@ describe("release:stable CLI", () => {
     expect(release.readState().publish).toMatchObject({
       publishRunId: "301",
       npmVisibleAt: expect.any(String),
-      approvedGates: ["301:71", "301:73", "701:81", "703:83"],
+      approvedGates: ["301:71", "301:73"],
     });
     expect(release.readState().phases.publish.status).toBe("completed");
   });
@@ -565,23 +549,44 @@ describe("release:stable CLI", () => {
     expect(result.calls.filter((call) => call.bin === "gh")).toHaveLength(2);
   });
 
-  it("reconciles an uncertain dispatch on restart without repeating the sweep or mutation", () => {
+  it("reconciles an uncertain dispatch only for the recorded actor without repeating the mutation", () => {
     const release = fixture();
     const state = publishState(true);
+    delete state.operator.login;
+    if (state.capabilities) {
+      delete state.capabilities.parentSweepsStaleChildren;
+    }
     release.seed(state);
     release.candidate(CANDIDATE_COMMAND);
     const distractors = [
       { ...parentRun(), id: 801, head_branch: "main" },
       { ...parentRun(), id: 802, display_title: "Publish v2026.9.5" },
       { ...parentRun(), id: 803, created_at: "2000-01-01T00:00:00.000Z" },
+      { ...parentRun(), id: 804, actor: { login: "another-operator" } },
+      { ...parentRun(), id: 805, event: "push" },
+      { ...parentRun(), id: 806, path: ".github/workflows/unrelated.yml" },
+      { ...parentRun(), id: 807, created_at: "2099-01-01T00:00:00.000Z" },
     ];
     const failed = release.run([
       ...publishPreparation(),
-      ...sweep(state.startedAt),
+      step(
+        "git",
+        ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`],
+        "release-approval-receipt",
+      ),
+      step("git", ["show", "origin/main:.github/workflows/openclaw-stable-main-closeout.yml"]),
+      step(
+        "git",
+        ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`],
+        "sweep_superseded_children",
+      ),
+      step("gh", ["api", "user", "--jq", ".login"], "release-test\n"),
       { ...parentDispatch(), exit: 1, stderr: "connection lost after submission" },
       { ...parentRuns(distractors), times: 10 },
     ]);
     expect(failed.status, failed.output).toBe(2);
+    expect(failed.stdout).not.toContain("state=rejected");
+    expect(release.readState().capabilities?.parentSweepsStaleChildren).toBe(true);
     expect(failed.stderr).toContain(
       `Could not reconcile ${publishWorkflow}; the dispatch may have been accepted.`,
     );
@@ -601,7 +606,8 @@ describe("release:stable CLI", () => {
     ]);
     expect(resumed.status, resumed.output).toBe(0);
     expect(resumed.calls.filter((call) => call.args[0] === "workflow")).toHaveLength(1);
-    expect(resumed.calls.filter((call) => call.args[1]?.includes("?status="))).toHaveLength(2);
+    expect(resumed.calls.filter((call) => call.args[1] === "user")).toHaveLength(1);
+    expect(resumed.calls.filter((call) => call.args[1]?.includes("?status="))).toHaveLength(0);
     expect(release.readState().publish).toMatchObject({
       publishRunId: "301",
       dispatchedAt: intent?.at,
@@ -611,6 +617,43 @@ describe("release:stable CLI", () => {
         .readState()
         .history.filter((entry) => entry.event === `dispatch-intent:${publishWorkflow}`),
     ).toHaveLength(1);
+  });
+
+  it("refuses ambiguous main-ref dispatches instead of choosing the newest run", () => {
+    const release = fixture();
+    const state = publishState(true);
+    state.operator.publicationApproved = null;
+    delete state.publish.macosValidateRunId;
+    release.seed(state);
+    release.candidate(CANDIDATE_COMMAND);
+    const workflow = "openclaw-macos-validate.yml";
+    const result = release.run([
+      ...publishPreparation(),
+      step("gh", ["workflow", "run", workflow]),
+      step(
+        "gh",
+        [
+          "api",
+          `repos/openclaw/releases/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=10`,
+        ],
+        JSON.stringify({
+          workflow_runs: [201, 211].map((id) => ({
+            id,
+            event: "workflow_dispatch",
+            actor: { login: "release-test" },
+            created_at: new Date().toISOString(),
+            path: `.github/workflows/${workflow}`,
+            head_branch: "main",
+            display_title: "macOS Validate",
+          })),
+        }),
+      ),
+    ]);
+    expect(result.status, result.output).toBe(2);
+    expect(result.stderr).toContain(`Ambiguous dispatch of ${workflow}: runs 201, 211`);
+    expect(result.stderr).toContain(`gh run list --repo openclaw/releases --workflow ${workflow}`);
+    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from publish`);
+    expect(release.readState().publish.macosValidateRunId).toBeUndefined();
   });
 
   it.each([false, true])(

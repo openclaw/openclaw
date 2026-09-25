@@ -14,6 +14,7 @@ import {
   approveReleaseGates,
   dispatchReleaseWorkflow,
   listReleaseRuns,
+  manualSweepCommands,
   parseJson,
   pendingDeployments,
   positiveInteger,
@@ -373,58 +374,61 @@ function parsePublishInputs(command: string): Map<string, string> {
   return inputs;
 }
 
-function botChild(
-  ctx: ReleaseContext,
-  run: Record<string, unknown>,
-  includeClawhub: boolean,
-): boolean {
-  const toolingTag = ctx.state.validate.toolingTag;
-  const workflows = ["plugin-npm-release.yml", "openclaw-npm-release.yml"];
-  if (includeClawhub) {
-    workflows.push("plugin-clawhub-release.yml", "plugin-clawhub-new.yml");
+async function reportWaitingChildren(ctx: ReleaseContext, reported: Set<string>): Promise<void> {
+  const { state } = ctx;
+  if (!state.validate.toolingTag) {
+    return;
   }
-  const path = run.path;
-  return (
-    Boolean(toolingTag) &&
-    run.head_branch === toolingTag &&
-    run.event === "workflow_dispatch" &&
-    isRecord(run.actor) &&
-    run.actor.login === "github-actions[bot]" &&
-    typeof path === "string" &&
-    workflows.some((workflow) => path.endsWith(`/${workflow}`)) &&
-    positiveInteger(run.id)
+  const dispatchedAt = requireValue(state.publish.dispatchedAt, "publish dispatch time");
+  const children = await listReleaseRuns(
+    ctx,
+    `repos/${state.repo}/actions/runs?status=waiting&event=workflow_dispatch&per_page=100&created=>=${dispatchedAt}`,
   );
-}
-
-async function sweepStaleChildren(ctx: ReleaseContext): Promise<void> {
-  for (const status of ["waiting", "queued"]) {
-    const runs = await listReleaseRuns(
-      ctx,
-      `repos/${ctx.state.repo}/actions/runs?status=${status}&per_page=100&created=>=${ctx.state.startedAt}`,
-    );
-    for (const run of runs.filter((row) => botChild(ctx, row, true))) {
-      const id = String(run.id);
-      const pending = (await pendingDeployments(ctx, ctx.state.repo, id))[0];
-      if (pending && isRecord(pending.environment) && positiveInteger(pending.environment.id)) {
-        await ctx.run("gh", [
-          "api",
-          "-X",
-          "POST",
-          `repos/${ctx.state.repo}/actions/runs/${id}/pending_deployments`,
-          "-f",
-          "state=rejected",
-          "-f",
-          `comment=Superseded by ${ctx.state.release} stable publish`,
-          "-F",
-          `environment_ids[]=${pending.environment.id}`,
-        ]);
+  for (const child of children) {
+    if (
+      child.head_branch !== state.validate.toolingTag ||
+      child.event !== "workflow_dispatch" ||
+      child.status !== "waiting" ||
+      !isRecord(child.actor) ||
+      child.actor.login !== "github-actions[bot]" ||
+      typeof child.path !== "string" ||
+      !["plugin-npm-release.yml", "openclaw-npm-release.yml"].some(
+        (workflow) => child.path === `.github/workflows/${workflow}`,
+      ) ||
+      typeof child.created_at !== "string" ||
+      !(Date.parse(child.created_at) >= Date.parse(dispatchedAt)) ||
+      !positiveInteger(child.id) ||
+      reported.has(String(child.id))
+    ) {
+      continue;
+    }
+    const id = String(child.id);
+    for (const pending of await pendingDeployments(ctx, state.repo, id)) {
+      if (
+        !isRecord(pending.environment) ||
+        pending.environment.name !== "npm-release" ||
+        !positiveInteger(pending.environment.id)
+      ) {
+        continue;
       }
-      await ctx.run("gh", [
+      const command = shellCommand("gh", [
         "api",
         "-X",
         "POST",
-        `repos/${ctx.state.repo}/actions/runs/${id}/cancel`,
+        `repos/${state.repo}/actions/runs/${id}/pending_deployments`,
+        "-f",
+        "state=approved",
+        "-f",
+        `comment=${state.release} stable publish approved by ${state.operator.name}`,
+        "-F",
+        `environment_ids[]=${pending.environment.id}`,
       ]);
+      ctx.log(
+        "publish",
+        `child ${id} (${child.path.split("/").at(-1)}) waits for npm-release; approve only if it belongs to parent ${state.publish.publishRunId}: ${command}`,
+      );
+      reported.add(id);
+      break;
     }
   }
 }
@@ -618,15 +622,12 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     state.operator.publicationApproved = new Date().toISOString();
     ctx.save();
   }
+  await probeCapabilities(ctx, requireValue(state.validate.toolingSha, "tooling SHA"));
   if (!state.publish.publishRunId) {
-    if (
-      !state.history.some(
-        (entry) =>
-          entry.phase === "publish" &&
-          entry.event === "dispatch-intent:openclaw-release-publish.yml",
-      )
-    ) {
-      await sweepStaleChildren(ctx);
+    if (!state.capabilities?.parentSweepsStaleChildren) {
+      for (const command of manualSweepCommands(ctx)) {
+        ctx.log("publish", command);
+      }
     }
     inputs.set("wait_for_clawhub", "false");
     const dispatched = await dispatchReleaseWorkflow(ctx, {
@@ -640,11 +641,9 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     state.publish.dispatchedAt = dispatched.dispatchedAt;
     ctx.save();
   }
-  if (!state.capabilities) {
-    await probeCapabilities(ctx, requireValue(state.validate.toolingSha, "tooling SHA"));
-  }
   const id = state.publish.publishRunId;
   const next = [
+    ...manualSweepCommands(ctx),
     shellCommand("pnpm", [
       "release:publish-preflight",
       "--tag",
@@ -660,6 +659,7 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     ]),
     ctx.resume("publish"),
   ];
+  const reportedChildren = new Set<string>();
   await pollRelease(ctx, {
     label: `npm visibility of openclaw@${state.release}`,
     timeoutMs: 2 * HOUR,
@@ -667,13 +667,7 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     probe: async () => {
       await approveReleaseGates(ctx, state.repo, id, "npm-release");
       if (!state.capabilities?.parentApprovalReceipt) {
-        const children = await listReleaseRuns(
-          ctx,
-          `repos/${state.repo}/actions/runs?event=workflow_dispatch&per_page=100&created=>=${requireValue(state.publish.dispatchedAt, "publish dispatch time")}`,
-        );
-        for (const child of children.filter((run) => botChild(ctx, run, false))) {
-          await approveReleaseGates(ctx, state.repo, String(child.id), "npm-release");
-        }
+        await reportWaitingChildren(ctx, reportedChildren);
       }
       const npm = await ctx.run(
         "npm",
