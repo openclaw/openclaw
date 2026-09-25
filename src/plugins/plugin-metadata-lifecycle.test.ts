@@ -238,46 +238,71 @@ it.each([true, false])(
   },
 );
 
-it("settles publication after admission closes before final close releases retained consumers", async () => {
-  const cache = getPluginCache();
-  const instance = new PluginInstance("retained-publication");
-  const dispose = vi.fn();
-  instance.lifecycle.onDispose(dispose);
-  cache.setupModules.set("retained-publication", instance);
-  const release = retainPluginCache(cache);
-  const owner = retainGatewayPluginMetadata();
-  owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
-  owner.publish(withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()));
-  owner.beginClose();
-  let published = false;
-  const publication = owner.waitForRetirement().then(() => {
-    published = true;
-  });
-  let closing: Promise<unknown> | undefined;
-  try {
-    await expect.poll(() => published).toBe(true);
-    expect(dispose).not.toHaveBeenCalled();
-    const finalEntered = createDeferredCore();
-    let closed = false;
-    closing = owner
-      .close(async (retire) => {
-        finalEntered.resolve();
-        await retire();
-      })
-      .then(() => {
-        closed = true;
-      });
-    await finalEntered.promise;
-    expect(closed).toBe(false);
-    expect(dispose).not.toHaveBeenCalled();
-    release();
-    await closing;
-    expect(dispose).toHaveBeenCalledOnce();
-  } finally {
-    release();
-    await Promise.allSettled([publication, closing ?? owner.close()]);
-  }
-});
+it.each([false, true])(
+  "settles publication and reports cleanup failures (released before final close: %s)",
+  async (releasedBeforeClose) => {
+    const cache = getPluginCache();
+    const instance = new PluginInstance("retained-publication");
+    const failure = new Error("retained consumer cleanup failed");
+    const dispose = vi.fn();
+    instance.lifecycle.onDispose(dispose);
+    cache.setupModules.set("retained-publication", instance);
+    const release = retainPluginCache(cache);
+    const owner = retainGatewayPluginMetadata();
+    owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
+    owner.publish(
+      withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()),
+      new Set(["retained-publication"]),
+      async (options) =>
+        options?.deferConsumers
+          ? { cleanupCount: 0, failures: [], deferredPluginIds: ["retained-publication"] }
+          : {
+              cleanupCount: 1,
+              failures: [{ pluginId: "retained-publication", hookId: "instance", error: failure }],
+            },
+    );
+    owner.beginClose();
+    let published = false;
+    const publication = owner.waitForRetirement().then(() => {
+      published = true;
+    });
+    let closing: Promise<unknown> | undefined;
+    try {
+      await expect.poll(() => published).toBe(true);
+      expect(dispose).not.toHaveBeenCalled();
+      if (releasedBeforeClose) {
+        release();
+        await expect.poll(() => cache.retirement).toBeDefined();
+        await cache.retirement;
+        expect(dispose).toHaveBeenCalledOnce();
+      }
+      const finalEntered = createDeferredCore();
+      let closed = false;
+      closing = owner
+        .close(async (retire) => {
+          finalEntered.resolve();
+          await retire();
+        })
+        .then(() => {
+          closed = true;
+        });
+      await finalEntered.promise;
+      expect(closed).toBe(false);
+      if (!releasedBeforeClose) {
+        expect(dispose).not.toHaveBeenCalled();
+      }
+      release();
+      await closing;
+      expect((await owner.close()).failures).toEqual([
+        expect.objectContaining({ pluginId: "retained-publication", error: failure }),
+      ]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await Promise.allSettled([publication, closing ?? owner.close()]);
+    }
+  },
+);
 
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();

@@ -103,7 +103,6 @@ export function retainGatewayPluginMetadata() {
               }
             });
           }
-          owner.retirements.delete(retirement);
           return {
             cleanupCount: (previous?.cleanupCount ?? 0) + (cleanup?.cleanupCount ?? 0),
             failures: [...(previous?.failures ?? []), ...(cleanup?.failures ?? [])],
@@ -115,11 +114,16 @@ export function retainGatewayPluginMetadata() {
         const observed = deferConsumers
           ? await retirement.beforeRetire?.({ deferConsumers: true })
           : undefined;
-        return deferConsumers &&
+        if (
+          deferConsumers &&
           (observed?.deferredPluginIds?.length ||
             (retirement.cache.kind === "process" && getPluginCacheRetention(retirement.cache)))
-          ? observed
-          : pending;
+        ) {
+          return observed;
+        }
+        const completed = await pending;
+        owner.retirements.delete(retirement);
+        return completed;
       }),
     ]);
     const failures = results.flatMap((result) =>
