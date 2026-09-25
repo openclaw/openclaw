@@ -66,6 +66,30 @@ describe("GatewayChatClient", () => {
     },
   );
 
+  it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
+    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const held = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .spyOn(GatewayClient.prototype, "request")
+      .mockResolvedValueOnce({ models })
+      .mockReturnValueOnce(held.promise);
+    const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    try {
+      await client.listModels({ agentId: "work" });
+      const refresh = client.listModels({ agentId: "work" });
+      const sharedRefresh = client.listModels({ agentId: "work" });
+      expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
+      expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
+      await client.stop();
+      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      await Promise.all([refresh, sharedRefresh]);
+      expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
+    } finally {
+      held.resolve({ models });
+      request.mockRestore();
+    }
+  });
+
   it("waits for gateway transport teardown on stop", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

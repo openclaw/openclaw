@@ -44,6 +44,7 @@ export class SearchableSelectList implements Component, Focusable {
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
   private highlightPatterns?: RegExp[];
+  private emptyMessage = "No matches";
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
@@ -69,6 +70,18 @@ export class SearchableSelectList implements Component, Focusable {
 
   set focused(value: boolean) {
     this.searchInput.focused = value;
+  }
+
+  setItems(items: SearchableSelectItem[], emptyMessage = "No matches") {
+    const selectedValue = this.filteredItems[this.selectedIndex]?.value;
+    this.items = items;
+    this.emptyMessage = emptyMessage;
+    this.preparedItems = undefined;
+    this.updateFilter();
+    this.selectedIndex = Math.max(
+      0,
+      this.filteredItems.findIndex((item) => item.value === selectedValue),
+    );
   }
 
   private updateFilter() {
@@ -97,7 +110,7 @@ export class SearchableSelectList implements Component, Focusable {
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: FuzzyCandidate[] = [];
 
-    // Rows are fixed for the overlay lifetime; defer search projection until it is needed.
+    // Defer search projection until it is needed; setItems retires the old projection.
     this.preparedItems ??= this.items.map((item) => {
       const label = stripAnsi(this.getItemLabel(item));
       const description = stripAnsi(item.description ?? "");
@@ -201,7 +214,8 @@ export class SearchableSelectList implements Component, Focusable {
 
     // If no items match filter, show message
     if (this.filteredItems.length === 0) {
-      lines.push(truncateToWidth(this.theme.noMatch("  No matches"), safeWidth, ""));
+      const message = this.items.length === 0 ? this.emptyMessage : "No matches";
+      lines.push(truncateToWidth(this.theme.noMatch(`  ${message}`), safeWidth, ""));
       return lines;
     }
 
