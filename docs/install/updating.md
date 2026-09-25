@@ -243,7 +243,12 @@ retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
-It acquires a fresh consistent copy, then checks, compacts, and publishes that
+Update schema inspection and rehearsal use SQLite online backup with a pinned
+read transaction, so a busy Gateway can keep writing while the copy includes
+committed WAL data. Each acquisition makes one copy instead of retrying until
+the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
+commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
+time in the update ledger, then checks, compacts, and publishes the private
 copy for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 
