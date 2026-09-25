@@ -3019,7 +3019,7 @@ NODE
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 
@@ -3117,7 +3117,7 @@ NODE
   });
 
   it.skipIf(process.platform === "win32")(
-    "bounds Windows project overlap to existing self-hosted capacity",
+    "runs measured Windows rows without overlapping projects",
     () => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs["checks-windows"];
@@ -3139,7 +3139,17 @@ NODE
         '#!/bin/sh\nprintf "project_parallelism=%s\\n" "${OPENCLAW_TEST_PROJECTS_PARALLEL:-1}"\n',
       );
       chmodSync(pnpm, 0o755);
-      for (const task of ["test-1", "test-2"]) {
+      const targets = ["test/windows-first.test.ts", "test/windows-second.test.ts"];
+      mkdirSync(path.join(cwd, "scripts"));
+      writeFileSync(path.join(cwd, "scripts/tsx.mjs"), "export {};\n");
+      writeFileSync(
+        path.join(cwd, "scripts/test-projects.mts"),
+        `
+        console.log("project_parallelism=" + process.env.OPENCLAW_TEST_PROJECTS_PARALLEL);
+        console.log("targets=" + JSON.stringify(process.argv.slice(2)));
+      `,
+      );
+      for (const task of ["test", "test-1", "test-2"]) {
         for (const runner of ["github-hosted", "self-hosted"]) {
           const result = runWorkflowShellScript(runStep.run, {
             cwd,
@@ -3149,16 +3159,23 @@ NODE
               TASK: task,
               RUNNER_ENVIRONMENT: runner,
               OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+              WINDOWS_TARGETS_JSON: JSON.stringify(targets),
             },
           });
           expect(result.status, result.stdout + result.stderr).toBe(0);
-          expect(result.stdout).toContain(
-            `project_parallelism=${runner === "self-hosted" ? 2 : 1}`,
-          );
+          expect(result.stdout).toContain("project_parallelism=1");
+          if (task === "test") {
+            expect(result.stdout).toContain(
+              `targets=${JSON.stringify([...targets, "--fileParallelism"])}`,
+            );
+          }
         }
       }
-      expect(job.strategy["max-parallel"]).toBe(2);
+      expect(job.strategy["max-parallel"]).toBe(5);
       expect(job.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(1);
+      expect(runStep.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(
+        "${{ runner.environment == 'self-hosted' && 4 || 1 }}",
+      );
     },
   );
 
@@ -3781,7 +3798,7 @@ NODE
       "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
-      "checks-windows": "blacksmith-8vcpu-windows-2025",
+      "checks-windows": "blacksmith-16vcpu-windows-2025",
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
@@ -5583,7 +5600,7 @@ server.listen(0, "127.0.0.1", () => {
     });
     // The Windows matrix carries no per-row runner: both parts share one class.
     expect(workflow.jobs["checks-windows"]["runs-on"]).not.toContain("matrix.runner");
-    expect(source).toContain("blacksmith-8vcpu-windows-2025");
+    expect(source).toContain("blacksmith-16vcpu-windows-2025");
   });
 
   it("keeps the extension boundary sticky disk on one protected key", () => {
