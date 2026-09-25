@@ -2769,6 +2769,25 @@ describe("CI changed Node test plan", () => {
     expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
   });
 
+  it("keeps core-impact extension fallback under the PR matrix headroom", () => {
+    const compactNodeRows = createNodeTestShardBundles({
+      changedPaths: ["src/config/types.ts"],
+      compact: true,
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      runnerBackend: "github",
+    }).filter((shard) => !shard.requiresDist);
+    const fallbackRows = createChangedExtensionFallbackShards(["src/config/types.ts"]);
+    expect(
+      hasCoreExtensionImpact(["src/config/types.ts"]),
+      "fixture should exercise core impact",
+    ).toBe(true);
+    expect(fallbackRows.length).toBeGreaterThan(0);
+    expect(
+      compactNodeRows.length + fallbackRows.filter((shard) => !shard.requiresDist).length,
+    ).toBeLessThanOrEqual(120);
+  });
+
   it.each([
     { name: "helper alone", changedPaths: [githubActivityHelper] },
     {
