@@ -175,7 +175,7 @@ export async function dispatchWorkerRequest(params: {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
-    const outcome = service.startInference(params.identity, params.request.params, {
+    const outcome = await service.startInference(params.identity, params.request.params, {
       connectionId: params.connectionId,
       send: (frame) => params.send(frame),
     });
@@ -201,7 +201,7 @@ export async function dispatchWorkerRequest(params: {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
-    const outcome = service.cancelInference(params.identity, params.request.params);
+    const outcome = await service.cancelInference(params.identity, params.request.params);
     respondOutcome(outcome, (failure: WorkerServiceFailure<"cancelInference">) =>
       workerInferenceError(failure.reason),
     );

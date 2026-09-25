@@ -370,7 +370,7 @@ function createStableReadOnlyCopyInTempDirectory(
     if (tempDir && existingTempDir === undefined) {
       removeTempDirectory(tempDir);
     }
-    throw sqliteSnapshotStagingError(tempDir ?? stagingRoot, error, !tempDir);
+    throw tempDir ? sqliteSnapshotStagingError(tempDir, error) : error;
   }
 }
 

@@ -280,13 +280,16 @@ cleanup owns SQLite staging files, while plugin cleanup owns this capture subtre
 Reclamation removes captured
 payload before its coordinator so a partial deletion remains retryable.
 
-Startup and hourly cleanup inspect only this owned subtree. An instance becomes
+Startup and hourly cleanup inspect this owned subtree. An instance becomes
 eligible after one hour, but age alone never authorizes removal: cleanup must
 also acquire its native coordinator, proving that no producer retains custody.
 Process exit releases the native lock even after a forced termination. PID
 names, process probes, and PID-reuse guesses are not used; a numeric PID cannot
 identify a producer across containers sharing a temporary directory. Contention,
-unreadable entries, symlinks, and entries without a coordinator preserve files.
+unreadable entries, and symlinks preserve files. An aged instance left without a
+coordinator by interrupted allocation or older partial cleanup is reclaimed after
+a successful rename probe. Allocation acquires the coordinator before creating
+payload, and disposal removes payload before its coordinator.
 Removal remains asynchronous and advisory. This subtree is excluded from state
 backups because its captured package bytes are reconstructible.
 
@@ -296,6 +299,15 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+
+Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
+`openclaw-model-catalog-*` roots in the selected state's temporary directory and
+the current system temporary directory. Roots must be older than one hour and
+have no coordinator. A complete process census that finds another OpenClaw
+producer preserves legacy roots. When the census is unavailable, including on
+Windows, cleanup uses age and a rename probe instead; sharing violations leave
+locked roots for a later cycle. This is best-effort cleanup of reconstructible
+legacy scratch, not proof that an older producer has stopped using it.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no coordinator proving whether their producer is still alive. Doctor reports
@@ -321,8 +333,9 @@ On hosts without a complete process census (including
 Windows and recognized container environments), Doctor reports legacy
 captures but skips their removal. For a container sharing the host's temporary
 directory, run maintenance on the host after stopping its OpenClaw containers.
-Modern captures retain their existing custody-token cleanup; no legacy files are
-moved or adopted by the new runtime.
+Doctor's maintenance repair remains separate from runtime reclamation: its
+broader inventory includes old service temporary locations the current runtime
+does not use. Modern captures retain their custody-token cleanup.
 
 Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
