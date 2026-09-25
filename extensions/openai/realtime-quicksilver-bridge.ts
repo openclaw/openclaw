@@ -1,4 +1,5 @@
 // GPT-Live backend bridge over the Frameless Bidi WebSocket protocol used by Codex realtime v3.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   rawDataToString,
@@ -188,14 +189,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     captureOpenAIQuicksilverTransportEvent(this.runtime, "local", "ws-open");
 
     let reachedReady = false;
-    let resolveReady!: () => void;
-    let rejectReady!: (error: Error) => void;
+    const ready = createDeferred<void>();
     let readySettled = false;
     let removeAbortListener = () => {};
-    const readyPromise = new Promise<void>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
     const settleReady = (providerReady = true) => {
       if (readySettled) {
         return;
@@ -206,7 +202,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(readyTimeout);
       }
       removeAbortListener();
-      resolveReady();
+      ready.resolve();
     };
     const failReady = (error: Error) => {
       if (readySettled) {
@@ -217,7 +213,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(readyTimeout);
       }
       removeAbortListener();
-      rejectReady(error);
+      ready.reject(error);
     };
     const failStartup = (error: Error, reason: string) => {
       if (this.lifecycle.terminalOutcome(connection) === "completed") {
@@ -354,7 +350,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         failStartup(error, "startup terminal event");
       }
     }
-    await readyPromise;
+    await ready.promise;
   }
 
   sendAudio(audio: Buffer): void {
@@ -640,13 +636,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     const socket = this.socket;
-    let drain: { resolve: () => void; reject: (error: unknown) => void } | undefined;
+    let drain: ReturnType<typeof createDeferred<void>> | undefined;
     if (isOpenAIGptLiveApiModel(this.config.model)) {
-      const completion = new Promise<void>((resolve, reject) => {
-        drain = { resolve, reject };
-      });
-      this.closing = { connection, completion };
-      void completion.catch(() =>
+      drain = createDeferred<void>();
+      this.closing = { connection, completion: drain.promise };
+      void drain.promise.catch(() =>
         (this.config.logger?.warn ?? console.warn)("GPT-Live failure cleanup observer failed"),
       );
     }

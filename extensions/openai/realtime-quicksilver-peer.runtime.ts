@@ -1,6 +1,7 @@
 // Control-plane facade; codecs, WebRTC sockets and packet clocks live in the worker.
 import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createCpuTrackedWorker,
   resolveRuntimeWorkerArgv,
@@ -70,7 +71,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     const abort = () => peer.close();
     params.signal?.addEventListener("abort", abort, { once: true });
     try {
-      await peer.ready;
+      await peer.ready.promise;
       params.signal?.throwIfAborted();
       return peer;
     } catch (error) {
@@ -92,9 +93,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     number,
     { resolve(value: string): void; reject(error: Error): void }
   >();
-  private readonly ready: Promise<void>;
-  private resolveReady!: () => void;
-  private rejectReady!: (error: Error) => void;
+  private readonly ready = createDeferred<void>();
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(
@@ -102,10 +101,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     private readonly callbacks: OpenAIQuicksilverAudioPeerCallbacks,
     private readonly output?: RealtimeVoiceAudioOutputPort,
   ) {
-    this.ready = new Promise((resolve, reject) => {
-      this.resolveReady = resolve;
-      this.rejectReady = reject;
-    });
     worker.on("message", (message: QuicksilverAudioWorkerEvent) => {
       try {
         this.handleMessage(message);
@@ -170,7 +165,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
     this.pendingAudio.clear();
     const error = new Error("GPT-Live audio worker closed");
-    this.rejectReady(error);
+    this.ready.reject(error);
     for (const request of this.requests.values()) {
       request.reject(error);
     }
@@ -218,7 +213,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     switch (message.type) {
       case "ready":
         this.started = true;
-        this.resolveReady();
+        this.ready.resolve();
         return;
       case "result":
       case "request-error": {
@@ -279,7 +274,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       return;
     }
     const started = this.started;
-    this.rejectReady(error);
+    this.ready.reject(error);
     this.close();
     if (started) {
       this.callbacks.onError(error);

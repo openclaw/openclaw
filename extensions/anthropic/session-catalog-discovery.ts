@@ -71,10 +71,6 @@ const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
 type ClaudeCliScan = Awaited<ReturnType<typeof scanClaudeSessions>>;
 const mergedScans = new WeakMap<ClaudeCliScan, WeakMap<DesktopOverlay, Promise<CatalogRecord[]>>>();
 
-function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
-  setBoundedCache(catalogDiscoveryCache, filePath, entry, MAX_CATALOG_DISCOVERY_CACHE_ENTRIES);
-}
-
 function applyCatalogDiscovery(
   records: Map<string, CatalogRecord>,
   sessionId: string,
@@ -90,32 +86,12 @@ function applyCatalogDiscovery(
   }
 }
 
-type SessionIndexEntry = {
-  sessionId?: unknown;
-  fullPath?: unknown;
-  fileMtime?: unknown;
-  firstPrompt?: unknown;
-  summary?: unknown;
-  messageCount?: unknown;
-  created?: unknown;
-  modified?: unknown;
-  gitBranch?: unknown;
-  projectPath?: unknown;
-  isSidechain?: unknown;
-};
-
 export type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
 function isCliEntrypoint(value: unknown): value is string {
   return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
-}
-
-// Claude's persisted string timestamps are date expressions, including numeric-looking years.
-// Numeric fields are already millisecond values, so preserve that distinct mixed-input contract.
-function parseClaudeCatalogTimestampMs(value: unknown): number | undefined {
-  return parseDateFirstTimestampMs(value);
 }
 
 async function readIndexRecords(context: ClaudeSessionScanContext) {
@@ -143,11 +119,10 @@ async function readIndexRecords(context: ClaudeSessionScanContext) {
     if (!isRecord(raw) || !Array.isArray(raw.entries)) {
       continue;
     }
-    for (const candidate of raw.entries) {
-      if (!isRecord(candidate)) {
+    for (const entry of raw.entries) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const entry = candidate as SessionIndexEntry;
       const sessionId = readBoundedString(entry.sessionId, 256);
       if (!sessionId) {
         continue;
@@ -166,10 +141,9 @@ async function readIndexRecords(context: ClaudeSessionScanContext) {
       if (!safeFile) {
         continue;
       }
-      const createdAt = parseClaudeCatalogTimestampMs(entry.created);
+      const createdAt = parseDateFirstTimestampMs(entry.created);
       const updatedAt =
-        parseClaudeCatalogTimestampMs(entry.modified) ??
-        parseClaudeCatalogTimestampMs(entry.fileMtime);
+        parseDateFirstTimestampMs(entry.modified) ?? parseDateFirstTimestampMs(entry.fileMtime);
       const summary = readBoundedString(entry.summary, 500);
       const firstPrompt = readBoundedString(entry.firstPrompt, 500);
       records.set(sessionId, {
@@ -358,7 +332,7 @@ async function discoverCliRecords(
         const fragments: string[] = [];
         collectTranscriptText(raw.message.content, fragments);
         const firstPrompt = readBoundedString(fragments[0], 500);
-        const createdAt = parseClaudeCatalogTimestampMs(raw.timestamp);
+        const createdAt = parseDateFirstTimestampMs(raw.timestamp);
         record = {
           threadId: sessionId,
           name: firstPrompt ?? null,
@@ -401,17 +375,22 @@ async function discoverCliRecords(
     }
     // Negative and sidechain-only results are cached too; unchanged files should not be reparsed.
     if (cacheable) {
-      cacheCatalogDiscovery(filePath, {
-        root,
-        mtimeMs: fileStat.mtimeMs,
-        size: fileStat.size,
-        ino: fileStat.ino,
-        sessionId,
-        scannedBytes: fileScannedBytes,
-        record,
-        metadata,
-        sidechain: sidechainIds.has(sessionId),
-      });
+      setBoundedCache(
+        catalogDiscoveryCache,
+        filePath,
+        {
+          root,
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
+          ino: fileStat.ino,
+          sessionId,
+          scannedBytes: fileScannedBytes,
+          record,
+          metadata,
+          sidechain: sidechainIds.has(sessionId),
+        },
+        MAX_CATALOG_DISCOVERY_CACHE_ENTRIES,
+      );
     }
     if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
       truncated = true;

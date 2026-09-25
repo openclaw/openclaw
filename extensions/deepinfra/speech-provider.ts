@@ -1,4 +1,3 @@
-// Deepinfra provider module implements model/runtime integration.
 import {
   createOpenAiCompatibleSpeechProvider,
   type SpeechProviderPlugin,

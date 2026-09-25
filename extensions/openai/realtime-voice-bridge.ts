@@ -115,14 +115,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   }
 
   sendUserMessage(text: string, options?: OpenAIRealtimeUserMessageOptions): void {
-    if (
-      options?.toolChoice &&
-      (this.interruptingPlayback ||
-        this.responseActive ||
-        this.responseCreateState !== "idle" ||
-        this.responseCancelInFlight ||
-        this.pendingToolCallIds.size > 0)
-    ) {
+    if (options?.toolChoice && (this.responseBusy || this.pendingToolCallIds.size > 0)) {
       throw new Error("Forced realtime tool choice requires an idle response state");
     }
     if (this.pendingToolCallIds.size > 0) {
@@ -506,39 +499,28 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     model: string,
   ): { url: string; headers: Record<string, string> } {
     const cfg = this.config;
+    let url: string;
     if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      const url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
-      return {
-        url,
-        headers: this.runtime.resolveProviderRequestHeaders({
+      url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
+    } else {
+      url = cfg.callId
+        ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
+        : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+    }
+    const defaultHeaders = { Authorization: `Bearer ${apiKey}` };
+    return {
+      url,
+      headers:
+        this.runtime.resolveProviderRequestHeaders({
           provider: "openai",
           baseUrl: url,
           capability: "audio",
           transport: "websocket",
-          defaultHeaders: { Authorization: `Bearer ${apiKey}` },
-        }) ?? { Authorization: `Bearer ${apiKey}` },
-      };
-    }
-
-    const url = cfg.callId
-      ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
-      : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
-    return {
-      url,
-      headers: this.runtime.resolveProviderRequestHeaders({
-        provider: "openai",
-        baseUrl: url,
-        capability: "audio",
-        transport: "websocket",
-        defaultHeaders: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      }) ?? {
-        Authorization: `Bearer ${apiKey}`,
-      },
+          defaultHeaders,
+        }) ?? defaultHeaders,
     };
   }
 

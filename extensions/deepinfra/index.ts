@@ -1,4 +1,3 @@
-// Deepinfra plugin entrypoint registers its OpenClaw integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";

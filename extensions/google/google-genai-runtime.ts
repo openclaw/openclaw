@@ -1,4 +1,3 @@
-// Google plugin module implements google genai runtime behavior.
 import { GoogleGenAI, type GoogleGenAIOptions } from "@google/genai";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
