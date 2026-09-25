@@ -288,6 +288,7 @@ function setCliBackendForPrepareTest(
     modelProvider?: string;
     pluginId?: string;
     prepareExecution?: CliBackendPlugin["prepareExecution"];
+    resolveModelId?: CliBackendPlugin["resolveModelId"];
     sessionMode?: "always" | "existing" | "none";
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
@@ -309,6 +310,7 @@ function setCliBackendForPrepareTest(
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
           : {}),
         ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
+        ...(params.resolveModelId ? { resolveModelId: params.resolveModelId } : {}),
         config: {
           ...createJsonlStdinBackendConfig(params.command ?? "claude"),
           systemPromptFileArg: "--append-system-prompt-file",
@@ -658,6 +660,50 @@ describe("prepareCliRunContext", () => {
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ contextTokenBudget: testCase.expected }),
     );
+  });
+
+  it.each([
+    { name: "the session-selected 200k option", selection: "200k", expected: "claude-fable-5" },
+    {
+      name: "the declared default option when unselected",
+      selection: undefined,
+      expected: "claude-fable-5[1m]",
+    },
+  ])("resolves the native model id from $name", async (testCase) => {
+    // The id must follow the same effective option as the context budget, or an
+    // unselected session budgets 1M while the CLI runs its bare-id window.
+    const resolveModelId = vi.fn<NonNullable<CliBackendPlugin["resolveModelId"]>>(
+      ({ modelId, contextWindow }) => (contextWindow === "1m" ? `${modelId}[1m]` : modelId),
+    );
+    setCliBackendForPrepareTest({ resolveModelId });
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-fable-5",
+      config: {},
+      ...(testCase.selection ? { contextWindow: testCase.selection } : {}),
+    });
+
+    expect(context.normalizedModel).toBe(testCase.expected);
+    expect(resolveModelId).toHaveBeenCalledWith({
+      modelId: "claude-fable-5",
+      contextWindow: testCase.selection ?? "1m",
+    });
   });
 
   beforeEach(() => {
