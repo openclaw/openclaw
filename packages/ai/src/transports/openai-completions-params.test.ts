@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { getAiTransportHost } from "../host.js";
+import { describe, expect, it } from "vitest";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -282,24 +281,44 @@ describe("openai completions params", () => {
     },
   );
 
-  it("preserves non-reasoning positive short budgets", () => {
-    const model = makeCompletionsModel({
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      contextWindow: 1016,
-      maxTokens: 1000,
-    });
-    const context = emptyContext("x".repeat(3200));
-    for (const remaining of [1, 15]) {
-      expect(
-        buildOpenAICompletionsParams(
-          { ...model, contextTokens: 1001 + remaining },
-          context,
-          undefined,
-        ).max_completion_tokens,
-      ).toBe(remaining);
-    }
-  });
+  it.each([
+    ["non-reasoning", false, undefined],
+    ["thinking-off", true, { reasoning: "off" }],
+  ] as const)(
+    "never sends a %s proxy request a context-reduced cap under the useful floor",
+    (_mode, reasoning, options) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning,
+        contextWindow: 1000,
+        maxTokens: 1000,
+      });
+      const capAt = (chars: number): number | "refused" => {
+        try {
+          return buildOpenAICompletionsParams(model, emptyContext("x".repeat(chars)), options)
+            .max_completion_tokens as number;
+        } catch (error) {
+          expect(error).toMatchObject({ code: "context_length_exceeded" });
+          return "refused";
+        }
+      };
+      // Once the margined estimate leaves under 16 tokens (3,150 characters), the budget comes
+      // from the unmargined estimate; once that leaves under 16 too (3,936), the request is refused.
+      expect(capAt(3100)).toBe(30);
+      expect(capAt(3150)).toBe(211);
+      expect(capAt(3872)).toBe(31);
+      expect(capAt(3936)).toBe("refused");
+      // Sweep from a margined budget through the unmargined band to exhaustion.
+      const caps = Array.from({ length: 1101 }, (_, index) => capAt(3000 + index));
+      const sent = caps.filter((cap): cap is number => cap !== "refused");
+      expect(Math.min(...sent)).toBeGreaterThanOrEqual(16);
+      const firstRefusal = caps.indexOf("refused");
+      expect(caps.slice(firstRefusal).every((cap) => cap === "refused")).toBe(true);
+      // The cap grows only once, where the budget moves to the unmargined estimate.
+      const increases = sent.filter((cap, index) => cap > (sent[index - 1] ?? cap));
+      expect(increases).toHaveLength(1);
+    },
+  );
 
   it.each([
     ["non-reasoning", false, undefined],
@@ -331,6 +350,17 @@ describe("openai completions params", () => {
           maxTokens: 1,
         }).max_completion_tokens,
       ).toBe(1);
+      // Caller-owned short budgets that fit the unmargined room go out unchanged; 3,600
+      // characters leave 99 tokens without the margin and none with it.
+      for (const maxTokens of [1, 2, 16]) {
+        expect(
+          buildOpenAICompletionsParams(
+            { ...model, contextTokens: 1000 },
+            emptyContext("x".repeat(3600)),
+            { ...options, maxTokens },
+          ).max_completion_tokens,
+        ).toBe(maxTokens);
+      }
     },
   );
 
@@ -355,37 +385,6 @@ describe("openai completions params", () => {
         expect(build).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
       } else {
         expect(build().max_completion_tokens).toBe(expected);
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "warns when a short non-thinking request proceeds (reasoning=%s)",
-    (reasoning) => {
-      const model = makeCompletionsModel({
-        baseUrl: "http://localhost:8000/v1",
-        reasoning,
-        contextWindow: 1016,
-        maxTokens: 1000,
-      });
-      const warning = vi.spyOn(getAiTransportHost(), "logWarn");
-      try {
-        for (const remaining of [1, 15]) {
-          warning.mockClear();
-          const params = buildOpenAICompletionsParams(
-            { ...model, contextTokens: 1001 + remaining },
-            emptyContext("x".repeat(3200)),
-            { reasoning: "off" },
-          );
-          expect(params.max_completion_tokens).toBe(remaining);
-          expect(warning).toHaveBeenCalledWith(
-            "openai-transport",
-            expect.stringContaining("insufficient_output_budget"),
-            undefined,
-          );
-        }
-      } finally {
-        warning.mockRestore();
       }
     },
   );
