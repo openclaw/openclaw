@@ -176,6 +176,25 @@ serveOwnedWorkerTasks(
           };
         });
       }
+      if (request.kind === "transcript-match") {
+        const { findTranscriptEventMatchingInDatabase } =
+          await import("./session-transcript-match.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(
+            (database) => findTranscriptEventMatchingInDatabase(database, request.request),
+            {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
+            },
+          );
+          return {
+            kind: "transcript-match" as const,
+            result: opened.found ? opened.value : undefined,
+          };
+        });
+      }
       if (request.kind === "transcript-search") {
         const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");

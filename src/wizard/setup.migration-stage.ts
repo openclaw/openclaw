@@ -2,12 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
@@ -92,20 +93,12 @@ type SetupMigrationStage = {
   cleanup: () => Promise<void>;
 };
 
-async function findExistingAncestor(candidate: string): Promise<string> {
-  let current = path.resolve(candidate);
-  while (!(await migrationPathEntryExists(current))) {
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error(`Could not find an existing parent for migration staging at ${candidate}.`);
-    }
-    current = parent;
-  }
-  return current;
-}
-
 async function makePrivateStageNear(target: string, label: string): Promise<string> {
-  const ancestor = await findExistingAncestor(path.dirname(path.resolve(target)));
+  const parent = path.dirname(path.resolve(target));
+  const ancestor = await findExistingAncestor(parent);
+  if (!ancestor) {
+    throw new Error(`Could not find an existing parent for migration staging at ${parent}.`);
+  }
   const staged = await fs.mkdtemp(path.join(ancestor, `.openclaw-${label}-`));
   await fs.chmod(staged, 0o700);
   return staged;

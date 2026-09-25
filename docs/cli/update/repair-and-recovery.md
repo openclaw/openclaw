@@ -171,6 +171,13 @@ because the updater owns service changes. They preserve an operator's
 coordinators and agent-database lease checks. An external deployment owner still
 owns stopping and restarting its Gateway.
 
+Automatic repair finishes its embedded agent turn and releases that turn's database
+and process resources before asking the update owner to run Doctor or update repair.
+This prevents the repair agent's own credential writes from blocking maintenance.
+Other live agent leases still block repair. Maintenance preserves the original
+Gateway activation intent, including `--no-restart` and intentional stops. A
+successful maintenance command alone does not verify the original symptom.
+
 Repair invoked within the owning update can continue when its inherited run ID
 and live process identity match that owner. Standalone repair records the same
 continuation for its new run and passes that run ID to its Doctor children.

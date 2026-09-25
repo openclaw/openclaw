@@ -47,6 +47,18 @@ const logNames = [
   "doctor.log",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
+  "update-report-recovery.json",
+  "update-report-baseline.json",
+  "update-report-retry.pty.log",
+  "update-report-pending.pty.log",
+  "update-report-retry.gh.jsonl",
+  "update-report-pending.gh.jsonl",
+  "update-report-retry-status.log",
+  "update-report-pending-status.log",
+  "update-report-retry-status.err",
+  "update-report-pending-status.err",
+  "update-report-retry.output.log",
+  "update-report-pending.output.log",
   "workshop-published-refusal.json",
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
@@ -65,6 +77,7 @@ const logNames = [
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
+  "missing-load-path/startup-readiness.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
@@ -1850,6 +1863,16 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
               "physical-candidate-repair.json",
             ]
           : []),
+        ...(snapshot.scenario === "update-report-recovery"
+          ? [
+              "update-report-recovery.json",
+              "update-report-baseline.json",
+              "update-report-retry-status.log",
+              "update-report-pending-status.log",
+              "update-report-retry.gh.jsonl",
+              "update-report-pending.gh.jsonl",
+            ]
+          : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
@@ -1933,13 +1956,20 @@ export function publishDiagnostics(
       throw new Error();
     }
     const redacted = redactSensitiveText(text, { mode: "tools" });
+    // Keep the last completed startup spans, after redacting the whole input.
+    const tail = label === "missing-load-path/baseline-gateway.log";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
     let result = "";
-    for (const line of redacted.split(/(?<=\n)/u)) {
-      if (Buffer.byteLength(JSON.stringify(result + line)) > outputLimit) {
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
         omissions[label] = "redacted output truncated at a complete line (16 KiB)";
         break;
       }
-      result += line;
+      result = next;
     }
     return result;
   }

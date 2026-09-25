@@ -1,4 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  readSandboxBrowserRegistryInDatabase,
+  readSandboxRegistryEntryInDatabase,
+  readSandboxRegistryInDatabase,
+  readSandboxRuntimeIdsInDatabase,
+} from "../agents/sandbox/registry.kernel.js";
 import { listRegistryWorktreesInDatabase } from "../agents/worktrees/registry-read.kernel.js";
 import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
@@ -11,10 +17,51 @@ export function readStateRegistryCommand(
   db: DatabaseSync,
   command: Extract<
     OpenClawStateReadCommand,
-    { type: "worktrees.cleanupState" | "fleet.list" | "fleet.get" }
+    {
+      type:
+        | "worktrees.cleanupState"
+        | "fleet.list"
+        | "fleet.get"
+        | "sandboxRegistry.list"
+        | "sandboxRegistry.get"
+        | "sandboxRegistry.runtimeIds"
+        | "sandboxRegistry.browsers";
+    }
   >,
 ): OpenClawStateReadReply {
   const admitted = { ok: true, sourceAdmitted: true } as const;
+  if (command.type === "sandboxRegistry.list") {
+    return {
+      ok: true,
+      type: command.type,
+      sourceAdmitted: true,
+      entries: readSandboxRegistryInDatabase(db),
+    };
+  }
+  if (command.type === "sandboxRegistry.get") {
+    return {
+      ok: true,
+      type: command.type,
+      sourceAdmitted: true,
+      entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
+    };
+  }
+  if (command.type === "sandboxRegistry.runtimeIds") {
+    return {
+      ok: true,
+      type: command.type,
+      sourceAdmitted: true,
+      runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
+    };
+  }
+  if (command.type === "sandboxRegistry.browsers") {
+    return {
+      ok: true,
+      type: command.type,
+      sourceAdmitted: true,
+      entries: readSandboxBrowserRegistryInDatabase(db),
+    };
+  }
   if (command.type === "worktrees.cleanupState") {
     return {
       ...admitted,

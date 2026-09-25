@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -87,11 +88,8 @@ function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefi
   if (Buffer.byteLength(normalized, "utf8") > MAX_NATIVE_OPERATION_CWD_BYTES) {
     throw new Error(`native operation cwd must not exceed ${MAX_NATIVE_OPERATION_CWD_BYTES} bytes`);
   }
-  for (let index = 0; index < normalized.length; index += 1) {
-    const code = normalized.charCodeAt(index);
-    if (code < 32 || code === 127) {
-      throw new Error("native operation cwd must not contain control characters");
-    }
+  if (containsAsciiControlCharacter(normalized)) {
+    throw new Error("native operation cwd must not contain control characters");
   }
   return path.resolve(attemptCwd ?? process.cwd(), normalized);
 }

@@ -1065,6 +1065,38 @@ describe("frozen admission entry", () => {
   });
 
   it.each([
+    { dependency: "0.18.2", version: "2026.9.33", requiresDefaults: false },
+    { dependency: "0.4.1", version: "2026.7.33", requiresDefaults: true },
+    { dependency: "0.5.6", version: "2026.8.33", requiresDefaults: true },
+  ])(
+    "retains the fs-safe $dependency contract when the defaults shim is absent",
+    ({ dependency, version, requiresDefaults }) => {
+      const f = fixture({
+        "package.json": JSON.stringify({
+          version,
+          dependencies: { "@openclaw/fs-safe": dependency },
+        }),
+      });
+      f.selected.git(
+        "update-ref",
+        `refs/remotes/origin/extended-stable/${version}`,
+        f.selected.sha,
+      );
+      const result = f.run({ fsSafeNative: true });
+      if (requiresDefaults) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("missing fs-safe defaults source");
+        expect(result.stdout).toBe("");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout).contracts).toEqual([
+          { consumer: "fs-safe-native", mode: "required" },
+        ]);
+      }
+    },
+  );
+
+  it.each([
     "npm-onboard-channel-agent",
     "codex-on-demand",
     "kitchen-sink-plugin",
