@@ -206,7 +206,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await captureFailure(false);
           if (outcome === "failure") {
             expect(await card.textContent()).toContain("Plugin not installed");
-            expect(await card.textContent()).toContain(
+            expect(await card.textContent()).not.toContain(
               "Resolve the reported issue, then select Retry install.",
             );
             expect(

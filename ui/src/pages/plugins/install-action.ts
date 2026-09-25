@@ -165,7 +165,7 @@ export class PluginInstallAction extends OpenClawLightDomElement {
                     >${formatUnit({ value: duration, unit: "second" })}</span
                   >
                 </div>
-                ${progress.failure ? html`<p class="plugin-install-progress__recovery">${progress.failure.recovery}</p>` : nothing}
+                ${progress.failure && !progress.canRetry ? html`<p class="plugin-install-progress__recovery">${progress.failure.recovery}</p>` : nothing}
                 <ol class="plugin-install-progress__activities">
                   ${progress.activities.map(
                     (activity) => html`<li
