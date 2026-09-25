@@ -449,6 +449,7 @@ export function createSessionsListTool(opts?: {
         const model = readStringValue(entry.model);
         // sessions.list owns runtime/context provenance; this tool only filters and
         // narrows its GatewaySessionListRow without reinterpreting raw session state.
+        const modelSelectionSource = entry.modelSelectionSource;
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
@@ -507,7 +508,7 @@ export function createSessionsListTool(opts?: {
           ...(parentSessionKey ? { parentSessionKey } : {}),
           ...(updatedAt !== undefined ? { updatedAt } : {}),
           ...(stateVersion ? { stateVersion } : {}),
-          ...(model ? { model } : {}),
+          ...(model ? { model, ...(modelSelectionSource ? { modelSelectionSource } : {}) } : {}),
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           ...(totalTokens !== undefined ? { totalTokens } : {}),
           ...(status ? { status } : {}),

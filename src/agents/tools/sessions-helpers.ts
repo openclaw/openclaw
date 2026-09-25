@@ -75,6 +75,7 @@ export const SessionListRowSchema = Type.Object(
       "lastMessagePreview",
       "parentSessionKey",
       "model",
+      "modelSelectionSource",
       "contextTokens",
       "totalTokens",
       "status",

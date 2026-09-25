@@ -8,11 +8,14 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import * as transcriptPreview from "../session-transcript-preview.js";
+import type { SessionsListResult } from "../session-utils.types.js";
 import {
   directSessionReq,
   seedLinearSessionTranscript,
@@ -25,10 +28,92 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 setupGatewaySessionsHandlerTestHarness();
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetPluginRuntimeStateForTest();
+});
 
 const prompt = "saved prompt not needed for search or previews ".repeat(2048);
 const owner = { type: "human", source: "profile", id: "owner@example.com" } as const;
+
+test("sessions.list distinguishes selection sources for identical selected values", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "fixture/selected" } },
+      plugins: { enabled: false },
+    };
+    const configured = "agent:main:configured";
+    const pinned = "agent:main:pinned";
+    const inherited = "agent:main:inherited";
+    const runtime = "agent:main:runtime";
+    const entries = [
+      { key: configured, overrides: {} },
+      {
+        key: pinned,
+        overrides: { providerOverride: "fixture", modelOverride: "selected" },
+      },
+      { key: inherited, overrides: { parentSessionKey: pinned } },
+      {
+        key: runtime,
+        overrides: { agentHarnessId: "fixture-harness", modelSelectionLocked: true },
+      },
+    ];
+    for (const { key, overrides } of entries) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { sessionId: key, updatedAt: 1, visibility: "shared", ...overrides },
+      );
+    }
+    const bindings = new Map([[runtime, { provider: "fixture", model: "selected" }]]);
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "fixture-harness",
+      source: "test",
+      harness: {
+        id: "fixture-harness",
+        label: "Selection owner",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("session listing must not start inference");
+        },
+        resolveSessionRuntimeOwnership: (params) => {
+          params.assertCurrent();
+          const modelRef = bindings.get(params.sessionId);
+          return modelRef ? { model: "native", auth: "native", modelRef } : undefined;
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    for (const runtimeSource of ["runtime", "configured"]) {
+      if (runtimeSource === "configured") {
+        bindings.delete(runtime);
+      }
+      const response = await directSessionReq<SessionsListResult>(
+        "sessions.list",
+        { agentId: "main" },
+        { context: { getRuntimeConfig: () => cfg, loadGatewayModelCatalog: async () => [] } },
+      );
+      expect(response.ok, response.error?.message).toBe(true);
+      expect(response.payload?.sessions).toHaveLength(4);
+      for (const [key, modelSelectionSource] of [
+        [configured, "configured"],
+        [pinned, "override"],
+        [inherited, "override"],
+        [runtime, runtimeSource],
+      ]) {
+        expect(response.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+          modelProvider: "fixture",
+          model: "selected",
+          modelSelectionSource,
+        });
+      }
+      expect(response.payload?.sessions.find((row) => row.key === inherited)).toMatchObject({
+        modelOverrideSource: "inherited",
+      });
+    }
+  });
+});
 
 async function seedMetadataReads(prepareProjection = false) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
