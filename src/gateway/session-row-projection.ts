@@ -315,7 +315,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
         records.invalidateDatabaseFacts(previous);
-        if (previous.entry) {
+        if (previous.entry && change.scope !== "session-entry") {
           placementFacts.invalidate(previous.entry.sessionId);
         }
         const row = inOwnerContext(() => {
