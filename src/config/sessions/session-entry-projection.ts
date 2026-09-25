@@ -110,7 +110,12 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+    // Native harness compaction does not rewrite the host transcript byte window.
+    transcriptByteCompactionLatch:
+      params.transcriptByteCompactionLatch ??
+      (params.compactionKind === "native-harness"
+        ? current.transcriptByteCompactionLatch
+        : undefined),
     updatedAt: params.now ?? Date.now(),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),

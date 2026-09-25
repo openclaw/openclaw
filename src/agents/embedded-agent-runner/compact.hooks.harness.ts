@@ -591,10 +591,6 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
       _options?: Parameters<typeof resolveModelAsync>[4],
     ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
-  resolveAgentHarnessPolicyMock.mockReset();
-  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
-  resolveContextWindowInfoMock.mockReset();
-  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
 
   sessionCompactImpl.mockReset();
   sessionCompactImpl.mockResolvedValue({
@@ -962,6 +958,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       ),
       resolveRunModelFallbacksOverride: vi.fn(() => undefined),
       resolveSessionAgentId: resolveSessionAgentIdMock,
+      resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
       resolveSessionAgentIds: resolveSessionAgentIdsMock,
     };
   });

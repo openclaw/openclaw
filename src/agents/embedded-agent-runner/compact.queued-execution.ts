@@ -61,6 +61,7 @@ type QueuedCompactionHostCommit = {
   entry: AcceptedCompactionSuccessor["entry"];
   tokensAfter?: number;
   compactionKind: "context-engine" | "server-endpoint";
+  accountingCommitted?: boolean;
 };
 
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
@@ -466,6 +467,8 @@ export async function executeQueuedContextEngineCompaction(input: {
       const postCompactionSessionId = successor.sessionId;
       const postCompactionSessionFile = successor.sessionFile;
       const postCompactionSessionTarget = successor.sessionTarget;
+      const requiresManualNativeCompaction =
+        params.trigger === "manual" && Boolean(transcriptBytePreflightAuthority);
       let secondaryNativeHarnessCompaction: EmbeddedAgentCompactResult | undefined;
       try {
         if (result.ok && result.compacted && canContinue() && contextEngine.maintain) {
@@ -564,14 +567,21 @@ export async function executeQueuedContextEngineCompaction(input: {
           attemptNativeHarnessCompaction
         ) {
           try {
-            // Committed host compaction stays authoritative; secondary native failure is
-            // diagnostic-only in result details and must not trigger a retry.
+            // Native failure cannot roll back committed host compaction. Manual requests
+            // report that failure; automatic synchronization remains diagnostic-only.
             // The native bridge owns its terminal-event watchdog. Keep this lane held until
             // that bridge settles; an outer timeout would release transcript ownership while
             // the harness could still be compacting the same session.
             secondaryNativeHarnessCompaction = await maybeCompactAgentHarnessSession(
               {
                 ...preparedParams,
+                ...(requiresManualNativeCompaction
+                  ? {
+                      preflightRequired: undefined,
+                      forcePreflight: undefined,
+                      preflightCompactionTrigger: undefined,
+                    }
+                  : {}),
                 sessionId: postCompactionSessionId,
                 sessionFile: postCompactionSessionFile,
                 sessionTarget: postCompactionSessionTarget,
@@ -584,8 +594,10 @@ export async function executeQueuedContextEngineCompaction(input: {
                 contextEngineRuntimeContext,
               },
               {
-                nativeCompactionRequest: "after_context_engine",
                 preparedModelRuntime,
+                ...(requiresManualNativeCompaction
+                  ? {}
+                  : { nativeCompactionRequest: "after_context_engine" as const }),
                 sourceAuthority: {
                   assertActive,
                   operatorAuthority: host.sourceAuthority.operatorAuthority,
@@ -621,11 +633,18 @@ export async function executeQueuedContextEngineCompaction(input: {
         normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
           ? "codexNativeCompaction"
           : "nativeHarnessCompaction";
+      const manualNativeIncomplete =
+        requiresManualNativeCompaction &&
+        result.ok &&
+        result.compacted &&
+        !(secondaryNativeHarnessCompaction?.ok && secondaryNativeHarnessCompaction.compacted);
       return {
-        ok: result.ok,
+        ok: result.ok && !manualNativeIncomplete,
         compacted: result.compacted,
         compactionKind,
-        reason: result.reason,
+        reason: manualNativeIncomplete
+          ? `Host transcript compacted; native compaction did not complete: ${secondaryNativeHarnessCompaction?.reason ?? "compaction aborted or unavailable"}`
+          : result.reason,
         result: result.result
           ? {
               ...(compactionKind === "server-endpoint"

@@ -370,6 +370,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             assertRequestCurrent();
             abortSignal?.throwIfAborted();
           };
+          let hostAccountingCommitted = false;
           try {
             result = await runGatewaySessionCompaction(
               {
@@ -388,6 +389,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sourceAuthority: { assertActive, operatorAuthority: capturedOperator?.authority },
                 onCommitted: (accepted) => {
                   expectedEntry = accepted.entry;
+                },
+                onHostCompactionCommitted: (commit) => {
+                  hostAccountingCommitted = commit.accountingCommitted === true;
                 },
               },
             );
@@ -419,10 +423,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                     ok: true,
                     entry: {
                       ...existingEntry,
-                      ...projectCompactionAccountingPatch(existingEntry, {
-                        compactionKind: result.compactionKind,
-                        tokensAfter: result.result?.tokensAfter,
-                      }),
+                      ...(hostAccountingCommitted
+                        ? {}
+                        : projectCompactionAccountingPatch(existingEntry, {
+                            compactionKind: result.compactionKind,
+                            tokensAfter: result.result?.tokensAfter,
+                          })),
                     },
                   };
                 },
