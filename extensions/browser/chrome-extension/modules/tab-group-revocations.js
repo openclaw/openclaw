@@ -31,6 +31,43 @@ export function createTabGroupRevocations({
       return;
     }
     reviseDiscovery();
+    if (!removed && group.title === "") {
+      const pendingCreationForGroup = [...createdTabs.values()].some(
+        (created) => !created.handedOff && created.grouping && created.pendingGroupId === group.id,
+      );
+      if (pendingCreationForGroup) {
+        // Chrome can emit membership before tabs.group() resolves. Defer
+        // ownership until the operation result is available; do not revoke
+        // the in-flight creation on an event that may be its own result.
+        return;
+      }
+    }
+    const foreignPendingCreation = [...createdTabs.entries()].filter(
+      ([tabId, created]) =>
+        !created.handedOff &&
+        created.grouping &&
+        created.pendingGroupId === group.id &&
+        createdTabs.get(tabId) === created,
+    );
+    if (!removed && foreignPendingCreation.length > 0 && typeof group.title === "string") {
+      if (group.title !== OPENCLAW_TAB_GROUP_TITLE) {
+        // A readable unrelated title before the operation result proves the
+        // pending membership was never our creation. Abandon it without a
+        // private revocation so rollback cannot reclaim the user-held tab.
+        for (const [, created] of foreignPendingCreation) {
+          created.initialGroup = false;
+          created.grouping = false;
+          created.pendingGroupId = undefined;
+          createdTabs.delete(created.tab.id);
+        }
+        return;
+      }
+    }
+    for (const created of createdTabs.values()) {
+      if (created.handedOff && created.groupFallback && created.groupId === group.id) {
+        created.groupFallback = false;
+      }
+    }
     if (!removed && group.title === OPENCLAW_TAB_GROUP_TITLE) {
       for (const created of createdTabs.values()) {
         if (
