@@ -378,20 +378,20 @@ function botChild(
   run: Record<string, unknown>,
   includeClawhub: boolean,
 ): boolean {
-  const releaseTags =
-    typeof run.display_title === "string"
-      ? run.display_title.match(/v\d{4}\.\d{1,2}\.\d+(?:-[a-z0-9.]+)?/gu)
-      : null;
+  const toolingTag = ctx.state.validate.toolingTag;
+  const workflows = ["plugin-npm-release.yml", "openclaw-npm-release.yml"];
+  if (includeClawhub) {
+    workflows.push("plugin-clawhub-release.yml", "plugin-clawhub-new.yml");
+  }
+  const path = run.path;
   return (
-    (!releaseTags?.length || releaseTags.includes(ctx.state.tag)) &&
+    Boolean(toolingTag) &&
+    run.head_branch === toolingTag &&
     run.event === "workflow_dispatch" &&
     isRecord(run.actor) &&
     run.actor.login === "github-actions[bot]" &&
-    typeof run.name === "string" &&
-    (includeClawhub
-      ? /clawhub|Plugin NPM Release|openclaw-npm-release/iu
-      : /Plugin NPM Release|openclaw-npm-release/iu
-    ).test(run.name) &&
+    typeof path === "string" &&
+    workflows.some((workflow) => path.endsWith(`/${workflow}`)) &&
     positiveInteger(run.id)
   );
 }

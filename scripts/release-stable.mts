@@ -6,6 +6,7 @@ import { cut, publish, validate } from "./lib/release-stable-phases.mts";
 import {
   RELEASE_PHASES,
   ReleaseRefusal,
+  acquireReleaseLock,
   createReleaseRunner,
   isReleasePhase,
   loadReleaseState,
@@ -146,100 +147,125 @@ export async function runReleaseStable(
   options: ReleaseOptions,
   runner?: ReleaseRunner,
 ): Promise<void> {
-  const state = loadReleaseState(options);
-  if (options.status) {
-    printReleaseStatus(state);
-    return;
-  }
-  if (options.cutSha && state.cut.cutSha && options.cutSha !== state.cut.cutSha) {
-    throw new ReleaseRefusal(
-      `This state belongs to cut ${state.cut.cutSha}. Use a fresh state directory for the explicitly selected cut ${options.cutSha} so retained validation and candidate artifacts cannot be reused.`,
-      [
-        resumeCommand(options, "cut", [
-          "--state-dir",
-          `${options.stateDir}-cut-${options.cutSha.slice(0, 12)}`,
-        ]),
-      ],
-    );
-  }
-  if (options.from) {
-    resetReleasePhases(state, options.from);
-  }
-  if (options.macosPreflightRunId) {
-    state.macos.preflightRunId = options.macosPreflightRunId;
-  }
-  if (options.macosValidateRunId) {
-    state.macos.validateRunId = options.macosValidateRunId;
-  }
-  const ctx: ReleaseContext = {
-    options,
-    state,
-    run: createReleaseRunner(options.dryRun, runner),
-    save: () => saveReleaseState(options, state),
-    log: (phase, message) => console.log(`[release-stable] ${phase}: ${message}`),
-    resume: (phase, extra) => resumeCommand(options, phase, extra),
-  };
-  ctx.save();
-  const handlers: Record<ReleasePhase, (context: ReleaseContext) => Promise<void>> = {
-    cut,
-    validate,
-    publish,
-    "sync-beta": syncBeta,
-    "flip-github": flipGithub,
-    macos,
-    closeout,
-  };
-  for (const phase of RELEASE_PHASES) {
-    if (state.phases[phase].status === "completed") {
-      continue;
+  let releaseLock: (() => void) | undefined;
+  if (!options.status && !options.dryRun) {
+    try {
+      releaseLock = acquireReleaseLock(options.stateDir);
+    } catch (error) {
+      if (error instanceof ReleaseRefusal) {
+        error.next.push(resumeCommand(options, options.from));
+      }
+      throw error;
     }
-    const handler = handlers[phase];
-    state.phases[phase] = {
-      status: "running",
-      startedAt: state.phases[phase].startedAt ?? new Date().toISOString(),
+  }
+  try {
+    const state = loadReleaseState(options);
+    if (options.status) {
+      printReleaseStatus(state);
+      return;
+    }
+    if (options.cutSha && state.cut.cutSha && options.cutSha !== state.cut.cutSha) {
+      throw new ReleaseRefusal(
+        `This state belongs to cut ${state.cut.cutSha}. Use a fresh state directory for the explicitly selected cut ${options.cutSha} so retained validation and candidate artifacts cannot be reused.`,
+        [
+          resumeCommand(options, "cut", [
+            "--state-dir",
+            `${options.stateDir}-cut-${options.cutSha.slice(0, 12)}`,
+          ]),
+        ],
+      );
+    }
+    if (options.from) {
+      resetReleasePhases(state, options.from);
+    }
+    if (options.macosPreflightRunId) {
+      state.macos.preflightRunId = options.macosPreflightRunId;
+    }
+    if (options.macosValidateRunId) {
+      state.macos.validateRunId = options.macosValidateRunId;
+    }
+    const ctx: ReleaseContext = {
+      options,
+      state,
+      run: createReleaseRunner(options.dryRun, runner),
+      save: () => saveReleaseState(options, state),
+      log: (phase, message) => console.log(`[release-stable] ${phase}: ${message}`),
+      resume: (phase, extra) => resumeCommand(options, phase, extra),
     };
     ctx.save();
-    ctx.log(phase, "starting");
-    try {
-      await handler(ctx);
-      state.phases[phase].status = "completed";
-      state.phases[phase].completedAt = new Date().toISOString();
+    const handlers: Record<ReleasePhase, (context: ReleaseContext) => Promise<void>> = {
+      cut,
+      validate,
+      publish,
+      "sync-beta": syncBeta,
+      "flip-github": flipGithub,
+      macos,
+      closeout,
+    };
+    for (const phase of RELEASE_PHASES) {
+      if (state.phases[phase].status === "completed") {
+        continue;
+      }
+      const handler = handlers[phase];
+      state.phases[phase] = {
+        status: "running",
+        startedAt: state.phases[phase].startedAt ?? new Date().toISOString(),
+      };
       ctx.save();
-      ctx.log(phase, "completed");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      state.phases[phase].status = "refused";
-      state.phases[phase].error = message;
-      ctx.save();
-      throw error instanceof ReleaseRefusal ? error : new ReleaseRefusal(message, [ctx.resume()]);
+      ctx.log(phase, "starting");
+      try {
+        await handler(ctx);
+        state.phases[phase].status = "completed";
+        state.phases[phase].completedAt = new Date().toISOString();
+        ctx.save();
+        ctx.log(phase, "completed");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        state.phases[phase].status = "refused";
+        state.phases[phase].error = message;
+        ctx.save();
+        throw error instanceof ReleaseRefusal ? error : new ReleaseRefusal(message, [ctx.resume()]);
+      }
     }
-  }
-  printReleaseStatus(state);
-  console.log(`Release: https://github.com/${state.repo}/releases/tag/${state.tag}`);
-  const runs = [
-    ["Full Release Validation", state.repo, state.validate.runId],
-    ["Publish parent", state.repo, state.publish.publishRunId],
-    ["Beta sync", state.releasesRepo, state.syncBeta.runId],
-    ["Initial macOS validate", state.releasesRepo, state.publish.macosValidateRunId],
-    ["Initial macOS preflight", state.releasesRepo, state.publish.macosPreflightRunId],
-    ["macOS validate", state.releasesRepo, state.macos.validateRunId],
-    ["macOS preflight", state.releasesRepo, state.macos.preflightRunId],
-    ["macOS publish", state.releasesRepo, state.macos.publishRunId],
-    ["Closeout", state.repo, state.closeout.runId],
-  ];
-  for (const [name, repo, id] of runs) {
-    if (id) {
-      console.log(`${name}: https://github.com/${repo}/actions/runs/${id}`);
+    printReleaseStatus(state);
+    console.log(`Release: https://github.com/${state.repo}/releases/tag/${state.tag}`);
+    const runs = [
+      ["Full Release Validation", state.repo, state.validate.runId],
+      ["Publish parent", state.repo, state.publish.publishRunId],
+      ["Beta sync", state.releasesRepo, state.syncBeta.runId],
+      ["Initial macOS validate", state.releasesRepo, state.publish.macosValidateRunId],
+      ["Initial macOS preflight", state.releasesRepo, state.publish.macosPreflightRunId],
+      ["macOS validate", state.releasesRepo, state.macos.validateRunId],
+      ["macOS preflight", state.releasesRepo, state.macos.preflightRunId],
+      ["macOS publish", state.releasesRepo, state.macos.publishRunId],
+      ["Closeout", state.repo, state.closeout.runId],
+    ];
+    for (const [name, repo, id] of runs) {
+      if (id) {
+        console.log(`${name}: https://github.com/${repo}/actions/runs/${id}`);
+      }
     }
-  }
-  console.log("Cleanup reminders (run after reviewing the completed release):");
-  if (state.validate.laneWaiver) {
+    console.log("Cleanup reminders (run after reviewing the completed release):");
+    if (state.validate.laneWaiver) {
+      console.log(
+        shellCommand("gh", [
+          "variable",
+          "delete",
+          "OPENCLAW_FRV_LANE_WAIVER",
+          "--repo",
+          state.repo,
+        ]),
+      );
+    }
     console.log(
-      shellCommand("gh", ["variable", "delete", "OPENCLAW_FRV_LANE_WAIVER", "--repo", state.repo]),
+      "# Switch away from the local cut branches, then delete them when no longer needed:",
     );
+    console.log(
+      shellCommand("git", ["branch", "-d", state.branch, `${state.branch}-main-closeout`]),
+    );
+  } finally {
+    releaseLock?.();
   }
-  console.log("# Switch away from the local cut branches, then delete them when no longer needed:");
-  console.log(shellCommand("git", ["branch", "-d", state.branch, `${state.branch}-main-closeout`]));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

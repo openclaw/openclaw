@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { isRecord } from "./record-shared.mjs";
 
 export const RELEASE_PHASES = [
   "cut",
@@ -126,6 +127,79 @@ export class ReleaseRefusal extends Error {
     this.name = "ReleaseRefusal";
     this.next = next;
   }
+}
+export function acquireReleaseLock(stateDir: string): () => void {
+  const path = join(stateDir, "state.lock");
+  const next = [`# wait for it or remove ${path} if that pid is gone`];
+  const contents = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  mkdirSync(stateDir, { recursive: true });
+  for (;;) {
+    try {
+      writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "EEXIST") {
+        throw error;
+      }
+    }
+    let previous: string;
+    try {
+      previous = readFileSync(path, "utf8");
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    let lock: unknown;
+    try {
+      lock = JSON.parse(previous);
+    } catch {
+      throw new ReleaseRefusal(`Cannot read release lock ${path}; inspect its owner.`, next);
+    }
+    if (
+      !isRecord(lock) ||
+      typeof lock.pid !== "number" ||
+      !Number.isSafeInteger(lock.pid) ||
+      lock.pid <= 0
+    ) {
+      throw new ReleaseRefusal(`Invalid process ID in release lock ${path}.`, next);
+    }
+    let alive = true;
+    try {
+      process.kill(lock.pid, 0);
+    } catch (error) {
+      if (isRecord(error) && error.code === "ESRCH") {
+        alive = false;
+      } else if (!isRecord(error) || error.code !== "EPERM") {
+        throw error;
+      }
+    }
+    if (alive) {
+      throw new ReleaseRefusal(
+        `Another release:stable process (pid ${lock.pid}) owns ${stateDir}`,
+        next,
+      );
+    }
+    if (readFileSync(path, "utf8") === previous) {
+      rmSync(path);
+    }
+  }
+  const release = () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    rmSync(path, { force: true });
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    try {
+      release();
+    } finally {
+      process.kill(process.pid, signal);
+    }
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  return release;
 }
 export function isReleasePhase(value: string): value is ReleasePhase {
   return phaseSchema.safeParse(value).success;

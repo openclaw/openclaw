@@ -94,16 +94,19 @@ const parentRuns = (runs: object[]) =>
   );
 const parentRun = () => ({
   id: 301,
+  path: `.github/workflows/${publishWorkflow}`,
   head_branch: toolingTag,
   display_title: `Publish v${RELEASE}`,
   created_at: new Date().toISOString(),
 });
-const child = (id: number, name = "Plugin NPM Release") => ({
+const child = (id: number, name = "Plugin NPM Release", workflow = "plugin-npm-release.yml") => ({
   id,
   name,
+  path: `.github/workflows/${workflow}`,
+  head_branch: toolingTag,
   event: "workflow_dispatch",
   actor: { login: "github-actions[bot]" },
-  display_title: `Release v${RELEASE}`,
+  display_title: name,
 });
 const children = (runs: object[]) =>
   step("gh", ["api", "*"], JSON.stringify({ workflow_runs: runs }));
@@ -325,6 +328,34 @@ describe("release:stable CLI", () => {
     expect(readFileSync(release.stateFile, "utf8")).toBe(invalid);
   });
 
+  it("refuses a live process lock before touching state and replaces a stale lock", () => {
+    const release = fixture();
+    release.seed(phaseState("cut"));
+    const before = readFileSync(release.stateFile, "utf8");
+    const lock = join(release.stateDir, "state.lock");
+    const live = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+    writeFileSync(lock, live);
+    const refused = release.run([]);
+    expect(refused.status, refused.output).toBe(2);
+    expect(refused.stderr).toContain(
+      `Another release:stable process (pid ${process.pid}) owns ${release.stateDir}`,
+    );
+    expect(refused.stderr).toContain(`# wait for it or remove ${lock} if that pid is gone`);
+    expect(refused.stderr).toContain(`pnpm release:stable ${RELEASE}`);
+    expect(readFileSync(release.stateFile, "utf8")).toBe(before);
+    expect(readFileSync(lock, "utf8")).toBe(live);
+    expect(refused.calls).toEqual([]);
+    expect(release.run([], ["--status"]).status).toBe(0);
+    expect(release.run([], ["--dry-run"]).status).toBe(0);
+    expect(readFileSync(lock, "utf8")).toBe(live);
+    expect(() => process.kill(999999, 0)).toThrow();
+    writeFileSync(lock, JSON.stringify({ pid: 999999, startedAt: "2000-01-01T00:00:00.000Z" }));
+    const resumed = release.run(newCut());
+    expect(resumed.status, resumed.output).toBe(0);
+    expect(release.readState().phases.cut.status).toBe("completed");
+    expect(existsSync(lock)).toBe(false);
+  });
+
   it("prepares the final tag and macOS lanes but refuses publication without operator approval", () => {
     const release = fixture();
     const state = publishState();
@@ -380,14 +411,14 @@ describe("release:stable CLI", () => {
     release.seed(state);
     release.candidate(CANDIDATE_COMMAND);
     const ignored = [
-      { ...child(610), display_title: "Release v2026.9.5" },
+      { ...child(610), head_branch: "release-publish/cccccccccccc-456" },
       { ...child(611), actor: { login: "human" } },
       { ...child(612), event: "push" },
-      child(613, "Unrelated workflow"),
+      child(613, "Unrelated workflow", "unrelated.yml"),
     ];
     const [waiting, queued] = sweep(
       state.startedAt,
-      [child(601, "clawhub release"), ...ignored],
+      [child(601, "Plugin ClawHub Release", "plugin-clawhub-release.yml"), ...ignored],
       [child(602)],
     );
     if (!waiting || !queued) {
@@ -403,7 +434,12 @@ describe("release:stable CLI", () => {
       { id: 81, name: "npm-release" },
       { id: 82, name: "clawhub-plugin-release" },
     ];
-    const liveChildren = [child(701), child(702, "clawhub release"), ...ignored];
+    const liveChildren = [
+      child(701),
+      child(702, "Plugin ClawHub Release", "plugin-clawhub-release.yml"),
+      child(703, "OpenClaw NPM Release", "openclaw-npm-release.yml"),
+      ...ignored,
+    ];
     const failed = release.run(
       [
         ...publishPreparation(),
@@ -433,6 +469,8 @@ describe("release:stable CLI", () => {
         children(liveChildren),
         pendingGates(701, childGates),
         gateApproval(701, 81),
+        pendingGates(703, [{ id: 83, name: "npm-release" }]),
+        gateApproval(703, 83),
         npmVisibility(false),
         actionRun(REPOSITORY, 301, "failure", 3),
       ],
@@ -447,13 +485,14 @@ describe("release:stable CLI", () => {
     const refused = release.readState();
     expect(refused.operator.publicationApproved).toEqual(expect.any(String));
     expect(refused.publish.npmVisibleAt).toBeUndefined();
-    expect(refused.publish.approvedGates).toEqual(["301:71", "301:73", "701:81"]);
+    expect(refused.publish.approvedGates).toEqual(["301:71", "301:73", "701:81", "703:83"]);
     expect(refused.phases.publish.status).toBe("refused");
     const resumed = release.run([
       ...publishPreparation(),
       pendingGates(301, parentGates),
       children(liveChildren),
       pendingGates(701, childGates),
+      pendingGates(703, [{ id: 83, name: "npm-release" }]),
       npmVisibility(),
     ]);
     expect(resumed.status, resumed.output).toBe(0);
@@ -485,7 +524,7 @@ describe("release:stable CLI", () => {
     expect(helper?.args).toContain("--skip-dispatch");
     expect(helper?.args).toContain("--skip-parallels");
     expect(helper?.args).toContain("--skip-telegram");
-    expect(resumed.calls.filter((call) => call.args.includes("state=approved"))).toHaveLength(3);
+    expect(resumed.calls.filter((call) => call.args.includes("state=approved"))).toHaveLength(4);
     const childReads = resumed.calls.filter((call) =>
       call.args[1]?.includes("?event=workflow_dispatch&per_page=100"),
     );
@@ -498,7 +537,7 @@ describe("release:stable CLI", () => {
     expect(release.readState().publish).toMatchObject({
       publishRunId: "301",
       npmVisibleAt: expect.any(String),
-      approvedGates: ["301:71", "301:73", "701:81"],
+      approvedGates: ["301:71", "301:73", "701:81", "703:83"],
     });
     expect(release.readState().phases.publish.status).toBe("completed");
   });

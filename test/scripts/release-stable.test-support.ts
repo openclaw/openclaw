@@ -127,6 +127,7 @@ export function workflowDispatch(
         workflow_runs: [
           {
             id,
+            path: `.github/workflows/${workflow}`,
             head_branch: "main",
             display_title: displayTitle,
             created_at: new Date().toISOString(),
