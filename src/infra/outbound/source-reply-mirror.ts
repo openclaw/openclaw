@@ -28,6 +28,10 @@ import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/tran
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "./channel-target-prefix.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 
@@ -252,7 +256,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     return "not-delivered";
   }
   if (
-    !matchesDeliveredSourceTargets(params.mirror, deliveryFact) ||
+    !matchesDeliveredSourceTargets(
+      { ...params.mirror, deliveredPayload: params.deliveredPayload },
+      deliveryFact,
+    ) ||
     !isExactCurrentSourceConversation({
       ...params.mirror,
       deliveredPayload: params.deliveredPayload,
@@ -356,11 +363,123 @@ function matchesDeliveredSourceTargets(
   params: SourceReplyTranscriptMirrorParams,
   delivery: ReturnType<typeof projectPluginMessageDeliveryFact>,
 ): boolean {
+  const targets = delivery?.deliveredTargets ?? [];
+  if (targets.length === 0) {
+    // No reported recipients to contradict; callers still verify the exact
+    // conversation through the requested route and delivered thread placement.
+    return true;
+  }
   // Requested routes cannot override contradictory transport facts. Match each
   // reported recipient independently, without inheriting requested thread aliases.
-  return (delivery?.deliveredTargets ?? []).every((target) =>
-    matchesCurrentSourceTarget({ ...params, actionParams: { target } }, "match"),
-  );
+  if (!resolveDeliveredSourceThreadMatch(params)) {
+    return false;
+  }
+  return targets.every((target) => matchesDeliveredSourceTarget(params, target));
+}
+
+function resolveDeliveredSourceThreadMatch(params: SourceReplyTranscriptMirrorParams): boolean {
+  const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
+  const receipt = resolveDeliveryReceipt(params);
+  // Validate every reported thread identity, including each physical receipt
+  // part: a conflicting part must not let a chat-only recipient complete a
+  // different-topic delivery as the current source.
+  const reportedThreadIds = resolveReportedDeliveryThreadIds(receipt);
+  if (reportedThreadIds.length > 0) {
+    return (
+      Boolean(currentThreadId) &&
+      reportedThreadIds.every((threadId) => threadId === currentThreadId)
+    );
+  }
+  const deliveredReplyToId = normalizeOptionalString(receipt?.replyToId);
+  if (deliveredReplyToId) {
+    const currentMessageId = normalizeMessageIdValue(params.toolContext?.currentMessageId);
+    return deliveredReplyToId === currentThreadId || deliveredReplyToId === currentMessageId;
+  }
+  // A thread-scoped source is not proven delivered unless the receipt reports it.
+  return !currentThreadId;
+}
+
+function resolveReportedDeliveryThreadIds(receipt: Record<string, unknown> | undefined): string[] {
+  if (!receipt) {
+    return [];
+  }
+  const threadIds = new Set<string>();
+  const aggregateThreadId = normalizeOptionalString(receipt.threadId);
+  if (aggregateThreadId) {
+    threadIds.add(aggregateThreadId);
+  }
+  if (Array.isArray(receipt.parts)) {
+    for (const part of receipt.parts) {
+      const partThreadId = normalizeOptionalString(asRecord(part)?.threadId);
+      if (partThreadId) {
+        threadIds.add(partThreadId);
+      }
+    }
+  }
+  return [...threadIds];
+}
+
+function matchesDeliveredSourceTarget(
+  params: SourceReplyTranscriptMirrorParams,
+  target: string,
+): boolean {
+  // Prefer the channel plugin's thread-aware target matcher, which recognizes
+  // provider-normalized forms a generic chat comparison cannot.
+  if (matchesCurrentSourceTarget({ ...params, actionParams: { target } }, "match")) {
+    return true;
+  }
+  // The chat-level fallback below may only apply to recipients that lack their
+  // own thread identity. A recipient that explicitly reports a topic must be
+  // judged at full identity by the exact matcher above; erasing that suffix here
+  // could credit a delivery to another topic as a reply to the current one.
+  if (hasDeliveredSourceThreadIdentity(target)) {
+    return false;
+  }
+  // Transport receipts report chat ids separately from topic ids, so a chat-only
+  // delivered target must still match a thread-qualified current source. Compare
+  // chat identity without provider prefixes, kind prefixes, or thread suffixes.
+  return matchesDeliveredSourceChat(params, target);
+}
+
+function hasDeliveredSourceThreadIdentity(value: string): boolean {
+  return /:(?:topic|direct-topic):\d+$/i.test(value.trim());
+}
+
+function matchesDeliveredSourceChat(
+  params: SourceReplyTranscriptMirrorParams,
+  target: string,
+): boolean {
+  const toolContext = params.toolContext;
+  const currentTargets = [
+    normalizeOptionalString(toolContext?.currentMessagingTarget),
+    normalizeOptionalString(toolContext?.currentChannelId),
+  ].filter((value): value is string => Boolean(value));
+  if (currentTargets.length === 0) {
+    return false;
+  }
+  // SAFETY: params.channel is a configured channel id within this mirror scope.
+  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const deliveredNormalized = normalizeTargetForProvider(params.channel, target, plugin);
+  if (!deliveredNormalized) {
+    return false;
+  }
+  const deliveredChat = resolveDeliveredSourceChatIdentity(deliveredNormalized, params.channel);
+  return currentTargets.some((current) => {
+    const currentNormalized = normalizeTargetForProvider(params.channel, current, plugin);
+    return (
+      currentNormalized !== undefined &&
+      resolveDeliveredSourceChatIdentity(currentNormalized, params.channel) === deliveredChat
+    );
+  });
+}
+
+function resolveDeliveredSourceChatIdentity(value: string, channel: string): string {
+  const withoutProvider = stripTargetProviderPrefix(value, channel);
+  const withoutKind = stripOutboundTargetKindPrefix(withoutProvider);
+  return withoutKind
+    .replace(/:(?:topic|direct-topic):\d+$/i, "")
+    .trim()
+    .toLowerCase();
 }
 
 function isCurrentSourceConversation(

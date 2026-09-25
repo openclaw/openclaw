@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -68,6 +69,7 @@ function registerTelegramTextPlugin(
   matchesToolContextTarget: NonNullable<
     NonNullable<ChannelPlugin["threading"]>["matchesToolContextTarget"]
   >,
+  sendResult: Record<string, unknown> = { channel: "telegram", messageId: "m1", chatId: "-100123" },
 ) {
   setActivePluginRegistry(
     createTestRegistry([
@@ -80,11 +82,7 @@ function registerTelegramTextPlugin(
             messaging: { targetResolver: { looksLikeId: () => true } },
             outbound: {
               deliveryMode: "direct",
-              sendText: vi.fn().mockResolvedValue({
-                channel: "telegram",
-                messageId: "m1",
-                chatId: "-100123",
-              }),
+              sendText: vi.fn().mockResolvedValue(sendResult),
             },
           }),
           config: {
@@ -226,6 +224,69 @@ describe("runMessageAction core send routing", () => {
       target: testCase.target,
       toolContext,
     });
+  });
+
+  it("marks a Telegram topic source reply current-source from a thread-losing transport receipt", async () => {
+    const matchesToolContextTarget: NonNullable<
+      NonNullable<ChannelPlugin["threading"]>["matchesToolContextTarget"]
+    > = ({ target, toolContext }) => {
+      const parse = (value: string): { chatId: string; thread?: string } => {
+        const stripped = value.replace(/^(?:telegram|tg):/i, "");
+        const match = /^(.+?):(?:(?:direct-topic|topic):)?(\d+)$/.exec(stripped);
+        return match
+          ? { chatId: match[1] ?? stripped, thread: match[2] ?? undefined }
+          : { chatId: stripped };
+      };
+      return [toolContext.currentMessagingTarget, toolContext.currentChannelId]
+        .filter((current): current is string => Boolean(current))
+        .some((current) => {
+          const requested = parse(target);
+          const existing = parse(current);
+          return (
+            requested.chatId === existing.chatId &&
+            (requested.thread ?? undefined) === (existing.thread ?? undefined)
+          );
+        });
+    };
+    registerTelegramTextPlugin(matchesToolContextTarget, {
+      channel: "telegram",
+      messageId: "m1",
+      chatId: "-100123",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "m1", chatId: "-100123" }],
+        threadId: "77",
+      }),
+    });
+
+    const toolContext = {
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:-100123:topic:77",
+      currentThreadTs: "77",
+      currentSourceTurnId: "source-turn-1",
+    };
+    const result = await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "telegram:-100123:topic:77",
+        message: "visible topic source reply",
+      },
+      toolContext,
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext,
+      },
+      sessionKey: "agent:main:telegram:group:telegram:-100123:topic:77",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBe(
+      "current-source",
+    );
   });
 
   it("does not mark a message-scoped reply that enters a new thread as current-source", async () => {
