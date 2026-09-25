@@ -46,9 +46,10 @@ When a regular agent delegates a persistent change through its `openclaw` tool,
 the host applies the requesting run's effective permission policy to the exact
 proposed operation. Full Access applies it automatically without an approval
 prompt, including when Full Access comes from the configured default rather than
-an explicit session mode. Restricted runs ask the requesting chat for approval:
-native approval cards where the channel supports them, otherwise a
-`/approve <id> allow-once|deny` reply. The Control UI and apps can also decide it.
+an explicit session mode. Restricted runs from messaging channels ask the
+requesting chat for approval: native approval cards where the channel supports
+them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
+decide in the Control UI or apps, which can also decide any chat's approval.
 Free-text replies such as "yes" never authorize the change.
 The requesting tool waits for the human decision and application outcome. Stopping
 the run cancels its pending approval; approving later cannot revive that run.
