@@ -12,6 +12,8 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
+  runOpenClawStateWriteTransaction,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -20,7 +22,10 @@ import {
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   persistSubagentRunsToDiskOrThrow,
+  prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   readSubagentRun,
   loadSubagentRunsForChildSessionFromSqlite,
@@ -153,6 +158,90 @@ describe("subagent registry sqlite store", () => {
     return await withEnvAsync({ OPENCLAW_STATE_DIR: tempStateDir }, fn);
   }
 
+  it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {
+    await withTempStateEnv(async () => {
+      const legacy = createRun();
+      saveSubagentRegistryToSqlite(new Map([[legacy.runId, legacy]]));
+      const original = openOpenClawStateDatabase();
+      closeOpenClawStateDatabaseForTest();
+      const old = new DatabaseSync(original.path);
+      try {
+        for (const column of ["requester_store_path", "controller_store_path"]) {
+          if (
+            old
+              .prepare("PRAGMA table_info(subagent_runs)")
+              .all()
+              .some((row) => row.name === column)
+          ) {
+            old.exec(`ALTER TABLE subagent_runs DROP COLUMN ${column}`);
+          }
+        }
+      } finally {
+        old.close();
+      }
+      const current = openOpenClawStateDatabase();
+      const version = current.db.prepare("PRAGMA user_version").get();
+      const schema = current.db.prepare("PRAGMA schema_version").get();
+      expect(
+        loadSubagentRegistryFromSqlite().get(legacy.runId)?.requesterStorePath,
+      ).toBeUndefined();
+      expect(
+        loadSubagentSessionListRunsFromSqlite().get(legacy.runId)?.requesterStorePath,
+      ).toBeUndefined();
+      expect(current.db.prepare("PRAGMA schema_version").get()).toEqual(schema);
+
+      const bound = createRun({
+        runId: "bound-registration",
+        requesterStorePath: path.join(tempStateDir!, "requester.sqlite"),
+        controllerStorePath: path.join(tempStateDir!, "controller.sqlite"),
+      });
+      expect(() =>
+        runOpenClawStateWriteTransaction((database) => {
+          upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(bound));
+          throw new Error("registration rolled back");
+        }),
+      ).toThrow("registration rolled back");
+      expect(current.db.prepare("PRAGMA schema_version").get()).toEqual(schema);
+      expect(loadSubagentRegistryFromSqlite().has(bound.runId)).toBe(false);
+
+      saveSubagentRegistryChangesToSqlite(new Map([[bound.runId, bound]]), [bound.runId]);
+      expect(loadSubagentRegistryFromSqlite().get(bound.runId)).toMatchObject({
+        requesterStorePath: bound.requesterStorePath,
+        controllerStorePath: bound.controllerStorePath,
+      });
+      expect(loadSubagentSessionListRunsFromSqlite().get(bound.runId)).toMatchObject({
+        requesterStorePath: bound.requesterStorePath,
+        controllerStorePath: bound.controllerStorePath,
+      });
+      expect(
+        loadSubagentRegistryFromSqlite().get(legacy.runId)?.requesterStorePath,
+      ).toBeUndefined();
+      const columns = current.db.prepare("PRAGMA table_info(subagent_runs)").all();
+      for (const name of ["requester_store_path", "controller_store_path"]) {
+        expect(columns.find((column) => column.name === name)).toMatchObject({
+          type: "TEXT",
+          notnull: 0,
+          dflt_value: null,
+          pk: 0,
+        });
+      }
+      expect(current.db.prepare("PRAGMA user_version").get()).toEqual(version);
+      const olderReader = new DatabaseSync(current.path, { readOnly: true });
+      try {
+        const row = olderReader
+          .prepare(
+            "SELECT run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json FROM subagent_runs WHERE run_id = ?",
+          )
+          .get(bound.runId);
+        expect(row?.run_id).toBe(bound.runId);
+        expect(isReleasedSubagentRunRecord(JSON.parse(String(row?.payload_json)))).toBe(true);
+        expect(olderReader.prepare("PRAGMA user_version").get()).toEqual(version);
+      } finally {
+        olderReader.close();
+      }
+    });
+  });
+
   it.each(["empty", "whole"] as const)(
     "reuses a complete %s compact tree with isolated full records and owner writes",
     async (kind) => {
@@ -166,10 +255,11 @@ describe("subagent registry sqlite store", () => {
           const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
           clearSubagentRunsReadCacheForTest();
           try {
+            await prepareSubagentSessionListReadCache();
+            queries.mockClear();
             const first = getSubagentSessionListRunsSnapshotForSessions(new Map(), keys);
             expect(first.size).toBe(kind === "empty" ? 0 : 1);
-            expect(queries).toHaveBeenCalled();
-            queries.mockClear();
+            expect(queries).not.toHaveBeenCalled();
             expect(getSubagentSessionListRunsSnapshotForSessions(new Map(), keys)).toEqual(first);
             expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys)).toEqual(first);
             expect(queries).not.toHaveBeenCalled();
@@ -221,7 +311,7 @@ describe("subagent registry sqlite store", () => {
   );
 
   it.each([false, true])(
-    "keeps partial trees out of the complete compact snapshot, including run-ID collisions (%s)",
+    "keeps complete compact facts after selected tree reads, including run-ID collisions (%s)",
     async (collision) => {
       await withTempStateEnv(async () => {
         await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
@@ -244,13 +334,15 @@ describe("subagent registry sqlite store", () => {
           const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
           clearSubagentRunsReadCacheForTest();
           try {
+            await prepareSubagentSessionListReadCache();
+            queries.mockClear();
             const tree = getSubagentSessionListRunsSnapshotForSessions(new Map(), [
               selected.requesterSessionKey,
             ]);
             expect([...tree.keys()]).toEqual(collision ? [] : [selected.runId]);
             queries.mockClear();
             const all = getSubagentSessionListRunsSnapshotForRead(new Map());
-            expect(queries).toHaveBeenCalled();
+            expect(queries).not.toHaveBeenCalled();
             expect(all.has(unrelated.runId)).toBe(true);
             expect(all.get(selected.runId)?.childSessionKey).toBe(
               collision ? other.childSessionKey : selected.childSessionKey,
@@ -573,7 +665,7 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("promotes legacy retained results into canonical completion state once", async () => {
+  it("preserves legacy retained results until Doctor promotes canonical completion state", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
         completion: { required: true, resultText: "NO_REPLY" },
@@ -598,10 +690,21 @@ describe("subagent registry sqlite store", () => {
         },
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const before = openOpenClawStateDatabase()
+        .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(run.runId);
       openOpenClawStateDatabase()
         .db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
         .run("2026.7.0");
       closeOpenClawStateDatabaseForTest();
+
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(run.runId),
+      ).toEqual(before);
+      closeOpenClawStateDatabaseForTest();
+      expect(repairOpenClawStateDatabaseSchema().warnings).toEqual([]);
 
       const restored = loadSubagentRegistryFromSqlite().get(run.runId);
       expect(restored?.completion).toMatchObject({

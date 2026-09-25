@@ -1,5 +1,3 @@
-// Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
-// request-scope injection, diagnostics, and handler dispatch integration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +6,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
+// Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
+// request-scope injection, diagnostics, and handler dispatch integration.
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -20,6 +21,11 @@ import {
 } from "../plugins/legacy-sdk-resource-host.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
+import {
+  createPluginCache,
+  invalidatePluginCacheMetadata,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -219,17 +225,7 @@ function createLookUpTableForTest(params: {
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry?.plugins ?? []),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     startup: {
       channelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
@@ -464,7 +460,7 @@ function registerActivePluginToolOwnership(
     pluginId,
     factory: () => null,
     names,
-    declaredNames,
+    declaredNames: new Set(declaredNames),
     optional: true,
     source: `/tmp/${pluginId}/index.js`,
   });
@@ -557,42 +553,32 @@ afterEach(() => {
 });
 
 describe("loadGatewayPlugins", () => {
-  test("logs plugin errors with details", () => {
-    const diagnostics: PluginDiagnostic[] = [
-      {
-        level: "error",
-        pluginId: "telegram",
-        source: "/tmp/telegram/index.ts",
-        message: "failed to load plugin: boom",
-      },
-    ];
-    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = loadStartupPluginFixture();
-
-    expect(log.error).toHaveBeenCalledWith(
-      "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
-    );
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  test("logs warn-level plugin diagnostics through the warn sink, not info", () => {
-    const diagnostics: PluginDiagnostic[] = [
-      {
-        level: "warn",
-        pluginId: "beads",
-        source: "/tmp/beads/index.ts",
-        message: 'typed hook "before_prompt_build" blocked by policy',
-      },
-    ];
-    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = loadStartupPluginFixture();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      '[plugins] typed hook "before_prompt_build" blocked by policy (plugin=beads, source=/tmp/beads/index.ts)',
-    );
-    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("[plugins] typed hook"));
-    expect(log.error).not.toHaveBeenCalled();
-  });
+  test.each(["error", "warn", "info"] as const)(
+    "routes %s diagnostics and retires informational deduplication with metadata",
+    (level) => {
+      const cache = createPluginCache();
+      loadOpenClawPlugins.mockReturnValue(
+        createRegistry([{ level, pluginId: "demo", source: "/plugin.ts", message: "notice" }]),
+      );
+      const log = createTestLog();
+      const expected = "[plugins] notice (plugin=demo, source=/plugin.ts)";
+      const emitted = () =>
+        log[level].mock.calls.filter(([message]) => message === expected).length;
+      withPluginCache(cache, () => {
+        loadStartupPluginFixture({ log });
+        loadStartupPluginFixture({ log });
+        expect(emitted()).toBe(level === "info" ? 1 : 2);
+        invalidatePluginCacheMetadata(cache);
+        loadStartupPluginFixture({ log });
+      });
+      expect(emitted()).toBe(level === "info" ? 2 : 3);
+      for (const sink of ["error", "warn", "info"] as const) {
+        if (sink !== level) {
+          expect(log[sink]).not.toHaveBeenCalledWith(expected);
+        }
+      }
+    },
+  );
 
   test("does not re-log a quarantined plugin verification diagnostic", () => {
     const diagnostic: PluginDiagnostic = {

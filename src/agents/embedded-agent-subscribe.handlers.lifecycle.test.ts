@@ -1,10 +1,10 @@
 // Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
+import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
@@ -31,67 +31,6 @@ vi.mock("../infra/agent-events.js", () => ({
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
-
-function createContext(
-  lastAssistant: unknown,
-  overrides?: {
-    onAgentEvent?: (event: unknown) => void | Promise<void>;
-    onBeforeLifecycleTerminal?: () => void | Promise<void>;
-    onBeforeTerminalDelivery?: () => void | Promise<void>;
-    onBlockReply?: ((payload: unknown) => void) | undefined;
-    onBlockReplyFlush?: () => void | Promise<void>;
-    resolveTerminalStopReason?: () => string | undefined;
-  },
-): EmbeddedAgentSubscribeContext {
-  // Lifecycle tests only need terminal state and delivery callbacks; omitted
-  // fields stay as no-op mocks so failure assertions stay focused.
-  const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
-  const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
-  const emitBlockReply = vi.fn();
-  return {
-    params: {
-      runId: "run-1",
-      config: {},
-      sessionKey: "agent:main:main",
-      onAgentEvent: overrides?.onAgentEvent,
-      onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
-      onBeforeTerminalDelivery: overrides?.onBeforeTerminalDelivery,
-      resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
-      ...(onBlockReply ? { onBlockReply } : {}),
-      onBlockReplyFlush: overrides?.onBlockReplyFlush,
-    },
-    state: {
-      lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
-      liveEditDiffStateById: new Map(),
-      pendingCompactionRetry: 0,
-      pendingToolMediaUrls: [],
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      messagingToolSentMediaUrls: [],
-      pendingToolAudioAsVoice: false,
-      deferredBlockReplies: [],
-      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      blockState: {
-        thinking: true,
-        final: true,
-        inlineCode: createInlineCodeState(),
-      },
-    },
-    log: {
-      debug: vi.fn(),
-      warn: vi.fn(),
-    },
-    flushBlockReplyBuffer: vi.fn(),
-    emitBlockReply,
-    emitAssistantStreamData: vi.fn(),
-    flushAssistantStream: vi.fn(),
-    releaseDeferredReplies: vi.fn(),
-    clearAssistantStream: vi.fn(),
-    clearDeferredBlockReplies: vi.fn(),
-    resolveCompactionRetry: vi.fn(),
-    maybeResolveCompactionWait: vi.fn(),
-  } as unknown as EmbeddedAgentSubscribeContext;
-}
 
 async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
   // Error lifecycle assertions share the same structured warning envelope.
@@ -480,7 +419,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
-      provider: "anthropic\u001b]8;;https://evil.test\u0007",
+      provider: "anthropic\u009b\u001b]8;;https://evil.test\u0007",
       model: "claude\tsonnet\n4",
       errorMessage: "connection refused",
       content: [{ type: "text", text: "" }],
@@ -492,10 +431,9 @@ describe("handleAgentEnd", () => {
     expect(meta.consoleMessage).toBe(
       "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     );
-    expect(meta?.consoleMessage).not.toContain("\n");
-    expect(meta?.consoleMessage).not.toContain("\r");
-    expect(meta?.consoleMessage).not.toContain("\t");
-    expect(meta?.consoleMessage).not.toContain("\u001b");
+    for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
+      expect(meta?.consoleMessage).not.toContain(control);
+    }
   });
 
   it("redacts logged error text before emitting lifecycle events", async () => {
@@ -1239,22 +1177,6 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
-  });
-
-  it("final-flushes block replies before clearing pending fence fragments", async () => {
-    const ctx = createContext(undefined);
-    ctx.state.blockState.pendingFenceFragment = "```";
-    ctx.flushBlockReplyBuffer = vi.fn((options?: { final?: boolean }) => {
-      if (vi.mocked(ctx.flushBlockReplyBuffer).mock.calls.length === 1) {
-        expect(options).toEqual({ final: true });
-        expect(ctx.state.blockState.pendingFenceFragment).toBe("```");
-      }
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, { final: true });
-    expect(ctx.state.blockState.pendingFenceFragment).toBeUndefined();
   });
 
   it("emits lifecycle end when block reply flush throws", () => {

@@ -9,6 +9,7 @@ import {
   mergeMigrationConfigValue,
   resolveMigrationConfigRuntime,
 } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -32,10 +33,9 @@ import {
   LEGACY_CODEX_PROFILE_ID,
   type CodexAuthCredential,
 } from "./auth-profile-target.js";
-import { readCodexCliActiveApiKeyAsync, readCodexCliCredentialsAsync } from "./cli-credentials.js";
+import { readCodexCliCredentialsAsync, type CodexCliCredential } from "./cli-credentials.js";
 import { readJsonObject } from "./helpers.js";
 import { defaultCodexHome, type CodexSource } from "./source.js";
-import type { resolveCodexMigrationTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_OAUTH_ITEM_ID = "auth:openai";
@@ -51,7 +51,6 @@ const CODEX_REASON_MISSING_AUTH_METADATA = "missing auth metadata";
 const CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE = "credential storage is not importable";
 type CodexConfigPatchMode = "apply" | "none" | "return";
 
-type CodexMigrationTargets = ReturnType<typeof resolveCodexMigrationTargets>;
 export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
 
 type CodexAuthProfileConfig = {
@@ -107,17 +106,9 @@ async function readModelRefs(source: CodexAuthSource): Promise<string[]> {
 
 async function buildCodexOAuthCredential(
   source: CodexAuthSource,
+  credential: CodexCliCredential,
   includeConfigPatch: boolean,
-  options: { allowKeychainPrompt: boolean; signal?: AbortSignal },
 ): Promise<CodexAuthCredential | null> {
-  const credential = await readCodexCliCredentialsAsync({
-    codexHome: source.codexHome,
-    allowKeychainPrompt: options.allowKeychainPrompt,
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
-  if (!credential) {
-    return null;
-  }
   const identity = resolveOpenAICodexAuthIdentity({
     access: credential.access,
     accountId: credential.accountId,
@@ -160,27 +151,6 @@ async function buildCodexOAuthCredential(
     : null;
 }
 
-async function buildCodexApiKeyCredential(
-  source: CodexAuthSource,
-  allowKeychainPrompt: boolean,
-  signal?: AbortSignal,
-): Promise<CodexAuthCredential | null> {
-  const credential = await readCodexCliActiveApiKeyAsync({
-    codexHome: source.codexHome,
-    allowKeychainPrompt,
-    ...(signal ? { signal } : {}),
-  });
-  if (!credential) {
-    return null;
-  }
-  return {
-    kind: "api_key",
-    provider: OPENAI_PROVIDER_ID,
-    profileId: "openai:codex-import",
-    key: credential.key,
-  };
-}
-
 async function readCodexAuthCredentials(
   source: CodexAuthSource,
   options: {
@@ -190,17 +160,23 @@ async function readCodexAuthCredentials(
     signal?: AbortSignal;
   },
 ): Promise<CodexAuthCredential[]> {
-  const oauth =
-    options.credentialKind === "api_key"
-      ? null
-      : await buildCodexOAuthCredential(source, options.includeConfigPatch, {
-          allowKeychainPrompt: options.allowKeychainPrompt,
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
-  const apiKey =
-    options.credentialKind === "oauth"
-      ? null
-      : await buildCodexApiKeyCredential(source, options.allowKeychainPrompt, options.signal);
+  const credentials = await readCodexCliCredentialsAsync({
+    codexHome: source.codexHome,
+    credentialKind: options.credentialKind,
+    allowKeychainPrompt: options.allowKeychainPrompt,
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  const oauth = credentials?.oauth
+    ? await buildCodexOAuthCredential(source, credentials.oauth, options.includeConfigPatch)
+    : null;
+  const apiKey: CodexAuthCredential | null = credentials?.apiKey
+    ? {
+        kind: "api_key",
+        provider: OPENAI_PROVIDER_ID,
+        profileId: "openai:codex-import",
+        key: credentials.apiKey.key,
+      }
+    : null;
   return [oauth, apiKey].filter((entry): entry is CodexAuthCredential => entry !== null);
 }
 
@@ -276,51 +252,14 @@ function applyDefaultModelIfMissing(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function applyOAuthConfigToConfig(
-  cfg: OpenClawConfig,
-  credential: Extract<CodexAuthCredential, { kind: "oauth" }>,
-  profileId: string,
-): OpenClawConfig {
-  let next = mergeMigrationConfigValue(cfg, credential.result.configPatch) as OpenClawConfig;
-  const profile = credential.result.profiles[0];
-  if (profile) {
-    next = applyAuthProfileConfig(next, {
-      profileId,
-      provider: profile.credential.provider,
-      mode: "oauth",
-      ...("email" in profile.credential && profile.credential.email
-        ? { email: profile.credential.email }
-        : {}),
-      ...("displayName" in profile.credential && profile.credential.displayName
-        ? { displayName: profile.credential.displayName }
-        : {}),
-      preferProfileFirst: false,
-    });
-  }
-  return applyDefaultModelIfMissing(next);
-}
-
-function applyApiKeyConfigToConfig(
-  cfg: OpenClawConfig,
-  credential: Extract<CodexAuthCredential, { kind: "api_key" }>,
-  profileId: string,
-): OpenClawConfig {
-  return applyAuthProfileConfig(cfg, {
-    profileId,
-    provider: credential.provider,
-    mode: "api_key",
-    displayName: CODEX_IMPORT_DISPLAY_NAME,
-    preferProfileFirst: false,
-  });
-}
-
 export function resolveCodexConfigPatchMode(ctx: MigrationProviderContext): CodexConfigPatchMode {
   const mode = ctx.providerOptions?.configPatchMode;
   return mode === "none" || mode === "return" ? mode : "apply";
 }
 
 function allowCodexKeychainPrompt(ctx: MigrationProviderContext): boolean {
-  return ctx.providerOptions?.allowKeychainPrompt === true;
+  const explicit = ctx.providerOptions?.allowKeychainPrompt;
+  return typeof explicit === "boolean" ? explicit : ctx.includeSecrets === true;
 }
 
 function resolveRequestedCredentialKind(
@@ -383,66 +322,60 @@ async function applyCodexAuthProfileConfig(
   }
 }
 
-async function applyCodexAuthConfig(
-  ctx: MigrationProviderContext,
-  credential: CodexAuthCredential,
-  profileId: string,
-): Promise<CodexAuthConfigApplyResult> {
-  const profile = authProfileConfigForCredential(credential, profileId);
-  if (!profile) {
-    return "unavailable";
-  }
-  return applyCodexAuthProfileConfig(ctx, profile, (config) =>
-    applyCredentialConfig(config, credential, profileId),
-  );
-}
-
 function applyCredentialConfig(
   config: OpenClawConfig,
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
-  return credential.kind === "oauth"
-    ? applyOAuthConfigToConfig(config, credential, profileId)
-    : applyApiKeyConfigToConfig(config, credential, profileId);
+  let next =
+    credential.kind === "oauth"
+      ? (mergeMigrationConfigValue(config, credential.result.configPatch) as OpenClawConfig)
+      : config;
+  const profile = authProfileConfigForCredential(credential, profileId);
+  if (profile) {
+    next = applyAuthProfileConfig(next, { ...profile, preferProfileFirst: false });
+  }
+  return credential.kind === "oauth" ? applyDefaultModelIfMissing(next) : next;
 }
 
 export async function buildCodexAuthItems(params: {
   ctx: MigrationProviderContext;
   source: CodexAuthSource;
-  targets: CodexMigrationTargets;
+  targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
   const configPatchMode = resolveCodexConfigPatchMode(params.ctx);
+  const allowKeychainPrompt = allowCodexKeychainPrompt(params.ctx);
   const credentials = await readCodexAuthCredentials(params.source, {
     credentialKind: resolveRequestedCredentialKind(params.ctx),
     includeConfigPatch: configPatchMode !== "none",
-    allowKeychainPrompt: allowCodexKeychainPrompt(params.ctx),
+    allowKeychainPrompt,
     signal: params.ctx.signal,
   });
   if (credentials.length === 0) {
     const requestedKind = resolveRequestedCredentialKind(params.ctx);
-    if (!requestedKind) {
+    if (!requestedKind && allowKeychainPrompt) {
       return [];
     }
-    const credentialKind = requestedKind;
-    return [
+    const offeredKinds = requestedKind ? [requestedKind] : (["oauth", "api_key"] as const);
+    return offeredKinds.map((credentialKind) =>
       createMigrationItem({
-        id: credentialKind === "oauth" ? OPENAI_OAUTH_ITEM_ID : OPENAI_API_KEY_ITEM_ID,
+        id: credentialKind === "api_key" ? OPENAI_API_KEY_ITEM_ID : OPENAI_OAUTH_ITEM_ID,
         kind: "auth",
         action: "skip",
         source: params.source.codexHome,
         status: "skipped",
         sensitive: true,
-        reason: CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE,
-        message:
-          "No supported Codex credential could be imported. Continue with sign-in to connect OpenClaw.",
+        reason: allowKeychainPrompt ? CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE : undefined,
+        message: allowKeychainPrompt
+          ? "No supported Codex credential could be imported. Continue with sign-in to connect OpenClaw."
+          : "Codex credentials have not been inspected. Confirm credential import to check the current Codex sign-in.",
         details: {
           provider: OPENAI_PROVIDER_ID,
           credentialKind,
           credentialImportUnavailable: true,
         },
       }),
-    ];
+    );
   }
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
   const skipped = !params.ctx.includeSecrets;
@@ -510,12 +443,41 @@ export async function buildCodexAuthItems(params: {
   });
 }
 
-export async function applyCodexAuthItems(params: {
+type CodexAuthApplyContext = {
   ctx: MigrationProviderContext;
-  item: MigrationItem;
   source: CodexAuthSource;
-  targets: CodexMigrationTargets;
-}): Promise<MigrationItem[]> {
+  targets: PlannedMigrationTargets;
+};
+
+export function createCodexAuthItemApplier(
+  params: CodexAuthApplyContext & { items: readonly MigrationItem[] },
+): (item: MigrationItem) => Promise<MigrationItem[]> {
+  const { items, ...context } = params;
+  const selectedKinds = new Set(
+    items
+      .filter((item) => item.kind === "auth" && item.status === "planned")
+      .map((item) => item.details?.credentialKind),
+  );
+  const selectedKind = selectedKinds.size === 1 ? selectedKinds.values().next().value : undefined;
+  // Read afresh for this apply invocation, then share it across selected sibling items.
+  let snapshot: Promise<CodexAuthCredential[]> | undefined;
+  const readCredentials = () =>
+    (snapshot ??= readCodexAuthCredentials(context.source, {
+      credentialKind:
+        selectedKind === "oauth" || selectedKind === "api_key" ? selectedKind : undefined,
+      includeConfigPatch: resolveCodexConfigPatchMode(context.ctx) !== "none",
+      allowKeychainPrompt: allowCodexKeychainPrompt(context.ctx),
+      signal: context.ctx.signal,
+    }));
+  return (item) => applyCodexAuthItem({ ...context, item, readCredentials });
+}
+
+async function applyCodexAuthItem(
+  params: CodexAuthApplyContext & {
+    item: MigrationItem;
+    readCredentials: () => Promise<CodexAuthCredential[]>;
+  },
+): Promise<MigrationItem[]> {
   const { ctx, item, source, targets } = params;
   if (item.status !== "planned") {
     return [item];
@@ -529,16 +491,10 @@ export async function applyCodexAuthItems(params: {
     return [markMigrationItemError(item, CODEX_REASON_MISSING_AUTH_METADATA)];
   }
   const configPatchMode = resolveCodexConfigPatchMode(ctx);
-  // Re-read before persistence to fence a changed CLI login. macOS may ask twice,
-  // but importing stale credential bytes would violate the migration contract.
-  const credential = (
-    await readCodexAuthCredentials(source, {
-      credentialKind,
-      includeConfigPatch: configPatchMode !== "none",
-      allowKeychainPrompt: allowCodexKeychainPrompt(ctx),
-      signal: ctx.signal,
-    })
-  ).find(
+  ctx.signal?.throwIfAborted();
+  const credentials = await params.readCredentials();
+  ctx.signal?.throwIfAborted();
+  const credential = credentials.find(
     (candidate) =>
       candidate.provider === provider &&
       candidate.kind === credentialKind &&
@@ -629,7 +585,9 @@ export async function applyCodexAuthItems(params: {
   const configResult =
     configPatchMode !== "apply"
       ? "unavailable"
-      : await applyCodexAuthConfig(ctx, credential, profileId);
+      : await applyCodexAuthProfileConfig(ctx, configProfile, (config) =>
+          applyCredentialConfig(config, credential, profileId),
+        );
   if (configResult === "conflict") {
     return [markMigrationItemConflict(item, CODEX_REASON_AUTH_PROFILE_EXISTS)];
   }

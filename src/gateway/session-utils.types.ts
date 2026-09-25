@@ -9,12 +9,7 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionEntry,
-  SessionGoal,
-  SessionOrigin,
-} from "../config/sessions/types.js";
+import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
@@ -45,11 +40,6 @@ export type GatewaySessionsDefaults = {
 };
 
 type SubagentRunState = "active" | "interrupted" | "historical";
-
-type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
 
 export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
   worktree?: SessionEntry["worktree"];
@@ -108,8 +98,6 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
-  compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
@@ -124,6 +112,11 @@ const sessionRowSchemaDriftGuard: Pick<GatewaySessionRow, keyof SessionRow> exte
 void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
+
+export type SessionTitleFields = {
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
+};
 
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";

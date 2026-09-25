@@ -45,6 +45,7 @@ function selectRange(node: Text, start: number, end: number) {
 
 function pointerUp(thread: HTMLElement) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+    paneId: "pane-a",
     onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   });
@@ -140,11 +141,12 @@ describe("chat selection popup", () => {
     const { thread, textNode } = buildThreadWithBubble("tear down before the selection settles");
     selectRange(textNode, 0, 9);
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAddToChat: onAddToChatSpy,
       onAskSideChat: onAskSideChatSpy,
     });
 
-    removeChatSelectionPopup();
+    removeChatSelectionPopup("pane-a");
     vi.runAllTimers();
 
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
@@ -158,9 +160,11 @@ describe("chat selection popup", () => {
     selectRange(textNode, 0, 11);
     const pendingTimerCount = vi.getTimerCount();
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAskSideChat: firstAskSideChat,
     });
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
       onAskSideChat: secondAskSideChat,
     });
 
@@ -183,6 +187,24 @@ describe("chat selection popup", () => {
     document.dispatchEvent(new Event("selectionchange"));
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
+
+  it.each(["pending", "mounted"])("keeps a %s selection when another pane retires", (phase) => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("Keep this selection");
+    selectRange(textNode, 0, 4);
+    handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      paneId: "pane-a",
+      onAskSideChat: onAskSideChatSpy,
+    });
+    if (phase === "mounted") {
+      vi.runAllTimers();
+    }
+    removeChatSelectionPopup("pane-b");
+    vi.runAllTimers();
+    expect(document.querySelector(".chat-selection-popup")).not.toBeNull();
+    removeChatSelectionPopup("pane-a");
+    expect(document.querySelector(".chat-selection-popup")).toBeNull();
+  });
 });
 
 describe("chat annotation editor", () => {
@@ -195,6 +217,7 @@ describe("chat annotation editor", () => {
     const onSave = vi.fn();
     const onCancel = vi.fn();
     showChatAnnotationEditor({
+      paneId: "pane-a",
       anchorRect: new DOMRect(100, 100, 100, 20),
       comment: "",
       onSave,

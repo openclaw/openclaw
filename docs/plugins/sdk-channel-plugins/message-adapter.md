@@ -57,13 +57,18 @@ contract test failure:
 | `message.live.capabilities`           | `draftPreview`, `previewFinalization`, `progressUpdates`, `nativeStreaming`, `quietFinalization` |
 | `message.live.finalizer.capabilities` | `finalEdit`, `normalFallback`, `discardPending`, `previewReceipt`, `retainOnAmbiguousFailure`    |
 
-Channels that finalize a draft preview in place should route the runtime logic
-through `defineFinalizableLivePreviewAdapter(...)` plus
-`deliverWithFinalizableLivePreviewAdapter(...)`, and keep the declared
-capabilities backed by `verifyChannelMessageLiveCapabilityAdapterProofs(...)`
-and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
-progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
-silently.
+Channels with previews should use `createLivePreviewLifecycle(...)` from
+`openclaw/plugin-sdk/channel-outbound` for final acceptance, promotion, and
+cleanup. Supply real transport operations and explicit delivery results instead
+of keeping channel-local final/cleanup flags. Native streaming and persistent
+cards retain their transport-specific finalization; they are not required to
+pretend to be deletable drafts. See
+[Progress and preview delivery ownership](/plugins/sdk-channel-outbound#progress-and-preview-delivery-ownership).
+
+Keep declared capabilities backed by
+`verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+`verifyChannelMessageLiveFinalizerProofs(...)` tests so native progress, edit,
+fallback/retention, cleanup, and receipt behavior cannot drift silently.
 
 ### Progress visibility acceptance
 
@@ -94,6 +99,13 @@ explicit output until the next breaking SDK release. New callers should omit
 them and use `streaming.progress.toolProgress` to control tool rows with the
 standard progress markers.
 
+When consuming prepared agent items, create the compositor with `preparedItems: true`.
+`pushItemEvent` then owns visible tool progress; raw tool, command-output, and
+patch callbacks retain diagnostic bookkeeping without adding duplicate rows.
+Omit this option for existing plugins that use raw callbacks. Their arguments,
+detail mode, custom line builder, and terminal command/patch rendering remain
+supported. This is an adapter capability, not a user configuration setting.
+
 ### Quiet acknowledgement and coalesced progress
 
 `createStatusReactionController({ presentation: "acknowledgement", ... })`
@@ -106,6 +118,14 @@ controls accept `coalesceInFlight: true` to keep background updates arriving
 during a send in the next throttle window. Explicit `flush()` still bypasses
 the delay for attention and finalization. Cancel pending updates and await
 in-flight work before closing or rotating a stream.
+
+Use `createFinalizableDraftLifecycle` for physical deletion custody rather than
+maintaining a plugin-local retry queue. `retire(id)` claims a detached preview;
+`retire(id, { defer: true })` records it without deleting it immediately.
+`cleanupPending()` retries retired IDs without deleting the current preview.
+When transport cleanup policy must change, pass a synchronous `prepareCleanup`
+callback to `cleanupPending`; it runs in order with clears, before deletion.
+Rejected deletions remain owned for a later cleanup attempt.
 
 ### Commentary delivery ownership
 

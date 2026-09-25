@@ -33,11 +33,17 @@ actor TestIsolationLock {
 @MainActor
 enum TestIsolation {
     static func withIsolatedState<T>(
+        launchAgentHomeDirectory: URL? = nil,
         env: [String: String?] = [:],
         defaults: [String: Any?] = [:],
         _ body: () async throws -> T) async rethrows -> T
     {
         precondition(!env.keys.contains("OPENCLAW_PROFILE"), "Select the app profile before launching the test process")
+        // Foundation and WebKit cache user paths for the process lifetime. A
+        // per-test HOME can strand those caches in a deleted fixture directory.
+        precondition(
+            !env.keys.contains("HOME") && !env.keys.contains("CFFIXED_USER_HOME"),
+            "Keep the process home fixed; use launchAgentHomeDirectory for service fixtures")
 
         func restoreUserDefaults(_ values: [String: Any?]) {
             for (key, value) in values {
@@ -60,6 +66,8 @@ enum TestIsolation {
         }
 
         await TestIsolationLock.shared.acquire()
+        let previousLaunchAgentHome = LaunchAgentPlist.testingHomeDirectoryURL
+        LaunchAgentPlist.testingHomeDirectoryURL = launchAgentHomeDirectory
         var env = env
         // Config reads and writes also persist health/audit state. A config-only
         // fixture must not send those writes to the process-wide state directory.
@@ -104,11 +112,13 @@ enum TestIsolation {
 
         do {
             let result = try await body()
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
             restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()
             return result
         } catch {
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
             restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()

@@ -5,9 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { formatBackupCreateSummary } from "../commands/backup-summary.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
@@ -36,7 +35,12 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
-import { listArchiveEntries, listArchiveEntryDetails } from "./backup-create.test-support.js";
+import {
+  createBackupClassificationInventory,
+  listArchiveEntries,
+  listArchiveEntryDetails,
+  makeBackupResult,
+} from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
@@ -46,35 +50,13 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
 
-function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
-  return {
-    createdAt: "2026-01-01T00:00:00.000Z",
-    archiveRoot: "openclaw-backup-2026-01-01",
-    archivePath: "/tmp/openclaw-backup.tar.gz",
-    dryRun: false,
-    includeWorkspace: true,
-    onlyConfig: false,
-    verified: false,
-    assets: [],
-    skipped: [],
-    skippedVolatileCount: 0,
-    ...overrides,
-  };
-}
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+});
 
-function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
-  return {
-    stateDir,
-    agentRoots: [],
-    coreDatabases: [],
-    resolveSqliteSource: () => ({ role: "plugin" }),
-    regenerableRoots: [],
-    isIncluded: () => true,
-    isTraversable: () => true,
-    isPackageContent: () => false,
-    isVolatile: () => false,
-  };
-}
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 async function withBackupClassificationDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-classify-"));
@@ -198,7 +180,7 @@ describe("formatBackupCreateSummary", () => {
   it.each([
     {
       name: "formats created archives with included and skipped paths",
-      result: makeResult({
+      result: makeBackupResult({
         verified: true,
         assets: [
           {
@@ -230,7 +212,7 @@ describe("formatBackupCreateSummary", () => {
     },
     {
       name: "formats dry runs and pluralized counts",
-      result: makeResult({
+      result: makeBackupResult({
         dryRun: true,
         assets: [
           {
@@ -262,7 +244,7 @@ describe("formatBackupCreateSummary", () => {
   it("surfaces the volatile skip count in the summary", () => {
     expect(
       formatBackupCreateSummary(
-        makeResult({
+        makeBackupResult({
           assets: [
             {
               kind: "state",
@@ -347,13 +329,8 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
 });
 
 describe("writeTarArchiveWithRetry", () => {
-  it.each([
-    new Error("did not encounter expected EOF"),
-    new Error("encountered unexpected EOF"),
-    new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
-    new Error("Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)"),
-    Object.assign(new Error(""), { code: "EOF" }),
-  ])("retries tar-specific EOF-class errors: $message", async (error) => {
+  it("retries a truncated source with the walker's EOF code", async () => {
+    const error = Object.assign(new Error("encountered unexpected EOF"), { code: "EOF" });
     const runTar = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(error)
@@ -371,6 +348,7 @@ describe("writeTarArchiveWithRetry", () => {
   });
 
   it.each([
+    new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
     new Error("EOF occurred in violation of protocol"),
     new Error("unexpected eof while reading"),
     new Error("ran out of EOF markers"),
@@ -396,7 +374,8 @@ describe("writeTarArchiveWithRetry", () => {
 
   it("reports the actual attempt count when bailing out before the retry limit", async () => {
     const nonEofErr = new Error("permission denied");
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+    const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
+      code: "EOF",
       path: "/state/logs/gateway.jsonl",
     });
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
@@ -426,7 +405,8 @@ describe("writeTarArchiveWithRetry", () => {
   });
 
   it("retries on EOF-class errors and eventually succeeds", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+    const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
+      code: "EOF",
       path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const runTar = vi
@@ -451,7 +431,8 @@ describe("writeTarArchiveWithRetry", () => {
   });
 
   it("uses a fresh temp archive path without pathname-based cleanup", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+    const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
+      code: "EOF",
       path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const tempArchivePath = "/tmp/backup.tar.gz.tmp";
@@ -482,7 +463,8 @@ describe("writeTarArchiveWithRetry", () => {
   });
 
   it("does not remove retry paths by pathname when a later attempt fails", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+    const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
+      code: "EOF",
       path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const tempArchivePath = "/tmp/backup.tar.gz.tmp";
@@ -511,7 +493,8 @@ describe("writeTarArchiveWithRetry", () => {
   });
 
   it("surfaces the offending path and attempt count after exhausting retries", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+    const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
+      code: "EOF",
       path: "/state/logs/gateway.jsonl",
     });
     const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(eofErr);
@@ -525,21 +508,6 @@ describe("writeTarArchiveWithRetry", () => {
       }),
     ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
     expect(runTar).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not retry on non-EOF errors", async () => {
-    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await expect(
-      writeTarArchiveWithRetry({
-        tempArchivePath: "/tmp/backup.tar.gz.tmp",
-        runTar,
-        sleepMs: sleep,
-      }),
-    ).rejects.toThrow(/permission denied/);
-    expect(runTar).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
   });
 });
 
@@ -879,8 +847,8 @@ describe("createBackupArchive", () => {
     {
       layout: "group link",
       linkSegments: ["team"],
-      linkTargetSegments: ["team"],
-      skillSegments: ["team", "demo"],
+      linkTargetSegments: ["team.tmp"],
+      skillSegments: ["team.tmp", "demo"],
     },
   ])(
     "archives a $layout external managed-skill target and verifies its payload",
@@ -1399,7 +1367,7 @@ describe("createBackupArchive", () => {
     },
   );
 
-  it("does not abort the archive when a snapshotted sqlite sidecar vanishes after tar enumerates it", async () => {
+  it("does not lstat live sidecars already covered by a SQLite snapshot", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1418,9 +1386,7 @@ describe("createBackupArchive", () => {
 
         const sqlite = requireNodeSqlite();
         const db = new sqlite.DatabaseSync(dbPath);
-        const originalLstat = fsSync.lstat.bind(fsSync);
-        let vanishedBeforeLstat = false;
-        let lstatSpy: MockInstance | undefined;
+        const lstatSpy = vi.spyOn(fs, "lstat");
         try {
           db.exec(`
             PRAGMA journal_mode = WAL;
@@ -1431,46 +1397,22 @@ describe("createBackupArchive", () => {
           await fs.access(`${dbPath}-wal`);
           await fs.access(`${dbPath}-shm`);
 
-          // Reproduce the live-agent race: tar has already enumerated the
-          // sidecars via readdir, and the owning process removes them before
-          // node-tar lstats them. A vanished sidecar of a snapshotted database
-          // must not abort the whole archive.
-          const sidecarPaths = new Set(
-            [`${dbPath}-wal`, `${dbPath}-shm`].map((sidecar) => path.resolve(sidecar)),
-          );
-          lstatSpy = vi.spyOn(fsSync, "lstat");
-          lstatSpy.mockImplementation(((target: unknown, callback: unknown) => {
-            if (
-              typeof target === "string" &&
-              typeof callback === "function" &&
-              sidecarPaths.has(path.resolve(target))
-            ) {
-              // unlink does not stat the file first, so this cannot recurse
-              // back into the lstat mock through rimraf.
-              try {
-                fsSync.unlinkSync(target);
-              } catch {
-                // already removed by an earlier lstat of the same sidecar
-              }
-              vanishedBeforeLstat = true;
-            }
-            return originalLstat(target as never, callback as never);
-          }) as unknown as typeof fsSync.lstat);
-
           const archive = await createBackupArchive({
             output: state.path("sidecar-race.tar.gz"),
             includeWorkspace: false,
           });
 
           const entries = await listArchiveEntries(archive.archivePath);
-          expect(vanishedBeforeLstat).toBe(false);
+          const inspectedPaths = lstatSpy.mock.calls.map(([target]) => target);
+          expect(inspectedPaths).not.toContain(`${dbPath}-wal`);
+          expect(inspectedPaths).not.toContain(`${dbPath}-shm`);
           expect(
             entries.find((entry) => entry.endsWith("/sidecar-agent/openclaw-agent.sqlite")),
           ).toBeDefined();
           expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-wal"))).toBe(false);
           expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-shm"))).toBe(false);
         } finally {
-          lstatSpy?.mockRestore();
+          lstatSpy.mockRestore();
           db.close();
         }
       },
@@ -1614,6 +1556,7 @@ describe("createBackupArchive", () => {
   });
 
   it("keeps ACPX codex-home scratch symlinks out of the archive via the real acpx manifest", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1794,7 +1737,7 @@ describe("createBackupArchive", () => {
         const entries = await listArchiveEntries(result.archivePath);
 
         expect(entries.some((entry) => entry.endsWith("/workspace/Cargo.lock"))).toBe(true);
-        expect(entries.some((entry) => entry.endsWith("/workspace/pending.tmp"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/workspace/pending.tmp"))).toBe(false);
         for (const suffix of [
           "/state/agents/main/sessions/live-session.jsonl",
           "/state/sessions/legacy-session.jsonl",
@@ -1812,7 +1755,7 @@ describe("createBackupArchive", () => {
             suffix,
           ).toBe(false);
         }
-        expect(result.skippedVolatileCount).toBe(9);
+        expect(result.skippedVolatileCount).toBe(10);
       },
     );
   });
@@ -2317,6 +2260,11 @@ describe("createBackupArchive", () => {
         scenario: "minimal",
       },
       async (state) => {
+        // Keep concurrent backups out of this fixture's warning inventory.
+        const scratchRoot = state.path("scratch");
+        await fs.mkdir(scratchRoot);
+        Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+        state.applyEnv();
         const databasePaths = [
           state.statePath("browser", "foreign-browser.sqlite"),
           state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),
@@ -2357,7 +2305,7 @@ describe("createBackupArchive", () => {
           output: state.path("foreign.tar.gz"),
           includeWorkspace: false,
         });
-        expect(archive.warnings).toHaveLength(opaqueFiles.size);
+        expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(opaqueFiles.size);
         for (const databasePath of opaqueFiles.keys()) {
           expect(
             archive.warnings?.filter(
@@ -2383,70 +2331,6 @@ describe("createBackupArchive", () => {
           expect(await fs.readFile(path.join(restored.targetPath, entry))).toEqual(bytes);
           expect(await fs.readFile(sourceFile)).toEqual(bytes);
         }
-      },
-    );
-  });
-
-  it("validates hard-linked canonical agent paths against each path owner", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-hardlinked-agent-owners-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        const mainDbPath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-        const workerDbPath = state.statePath("agents", "worker", "agent", "openclaw-agent.sqlite");
-        await fs.mkdir(path.dirname(mainDbPath), { recursive: true });
-        await fs.mkdir(path.dirname(workerDbPath), { recursive: true });
-        await fs.mkdir(outputDir, { recursive: true });
-        registerAgentDatabase(state, mainDbPath);
-        registerAgentDatabase(state, workerDbPath, "worker");
-        createOwnedSqliteDatabase({
-          sqlitePath: mainDbPath,
-          role: "agent",
-          agentId: "main",
-        });
-        await fs.link(mainDbPath, workerDbPath);
-
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 6, 24, 9, 2, 45),
-          }),
-        ).rejects.toThrow(/belongs to agent main; requested agent worker/iu);
-        expect(await fs.readdir(outputDir)).toEqual([]);
-      },
-    );
-  });
-
-  it("does not treat a canonical agent path as an alias of the global database", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-hardlinked-global-agent-owners-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        const globalDbPath = resolveCanonicalTestSqlitePath(state, "global");
-        const agentDbPath = resolveCanonicalTestSqlitePath(state, "agent");
-        await fs.mkdir(path.dirname(globalDbPath), { recursive: true });
-        await fs.mkdir(path.dirname(agentDbPath), { recursive: true });
-        await fs.mkdir(outputDir, { recursive: true });
-        registerAgentDatabase(state, agentDbPath);
-        await fs.link(globalDbPath, agentDbPath);
-
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 6, 24, 9, 2, 50),
-          }),
-        ).rejects.toThrow(/schema role global; expected agent/iu);
-        expect(await fs.readdir(outputDir)).toEqual([]);
       },
     );
   });

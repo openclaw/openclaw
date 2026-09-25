@@ -11,9 +11,14 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  emitDiagnosticMemorySample,
+  resetDiagnosticMemoryForTest,
+  type EmitDiagnosticMemorySample,
+} from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -95,19 +100,6 @@ const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
 
-// The logging-core SDK shipped this callback input before automatic bundles retired.
-// Preserve its optional fields; the heartbeat only supplies emitSample.
-type DiagnosticMemorySampleCallbackOptions = NonNullable<
-  Parameters<typeof emitDiagnosticMemorySample>[0]
-> & {
-  writeCriticalBundle?: boolean;
-  stateDir?: string;
-  sessionStorePaths?: string[];
-  resolveSessionStorePaths?: () => string[] | undefined;
-};
-type EmitDiagnosticMemorySample = (
-  options?: DiagnosticMemorySampleCallbackOptions,
-) => ReturnType<typeof emitDiagnosticMemorySample>;
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
@@ -750,6 +742,7 @@ export function logMessageProcessed(params: {
   chatId?: number | string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   durationMs?: number;
   outcome: "completed" | "skipped" | "error";
   reason?: string;
@@ -782,6 +775,7 @@ export function logMessageProcessed(params: {
     messageId: params.messageId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     durationMs: params.durationMs,
     outcome: params.outcome,
     reason: params.reason,
@@ -1065,51 +1059,6 @@ function logSessionAttention(
   return recovery;
 }
 
-export function logToolLoopAction(
-  params: SessionRef & {
-    toolName: string;
-    level: "warning" | "critical";
-    action: "warn" | "block";
-    detector:
-      | "generic_repeat"
-      | "argument_churn"
-      | "unknown_tool_repeat"
-      | "known_poll_no_progress"
-      | "global_circuit_breaker"
-      | "ping_pong";
-    count: number;
-    message: string;
-    pairedToolName?: string;
-  },
-) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const payload = `tool loop: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-    params.sessionKey ?? "unknown"
-  } tool=${params.toolName} level=${params.level} action=${params.action} detector=${
-    params.detector
-  } count=${params.count}${params.pairedToolName ? ` pairedTool=${params.pairedToolName}` : ""} message="${params.message}"`;
-  if (params.level === "critical") {
-    diag.error(payload);
-  } else {
-    diag.warn(payload);
-  }
-  emitDiagnosticEvent({
-    type: "tool.loop",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    toolName: params.toolName,
-    level: params.level,
-    action: params.action,
-    detector: params.detector,
-    count: params.count,
-    message: params.message,
-    pairedToolName: params.pairedToolName,
-  });
-  markActivity();
-}
-
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
 
@@ -1140,6 +1089,7 @@ export function startDiagnosticHeartbeat(
   heartbeatInterval = setInterval(() => {
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
+    emitChildProcessSpawnSample();
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
       try {

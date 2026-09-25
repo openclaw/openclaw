@@ -96,6 +96,7 @@ export function findSettingsSearchBlocks(params: {
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
+  multipleProfiles?: boolean;
   basePath?: string;
   canAdmin?: boolean;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
@@ -109,6 +110,7 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
+            (params.multipleProfiles || !block.requiresMultipleProfiles) &&
             (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
             isSettingsNavigationRouteVisible(
               block.routeId,

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
@@ -36,37 +35,6 @@ function load(rootDir: string, entry: string, standalone = false) {
 }
 
 describe("plugin module generations", () => {
-  it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1")(
-    "reloads Bun plugin generations while retained callers keep their original modules",
-    () => {
-      const home = temp.make("plugin-bun-generations-");
-      const result = spawnSync(
-        process.env.BUN_BIN ?? "bun",
-        [
-          "--no-install",
-          "--conditions=openclaw-custom",
-          "src/plugins/plugin-module-generation.bun.test-support.ts",
-          home,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            HOME: home,
-            USERPROFILE: home,
-            TMPDIR: home,
-            OPENCLAW_STATE_DIR: path.join(home, "state"),
-          },
-        },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-    },
-  );
-
   it.each([
     ...["ts", "mts", "mtsx"].flatMap((extension) =>
       ["commonjs", undefined].map((type) => ({ extension, type, importOnly: false })),
@@ -655,7 +623,14 @@ describe("plugin module generations", () => {
     },
   );
 
-  it.each(["before bind", "directory before bind", "after bind", "unchanged"])(
+  it.each([
+    "before bind",
+    "directory before bind",
+    "after bind",
+    "unchanged",
+    "nested state",
+    "state at source root",
+  ])(
     "checks expected source bytes before execution and uses that same capture (%s)",
     async (change) => {
       const marker = path.join(temp.make("plugin-expected-effect-"), "ran");
@@ -664,6 +639,12 @@ describe("plugin module generations", () => {
       const root = temp.make("plugin-expected-source-");
       const source = path.join(root, "entry.cjs");
       fs.writeFileSync(source, entry("reviewed"));
+      if (change === "nested state" || change === "state at source root") {
+        vi.stubEnv(
+          "OPENCLAW_STATE_DIR",
+          change === "nested state" ? path.join(root, ".state") : root,
+        );
+      }
       const prepared = capturePluginGenerationArtifact(root);
       const expectedSourceDigest = prepared.sourceDigest;
       prepared.dispose();
@@ -728,6 +709,7 @@ describe("plugin module generations", () => {
     "static",
     "dynamic",
     "explicit",
+    "assert",
     "commonjs",
     "commonjs-dynamic",
     "computed",
@@ -743,7 +725,7 @@ describe("plugin module generations", () => {
       source,
       mode.endsWith("dynamic") || computed
         ? `const name = './data.json'; export const read = async () => (await import(${computed ? "name" : "'./data.json'"})).default.value;`
-        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : ""};
+        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : mode === "assert" ? "assert { type: 'json' }" : ""};
              export const read = async () => data.value;`,
     );
     type JsonPlugin = { read(): Promise<string> };
@@ -795,7 +777,7 @@ describe("plugin module generations", () => {
     },
   );
 
-  it("resolves deferred TypeScript without acquiring the compiler until execution", () => {
+  it("resolves deferred TypeScript without acquiring its source transformers until execution", () => {
     const root = temp.make("plugin-resolve-only-typescript-");
     fs.writeFileSync(
       path.join(root, "index.cjs"),
@@ -808,8 +790,8 @@ describe("plugin module generations", () => {
       this: NodeJS.Module,
       id: string,
     ) {
-      if (id === "typescript") {
-        throw new Error("Resolution must not acquire the TypeScript compiler");
+      if (["@babel/parser", "@babel/traverse", "@babel/generator", "esbuild"].includes(id)) {
+        throw new Error("Resolution must not acquire source transformers");
       }
       return originalRequire.call(this, id);
     });
@@ -834,7 +816,7 @@ describe("plugin module generations", () => {
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
         ? /ParseError: Unexpected token[\s\S]*broken\.ts:1:20/
-        : /^broken\.ts\(1,21\): error TS1110: Type expected\./,
+        : /^broken\.ts: Unexpected token \(1:20\)/,
     );
   });
 

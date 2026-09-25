@@ -13,11 +13,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeRenderableLine } from "../tui-formatters.js";
-
-const ANSI_ESCAPE = String.fromCharCode(27);
-const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -156,49 +154,30 @@ export class SearchableSelectList implements Component, Focusable {
     return item.label || item.value;
   }
 
-  private splitAnsiParts(text: string): Array<{ text: string; isAnsi: boolean }> {
-    const parts: Array<{ text: string; isAnsi: boolean }> = [];
-    ANSI_SGR_REGEX.lastIndex = 0;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = ANSI_SGR_REGEX.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({ text: text.slice(lastIndex, match.index), isAnsi: false });
-      }
-      parts.push({ text: match[0], isAnsi: true });
-      lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < text.length) {
-      parts.push({ text: text.slice(lastIndex), isAnsi: false });
-    }
-    return parts;
-  }
-
   private highlightMatch(text: string, patterns: RegExp[]): string {
     if (patterns.length === 0) {
       return text;
     }
 
-    let parts = this.splitAnsiParts(text);
+    let parts = [...iterateAnsiSegments(text)];
     for (const regex of patterns) {
-      const nextParts: Array<{ text: string; isAnsi: boolean }> = [];
+      const nextParts: typeof parts = [];
       for (const part of parts) {
-        if (part.isAnsi) {
+        if (part.kind === "ansi") {
           nextParts.push(part);
           continue;
         }
         regex.lastIndex = 0;
-        const replaced = part.text.replace(regex, (match) => this.theme.matchHighlight(match));
-        if (replaced === part.text) {
+        const replaced = part.value.replace(regex, (match) => this.theme.matchHighlight(match));
+        if (replaced === part.value) {
           nextParts.push(part);
           continue;
         }
-        nextParts.push(...this.splitAnsiParts(replaced));
+        nextParts.push(...iterateAnsiSegments(replaced));
       }
       parts = nextParts;
     }
-    return parts.map((part) => part.text).join("");
+    return parts.map((part) => part.value).join("");
   }
 
   invalidate() {

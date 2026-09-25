@@ -5,12 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logWarn } from "./logger.js";
-import {
-  resetLogger,
-  setLoggerOverride,
-  stripRedundantSubsystemPrefixForConsole,
-} from "./logging.js";
-import { flushLogger } from "./logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "./logging/logger.js";
+import { stripRedundantSubsystemPrefixForConsole } from "./logging/subsystem.js";
 import type { RuntimeEnv } from "./runtime.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 

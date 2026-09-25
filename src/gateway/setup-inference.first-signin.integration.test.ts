@@ -16,8 +16,30 @@ afterEach(() => {
 it(
   "activates the first device sign-in through openclaw.setup.auth.start and the embedded probe",
   { timeout: 90_000 },
-  async () => {
+  async ({ signal, onTestFinished }) => {
     const requests: string[] = [];
+    const startedAt = performance.now();
+    let phase = "fixture-setup";
+    let wizardSteps = 0;
+    let wizardStepType: string | undefined;
+    const reportAbort = () => {
+      console.error("[setup-first-signin] test aborted", {
+        phase,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        mockedRequests: requests.length,
+        tokenRequests: requests.filter(
+          (url) => url === "https://github.com/login/oauth/access_token",
+        ).length,
+        probeRequests: requests.filter(
+          (url) => url === "https://api.individual.githubcopilot.com/v1/messages",
+        ).length,
+        wizardSteps,
+        wizardStepType,
+      });
+    };
+    // Capture the deadline phase before teardown can advance the pending test.
+    signal.addEventListener("abort", reportAbort, { once: true });
+    onTestFinished(() => signal.removeEventListener("abort", reportAbort));
     // Inventory refresh runs in another thread; the setup probe owns this test's transport.
     vi.spyOn(catalogRefresh, "refreshCommittedProviderCatalogs").mockImplementation(() => {});
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -110,6 +132,7 @@ it(
         const recoveryRestart = vi.fn(() => {
           throw new Error("Setup must complete without a recovery restart");
         });
+        phase = "gateway-start-and-connect";
         const { client, server } = await startGatewayWithClient({
           configPath: state.configPath,
           token: "synthetic-gateway-token",
@@ -130,25 +153,31 @@ it(
           },
         });
         try {
+          phase = "gateway-startup-settlement";
           await server.startupSettled;
           const sessionId = "first-device-signin";
+          phase = "setup-auth-start";
           await client.request("openclaw.setup.auth.start", {
             sessionId,
             agentId: "main",
             authChoice: "github-copilot",
             nativeSessionCatalogsEnabled: false,
           });
+          phase = "wizard-next";
           let result = await client.request<WizardNextResult>("wizard.next", { sessionId });
           while (!result.done) {
             const step = result.step;
             if (!step) {
               throw new Error("Setup wizard did not return a step");
             }
+            wizardSteps += 1;
+            wizardStepType = step.type;
             result = await client.request<WizardNextResult>("wizard.next", {
               sessionId,
               answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
             });
           }
+          phase = "activation-assertions";
           expect(result, JSON.stringify(result)).toMatchObject({
             status: "done",
             modelActivation: { modelRef: "github-copilot/claude-sonnet-5" },
@@ -177,8 +206,11 @@ it(
             `github-copilot/claude-sonnet-5@${profileId}`,
           );
         } finally {
+          phase = "client-disconnect";
           await disconnectGatewayClient(client);
+          phase = "server-close";
           await server.close({ reason: "first sign-in test complete" });
+          phase = "fixture-drain";
         }
       },
     );

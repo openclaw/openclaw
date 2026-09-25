@@ -1,7 +1,11 @@
 // Main job heartbeat tests cover target ordering for heartbeat delivery.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import {
+  createFinishedBarrier,
+  setupCronServiceSuite,
+  writeCronStoreSnapshot,
+} from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -38,6 +42,7 @@ describe("cron main job passes heartbeat target=last", () => {
   }) {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
+    const finished = createFinishedBarrier();
     const cron = new CronService({
       storePath: params.storePath,
       cronEnabled: true,
@@ -45,9 +50,10 @@ describe("cron main job passes heartbeat target=last", () => {
       enqueueSystemEvent,
       requestHeartbeat,
       requestHeartbeatAndWait: params.requestHeartbeatAndWait,
+      onEvent: finished.onEvent,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    return { cron, enqueueSystemEvent, requestHeartbeat };
+    return { cron, enqueueSystemEvent, requestHeartbeat, finished };
   }
 
   function requireRequestHeartbeatAndWaitCall(
@@ -76,12 +82,26 @@ describe("cron main job passes heartbeat target=last", () => {
     };
   }
 
-  async function runSingleTick(cron: CronService) {
-    const startPromise = cron.start();
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await startPromise;
-    cron.stop();
+  async function runSingleTick(
+    cron: CronService,
+    finished: ReturnType<typeof createFinishedBarrier>,
+    jobId: string,
+  ) {
+    const terminal = finished.waitForOk(jobId);
+    try {
+      await cron.start();
+      const job = cron.getJob(jobId);
+      if (job?.state.lastRunAtMs === undefined) {
+        const nextRunAtMs = job?.state.nextRunAtMs;
+        if (nextRunAtMs === undefined) {
+          throw new Error("expected the job to have a scheduled deadline");
+        }
+        await vi.advanceTimersByTimeAsync(nextRunAtMs - Date.now());
+      }
+      await terminal;
+    } finally {
+      cron.stop();
+    }
   }
 
   it("should pass heartbeat.target=last to requestHeartbeatAndWait for wakeMode=now main jobs", async () => {
@@ -101,12 +121,12 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron } = createCronWithSpies({
+    const { cron, finished } = createCronWithSpies({
       storePath,
       requestHeartbeatAndWait,
     });
 
-    await runSingleTick(cron);
+    await runSingleTick(cron, finished, job.id);
 
     // requestHeartbeatAndWait should have been called
     expect(requestHeartbeatAndWait).toHaveBeenCalled();
@@ -136,12 +156,12 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron, enqueueSystemEvent, requestHeartbeat } = createCronWithSpies({
+    const { cron, enqueueSystemEvent, requestHeartbeat, finished } = createCronWithSpies({
       storePath,
       requestHeartbeatAndWait,
     });
 
-    await runSingleTick(cron);
+    await runSingleTick(cron, finished, job.id);
 
     expect(requestHeartbeat).toHaveBeenCalled();
     const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);

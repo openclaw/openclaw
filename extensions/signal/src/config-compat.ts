@@ -13,7 +13,11 @@ import {
   isValidSignalManagedNativePort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
+import {
+  assertSignalSocketTransport,
+  buildSignalTransportHttpUrl,
+  normalizeSignalTransportUrl,
+} from "./transport-url.js";
 
 const LEGACY_TRANSPORT_FIELDS = [
   "configPath",
@@ -47,30 +51,21 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   if (!isRecord(value)) {
     return false;
   }
-  if (value.kind === "managed-native") {
-    if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+  try {
+    if (value.kind === "managed-native") {
+      assertSignalSocketTransport(value);
+      if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+        return false;
+      }
+      if (value.url === undefined) {
+        return true;
+      }
+    } else if (value.kind !== "external-native" && value.kind !== "container") {
       return false;
-    }
-    if (value.url === undefined) {
-      return true;
     }
     if (typeof value.url !== "string") {
       return false;
     }
-    try {
-      normalizeSignalTransportUrl(value.url);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  if (
-    (value.kind !== "external-native" && value.kind !== "container") ||
-    typeof value.url !== "string"
-  ) {
-    return false;
-  }
-  try {
     normalizeSignalTransportUrl(value.url);
     return true;
   } catch {
@@ -425,6 +420,9 @@ function allocateMigratedManagedPorts(params: {
     if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
       continue;
     }
+    if (transport.kind === "managed-native" && transport.socketPath !== undefined) {
+      continue;
+    }
     if (transport.kind !== "managed-native") {
       const localPort = resolveLocalSignalTransportPort(transport.url);
       if (localPort !== undefined) {
@@ -446,7 +444,7 @@ function allocateMigratedManagedPorts(params: {
     if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
       return transport;
     }
-    if (transport.kind !== "managed-native") {
+    if (transport.kind !== "managed-native" || transport.socketPath !== undefined) {
       return transport;
     }
     const existingCanonical = isRecord(params.entries[index]?.transport);
@@ -572,6 +570,23 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   }
   const apiMode = signal.apiMode;
   const entries = [signal, ...Object.values(accounts).filter(isRecord)];
+  // A malformed explicit socket opt-in must never become an HTTP daemon during repair.
+  if (
+    entries.some(
+      (entry) =>
+        isRecord(entry.transport) &&
+        Object.hasOwn(entry.transport, "socketPath") &&
+        (entry.transport.kind !== "managed-native" || !isSignalTransportConfig(entry.transport)),
+    )
+  ) {
+    return {
+      config: cfg,
+      changes: [],
+      warnings: [
+        "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
+      ],
+    };
+  }
   const migrationEntries = entries.filter((_, index) => shouldMaterializeTransport(entries, index));
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),

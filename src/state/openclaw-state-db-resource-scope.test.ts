@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  getOpenClawDatabaseMaintenanceScope,
+  observeOpenClawDatabaseMaintenanceResource,
+} from "./openclaw-state-db-async-lifecycle.js";
 
 it("distinguishes runtime custody and preserves inherited schema maintenance", async () => {
   const runtime = createOpenClawDatabaseMaintenanceScope();
@@ -22,4 +26,60 @@ it("distinguishes runtime custody and preserves inherited schema maintenance", a
   );
   expect(delegate).toHaveBeenCalledOnce();
   await nested.close();
+});
+
+it("keeps nested authority reads in their resource scope without admitting effects or revoked work", async () => {
+  let revoked = false;
+  let childRevoked = false;
+  let nestedEffect = false;
+  const parent = createOpenClawDatabaseMaintenanceScope(undefined, () => {
+    const current = getOpenClawDatabaseMaintenanceScope();
+    current?.assertReadAdmission();
+    if (nestedEffect) {
+      current?.assertAdmission();
+    }
+    if (revoked) {
+      throw new Error("requester revoked");
+    }
+  });
+  const child = parent.run(() =>
+    createOpenClawDatabaseMaintenanceScope(undefined, () => {
+      if (childRevoked) {
+        throw new Error("child revoked");
+      }
+    }),
+  );
+  const resource = {};
+  const close = vi.fn();
+  try {
+    child.run(() => {
+      child.own(resource, "shared-handles", close);
+      observeOpenClawDatabaseMaintenanceResource(resource);
+      child.assertAgentSchemaMigration({
+        agentId: "main",
+        path: "/synthetic/agent.sqlite",
+        foundVersion: 1,
+        supportedVersion: 2,
+      });
+    });
+    nestedEffect = true;
+    expect(() => child.run(() => child.assertAdmission())).toThrow("cannot admit a nested effect");
+    nestedEffect = false;
+    expect(() => child.run(() => child.assertAdmission())).not.toThrow();
+    await expect(
+      child.run(async () => {
+        await Promise.resolve();
+        childRevoked = true;
+        parent.assertOwnerCurrent();
+      }),
+    ).rejects.toThrow("child revoked");
+    childRevoked = false;
+    revoked = true;
+    expect(() => child.run(() => child.assertReadAdmission())).toThrow("requester revoked");
+  } finally {
+    await child.close();
+    await parent.close();
+  }
+  expect(close).toHaveBeenCalledOnce();
+  expect(() => child.assertReadAdmission()).toThrow("resource scope is closed");
 });

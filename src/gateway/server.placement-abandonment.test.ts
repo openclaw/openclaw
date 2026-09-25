@@ -14,6 +14,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -99,6 +100,7 @@ it.for(cases)(
         if (!gatewayStopped || !childStopped) {
           throw new Error("Placement abandonment fixture still owns Gateway or child state");
         }
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await state.cleanup();
       });
@@ -132,6 +134,10 @@ it.for(cases)(
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       let offlineDeviceSeeded = false;
       let cleaningUp = false;
+      const offlineTransport = transport();
+      offlineTransport.hasCurrentRunner = () => false;
+      offlineTransport.listCurrentNodes = async () => [];
+      const offlineNodeLookup = vi.spyOn(offlineTransport, "getCurrentNode");
       const cleanupTransport = transport();
       const cleanupNodes = await cleanupTransport.listCurrentNodes();
       signal.throwIfAborted();
@@ -145,7 +151,7 @@ it.for(cases)(
         .mockImplementation((options) =>
           createTunnel({
             ...options,
-            getTransport: () => (cleaningUp ? cleanupTransport : options.getTransport()),
+            getTransport: () => (cleaningUp ? cleanupTransport : offlineTransport),
           }),
         );
       cleanups.push(() => tunnelFixture.mockRestore());
@@ -301,6 +307,7 @@ it.for(cases)(
             recoveryError: "Earlier workspace recovery failed",
           });
         }
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await start();
         database = openOpenClawStateDatabase();
@@ -325,7 +332,7 @@ it.for(cases)(
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
-      const environments = createWorkerEnvironmentStore({ database });
+      const environments = await createWorkerEnvironmentStore({ database });
       const retainedCleanup = environments.get(environmentId);
       expect(retainedCleanup).toMatchObject({
         state: "attached",
@@ -387,6 +394,7 @@ it.for(cases)(
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
+      expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();
     } catch (error) {
       bodyFailure = { error };

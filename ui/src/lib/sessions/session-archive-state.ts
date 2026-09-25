@@ -116,8 +116,23 @@ export function createSessionArchiveState(
         fields.archiveReason = current.archiveReason;
       }
     }
+    const entries = Object.entries(fields);
+    const values: Record<string, unknown> = row;
+    if (
+      entries.every(([name, value]) => {
+        const observed = provenance.fieldObservation(row, name);
+        return (
+          values[name] === value &&
+          Object.hasOwn(values, name) === (value !== undefined) &&
+          mergeSessionFieldObservations(observed, current.observation).observation === observed
+        );
+      })
+    ) {
+      // Preserve unrelated writer normalization through the existing self-merge owner.
+      return provenance.mergeRow(row, row);
+    }
     const offered = provenance.inheritRow({ ...row, ...fields }, row);
-    for (const [name, value] of Object.entries(fields)) {
+    for (const [name, value] of entries) {
       if (value === undefined) {
         Reflect.deleteProperty(offered, name);
       }

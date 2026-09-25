@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 // Covers CLI-backed attempt execution and session-binding persistence.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,13 +19,17 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -50,252 +55,30 @@ import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/ru
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
-import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
-  persistAcpTurnTranscript,
-  persistCliTurnTranscript,
-  runAgentAttempt as runAgentAttemptImpl,
-} from "./attempt-execution.js";
+  COMMAND_REPLY_EXPECTATION_CASES,
+  createSubagentAnnounceHandoffOptions,
+  createSubagentAnnounceSessionStore,
+  SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
+  type SubagentAnnounceDeliveryCase,
+} from "./attempt-execution.announce.test-support.js";
+import {
+  createCliImageCapabilityPlugins,
+  resetCliAttemptFixtureDatabases,
+} from "./attempt-execution.cli.test-support.js";
+import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import { resolveEmbeddedModelSelection } from "./model-selection.js";
+import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
 
 type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
-const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
-const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
-
-function createSubagentAnnounceHandoffOptions(params: {
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
-  targetSessionKey: string;
-  targetSessionId: string;
-  provider: string;
-  model: string;
-  disableMessageTool?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
-  runtimeToolsAllow?: string[];
-  trustedInternalHandoff?: boolean;
-}): Partial<RunAgentAttemptParams["opts"]> {
-  return {
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
-    ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-    ...(params.modelRun ? { modelRun: true } : {}),
-    ...(params.promptMode ? { promptMode: params.promptMode } : {}),
-    toolsAllow: params.runtimeToolsAllow ?? [...SUBAGENT_ANNOUNCE_REQUESTER_TOOLS],
-    ...(params.trustedInternalHandoff === false
-      ? {}
-      : {
-          trustedInternalHandoff: {
-            kind: "subagent-completion" as const,
-            sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-            sourceSessionId: "subagent-announce-child",
-            targetSessionKey: params.targetSessionKey,
-            targetSessionId: params.targetSessionId,
-            provider: params.provider,
-            model: params.model,
-          },
-        }),
-    inputProvenance: {
-      kind: "inter_session",
-      sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-      sourceChannel: "internal",
-      sourceTool: "subagent_announce",
-    },
-    internalEvents: [
-      {
-        type: "task_completion",
-        source: "subagent",
-        childSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-        childSessionId: "subagent-announce-child",
-        announceType: "subagent task",
-        taskLabel: "review",
-        status: "ok",
-        statusLabel: "completed",
-        result: "child output",
-        replyInstruction: "Relay this completion.",
-      },
-    ],
-  };
-}
-
-type SubagentAnnounceDeliveryCase = {
-  name: string;
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
-  disableMessageTool: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
-  inheritedToolAllow?: readonly string[];
-  inheritedToolDeny?: readonly string[];
-  runtimeToolsAllow?: string[];
-  operatorTools?: OpenClawConfig["tools"];
-  sandboxMode?: "off" | "non-main" | "all";
-  trustedInternalHandoff?: boolean;
-  expectedDisableTools: boolean;
-  expectedToolsAllow?: readonly string[];
-};
-
-const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
-  {
-    name: "automatic source replies",
-    sourceReplyDeliveryMode: "automatic" as const,
-    disableMessageTool: false,
-    expectedDisableTools: true,
-  },
-  {
-    name: "message-tool-only source replies",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "message-tool-only source replies requiring an explicit target",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
-    requireExplicitMessageTarget: true,
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an explicitly disabled message tool",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: true,
-    expectedDisableTools: true,
-  },
-  {
-    name: "a coding profile with a source-bound message grant",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    inheritedToolAllow: ["read", "exec", "sessions_spawn"],
-    operatorTools: { profile: "coding" },
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an operator allowlist with a source-bound message grant",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { allow: ["read", "exec"] },
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an inherited explicit message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    inheritedToolAllow: ["*"],
-    inheritedToolDeny: ["message"],
-    expectedDisableTools: true,
-  },
-  {
-    name: "a current operator message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { deny: ["message"] },
-    expectedDisableTools: true,
-  },
-  {
-    name: "an active sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "all",
-    expectedDisableTools: true,
-  },
-  {
-    name: "a non-main sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "non-main",
-    expectedDisableTools: true,
-  },
-  {
-    name: "an inactive sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "off",
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "a runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: ["read", "exec"],
-    expectedDisableTools: true,
-  },
-  {
-    name: "an empty runtime allowlist",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: [],
-    expectedDisableTools: true,
-  },
-  {
-    name: "an intersected runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),
-    expectedDisableTools: true,
-  },
-  {
-    name: "an authorized messaging tool group",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    inheritedToolAllow: ["group:messaging"],
-    runtimeToolsAllow: ["group:messaging"],
-    operatorTools: { profile: "coding" },
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an untrusted completion handoff",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    trustedInternalHandoff: false,
-    expectedDisableTools: true,
-  },
-];
-
-const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
-  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
-    if (testCase.name === "automatic source replies") {
-      return {
-        ...testCase,
-        expectedDisableTools: false,
-        expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      };
-    }
-    if (!testCase.expectedDisableTools) {
-      return {
-        ...testCase,
-        expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      };
-    }
-    return testCase;
-  }),
-  {
-    name: "a raw model run despite message-tool-only delivery",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    modelRun: true,
-    expectedDisableTools: true,
-  },
-  {
-    name: "prompt mode none despite message-tool-only delivery",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    promptMode: "none",
-    expectedDisableTools: true,
-  },
-];
-
 const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
   runAgentAttemptImpl(makeRunAgentAttemptParams(params));
 
@@ -721,29 +504,6 @@ describe("CLI attempt execution", () => {
     return runAgentAttempt({ workspaceDir: tmpDir, agentDir, storePath, ...overrides });
   }
 
-  function createSubagentAnnounceSessionStore(
-    requesterSessionKey: string,
-    requesterSessionEntry: SessionEntry,
-    envelope: Pick<SubagentAnnounceDeliveryCase, "inheritedToolAllow" | "inheritedToolDeny">,
-  ): Record<string, SessionEntry> {
-    return {
-      [requesterSessionKey]: requesterSessionEntry,
-      [SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY]: {
-        sessionId: "subagent-announce-child",
-        updatedAt: Date.now(),
-        spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-        subagentRole: "leaf",
-        subagentControlScope: "none",
-        inheritedToolPolicyVersion: 1,
-        inheritedToolAllow: [...(envelope.inheritedToolAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS)],
-        ...(envelope.inheritedToolDeny
-          ? { inheritedToolDeny: [...envelope.inheritedToolDeny] }
-          : {}),
-      },
-    };
-  }
-
   function readSessionStore(): Record<string, SessionEntry> {
     return Object.fromEntries(
       listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
@@ -755,25 +515,7 @@ describe("CLI attempt execution", () => {
     cliBackendsTesting.resetDepsForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
-    for (const database of listOpenClawAgentDatabasesForTest()) {
-      if (!database.path.startsWith(`${suiteRoot}${path.sep}`)) {
-        continue;
-      }
-      runOpenClawAgentWriteTransaction(
-        (fixture) => {
-          fixture.db.exec(`
-            DELETE FROM session_transcript_fts;
-            DELETE FROM session_nodes;
-            DELETE FROM conversations;
-            DELETE FROM auth_profile_store;
-            DELETE FROM auth_profile_state;
-            DELETE FROM cache_entries;
-          `);
-        },
-        database,
-        { operationLabel: "test.attempt-execution.reset" },
-      );
-    }
+    resetCliAttemptFixtureDatabases(suiteRoot);
     await fs.rm(tmpDir, { recursive: true, force: true });
     await fs.rm(storePath, { force: true });
     homeEnvSnapshot?.restore();
@@ -813,7 +555,7 @@ describe("CLI attempt execution", () => {
     const callback = embedded.onExecutionStarted;
 
     expect(callback).toBeTypeOf("function");
-    (callback as (info?: { lifecycleGeneration?: string }) => void)({
+    await (callback as (info?: { lifecycleGeneration?: string }) => void | Promise<void>)({
       lifecycleGeneration: "next-generation",
     });
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
@@ -1077,6 +819,11 @@ describe("CLI attempt execution", () => {
     sessionEntry: SessionEntry;
     sessionStore: Record<string, SessionEntry>;
     runId: string;
+    configuredSelection?: {
+      cfg: OpenClawConfig;
+      opts: RunAgentAttemptParams["opts"];
+      metadataSnapshot: PluginMetadataSnapshot;
+    };
   }) {
     const [
       { getAcpSessionManager },
@@ -1087,24 +834,31 @@ describe("CLI attempt execution", () => {
       import("../agent-command-execution-identity.js"),
       import("./run-embedded-attempt.js"),
     ]);
-    const cfg: OpenClawConfig = {
+    const cfg: OpenClawConfig = params.configuredSelection?.cfg ?? {
       agents: {
         defaults: { model: { primary: "claude-cli/sonnet", fallbacks: ["claude-cli/opus"] } },
       },
     };
-    const opts = {
-      message: "outer fallback",
-      modelFallbacksOverride: ["claude-cli/opus"],
-      bootstrapContextRunKind: params.suppression === "heartbeat" ? "heartbeat" : undefined,
-    } satisfies RunAgentAttemptParams["opts"];
+    const opts =
+      params.configuredSelection?.opts ??
+      ({
+        message: "outer fallback",
+        modelFallbacksOverride: ["claude-cli/opus"],
+        bootstrapContextRunKind: params.suppression === "heartbeat" ? "heartbeat" : undefined,
+      } satisfies RunAgentAttemptParams["opts"]);
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const manifestMetadataSnapshot = params.configuredSelection?.metadataSnapshot;
+    const modelManifestContext = { manifestPlugins: manifestMetadataSnapshot ?? [] };
+    const configuredThinkingCatalog = params.configuredSelection
+      ? buildConfiguredModelCatalog({ cfg, ...modelManifestContext })
+      : [];
     const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
       ...params,
       opts,
       cfg,
       body: opts.message,
       transcriptBody: opts.message,
-      configuredThinkingCatalog: [],
+      configuredThinkingCatalog,
       normalizedSpawned: {},
       agentCfg: undefined,
       thinkOverride: undefined,
@@ -1123,59 +877,85 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       cwd: undefined,
       agentDir,
-      pluginsEnabled: false,
-      manifestMetadataSnapshot: undefined,
-      modelManifestContext: { manifestPlugins: [] },
-      isSubagentLane: false,
+      pluginsEnabled: params.configuredSelection !== undefined,
+      manifestMetadataSnapshot,
+      modelManifestContext,
+      isSubagentLane: isSubagentSessionKey(params.sessionKey),
       acpManager: getAcpSessionManager(),
       acpResolution: null,
       runLease: undefined,
     };
+    const modelSelection: Parameters<typeof runEmbeddedAgentAttempt>[0]["modelSelection"] =
+      params.configuredSelection
+        ? await resolveEmbeddedModelSelection({
+            cfg,
+            opts,
+            sessionEntry: params.sessionEntry,
+            sessionStore: params.sessionStore,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionEntry.sessionId,
+            storePath,
+            sessionAgentId: "main",
+            workspaceDir: tmpDir,
+            pluginsEnabled: true,
+            manifestMetadataSnapshot,
+            modelManifestContext,
+            configuredThinkingCatalog,
+            requestedThinkLevel: "off",
+            isSubagentLane: isSubagentSessionKey(params.sessionKey),
+            suppressVisibleSessionEffects: false,
+            runContext: {},
+          })
+        : {
+            sessionEntry: params.sessionEntry,
+            provider: "claude-cli",
+            model: "sonnet",
+            requestedRouteResolution: "resolved",
+            defaultProvider: "claude-cli",
+            defaultModel: "sonnet",
+            configuredDefaultAuthProfileId: undefined,
+            providerForAuthProfileValidation: "claude-cli",
+            hasExplicitRunOverride: false,
+            storedProviderOverride: undefined,
+            storedModelOverride: undefined,
+            storedModelOverrideSource: undefined,
+            hasStoredAutoFallbackProvenance: false,
+            autoFallbackPrimaryProbe: undefined,
+            sessionEntryForAttempt: params.sessionEntry,
+            thinkingCatalog: [],
+            immutableThinkLevel: "off",
+            effectiveTurnThinkLevel: "off",
+            sessionFile: path.join(tmpDir, "session.jsonl"),
+          };
+    const selectedPrepared = {
+      ...prepared,
+      sessionEntry: modelSelection.sessionEntry,
+    };
     const admission = prepareAgentCommandExecutionIdentity({
       opts,
-      prepared,
+      prepared: selectedPrepared,
       ingress: { kind: "system", boundary: "cold-cli-fallback-test", state: "present" },
       lifecycleGeneration,
     });
     try {
       const attempt = await runEmbeddedAgentAttempt({
         preparedRunAdmission: admission,
-        prepared,
+        prepared: selectedPrepared,
         opts,
-        sessionEntry: params.sessionEntry,
+        sessionEntry: selectedPrepared.sessionEntry,
         lifecycleGeneration,
         onLifecycleGenerationChanged: () => {},
         suppressVisibleSessionEffects: false,
         preserveUserFacingSessionModelState: params.suppression === "preserved-state",
         trackInternalModelRunTarget: () => {},
         embeddedSessionState: {
-          sessionEntry: params.sessionEntry,
+          sessionEntry: selectedPrepared.sessionEntry,
           requestedThinkLevel: "off",
           resolvedVerboseLevel: undefined,
           skillsSnapshot: { prompt: "", skills: [] },
           runContext: {},
         },
-        modelSelection: {
-          sessionEntry: params.sessionEntry,
-          provider: "claude-cli",
-          model: "sonnet",
-          requestedRouteResolution: "resolved",
-          defaultProvider: "claude-cli",
-          defaultModel: "sonnet",
-          configuredDefaultAuthProfileId: undefined,
-          providerForAuthProfileValidation: "claude-cli",
-          hasExplicitRunOverride: false,
-          storedProviderOverride: undefined,
-          storedModelOverride: undefined,
-          storedModelOverrideSource: undefined,
-          hasStoredAutoFallbackProvenance: false,
-          autoFallbackPrimaryProbe: undefined,
-          sessionEntryForAttempt: params.sessionEntry,
-          thinkingCatalog: [],
-          immutableThinkLevel: "off",
-          effectiveTurnThinkLevel: "off",
-          sessionFile: path.join(tmpDir, "session.jsonl"),
-        },
+        modelSelection,
       });
       try {
         await attempt.fallbackTrajectoryRecorder?.flush();
@@ -1187,6 +967,170 @@ describe("CLI attempt execution", () => {
       await admission.finish();
     }
   }
+
+  it.each([
+    "run fallback override",
+    "configured fallback",
+    "implicit configured primary",
+    "live model switch",
+    "canonical override repair",
+  ] as const)("retains CLI image capability after a thinking-off %s", async (transition) => {
+    const canonicalRepair = transition === "canonical override repair";
+    const model = canonicalRepair ? "custom/child" : "claude-sonnet-4-6";
+    const modelRef = `anthropic/${model}`;
+    const implicitPrimary = transition === "implicit configured primary";
+    const sessionKey = implicitPrimary
+      ? "agent:main:discord:channel:vision-fixture"
+      : "agent:main:subagent:vision-fixture";
+    const sessionEntry = makeSessionEntry(
+      `vision-${transition}`,
+      implicitPrimary
+        ? { groupId: "vision-fixture", chatType: "group" }
+        : {
+            providerOverride: "custom",
+            modelOverride: "child",
+            modelOverrideSource: "auto",
+            modelOverrideRouteResolution: "resolved",
+            modelOverrideFallbackOriginProvider: "custom",
+            modelOverrideFallbackOriginModel: "child",
+          },
+    );
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        entries: { main: { workspace: tmpDir } },
+        defaults: {
+          model: {
+            primary: implicitPrimary || canonicalRepair ? modelRef : "custom/base",
+            ...(transition === "configured fallback" ? { fallbacks: [modelRef] } : {}),
+          },
+          modelPolicy: {
+            allow: canonicalRepair ? [modelRef] : ["custom/base", "custom/child", modelRef],
+          },
+          models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
+          thinkingDefault: "off",
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://custom.invalid/v1",
+            apiKey: "synthetic-fixture-key",
+            agentRuntime: { id: "openclaw" },
+            models: ["base", "child"].map((id): ModelDefinitionConfig => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 1024,
+            })),
+          },
+        },
+      },
+      ...(implicitPrimary
+        ? { channels: { modelByChannel: { discord: { "vision-fixture": "custom/child" } } } }
+        : {}),
+    };
+    const { metadataSnapshot, pluginRegistry } = createCliImageCapabilityPlugins(model);
+    setActivePluginRegistry(pluginRegistry);
+    const opts: RunAgentAttemptParams["opts"] = {
+      message: "Inspect the image after switching models",
+      thinking: "off",
+      toolsAllow: ["read"],
+      ...(transition === "run fallback override" ? { modelFallbacksOverride: [modelRef] } : {}),
+      ...(implicitPrimary ? { channel: "discord" } : {}),
+    };
+    const imagePath = path.join(tmpDir, "capability-pixel.png");
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+        "base64",
+      ),
+    );
+    await writeSessionStoreSeed(sessionStore);
+    if (!canonicalRepair) {
+      runEmbeddedAgentMock.mockRejectedValueOnce(
+        transition === "live model switch"
+          ? new LiveSessionModelSwitchError({ provider: "anthropic", model })
+          : new FailoverError("Configured child capacity", {
+              reason: "rate_limit",
+              provider: "custom",
+              model: "child",
+            }),
+      );
+    }
+    runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      expect(run).toMatchObject({
+        provider: "claude-cli",
+        modelProvider: "anthropic",
+        model,
+        thinkLevel: "off",
+      });
+      if (canonicalRepair) {
+        expect(run.modelRoutingProvenance).toMatchObject({ stage: "initial" });
+      }
+      const context = buildCliMcpGrantContext({
+        run,
+        config: cfg,
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: expectDefined(run.modelProvider, "CLI model provider"),
+        modelId: expectDefined(run.model, "CLI model"),
+        toolsAllow: ["read"],
+      });
+      const scoped = await resolveMcpLoopbackScopedTools({
+        cfg,
+        context,
+        authProfileStore: createAuthProfileStoreFixture({}),
+        authProfileStoreAgentDir: agentDir,
+      });
+      const read = expectDefined(
+        scoped.tools.find((tool) => tool.name === "read"),
+        "CLI MCP read tool",
+      );
+      const result = await read.execute("read-fallback-image", { path: imagePath });
+      expect(result.content.filter((part) => part.type === "image")).toHaveLength(1);
+      expect(context.modelHasVision).toBe(true);
+      return makeCliResult("Image inspected", "");
+    });
+    await withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot,
+        pluginRegistry,
+      },
+      async () => {
+        await runOuterCliFallback({
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          runId: `run-vision-${transition}`,
+          configuredSelection: { cfg, opts, metadataSnapshot },
+        });
+      },
+    );
+    if (canonicalRepair) {
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      const repaired = expectDefined(readSessionStore()[sessionKey], "repaired session");
+      for (const field of [
+        "providerOverride",
+        "modelOverride",
+        "modelOverrideSource",
+        "modelOverrideRouteResolution",
+        "modelOverrideFallbackOriginProvider",
+        "modelOverrideFallbackOriginModel",
+      ]) {
+        expect(repaired).not.toHaveProperty(field);
+      }
+    } else {
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(firstEmbeddedAgentArg()).toMatchObject({ provider: "custom", model: "child" });
+    }
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+  });
 
   it.each([
     "accepted",
@@ -3909,39 +3853,29 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
-  it.each([
-    {
-      name: "subagent lane",
-      lane: "subagent" as const,
-      sessionKey: "agent:main:subagent:cli-empty-completion",
-      expected: true,
+  it.each(COMMAND_REPLY_EXPECTATION_CASES)(
+    "classifies $name reply obligations consistently across embedded and CLI runs",
+    async ({ name, opts, expected }) => {
+      const embedded = await runOpenClawEmbeddedAttemptForTest({ opts, runId: name });
+      expect(resolveReplyExpectation(embedded)).toBe(expected);
+      const sessionKey = `agent:main:direct:${name}`;
+      const sessionEntry = makeSessionEntry(`session-${name}`);
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
+      await runStoredAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionEntry,
+        sessionKey,
+        body: "complete the task",
+        runId: `run-${name}-cli-reply`,
+        opts,
+        sessionStore,
+      });
+      expect(resolveReplyExpectation(firstRunCliAgentArg())).toBe(expected);
     },
-    {
-      name: "ordinary lane",
-      lane: undefined,
-      sessionKey: "agent:main:direct:cli-empty-completion",
-      expected: false,
-    },
-  ])("allows empty CLI output only for $name runs", async ({ lane, sessionKey, expected }) => {
-    const sessionEntry = makeSessionEntry(`session-${lane ?? "ordinary"}`);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
-
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "complete the task",
-      runId: `run-${lane ?? "ordinary"}-cli-empty-completion`,
-      opts: lane ? { lane } : {},
-      sessionStore,
-    });
-
-    expect(firstRunCliAgentArg().allowEmptyAssistantReplyAsSilent).toBe(expected);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
+  );
 
   it("forwards exact cron creator authority into embedded execution", async () => {
     const runId = "embedded-cron-creator-authority";

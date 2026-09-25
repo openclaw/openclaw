@@ -20,7 +20,7 @@ type GatewayLocalProbeTarget = {
 export type ConfiguredGatewayLocalProbe = {
   requestHttp(params: {
     host: string;
-    pathname: "/healthz" | "/readyz";
+    pathname: "/healthz" | "/readyz" | "/startupz";
     port: number;
     timeoutMs: number;
     signal?: AbortSignal;
@@ -37,7 +37,7 @@ export function normalizeGatewayHttpProbeHost(host: string): string {
 
 export async function requestGatewayLocalHttpProbe(params: {
   host: string;
-  pathname: "/healthz" | "/readyz";
+  pathname: "/healthz" | "/readyz" | "/startupz";
   port: number;
   timeoutMs: number;
   tlsFingerprints?: readonly string[];

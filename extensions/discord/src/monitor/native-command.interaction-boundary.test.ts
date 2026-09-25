@@ -15,6 +15,7 @@ import {
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import * as pickerPreferences from "./model-picker-preferences.js";
@@ -447,3 +448,5 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 });
+
+installDiscordIngressTestRuntime();

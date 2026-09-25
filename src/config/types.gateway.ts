@@ -2,76 +2,24 @@ import type { z } from "zod";
 // Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 import type { GatewayConfigSchema } from "./zod-schema.gateway.js";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
+import type { TalkSchema } from "./zod-schema.root-support.js";
 
 type GatewayConfigInput = NonNullable<z.input<typeof GatewayConfigSchema>>;
+type TalkConfigInput = z.input<typeof TalkSchema>;
 
 /** Gateway bind-address policy for local server startup. */
 export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 
 export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
-export type WideAreaDiscoveryConfig = {
-  /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
-  domain?: string;
-};
+export type DiscoveryConfig = NonNullable<z.input<typeof OpenClawSchemaShape.discovery>>;
+export type WideAreaDiscoveryConfig = NonNullable<DiscoveryConfig["wideArea"]>;
+export type MdnsDiscoveryConfig = NonNullable<DiscoveryConfig["mdns"]>;
+export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;
 
-/** mDNS/Bonjour metadata exposure level for local gateway discovery. */
-export type MdnsDiscoveryMode = "off" | "minimal" | "full";
-
-export type MdnsDiscoveryConfig = {
-  /**
-   * mDNS/Bonjour discovery broadcast mode (default: minimal).
-   * - off: disable mDNS entirely
-   * - minimal: omit cliPath/sshPort from TXT records
-   * - full: include cliPath/sshPort in TXT records
-   */
-  mode?: MdnsDiscoveryMode;
-};
-
-export type DiscoveryConfig = {
-  /** Wide-area DNS-SD discovery settings. */
-  wideArea?: WideAreaDiscoveryConfig;
-  /** Local mDNS/Bonjour discovery settings. */
-  mdns?: MdnsDiscoveryConfig;
-};
-
-export type TalkProviderConfig = {
-  /** Provider API key (optional; provider-specific env fallback may apply). */
-  apiKey?: SecretInput;
-  /** Provider-owned Talk config fields. */
-  [key: string]: unknown;
-};
-
-export type TalkRealtimeConfig = {
-  /** Active realtime voice provider. */
-  provider?: string;
-  /** Provider-specific realtime voice config keyed by provider id. */
-  providers?: Record<string, TalkProviderConfig>;
-  /** Provider model override for realtime sessions. */
-  model?: string;
-  /** Provider speaker voice name override for realtime sessions. */
-  speakerVoice?: string;
-  /** Provider speaker voice id override for realtime sessions. */
-  speakerVoiceId?: string;
-  /** Additional system instructions appended to realtime Talk sessions. */
-  instructions?: string;
-  /** Realtime execution mode. */
-  mode?: "realtime" | "stt-tts" | "transcription";
-  /** Byte/session transport. */
-  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
-  /** Voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive). */
-  vadThreshold?: number;
-  /** Milliseconds of silence before the current user turn is committed. */
-  silenceDurationMs?: number;
-  /** Milliseconds of audio retained before detected speech begins. */
-  prefixPaddingMs?: number;
-  /** Provider-specific realtime reasoning effort. */
-  reasoningEffort?: string;
-  /** Tool/agent strategy for realtime sessions. */
-  brain?: "agent-consult" | "direct-tools" | "none";
-  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
-  consultRouting?: "provider-direct" | "force-agent-consult";
-};
+export type TalkProviderConfig = NonNullable<TalkConfigInput["providers"]>[string];
+export type TalkRealtimeConfig = NonNullable<TalkConfigInput["realtime"]>;
 
 export type ResolvedTalkConfig = {
   /** Active Talk TTS provider resolved from the current config payload. */
@@ -80,35 +28,7 @@ export type ResolvedTalkConfig = {
   config: TalkProviderConfig;
 };
 
-export type TalkConfig = {
-  /** Agent that owns Talk sessions created without an agent-scoped session key. */
-  agentId?: string;
-  /** Active Talk TTS provider (for example "acme-speech"). */
-  provider?: string;
-  /** Provider-specific Talk config keyed by provider id. */
-  providers?: Record<string, TalkProviderConfig>;
-  /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
-  realtime?: TalkRealtimeConfig;
-  /** Optional thinking level override for the agent run behind Talk realtime consults. */
-  consultThinkingLevel?:
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | "ultra";
-  /** Optional fast mode override for the agent run behind Talk realtime consults. */
-  consultFastMode?: boolean;
-  /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */
-  speechLocale?: string;
-  /** Stop speaking when user starts talking (default: true). */
-  interruptOnSpeech?: boolean;
-  /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
-  silenceTimeoutMs?: number;
-};
+export type TalkConfig = TalkConfigInput;
 
 export type TalkConfigResponse = TalkConfig & {
   /** Canonical active Talk payload for clients. */
@@ -159,6 +79,11 @@ export type GatewayTailscaleConfig = Omit<
   /** @deprecated Migrate to `mode="funnel"`, which uses managed ingress. */
   preserveFunnel?: boolean;
 };
+
+/** Operator-provisioned private HTTPS wildcard portal ingress. */
+export type GatewayPortalIngressConfig = NonNullable<
+  NonNullable<GatewayConfigInput["portals"]>["ingress"]
+>;
 
 export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
@@ -230,7 +155,7 @@ export type GatewayNodesConfig = NonNullable<GatewayConfigInput["nodes"]> & {
 
 export type GatewayToolsConfig = NonNullable<GatewayConfigInput["tools"]>;
 
-/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
+/** Closed session, sandbox, agent, model, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];

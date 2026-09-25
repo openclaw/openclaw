@@ -9,7 +9,6 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   shouldRetrySilentErrorAssistantTurn,
-  shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -58,22 +57,6 @@ function makeIncompleteTurnParams(
   };
 }
 
-function makeSilentReplyParams(
-  attempt: EmbeddedRunAttemptResult,
-  overrides: Partial<
-    Omit<Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0], "attempt">
-  > = {},
-): Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0] {
-  return {
-    allowEmptyAssistantReplyAsSilent: true,
-    payloadCount: 0,
-    aborted: false,
-    timedOut: false,
-    attempt,
-    ...overrides,
-  };
-}
-
 describe("incomplete-turn error recovery", () => {
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
     const assistant = makeLastAssistant({
@@ -119,6 +102,7 @@ describe("incomplete-turn error recovery", () => {
       stopReason: "error",
       provider: "ollama",
       model: "glm-5.1:cloud",
+      content: [{ type: "text", text: "" }],
       usage: { input: 100, output: 12, totalTokens: 112 },
     });
     expect(
@@ -476,128 +460,5 @@ describe("incomplete-turn error recovery", () => {
     );
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("treats clean empty assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats reasoning-only assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "end_turn",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_silent_helper", type: "reasoning" }),
-          },
-        ],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it.each([true, false, undefined])(
-    "treats exact NO_REPLY as authored silence with allowEmptyAssistantReplyAsSilent=%s",
-    (allowEmptyAssistantReplyAsSilent) => {
-      const attempt = makeAttemptResult({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: makeLastAssistant({
-          content: [{ type: "text", text: "NO_REPLY" }],
-        }),
-      });
-
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent(
-          makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent }),
-        ),
-      ).toBe(true);
-    },
-  );
-
-  it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-  });
-
-  it("does not treat error or side-effect empty turns as silent", () => {
-    const errorAttempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-      }),
-    });
-    const silentErrorAttempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-    const sideEffectAttempt = makeAttemptResult({
-      assistantTexts: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["sent already"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-    const postToolEmptyAttempt = makeAttemptResult({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        api: "openai-completions",
-        provider: "stepfun",
-        model: "step-router-v1",
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(errorAttempt))).toBe(false);
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(silentErrorAttempt))).toBe(
-      false,
-    );
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(sideEffectAttempt))).toBe(
-      false,
-    );
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(postToolEmptyAttempt)),
-    ).toBe(false);
   });
 });

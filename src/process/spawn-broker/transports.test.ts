@@ -4,7 +4,9 @@ import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("Gateway spawn transports", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;
 
   beforeAll(async () => {

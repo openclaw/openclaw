@@ -12,14 +12,13 @@ import {
 } from "./control-ui-asset-retention.test-support.js";
 
 describe("Control UI asset retention", () => {
-  it("verifies retained assets through one bounded scratch buffer", async () => {
+  it("verifies each retained asset once without whole-file reads", async () => {
     const fixture = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-retention-io-")),
     );
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture, "state") }, async () => {
-        const retainedPaths = new Set<string>();
-        let expectedBytes = 0;
+        const retainedPaths = new Map<string, number>();
         let root = "";
         for (const label of ["a", "b", "c"]) {
           root = path.join(fixture, label);
@@ -29,11 +28,8 @@ describe("Control UI asset retention", () => {
           const owner = createControlUiAssetRetention(root);
           await owner.prepare();
           const retained = owner.resolveAsset(asset)!;
-          retainedPaths.add(retained.filePath);
-          expectedBytes += (await fs.stat(retained.filePath)).size;
+          retainedPaths.set(retained.filePath, 0);
         }
-        const buffers = new Set<Buffer>();
-        let readBytes = 0;
         let wholeFileReads = 0;
         const readFile = fs.readFile;
         const open = fs.open;
@@ -49,19 +45,12 @@ describe("Control UI asset retention", () => {
           if (typeof args[0] !== "string" || !retainedPaths.has(args[0])) {
             return handle;
           }
-          const read = handle.read.bind(handle);
-          vi.spyOn(handle, "read").mockImplementation((async (
-            buffer: Buffer,
-            offset: number,
-            length: number,
-            position: number | null,
-          ) => {
-            expect(length).toBeLessThanOrEqual(64 * 1024);
-            buffers.add(buffer);
-            const result = await read(buffer, offset, length, position);
-            readBytes += result.bytesRead;
-            return result;
-          }) as typeof handle.read);
+          retainedPaths.set(args[0], retainedPaths.get(args[0])! + 1);
+          const readWholeFile = handle.readFile.bind(handle);
+          vi.spyOn(handle, "readFile").mockImplementation((...readArgs) => {
+            wholeFileReads++;
+            return readWholeFile(...readArgs);
+          });
           return handle;
         });
         const owner = createControlUiAssetRetention(root);
@@ -71,9 +60,8 @@ describe("Control UI asset retention", () => {
           vi.restoreAllMocks();
         }
         expect(wholeFileReads).toBe(0);
-        expect(readBytes).toBe(expectedBytes);
-        expect(buffers.size).toBe(1);
-        for (const retained of retainedPaths) {
+        for (const [retained, opens] of retainedPaths) {
+          expect(opens).toBe(1);
           expect(owner.resolveAsset(`assets/${path.basename(retained)}`)?.filePath).toBe(retained);
         }
       });

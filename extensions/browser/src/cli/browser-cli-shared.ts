@@ -10,6 +10,7 @@ import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
+import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../browser/act-policy.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import {
@@ -136,19 +137,9 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-/** Parses a positive integer value for Browser CLI options. */
-export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
-/** Parses a non-negative integer value for Browser CLI options. */
-export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
 /** Parses and validates a required positive integer CLI option. */
 export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserPositiveIntegerValue(raw);
+  const parsed = parseStrictPositiveInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
@@ -157,7 +148,7 @@ export function parseBrowserPositiveIntegerOption(raw: string, flag: string): nu
 
 /** Parses and validates a required non-negative integer CLI option. */
 export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a non-negative integer.`);
   }
@@ -176,16 +167,17 @@ export async function callBrowserRequest<T>(
       : typeof opts.timeout === "string"
         ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
-  const timeout = resolvedTimeout === undefined ? opts.timeout : String(resolvedTimeout);
+  const budgets =
+    resolvedTimeout === undefined ? undefined : resolveBrowserProxyTimeouts(resolvedTimeout);
   const payload = await callGatewayFromCli(
     BROWSER_REQUEST_GATEWAY_METHOD,
-    { ...opts, timeout },
+    { ...opts, timeout: budgets ? String(budgets.gatewayTimeoutMs) : opts.timeout },
     {
       method: params.method,
       path: params.path,
       query: normalizeQuery(params.query),
       body: params.body,
-      timeoutMs: resolvedTimeout,
+      timeoutMs: budgets?.proxyTimeoutMs,
     },
     { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );

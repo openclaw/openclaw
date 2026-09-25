@@ -1,4 +1,3 @@
-// Discord plugin module implements api.messages behavior.
 import {
   Routes,
   type APIChannel,

@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -77,7 +78,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
+        runtimeCapabilityProfile: resolveConversationCapabilityProfile({}),
         toolsEnabled: true,
         toolsRaw,
       },

@@ -154,8 +154,9 @@ describe("Gateway Active Memory", () => {
                     type: "function_call",
                     id: "fc_memory_get",
                     call_id: "call_memory_get",
-                    name: "memory_get",
-                    arguments: JSON.stringify({ path: "MEMORY.md" }),
+                    // The default recall surface dispatches the configured memory tool through discovery.
+                    name: "tool_call",
+                    arguments: JSON.stringify({ id: "memory_get", args: { path: "MEMORY.md" } }),
                     status: "completed",
                   });
                 } else {

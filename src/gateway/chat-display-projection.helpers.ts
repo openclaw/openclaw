@@ -92,12 +92,14 @@ export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
 export function truncateChatHistoryText(
   text: string,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  preserveExactPrefix = false,
 ): { text: string; truncated: boolean } {
   if (text.length <= maxChars) {
     return { text, truncated: false };
   }
+  const prefix = truncateUtf16Safe(text, maxChars);
   return {
-    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
+    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }
@@ -179,7 +181,7 @@ export function hasAssistantDisplayableNonTextContent(message: unknown): boolean
 }
 
 export function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {
-  if (isProjectedSessionsSendForwardedMessage(message)) {
+  if (isProjectedForwardedMessage(message)) {
     return true;
   }
   if (!hasAssistantDisplayableNonTextContent(message)) {
@@ -225,24 +227,16 @@ export function isEmptyTextOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       return false;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string" || entry.text.trim().length > 0) {
+    if (entry.type !== "text" || typeof entry.text !== "string" || entry.text.trim().length > 0) {
       return false;
     }
   }
-  return sawText;
+  return true;
 }
 
 export function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {
@@ -269,18 +263,33 @@ export function extractProjectedText(content: unknown): string {
   return parts.join("\n");
 }
 
-export function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>): boolean {
+export function isCronRunMessage(message: Record<string, unknown>): boolean {
+  const provenance = normalizeInputProvenance(message.provenance);
+  return (
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "cron" &&
+    Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey)
+  );
+}
+
+export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
   if (message.role !== "user") {
     return false;
   }
   const provenance = normalizeInputProvenance(message.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  return (
+    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+    isCronRunMessage(message)
+  );
 }
 
-export function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
+export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {
   if (message.role !== "assistant") {
     return false;
   }
   const provenance = normalizeInputProvenance(message.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  return (
+    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+    isCronRunMessage(message)
+  );
 }

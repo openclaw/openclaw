@@ -40,7 +40,6 @@ import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -137,9 +136,7 @@ type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: n
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
-  comSpec?: string;
   nodeExecPath?: string;
-  npmExecPath?: string;
 };
 
 type TsdownBuildResult = ReturnType<ReturnType<typeof createTsdownOutputScanner>["finish"]> & {
@@ -452,24 +449,7 @@ function readForwardedOptions(args: string[], names: string[]) {
 const readForwardedOption = (args: string[], names: string[]) =>
   readForwardedOptions(args, names)[0];
 function readForwardedScalarOption(args: string[], names: string[], label: string) {
-  const values: string[] = [];
-  for (const [index, arg] of args.entries()) {
-    for (const name of names) {
-      if (arg === name) {
-        const value = args[index + 1];
-        if (!value || value.startsWith("-")) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      } else if (arg.startsWith(`${name}=`)) {
-        const value = arg.slice(name.length + 1);
-        if (!value) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      }
-    }
-  }
+  const values = readForwardedOptions(args, names);
   if (values.length > 1) {
     throw new Error(`tsdown build accepts only one ${label} value`);
   }
@@ -917,44 +897,45 @@ export function resolveTsdownBuildInvocation(
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
     : args;
+  const explicitConcurrency = args.some(
+    (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
+  );
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const runtimeOnly =
+    !args.includes("--dts") &&
+    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    filters.length > 0 &&
+    filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
+    // Native declaration children retain entire compiler graphs. Let tsdown own
+    // config admission so preparation and trace drainage cannot overlap unboundedly.
+    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? ["--concurrency", "1"]
+      : []),
     ...forwardedArgs,
   ];
-  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
-    return {
-      command: params.nodeExecPath ?? process.execPath,
-      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
-      options: {
-        stdio: tsdownStdio(),
-        shell: false,
-        windowsVerbatimArguments: undefined,
-        env,
-      },
-    };
-  }
-  const runner = resolvePnpmRunner({
-    env,
-    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform: (params.platform ?? process.platform) === "win32" ? "win32" : "linux",
-  });
+  // A package-manager bin shim can select a different runtime from PATH.
+  // Keep the compiler on the runtime chosen by its build owner.
   return {
-    command: runner.command,
-    args: runner.args,
+    command: params.nodeExecPath ?? process.execPath,
+    args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
     options: {
       stdio: tsdownStdio(),
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      shell: false,
+      windowsVerbatimArguments: undefined,
       env,
     },
   };
+}
+
+function tsdownDeclarationsEnabled(args: string[], env: NodeJS.ProcessEnv) {
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 function selectsMainConfig(args: string[]) {
@@ -1005,10 +986,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     const previous = forwardedArgs[index - 1];
     return !isFilterArg(arg) && !isFilterFlag(previous);
   });
-  const dtsArg = aiArgs.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
 
   const declarationEnv =

@@ -13,7 +13,6 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -41,10 +40,11 @@ import {
   createPluginRegistryConfigValidator,
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
-
-export type ValidateConfigWithPluginsResult =
-  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
-  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] };
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
+import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
@@ -80,6 +80,7 @@ export function validatePreparedConfigWithPlugins(
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
     onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
+    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
   const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
@@ -255,7 +256,6 @@ export function validatePreparedConfigWithPlugins(
 
   let mutatedConfig = config;
   let channelsCloned = false;
-  let pluginsCloned = false;
   let pluginEntriesCloned = false;
   let installedPluginRecordIds = opts.installedPluginRecordIds
     ? new Set([...opts.installedPluginRecordIds].map(normalizePluginId))
@@ -279,16 +279,10 @@ export function validatePreparedConfigWithPlugins(
 
   const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
     const normalizedChannelId = normalizePluginId(channelId);
-    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
-      return false;
-    }
-    const pluginConfig = config.plugins;
-    const matches = (pluginId: string) => normalizePluginId(pluginId) === normalizedChannelId;
     return (
-      (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) ||
-      (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) ||
-      (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) ||
-      ensureInstalledPluginRecordIds().has(normalizedChannelId)
+      Boolean(normalizedChannelId) &&
+      !ensureKnownIds().has(normalizedChannelId) &&
+      hasPluginEvidence(channelId)
     );
   };
 
@@ -315,9 +309,7 @@ export function validatePreparedConfigWithPlugins(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
-  const hasPluginEvidenceForWebSearchProvider = (
-    ...pluginOrProviderIds: readonly string[]
-  ): boolean => {
+  const hasPluginEvidence = (...pluginOrProviderIds: readonly string[]): boolean => {
     const candidateIds = new Set(
       pluginOrProviderIds.map(normalizePluginId).filter((id) => id.length > 0),
     );
@@ -363,7 +355,7 @@ export function validatePreparedConfigWithPlugins(
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
       };
-      if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
+      if (hasPluginEvidence(trimmed, installCatalogEntry.pluginId)) {
         warnings.push({
           ...issue,
           message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
@@ -386,7 +378,7 @@ export function validatePreparedConfigWithPlugins(
     const hasStaleEvidence = Boolean(
       normalizedProviderId &&
       !ensureKnownIds().has(normalizedProviderId) &&
-      hasPluginEvidenceForWebSearchProvider(trimmed),
+      hasPluginEvidence(trimmed),
     );
     if (hasStaleEvidence) {
       warnings.push({
@@ -455,14 +447,13 @@ export function validatePreparedConfigWithPlugins(
   };
 
   const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>): void => {
-    if (!pluginsCloned) {
-      mutatedConfig = { ...mutatedConfig, plugins: { ...mutatedConfig.plugins } };
-      pluginsCloned = true;
-    }
     if (!pluginEntriesCloned) {
-      mutatedConfig.plugins = {
-        ...mutatedConfig.plugins,
-        entries: { ...mutatedConfig.plugins?.entries },
+      mutatedConfig = {
+        ...mutatedConfig,
+        plugins: {
+          ...mutatedConfig.plugins,
+          entries: { ...mutatedConfig.plugins?.entries },
+        },
       };
       pluginEntriesCloned = true;
     }
@@ -520,14 +511,17 @@ export function validatePreparedConfigWithPlugins(
       // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
       // is untrusted manifest input and must use the isolation path instead of the
       // throwing validator reserved for repo-owned schemas.
-      const result = validatePluginSchemaValue({
-        origin: channelSchema.origin,
-        schema: channelSchema.schema,
-        cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for plugin schema validation;
-        // writeConfigFile persists persistCandidate, not validated.config (#61841)
-      });
+      const result = validatePreparedPluginSchemaValue(
+        {
+          origin: channelSchema.origin,
+          schema: channelSchema.schema,
+          cacheKey: `channel:${trimmed}`,
+          value: config.channels[trimmed],
+          applyDefaults: true, // Always apply defaults for plugin schema validation;
+          // writeConfigFile persists persistCandidate, not validated.config (#61841)
+        },
+        opts.schemaValidations,
+      );
       if (!result.ok) {
         for (const error of result.errors) {
           issues.push({
@@ -602,6 +596,7 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
+      schemaValidations: opts.schemaValidations,
       registry,
       knownIds: ensureKnownIds(),
       normalizedPlugins: ensureNormalizedPlugins(),

@@ -8,10 +8,8 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import type { AssistantMessage } from "../llm/types.js";
-import {
-  createWorkerTranscriptRuntime,
-  toAgentMessage,
-} from "./embedded-agent-transcript.runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
@@ -55,6 +53,52 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each(["accepted", "failed"] as const)(
+    "settles a submitted transcript commit after cancellation when it is %s",
+    async (outcome) => {
+      const started = createDeferredCore();
+      const completed = createDeferredCore();
+      const controller = new AbortController();
+      const commit = vi.fn(() => {
+        started.resolve();
+        return completed.promise;
+      });
+      const runtime = createWorkerTranscriptRuntime({ commit }, controller.signal);
+      runtime.onMessagePersisted(assistantWithReplay());
+      const first = runtime.withSessionWriteSettlement(() => undefined);
+      const firstOutcome = first.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await started.promise;
+      controller.abort();
+      runtime.onMessagePersisted(assistantWithReplay());
+      const final = runtime.withSessionWriteSettlement(() => undefined);
+      let settled = false;
+      const finalOutcome = final.then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      const failure = new Error("submitted commit outcome unavailable");
+      if (outcome === "accepted") {
+        completed.resolve();
+      } else {
+        completed.reject(failure);
+      }
+      expect(await firstOutcome).toBe(outcome === "accepted" ? undefined : failure);
+      expect(await finalOutcome).toBe(outcome === "accepted" ? undefined : failure);
+      expect(commit).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["computer", "browser"])(
     "preserves %s image bytes while retaining the non-image transcript budget",
     async (toolName) => {
@@ -89,8 +133,9 @@ describe("worker transcript provider replay", () => {
       );
     },
   );
-  it("projects and restores opaque replay state within frame limits", () => {
+  it.each(["text", "unsupported"])("projects %s content with opaque replay state", (type) => {
     const message = assistantWithReplay();
+    Object.assign(message.content[0]!, { type });
     Object.assign(message.providerReplay!, { providerScratch: "private" });
 
     const result = toWorkerTranscriptMessage(message, "transcript");
@@ -109,8 +154,7 @@ describe("worker transcript provider replay", () => {
         baseLeafId: null,
         messages: [projected],
       }),
-    ).toBe(true);
-    expect(toAgentMessage(projected)).toMatchObject({ providerReplay });
+    ).toBe(type === "text");
   });
 
   it("keeps replay above 48 KiB whole when the complete commit frame fits", () => {

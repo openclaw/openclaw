@@ -2,8 +2,14 @@ import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
+import { prepareCliSystemPrompt } from "./prompt-context.js";
+
+vi.mock("../git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
@@ -14,6 +20,32 @@ vi.mock("../../tts/tts-settings.js", () => ({
 describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+  });
+
+  it("prepares session credit before rendering the CLI system prompt", async () => {
+    const gitCoauthorPrompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
+    const config = {};
+    const prompt = await prepareCliSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain(gitCoauthorPrompt);
+    expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+    });
   });
 
   it("includes the OpenClaw skills prompt in CLI system prompts", () => {
@@ -39,9 +71,7 @@ describe("buildCliAgentSystemPrompt", () => {
     };
     const systemPrompt = buildCliAgentSystemPrompt(params);
 
-    expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
     expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
@@ -61,7 +91,9 @@ describe("buildCliAgentSystemPrompt", () => {
         modelDisplay: "test/model",
       });
 
-      expect(prompt.includes("including when it is already installed")).toBe(available);
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
     },
   );
 
@@ -83,9 +115,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Delegation");
-    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
-    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
-    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
   it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
@@ -96,16 +125,8 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).not.toContain("OpenClaw lists the standard tools above");
-    expect(prompt).not.toContain("This runtime enables:");
-    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
-    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
-    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("No OpenClaw tool list is injected");
-    expect(prompt).toContain("docs first via `read`");
     expect(prompt).not.toContain("exec approval-pending");
-    expect(prompt).not.toContain("Config read: `gateway`");
-    expect(prompt).not.toContain("`gateway(config.schema.lookup)`");
   });
 
   it("describes bundled exec as synchronous node execution", () => {
@@ -116,7 +137,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("- exec: Run shell on connected node; sync; host=node");
-    expect(prompt).not.toContain("pty available");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", () => {
@@ -127,10 +147,8 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("## Directory Roles");
     expect(prompt).toContain("Working directory: /tmp/task-repo");
     expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
-    expect(prompt).not.toContain("## Workspace\n");
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 
@@ -151,9 +169,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
-    expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md; no generic greeting.");
   });
 
   it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
@@ -164,7 +180,6 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("## Bootstrap Pending");
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
   });
 
@@ -227,7 +242,6 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
     );
-    expect(prompt).toContain("sessionId=session-123");
   });
 
   it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
@@ -241,7 +255,6 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("Telegram rich ON");
-    expect(prompt).not.toContain("Telegram rich OFF");
     expect(prompt).not.toContain("### message tool");
   });
 

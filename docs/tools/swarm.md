@@ -11,7 +11,7 @@ read_when:
 
 Swarm orchestrates many sub-agents from a
 [Code Mode](/tools/code-mode) script. It is enabled by default, with an explicit
-opt-out. Use normal JavaScript or TypeScript control flow such as `Promise.all`,
+opt-out. Use normal JavaScript control flow such as `Promise.all`,
 `while`, and `if` to fan out work, collect results, and make decisions.
 
 There is no graph DSL and no separate workflow format. The program is the
@@ -151,7 +151,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in the dashboard and sidebar. Use
+Use `label` for a recognizable child name in transcript activity and Tasks views. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -406,8 +406,11 @@ identify each child's status. Native clients present killed and timed-out childr
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row to
-inspect a collector child or open its transcript without losing the swarm hierarchy.
+Collector children appear in inline transcript activity rows, the chat **Tasks**
+tab, and the [Tasks page](/automation/tasks#control-ui). They have no session-sidebar
+rows. Their activity and unread failures still contribute to the parent’s sidebar
+ring and attention signals. Persistent spawned sessions and forks keep their
+normal sidebar nesting.
 
 Delete-mode collector children can clean up their child sessions immediately after
 completion while retaining their waitable results. Those collector records remain
@@ -448,7 +451,7 @@ calls. Both tools must be allowed by the effective tool policy. Default-on
 Swarm does not add them to a restrictive tool profile or allowlist.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
-`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.*`. It does not use OpenClaw's guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
 
@@ -592,7 +595,7 @@ of Swarm's current direction.
 
 ## Related
 
-- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Code Mode](/tools/code-mode) for JavaScript executors and activation rules
 - [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
 - [Tools overview](/tools) for tool profiles and policy routing

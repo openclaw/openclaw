@@ -63,7 +63,7 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.
 
-- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
@@ -79,6 +79,10 @@ such as `discord-archive` do not match `discord`.
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+Before probing channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
+
+The command reads existing local device authentication without creating an identity or persisting tokens returned by the Gateway, including when `--probe` is enabled.
 
 `channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
 
@@ -204,7 +208,7 @@ openclaw channels logout --channel whatsapp
 ```
 
 - `channels login` supports `--agent <id>`, `--account <id>`, and `--verbose`; `channels logout` supports `--agent <id>` and `--account <id>`.
-- `channels login` and `logout` can infer the channel when only one configured channel supports that action; with several, pass `--channel`.
+- `channels login` and `logout` can infer the channel when only one configured channel supports that action; with several, pass `--channel`. Only omitting `--channel` triggers inference: a blank value is rejected, so an unset shell variable cannot log out a channel you did not name.
 - `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup; with `gateway.mode: "remote"` the gateway error fails the command instead.
 - Logout reports whether the plugin cleared saved auth. If the plugin reports that the account is not logged out, the CLI warns that other credentials may still be active; this is not a claim that provider-side tokens were revoked.
 - Login and logout base config changes on the authored source, not runtime defaults. A logout with no credentials to clear does not rewrite config merely because runtime defaults were materialized; intentional plugin enablement or installation changes can still be saved.

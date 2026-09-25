@@ -662,7 +662,7 @@ describe("createMattermostInteractionHandler", () => {
     if (requestLog) {
       expect(requestLog).toEqual([
         { path: "/posts/post-1", method: undefined },
-        { path: "/posts/post-1", method: "PUT" },
+        { path: "/posts/post-1/patch", method: "PUT" },
       ]);
     }
   }

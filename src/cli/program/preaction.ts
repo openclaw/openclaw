@@ -24,16 +24,13 @@ import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
-function setProcessTitleForCommand(actionCommand: Command) {
-  let current: Command = actionCommand;
-  while (current.parent && current.parent.parent) {
-    current = current.parent;
+// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
+// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
+// operators can tell it apart from ordinary commands.
+function setProcessTitleForCommand() {
+  if (process.title !== CLI_NAME) {
+    process.title = CLI_NAME;
   }
-  const name = current.name();
-  if (!name || name === CLI_NAME) {
-    return;
-  }
-  process.title = `${CLI_NAME}-${name}`;
 }
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
@@ -135,7 +132,7 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand(actionCommand);
+    setProcessTitleForCommand();
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -150,13 +147,15 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const commandPath = getCommanderCommandPath(actionCommand);
-    const nativeUpdateCapabilityProbe =
+    const nativeUpdateExecutorCheck =
       commandPath.length === 2 &&
       (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
       ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.args.length === 0 &&
+      actionCommand.getOptionValueSource("updateExecutor") === "cli" &&
       actionCommand.getOptionValue("updateExecutor") === "check";
     const jsonOutputMode =
-      nativeUpdateCapabilityProbe || isCommandJsonOutputMode(actionCommand, argv);
+      nativeUpdateExecutorCheck || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const startupPolicy = resolveCliStartupPolicy({
@@ -165,6 +164,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       jsonOutputMode,
       machineOutputMode,
       env: process.env,
+      nativeUpdateExecutorCheck,
     });
     await applyCliExecutionStartupPresentation({
       startupPolicy,
@@ -181,7 +181,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     // Capability discovery precedes staged-update admission and must not migrate live state.
     if (
-      nativeUpdateCapabilityProbe ||
+      nativeUpdateExecutorCheck ||
       isGuidedConfigAction(actionCommand) ||
       isGuidedConfigCommandPath(commandPath)
     ) {

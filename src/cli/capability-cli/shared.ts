@@ -19,7 +19,7 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
@@ -133,7 +133,7 @@ export function providerHasGenericConfig(params: {
   const ttsProviders = (params.cfg.tts?.providers ?? {}) as Record<string, unknown>;
   const envVars =
     params.envVars ??
-    getProviderEnvVars(params.providerId, {
+    getProviderEnvVarsCore(params.providerId, {
       config: params.cfg,
       includeUntrustedWorkspacePlugins: false,
     });
@@ -208,11 +208,14 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+export function parseOptionalTimeoutMs(
+  raw: string | number | undefined,
+  flagName = "--timeout-ms",
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {

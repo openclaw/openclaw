@@ -552,7 +552,7 @@ extension OpenClawChatViewModel {
         logDiagnostic(
             "chat.ui send queued sessionKey=\(draft.session.key) "
                 + "localRunId=\(runId) pending=\(pendingRunCount)")
-        pendingToolCallsById = [:]
+        turnToolCallsById = [:]
         updateStreamingAssistantText(nil)
 
         // Production attachment sends enter the durable outbox above. Fixture,
@@ -741,7 +741,7 @@ extension OpenClawChatViewModel {
         let reusedRunAlreadyFinal = hasRecordedFinalMessage(runId: remoteRunId)
         if reusedRunAlreadyFinal {
             clearPendingRun(remoteRunId, hapticEvent: .runCompleted)
-            pendingToolCallsById = [:]
+            turnToolCallsById = [:]
             updateStreamingAssistantText(nil)
         } else {
             armPendingRunOwner(

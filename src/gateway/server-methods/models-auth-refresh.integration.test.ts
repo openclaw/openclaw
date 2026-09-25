@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/path-resolve.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfig, resolveConfigPath, resolveStateDir } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

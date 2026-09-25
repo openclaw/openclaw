@@ -24,6 +24,7 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import * as nativeModuleRequire from "./native-module-require.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -187,17 +188,19 @@ it("retains the creating cache generation when broad services initialize later",
     expect(getPluginCache()).toBe(owner);
     return runtime;
   });
-  const loadPluginModule = vi.fn(() => {
-    expect(getPluginCache()).toBe(owner);
-    return { createPluginRuntime };
-  });
-  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({ loadPluginModule }));
-  expect(loadPluginModule).not.toHaveBeenCalled();
+  const loadRuntimeModule = vi
+    .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+    .mockImplementation(() => {
+      expect(getPluginCache()).toBe(owner);
+      return { ok: true, moduleExport: { createPluginRuntime } };
+    });
+  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  expect(loadRuntimeModule).not.toHaveBeenCalled();
   withPluginCache(replacement, () => {
     expect(lazyRuntime.events).toBe(runtime.events);
     expect(lazyRuntime.events).toBe(runtime.events);
   });
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
+  expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 

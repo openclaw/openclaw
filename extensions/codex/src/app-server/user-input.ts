@@ -3,11 +3,30 @@ import type { CodexProjectedImageGroup } from "./context-engine-projection.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type { CodexUserInput } from "./protocol.js";
 
+function prependHistoryProvenance(
+  input: CodexUserInput[],
+  historyProvenancePrefix: string | undefined,
+): CodexUserInput[] {
+  if (!historyProvenancePrefix) {
+    return input;
+  }
+  const firstTextIndex = input.findIndex((item) => item.type === "text");
+  if (firstTextIndex === -1) {
+    return [{ type: "text", text: historyProvenancePrefix, text_elements: [] }, ...input];
+  }
+  return input.map((item, index) =>
+    index === firstTextIndex && item.type === "text"
+      ? { ...item, text: `${historyProvenancePrefix}${item.text}` }
+      : item,
+  );
+}
+
 /** Builds ordered Codex user input for both new turns and same-turn steering. */
 export function buildCodexUserInput(
   text: string | undefined,
   images?: EmbeddedRunAttemptParams["images"],
   contextImageGroups?: CodexProjectedImageGroup[],
+  historyProvenancePrefix?: string,
 ): CodexUserInput[] {
   if (text !== undefined && contextImageGroups?.length) {
     let offset = 0;
@@ -16,7 +35,10 @@ export function buildCodexUserInput(
       offset = group.end;
       return parts;
     });
-    return [...input, ...buildCodexUserInput(text.slice(offset), images)];
+    return prependHistoryProvenance(
+      [...input, ...buildCodexUserInput(text.slice(offset), images)],
+      historyProvenancePrefix,
+    );
   }
   const imageInputs = (images ?? []).map((image): CodexUserInput => {
     const imageUrl = sanitizeInlineImageDataUrl(`data:${image.mimeType};base64,${image.data}`);
@@ -30,5 +52,5 @@ export function buildCodexUserInput(
   });
   const textInput: CodexUserInput[] =
     text === undefined ? [] : [{ type: "text", text, text_elements: [] }];
-  return [...textInput, ...imageInputs];
+  return prependHistoryProvenance([...textInput, ...imageInputs], historyProvenancePrefix);
 }

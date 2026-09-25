@@ -7,6 +7,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -53,6 +54,17 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
+  it("uses the admitted source when current config routes the session to another store", async () => {
+    const runtime = setup();
+    const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
+
+    await expect(
+      runtime.executor(params(request(), vi.fn(), changedConfig)),
+    ).resolves.toMatchObject({ type: "done" });
+    expect(runtime.scope.authProfile).toBe(PROFILE);
+    expect(runtime.stream).toHaveBeenCalledOnce();
+  });
+
   it("returns bounded, redacted model preparation guidance", async () => {
     const runtime = setup();
     const secret = `worker-preparation-secret-${"a".repeat(48)}`;
@@ -71,6 +83,92 @@ describe("worker inference provider runtime", () => {
     expect(outcome.message.length).toBeLessThanOrEqual(256);
     expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
     expect(runtime.stream).not.toHaveBeenCalled();
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it.each(["insufficient_quota", "invalid_api_key", "context_length_exceeded"])(
+    "preserves a streamed provider failure identified only by %s",
+    async (errorCode) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "error",
+          reason: "error",
+          error: { ...finalMessage(), stopReason: "error", errorCode },
+        });
+        return stream;
+      });
+
+      const outcome = await runtime.executor(params(request(), vi.fn()));
+
+      expect(outcome).toMatchObject({ type: "error", reason: "provider-error", usage });
+      if (outcome.type !== "error") {
+        throw new Error("expected provider failure");
+      }
+      expect(parseApiErrorInfo(outcome.message)?.code).toBe(errorCode);
+      expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    },
+  );
+
+  it("bounds streamed provider details without losing structured failure facts", async () => {
+    const runtime = setup();
+    const secret = `stream-secret-${"a".repeat(48)}`;
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          ...finalMessage(),
+          stopReason: "error",
+          errorMessage: `429: Authorization: Bearer ${secret} ${'diagnostic " \\ '.repeat(80)}`,
+          errorCode: "rate_limit_exceeded",
+          errorType: "rate_limit_error",
+        },
+      });
+      return stream;
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    if (outcome.type !== "error") {
+      throw new Error("expected provider failure");
+    }
+    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+      httpCode: "429",
+      code: "rate_limit_exceeded",
+      type: "rate_limit_error",
+    });
+    expect(outcome.message).not.toContain(secret);
+    expect(outcome.message.length).toBeLessThanOrEqual(256);
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+  });
+
+  it.each([
+    { name: "short body", status: 503, code: "upstream_unavailable", detail: "Unavailable" },
+    { name: "long body", status: 429, code: "insufficient_quota", detail: "x".repeat(520) },
+    { name: "bigint diagnostic", status: 429, code: "insufficient_quota", detail: 1n },
+  ])("preserves a thrown provider HTTP failure ($name)", async ({ status, code, detail }) => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      throw Object.assign(new Error("Request rejected"), {
+        status,
+        body: { error: { detail, code, message: "Provider request rejected" } },
+      });
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    if (outcome.type !== "error") {
+      throw new Error("expected provider failure");
+    }
+    expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
+    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+      httpCode: String(status),
+      code,
+    });
+    expect(outcome.message).toContain("Provider request rejected");
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
@@ -199,6 +297,7 @@ describe("worker inference provider runtime", () => {
       }),
     );
     const prepared = runtime.prepareModel.mock.calls[0]?.[0];
+    expect(prepared?.signal).toBe(execution.signal);
     expect(runtime.scope).toEqual({
       agentDir: prepared?.agentDir,
       agentRuntime: "openclaw",
@@ -273,47 +372,58 @@ describe("worker inference provider runtime", () => {
     ]);
   });
 
-  it("projects provider terminal messages onto the closed worker schema", async () => {
-    const runtime = setup();
-    const message = finalMessage();
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
-      id: "cmp_worker_terminal",
-      data: "opaque-worker-terminal",
-      replayIndex: 1,
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
-      baseUrlHash: "ozhevd1smnk8s",
-      sessionHash: "171dzdv17gum5g",
-      authProfileHash: "oe8bkr3r8947",
-    };
-    Object.assign(message.content[0]!, { providerScratch: "text-state" });
-    Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
-    Object.assign(message.usage, { providerScratch: { requestId: "private" } });
-    Object.assign(message.providerReplay, { providerScratch: "private" });
-    runtime.stream.mockImplementation(() => providerStream(message));
+  it.each(["text", "unsupported"])(
+    "projects %s terminal content onto the closed worker schema",
+    async (type) => {
+      const runtime = setup();
+      const message = finalMessage();
+      message.providerReplay = {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_worker_terminal",
+        data: "opaque-worker-terminal",
+        replayIndex: 1,
+        provider: "openai",
+        api: "openai-responses",
+        model: MODEL,
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+      };
+      Object.assign(message.content[0]!, { type, providerScratch: "text-state" });
+      Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
+      Object.assign(message.usage, { providerScratch: { requestId: "private" } });
+      Object.assign(message.providerReplay, { providerScratch: "private" });
+      runtime.stream.mockImplementation(() => providerStream(message));
 
-    const outcome = await runtime.executor(params(request(), vi.fn()));
+      const outcome = await runtime.executor(params(request(), vi.fn()));
 
-    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
-    expect(JSON.stringify(outcome)).not.toContain("providerScratch");
-    expect(JSON.stringify(outcome)).not.toContain("partialArgs");
-    expect(JSON.stringify(outcome)).not.toContain("streamIndex");
-    expect(outcome).toMatchObject({
-      type: "done",
-      message: {
-        providerReplay: {
-          type: "openai-responses-compaction",
-          data: "opaque-worker-terminal",
-          replayIndex: 1,
-          sessionHash: "171dzdv17gum5g",
-          authProfileHash: "oe8bkr3r8947",
+      expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+      expect(JSON.stringify(outcome)).not.toContain("providerScratch");
+      expect(JSON.stringify(outcome)).not.toContain("partialArgs");
+      expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+      if (type === "unsupported") {
+        expect(outcome).toMatchObject({
+          type: "error",
+          reason: "provider-error",
+          message: '{"message":"Unsupported assistant terminal content"}',
+        });
+        return;
+      }
+      expect(outcome).toMatchObject({
+        type: "done",
+        message: {
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: "opaque-worker-terminal",
+            replayIndex: 1,
+            sessionHash: "171dzdv17gum5g",
+            authProfileHash: "oe8bkr3r8947",
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("returns a typed error when authoritative replay cannot be persisted", async () => {
     const runtime = setup();

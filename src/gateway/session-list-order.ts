@@ -2,14 +2,14 @@
 
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { sortAndLimitByWork } from "../shared/sort-and-limit.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 
 export type SessionEntryPair = [string, SessionEntry];
 
-function compareSessionEntryPairs(
+export function compareSessionEntryPairs(
   a: SessionEntryPair,
   b: SessionEntryPair,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",

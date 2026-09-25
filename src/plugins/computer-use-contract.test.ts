@@ -8,9 +8,11 @@ import {
   parseComputerActResult,
   parseComputerUseCapabilityDescriptor,
   parseScreenSnapshotResult,
+} from "./computer-use-contract.js";
+import {
   registerComputerUseProvider,
   type ComputerUseProvider,
-} from "./computer-use-contract.js";
+} from "./computer-use-registration.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 describe("Computer Use wire contract", () => {
@@ -331,7 +333,9 @@ describe("Computer Use provider registration", () => {
       );
       const snapshot = commands[0]!;
       const computer = commands[1]!;
+      expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
       await snapshot.handle(JSON.stringify({ executionId: firstId }));
+      expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
       const retiringFirst = computer.handle(
         JSON.stringify({ executionId: firstId, action: "__close_execution" }),
       );
@@ -361,6 +365,7 @@ describe("Computer Use provider registration", () => {
         });
         expect(openExecution).toHaveBeenCalledTimes(2);
         expect(close).toHaveBeenCalledTimes(2);
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
         expect(laterSettled).not.toHaveBeenCalled();
         expect(laterCloseSettled).not.toHaveBeenCalled();
         nextClose.resolve();
@@ -373,6 +378,10 @@ describe("Computer Use provider registration", () => {
         ]);
         expect(openExecution).toHaveBeenCalledTimes(3);
         expect(close).toHaveBeenCalledTimes(closeLater ? 3 : 2);
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([
+          !closeLater,
+          !closeLater,
+        ]);
       } finally {
         firstClose.resolve();
         nextClose.resolve();
@@ -380,6 +389,7 @@ describe("Computer Use provider registration", () => {
         await observedLater;
         await observedLaterClose;
         await snapshot.onDisconnect?.();
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
       }
     },
   );
@@ -428,14 +438,17 @@ describe("Computer Use provider registration", () => {
     const closeParams = JSON.stringify({ executionId, action: "__close_execution" });
     const opening = snapshot.handle(params);
     const closingFailedOpen = computer.handle(closeParams);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
     const failedOpenResults = Promise.allSettled([opening, closingFailedOpen]);
     failedOpening.reject(openFailure);
     expect(await failedOpenResults).toEqual([
       { status: "rejected", reason: openFailure },
       { status: "rejected", reason: openFailure },
     ]);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
     await expect(snapshot.handle(params)).resolves.toBe("snapshot");
     await expect(computer.handle(closeParams)).rejects.toBe(closeFailure);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
     await expect(
       computer.handle(JSON.stringify({ executionId: otherId, action: "__close_execution" })),
     ).resolves.toBe('{"ok":true}');
@@ -455,8 +468,15 @@ describe("Computer Use provider registration", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
-    const close = vi.fn(async () => {});
-    const stopWatching = vi.fn();
+    const executionRetiring = createDeferredCore();
+    const close = vi.fn(async () => await executionRetiring.promise);
+    const retiring = createDeferredCore();
+    const stopEntered = createDeferredCore();
+    const failure = new Error("availability stop failed");
+    const stopWatching = vi.fn(() => {
+      stopEntered.resolve();
+      return retiring.promise;
+    });
     const openExecution = vi.fn(async () => ({ snapshot, act, close }));
     const provider: ComputerUseProvider = {
       id: "fixture",
@@ -496,9 +516,34 @@ describe("Computer Use provider registration", () => {
     expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = commands[0]!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
-    expect(stopWatching).toHaveBeenCalledOnce();
+    const stopping = Promise.resolve(stop?.());
+    let settled = false;
+    const observed = stopping.then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await stopEntered.promise;
+      await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
+      retiring.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      executionRetiring.resolve();
+      expect(await observed).toBe(failure);
+      expect(stopWatching).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      executionRetiring.resolve();
+      await Promise.allSettled([stopping, observed]);
+    }
   });
 
   it("refuses a second mutating execution and closes only the exact host execution", async () => {

@@ -1,7 +1,7 @@
 // Control UI tests cover session pull request chips above the chat composer.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -10,6 +10,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
@@ -59,45 +60,6 @@ async function newBrowserContext(): Promise<BrowserContext> {
 async function closeContexts(): Promise<void> {
   await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
   openContexts.clear();
-}
-
-async function expectPullRequestChipOnTop(page: Page): Promise<void> {
-  const chip = page.locator(".chat-pr").first();
-  await chip.waitFor();
-  const uncovered = await chip.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    const sampleY = Math.min(bounds.bottom - 1, bounds.top + 10);
-    return [0.2, 0.5, 0.8].every((ratio) => {
-      const sampleX = bounds.left + bounds.width * ratio;
-      return document.elementFromPoint(sampleX, sampleY)?.closest(".chat-pr") === element;
-    });
-  });
-  expect(uncovered).toBe(true);
-}
-
-async function overlapLastTranscriptRowWithPullRequestChip(page: Page): Promise<void> {
-  const row = page.locator(".chat-virtual-row").last();
-  const chip = page.locator(".chat-pr").first();
-  await row.waitFor();
-  await chip.waitFor();
-  await page.evaluate(() => {
-    const rows = document.querySelectorAll<HTMLElement>(".chat-virtual-row");
-    const rowElement = rows.item(rows.length - 1);
-    const chipElement = document.querySelector<HTMLElement>(".chat-pr");
-    if (!rowElement || !chipElement) {
-      throw new Error("Expected a virtual transcript row and pull request chip");
-    }
-    const paintedRow = rowElement.querySelector<HTMLElement>(".chat-bubble") ?? rowElement;
-    const paintedBounds = paintedRow.getBoundingClientRect();
-    const chipBounds = chipElement.getBoundingClientRect();
-    rowElement.style.top = `${chipBounds.top + 24 - paintedBounds.bottom}px`;
-  });
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      }),
-  );
 }
 
 function publicationRequestKey(params: unknown): string {
@@ -190,11 +152,8 @@ describeControlUiE2e("session pull request chips", () => {
       },
     });
 
-    // Three detected PRs collapse to two chips; merged history hides first.
     const chips = page.locator(".chat-pr");
-    await expect.poll(() => chips.count()).toBe(2);
-    const showMore = page.locator(".chat-prs__more");
-    await expect.poll(() => showMore.textContent()).toContain("Show 1 more");
+    await expect.poll(() => chips.count()).toBe(3);
 
     const openChip = chips.first();
     await expect.poll(() => openChip.getAttribute("data-state")).toBe("open");
@@ -249,11 +208,6 @@ describeControlUiE2e("session pull request chips", () => {
     await page.keyboard.press("Space");
     await expect.poll(() => menu.isVisible()).toBe(false);
 
-    // Show more reveals the collapsed merged chip.
-    await showMore.click();
-    await expect.poll(() => chips.count()).toBe(3);
-    await expect.poll(() => showMore.count()).toBe(0);
-
     const mergedChip = chips.nth(1);
     await expect.poll(() => mergedChip.getAttribute("data-state")).toBe("merged");
     await expect
@@ -268,7 +222,7 @@ describeControlUiE2e("session pull request chips", () => {
       .last()
       .evaluate((node) => node.getBoundingClientRect().bottom);
     const composerTop = await page
-      .locator(".agent-chat__composer-shell")
+      .locator(".agent-chat__input")
       .evaluate((node) => node.getBoundingClientRect().top);
     expect(rowBottom).toBeLessThanOrEqual(composerTop);
     expect(composerTop - rowBottom).toBeLessThanOrEqual(8);
@@ -285,60 +239,80 @@ describeControlUiE2e("session pull request chips", () => {
   });
 
   it.each([
-    { label: "desktop", viewport: { width: 1180, height: 800 } },
-    { label: "mobile", viewport: { width: 393, height: 852 } },
-  ])(
-    "keeps the PR chip above an underlapping transcript on $label",
-    async ({ label, viewport }) => {
-      const context = await browser.newContext({
-        colorScheme: "light",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-      });
-      openContexts.add(context);
+    { width: 1440, theme: "light" },
+    { width: 1440, theme: "dark" },
+    { width: 390, theme: "light" },
+    { width: 390, theme: "dark" },
+  ] as const)(
+    "keeps every PR visible and actionable at $width in $theme",
+    async ({ width, theme }) => {
+      const context = await newBrowserContext();
       const page = await context.newPage();
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(
+        ({ key, mode }) => {
+          localStorage.setItem(key, JSON.stringify({ themeMode: mode }));
+        },
+        { key: controlUiBundledSettingsStorageKey(server.baseUrl), mode: theme },
+      );
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
-        historyMessages: Array.from({ length: 25 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `Transcript row ${index + 1}: paint-order regression fixture.`,
-          timestamp: index + 1,
-        })),
-        methodResponses: {
-          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-        },
+        historyMessages: [{ role: "assistant", content: "The changes are ready to inspect." }],
+        methodResponses: { [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true } },
       });
       await page.goto(`${server.baseUrl}chat`);
       const watchedKey = await waitForWatchedSessionKey(gateway);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          [watchedKey]: {
-            pullRequests: [
-              {
-                number: 123456,
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe(theme);
+      const stack = page.locator(".chat-prs");
+      const chips = stack.locator(".chat-pr");
+      for (const count of [1, 2, 3]) {
+        await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+          sessions: {
+            [watchedKey]: {
+              pullRequests: Array.from({ length: count }, (_, index) => ({
+                number: index + 1,
                 owner: "openclaw",
                 repo: "openclaw",
-                branch: "fix/pr-chip-stacking",
-                title: "Keep the PR chip above the transcript",
-                url: "https://github.com/openclaw/openclaw/pull/123456",
-                state: "open",
-              },
-            ],
-            rateLimited: false,
-            status: "ok",
+                branch: "fix/example",
+                title: `Example ${index + 1}`,
+                url: `https://github.com/openclaw/openclaw/pull/${index + 1}`,
+                state: "merged",
+              })),
+              rateLimited: false,
+              status: "ready",
+            },
           },
-        },
-      });
-
-      await overlapLastTranscriptRowWithPullRequestChip(page);
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(stackingProofDir, `${label}.png`),
         });
+        await expect.poll(() => chips.count()).toBe(count);
+        await page.locator(".chat").evaluate(finishElementAnimations);
+        const bounds = await stack.evaluate((element) => {
+          const composer = document.querySelector(".agent-chat__input")!;
+          const composerBounds = composer.getBoundingClientRect();
+          return {
+            composerTop: composerBounds.top,
+            composerLeft: composerBounds.left,
+            composerWidth: composerBounds.width,
+            rows: [...element.children].map((row) => {
+              const rect = row.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
+            }),
+          };
+        });
+        let previousBottom = 0;
+        for (const row of bounds.rows) {
+          expect(row.top).toBeGreaterThanOrEqual(previousBottom);
+          expect(row.bottom).toBeLessThanOrEqual(bounds.composerTop);
+          expect(row.left).toBeCloseTo(bounds.composerLeft, 1);
+          expect(row.width).toBeCloseTo(bounds.composerWidth, 1);
+          previousBottom = row.bottom;
+        }
+        for (const chip of await chips.all()) {
+          await chip.locator(".chat-pr__link").click({ trial: true });
+          await chip.locator(".chat-pr__dismiss").click({ trial: true });
+        }
       }
-      await expectPullRequestChipOnTop(page);
     },
   );
 
@@ -410,7 +384,7 @@ describeControlUiE2e("session pull request chips", () => {
         });
       }
       const rowBox = await page.locator(".chat-prs").boundingBox();
-      const composerBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+      const composerBox = await page.locator(".agent-chat__input").boundingBox();
       expect(rowBox && composerBox).toBeTruthy();
       if (rowBox && composerBox) {
         expect(Math.abs(rowBox.width - composerBox.width)).toBeLessThanOrEqual(1);

@@ -38,9 +38,15 @@ import {
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import {
+  expectRegisteredSubagentRun,
+  firstMockCall,
+  latestMockCall,
+} from "./subagent-spawn.test-helpers.js";
+import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -96,73 +102,6 @@ const hoisted = vi.hoisted(() => {
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
-  const createSessionAccessorMock = () => {
-    const resolveMockStorePath = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      storePath?: string;
-    }): string =>
-      scope.storePath ??
-      resolveStorePathMock(undefined, {
-        agentId: scope.agentId,
-        env: scope.env,
-      });
-    const loadMockEntry = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      sessionKey: string;
-      storePath?: string;
-    }): SessionEntry | undefined => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return store[scope.sessionKey];
-    };
-    const listMockEntries = (
-      scope: {
-        agentId?: string;
-        env?: NodeJS.ProcessEnv;
-        storePath?: string;
-      } = {},
-    ) => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-    };
-    return {
-      listSessionEntries: listMockEntries,
-      listSessionEntriesReadOnly: listMockEntries,
-      loadSessionEntry: loadMockEntry,
-      loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
-        await upsertSessionEntryMock(scope, patch),
-      resolveSessionTranscriptRuntimeTarget: async (scope: {
-        agentId: string;
-        sessionId: string;
-        sessionKey: string;
-        storePath?: string;
-        threadId?: string | number;
-      }) => {
-        const store = scope.storePath
-          ? (loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
-          : undefined;
-        const resolved = await resolveSessionTranscriptFileMock({
-          ...scope,
-          ...(store ? { sessionStore: store } : {}),
-          sessionEntry: loadMockEntry(scope),
-        });
-        return {
-          agentId: scope.agentId,
-          sessionFile: resolved.sessionFile,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        };
-      },
-    };
-  };
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -189,7 +128,6 @@ const hoisted = vi.hoisted(() => {
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
-    createSessionAccessorMock,
     state,
   };
 });
@@ -222,14 +160,28 @@ vi.mock("../../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
+vi.mock("../../../config/sessions/session-accessor.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).accessor;
+});
 
-vi.mock("../../../config/sessions.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
-}));
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).readRuntime;
+});
+
+vi.mock("../../../config/sessions.js", async () => {
+  const { isConfiguredSessionStoreAgentId, isPerAgentSessionStoreConfig } =
+    await import("../../../config/sessions/targets.js");
+  return {
+    ...(await import("../../../config/sessions/main-session.js")),
+    isConfiguredSessionStoreAgentId,
+    isPerAgentSessionStoreConfig,
+    resolveExistingAgentSessionStoreTargetsSync: () => [],
+    loadSessionStore: hoisted.loadSessionStoreMock,
+    resolveSessionStorePathCore: hoisted.resolveStorePathMock,
+  };
+});
 
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.cfg,
@@ -430,36 +382,6 @@ function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
-}
-
-function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
-function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
 }
 
 function latestBindingInput(): Record<string, unknown> {
@@ -928,16 +850,6 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
-    // ACP registration must leave taskRowOwnership absent so the registry
-    // falls back to best-effort task-row creation (subagent-registry-run-launch.ts).
-    // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
-    // if ACP ever claimed "required" here, a failed task-row write would abort
-    // an ACP run the registry never actually owns.
-    const registeredAcpRun = expectRecordFields(
-      firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
-      {},
-    );
-    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",
@@ -1032,7 +944,7 @@ describe("spawnAcpDirect", () => {
     const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     let capturedIdentity: AgentRuntimeIdentity | undefined;
-    setSubagentSpawnDepsForTest({
+    spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -1072,7 +984,7 @@ describe("spawnAcpDirect", () => {
       );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
-      setSubagentSpawnDepsForTest();
+      spawnTesting.setDepsForTest();
     }
   });
 
@@ -1369,70 +1281,48 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
-    replaceSpawnConfig({
-      ...createDefaultSpawnConfig(),
-      agents: {
-        list: [
-          {
-            id: "codex-acp",
-            runtime: {
-              type: "acp",
-              acp: { agent: "codex" },
-            },
-            subagents: {
-              model: "openai/gpt-5.5",
-              thinking: "low",
-            },
-          },
-        ],
-        defaults: {
-          subagents: {
-            allowAgents: ["codex"],
-            maxSpawnDepth: 2,
-          },
-        },
-      },
-    });
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex-acp",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({
-      agent: "codex",
-      runtimeOptions: {
-        model: "openai/gpt-5.5",
-        thinking: "low",
-      },
-    });
-  });
-
   it.each<{
     scenario: string;
     model?: string;
+    subagentModel?: string;
+    modelAliases?: Record<string, { alias: string }>;
     ownerThinking?: ThinkLevel;
     globalThinking?: ThinkLevel;
     modelThinking?: ThinkLevel;
     subagentThinking?: ThinkLevel;
     globalSubagentThinking?: ThinkLevel;
     thinking?: ThinkLevel;
+    expectedModel?: string;
     expectedThinking?: ThinkLevel;
     expectedThinkingExplicit?: boolean;
     backend?: string;
   }>([
     {
+      scenario: "qualified subagent model",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "openai/gpt-5.5",
+      subagentThinking: "low",
+      expectedModel: "openai/gpt-5.5",
+      expectedThinking: "low",
+    },
+    {
+      scenario: "bare subagent alias with the ACP agent's provider",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "opus",
+      modelAliases: { "claude-opus-4-6": { alias: "opus" } },
+      subagentThinking: "low",
+      expectedModel: "anthropic/claude-opus-4-6",
+      expectedThinking: "low",
+    },
+    {
       scenario: "configured primary model with global thinking default",
       model: "anthropic/claude-sonnet-4-6",
       globalThinking: "off",
       expectedThinking: "off",
+    },
+    {
+      scenario: "opaque harness primary without a native provider prefix",
+      model: "harness-only[context=272k,reasoning=medium,fast=false]",
     },
     {
       scenario: "owner default before model and global defaults",
@@ -1497,12 +1387,15 @@ describe("spawnAcpDirect", () => {
     "resolves configured ACP spawn model and thinking ($scenario)",
     async ({
       model,
+      subagentModel,
+      modelAliases,
       ownerThinking,
       globalThinking,
       modelThinking,
       subagentThinking,
       globalSubagentThinking,
       thinking,
+      expectedModel = model,
       expectedThinking,
       expectedThinkingExplicit,
       backend,
@@ -1519,14 +1412,18 @@ describe("spawnAcpDirect", () => {
               },
               model,
               thinkingDefault: ownerThinking,
-              subagents: { thinking: subagentThinking },
+              subagents: { model: subagentModel, thinking: subagentThinking },
             },
           ],
           defaults: {
+            model: "openai/gpt-5.4",
             thinkingDefault: globalThinking,
-            ...(model && modelThinking
-              ? { models: { [model]: { params: { thinking: modelThinking } } } }
-              : {}),
+            models: {
+              ...modelAliases,
+              ...(model && modelThinking
+                ? { [model]: { params: { thinking: modelThinking } } }
+                : {}),
+            },
             subagents: {
               allowAgents: ["codex"],
               maxSpawnDepth: 2,
@@ -1549,9 +1446,9 @@ describe("spawnAcpDirect", () => {
           ? { thinkingExplicit: expectedThinkingExplicit }
           : {}),
         runtimeOptions:
-          model || expectedThinking
+          expectedModel || expectedThinking
             ? {
-                ...(model ? { model } : {}),
+                ...(expectedModel ? { model: expectedModel } : {}),
                 ...(expectedThinking ? { thinking: expectedThinking } : {}),
               }
             : undefined,
@@ -2861,14 +2758,16 @@ describe("spawnAcpDirect", () => {
       accountId: "bot-alpha",
       to: `room:${boundRoom}`,
     });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRegisteredSubagentRun(
+      hoisted.registerSubagentRunMock,
+      {
         requesterOrigin: expect.objectContaining({
           channel: "matrix",
           accountId: "bot-alpha",
           to: `room:${boundRoom}`,
         }),
-      }),
+      },
+      { assertCurrent: undefined },
     );
   });
 
@@ -3515,13 +3414,15 @@ describe("spawnAcpDirect", () => {
         return;
       }
       expectAcceptedSpawn(result);
-      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expectRegisteredSubagentRun(
+        hoisted.registerSubagentRunMock,
+        {
           requesterSessionKey: "global",
           childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
           agentId: "codex",
           requesterAgentId: "research",
-        }),
+        },
+        { assertCurrent: undefined },
       );
     },
   );

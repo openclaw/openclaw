@@ -92,7 +92,7 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {
-      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+      writeStdout(JSON.stringify(value, undefined, space > 0 ? space : undefined));
     },
   };
 }
@@ -151,7 +151,7 @@ export function writeRuntimeJson(
     runtime.writeJson(value, space);
     return;
   }
-  runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  runtime.log(JSON.stringify(value, undefined, space > 0 ? space : undefined));
 }
 
 export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {

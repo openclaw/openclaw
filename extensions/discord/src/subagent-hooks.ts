@@ -1,4 +1,3 @@
-// Discord plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
@@ -6,10 +5,9 @@ import {
 import {
   listThreadBindingsBySessionKey,
   type ThreadBindingTargetKind,
-  unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
 import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
-export { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -48,8 +46,8 @@ function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind
   return undefined;
 }
 
-export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
-  unbindThreadBindingsBySessionKey({
+export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
     targetKind: normalizeThreadBindingTargetKind(event.targetKind),

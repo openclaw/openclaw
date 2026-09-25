@@ -7,6 +7,59 @@ import {
 } from "./accounts.js";
 
 describe("resolveSignalAccount", () => {
+  it("resolves socket paths without reserving a sibling HTTP port", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: { kind: "managed-native", socketPath: "/tmp/signal private/a#b.sock" },
+          accounts: { http: { transport: { kind: "managed-native" } } },
+        },
+      },
+    } as const;
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      socketPath: "/tmp/signal private/a#b.sock",
+      baseUrl: "unix:///tmp/signal%20private/a%23b.sock",
+    });
+    expect(resolveSignalAccount({ cfg, accountId: "http" }).baseUrl).toBe("http://127.0.0.1:8080");
+  });
+
+  it.each([true, false])(
+    "only rejects duplicate socket paths for enabled siblings (%s)",
+    (enabled) => {
+      const transport = {
+        kind: "managed-native",
+        socketPath: "/tmp/signal-private/daemon.sock",
+      } as const;
+      const resolve = () =>
+        resolveSignalAccount({
+          cfg: { channels: { signal: { transport, accounts: { work: { enabled, transport } } } } },
+        });
+      if (enabled) {
+        expect(resolve).toThrow("distinct socket path");
+      } else {
+        expect(resolve().baseUrl).toBe("unix:///tmp/signal-private/daemon.sock");
+      }
+    },
+  );
+
+  it("rejects ambiguous socket options at runtime even without schema validation", () => {
+    expect(() =>
+      resolveSignalAccount({
+        cfg: {
+          channels: {
+            signal: {
+              transport: {
+                kind: "managed-native",
+                socketPath: "/tmp/signal/daemon.sock",
+                httpPort: 8080,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("cannot be combined");
+  });
+
   it("resolves an omitted transport to managed native defaults", () => {
     const resolved = resolveSignalAccount({ cfg: { channels: { signal: {} } } as never });
 

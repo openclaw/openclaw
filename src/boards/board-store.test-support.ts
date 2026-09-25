@@ -5,10 +5,14 @@ import { onTestFinished } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { BoardStore, BoardSessionTarget } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -19,8 +23,10 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
   const seededSessions = new Set<string>();
 
   if (ownsStateDir) {
-    onTestFinished(() => {
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });
     });

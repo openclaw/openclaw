@@ -21,12 +21,8 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import {
-  cleanupAgedMemoryReindexTempFiles,
-  memoryDatabaseTableExists,
-  readMemoryDatabaseRevision,
-  removeMemoryDatabaseFiles,
-} from "./manager-db.js";
+import { memoryDatabaseTableExists, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
@@ -43,9 +39,10 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
-import { MEMORY_INDEX_META_KEY, type MemorySyncProgressState } from "./manager-sync-base.js";
+import type { MemorySyncProgressState } from "./manager-sync-base.js";
 import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
@@ -298,7 +295,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         needsRuntimeVersionReindex ||
         (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
         (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
-      const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
+      // Empty indexes still need source discovery when no watcher or session listener runs.
+      const isSearchBootstrap = params?.reason === "search-bootstrap";
+      const needsFullSessionReindex =
+        needsFullReindex || this.sessionsFullRetryDirty || isSearchBootstrap;
       if (indexIdentity.status !== "valid" && !needsFullReindex) {
         this.dirty = true;
         const sessionsDirty = markMemoryTargetArchiveFilesDirty({
@@ -358,39 +358,17 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return;
         }
 
-        const shouldSyncMemory = this.sources.has("memory") && this.dirty;
-        const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+        const shouldSyncMemory = this.sources.has("memory") && (this.dirty || isSearchBootstrap);
+        const shouldSyncSessions = this.shouldSyncSessions(params, needsFullSessionReindex);
 
-        if (this.shouldDeferSourceWideBatch()) {
-          await this.executeSourceWideSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
-            needsFullReindex,
-            needsFullSessionReindex,
-            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-            progress: progress ?? undefined,
-          });
-          if (shouldSyncSessions) {
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
-          }
-        } else {
-          if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-          }
-
-          if (shouldSyncSessions) {
-            await this.syncArchiveFiles({
-              needsFullReindex: needsFullSessionReindex,
-              targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-              progress: progress ?? undefined,
-            });
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
-          }
-        }
+        await this.executeSourceSync({
+          shouldSyncMemory,
+          shouldSyncSessions,
+          needsFullReindex,
+          needsFullSessionReindex,
+          targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
+          progress: progress ?? undefined,
+        });
       } catch (err) {
         this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
@@ -401,7 +379,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
         const activated = shouldFallback && (await this.activateFallbackProvider(reason));
         if (activated) {
-          if (needsFullReindex && !hasTargetArchiveFiles) {
+          if ((needsFullReindex || isSearchBootstrap) && !hasTargetArchiveFiles) {
+            needsFullReindex = true;
             this.beginSyncProviderGeneration();
             await this.runInPlaceReindex({
               reason: params?.reason ?? "fallback",
@@ -588,30 +567,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const shouldSyncMemory = shouldRetryMemoryOnFailure;
           const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
-          if (this.shouldDeferSourceWideBatch()) {
-            await this.executeSourceWideSync({
-              shouldSyncMemory,
-              shouldSyncSessions,
-              needsFullReindex: true,
-              progress: params.progress,
-            });
-            if (shouldSyncSessions) {
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          } else {
-            if (shouldSyncMemory) {
-              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-            }
-
-            if (shouldSyncSessions) {
-              await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          }
+          await this.executeSourceSync({
+            shouldSyncMemory,
+            shouldSyncSessions,
+            needsFullReindex: true,
+            progress: params.progress,
+          });
           if (!shouldSyncMemory) {
             this.clearMemoryRetryState();
           }

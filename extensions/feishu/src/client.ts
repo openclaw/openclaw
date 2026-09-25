@@ -1,15 +1,16 @@
-// Feishu plugin module implements client behavior.
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import { captureFeishuSendContext } from "./send-context.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -26,27 +27,6 @@ const FEISHU_WS_CONFIG = {
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
-
-type FeishuClientSdk = Pick<
-  typeof Lark,
-  | "AppType"
-  | "Client"
-  | "defaultHttpInstance"
-  | "Domain"
-  | "EventDispatcher"
-  | "LoggerLevel"
-  | "WSClient"
->;
-
-const feishuClientSdk: FeishuClientSdk = {
-  AppType: Lark.AppType,
-  Client: Lark.Client,
-  defaultHttpInstance: Lark.defaultHttpInstance,
-  Domain: Lark.Domain,
-  EventDispatcher: Lark.EventDispatcher,
-  LoggerLevel: Lark.LoggerLevel,
-  WSClient: Lark.WSClient,
-};
 
 function setRequestUserAgent<T>(req: T): T {
   const request = req as { headers?: unknown };
@@ -234,6 +214,12 @@ type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> &
     proxy?: false;
   };
 
+type FeishuRequestAuthority = {
+  assertCurrent: () => void;
+  assertRedirect: () => void;
+  beforeDispatch?: () => Promise<void>;
+};
+
 // Multi-account client cache
 const clientCache = new Map<
   string,
@@ -246,7 +232,7 @@ const clientCache = new Map<
 function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
   // The SDK parses :port in its domain as an API route parameter; custom origins
   // must stay in their account-owned HTTP transport until path expansion ends.
-  return domain === "lark" ? feishuClientSdk.Domain.Lark : feishuClientSdk.Domain.Feishu;
+  return domain === "lark" ? Lark.Domain.Lark : Lark.Domain.Feishu;
 }
 
 /**
@@ -260,7 +246,7 @@ function createFeishuHttpInstance(
   configuredDomain?: FeishuDomain,
 ): Lark.HttpInstance {
   // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
-  const base = feishuClientSdk.defaultHttpInstance as Lark.HttpInstance;
+  const base = Lark.defaultHttpInstance as Lark.HttpInstance;
   const customDomain =
     configuredDomain && configuredDomain !== "feishu" && configuredDomain !== "lark"
       ? new URL(configuredDomain)
@@ -283,14 +269,14 @@ function createFeishuHttpInstance(
 
   async function injectRequestOptions<D>(
     opts?: Lark.HttpRequestOptions<D>,
-    assertReadAuthority?: () => void,
+    authority?: FeishuRequestAuthority,
   ): Promise<FeishuProxyAwareHttpRequestOptions<D>> {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
     if (typeof next.url === "string") {
       next.url = resolveRequestUrl(next.url);
     }
     const agent = await getFeishuProxyAgent();
-    assertReadAuthority?.();
+    authority?.assertCurrent();
     if (agent) {
       if (isManagedProxyActive()) {
         next.httpAgent = agent;
@@ -301,16 +287,20 @@ function createFeishuHttpInstance(
       }
       next.proxy = false;
     }
-    if (assertReadAuthority) {
-      const defaults = feishuClientSdk.defaultHttpInstance.defaults;
+    if (authority?.beforeDispatch) {
+      await authority.beforeDispatch();
+      authority.assertCurrent();
+    }
+    if (authority) {
+      const defaults = Lark.defaultHttpInstance.defaults;
       const transforms =
         next.transformRequest === undefined ? defaults.transformRequest : next.transformRequest;
       // Axios runs these after its async interceptors, immediately before the
-      // HTTP adapter starts a read or JSON token request.
+      // HTTP adapter starts the request, including multipart uploads.
       next.transformRequest = [
         ...(Array.isArray(transforms) ? transforms : transforms ? [transforms] : []),
         (data: unknown) => {
-          assertReadAuthority();
+          authority.assertCurrent();
           return data;
         },
       ];
@@ -318,31 +308,99 @@ function createFeishuHttpInstance(
         next.beforeRedirect === undefined ? defaults.beforeRedirect : next.beforeRedirect;
       next.beforeRedirect = (...args) => {
         beforeRedirect?.(...args);
-        assertReadAuthority();
+        authority.assertRedirect();
       };
     }
     return next;
   }
 
   async function runRequest<T>(
-    request: (assertReadAuthority: (() => void) | undefined) => Promise<T>,
+    request: (authority: FeishuRequestAuthority | undefined) => Promise<T>,
+    sdkMethod?: "request",
   ): Promise<T> {
     const assertReadAuthority = captureChannelReadAuthority();
-    assertReadAuthority?.();
+    const sendContext = captureFeishuSendContext();
+    const recipientVisible = sdkMethod === "request" && sendContext?.recipientVisible === true;
+    const onPlatformSendDispatch = recipientVisible
+      ? sendContext.onPlatformSendDispatch
+      : undefined;
+    let fenceFailure: Error | undefined;
+    const assertCurrent = () => {
+      try {
+        assertReadAuthority?.();
+        sendContext?.assertCurrent();
+      } catch (cause) {
+        fenceFailure =
+          cause instanceof Error ? cause : new Error("Feishu request authority closed", { cause });
+        throw fenceFailure;
+      }
+    };
+    const authority: FeishuRequestAuthority | undefined =
+      assertReadAuthority || sendContext
+        ? {
+            assertCurrent,
+            assertRedirect: recipientVisible
+              ? () => {
+                  try {
+                    assertCurrent();
+                  } catch {
+                    // The first POST may have been accepted. A denied redirect
+                    // cannot prove the entire message was never dispatched.
+                    const failure = new Error(
+                      "Feishu sender retired before following a message redirect",
+                    );
+                    fenceFailure = failure;
+                    throw failure;
+                  }
+                }
+              : assertCurrent,
+            ...(onPlatformSendDispatch
+              ? {
+                  beforeDispatch: async () => {
+                    try {
+                      await onPlatformSendDispatch();
+                    } catch (cause) {
+                      // Still before the HTTP adapter: distinguish retirement
+                      // from a retryable failure to persist dispatch timing.
+                      assertCurrent();
+                      fenceFailure =
+                        cause instanceof PlatformMessageNotDispatchedError
+                          ? cause
+                          : new PlatformMessageNotDispatchedError(
+                              "Feishu dispatch refresh failed before request",
+                              { cause },
+                            );
+                      throw fenceFailure;
+                    }
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+    authority?.assertCurrent();
     try {
-      return await request(assertReadAuthority);
+      return await request(authority);
     } catch (error) {
       // SDK auth diagnostics include transport request data. Replace a closed
       // invocation's wrapped error before those diagnostics can expose credentials.
       assertReadAuthority?.();
+      // Axios/follow-redirects attach request data to errors. Return the safe
+      // error recorded at the failed fence, without rechecking a settled send.
+      if (fenceFailure) {
+        throw fenceFailure;
+      }
       throw error;
     }
   }
 
   return {
     request: (opts) =>
-      runRequest(async (assert) =>
-        base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), assert)),
+      // SDK message requests reach this seam after formatPayload/auth. Token
+      // requests use post below and must never mark a message as dispatched.
+      runRequest(
+        async (authority) =>
+          base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), authority)),
+        "request",
       ),
     get: (url, opts) =>
       runRequest(async (assert) =>
@@ -413,10 +471,10 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   }
 
   // Create new client with timeout-aware HTTP instance
-  const client = new feishuClientSdk.Client({
+  const client = new Lark.Client({
     appId,
     appSecret,
-    appType: feishuClientSdk.AppType.SelfBuild,
+    appType: Lark.AppType.SelfBuild,
     domain: resolveSdkDomain(domain),
     httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
@@ -431,7 +489,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
 }
 
 type FeishuWsClientCallbacks = Pick<
-  ConstructorParameters<typeof feishuClientSdk.WSClient>[0],
+  ConstructorParameters<typeof Lark.WSClient>[0],
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
@@ -451,13 +509,13 @@ export async function createFeishuWSClient(
 
   const agent = await getFeishuProxyAgent();
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
-  return new feishuClientSdk.WSClient({
+  return new Lark.WSClient({
     appId,
     appSecret,
     domain: resolveSdkDomain(domain),
     httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
     ...callbacks,
-    loggerLevel: feishuClientSdk.LoggerLevel.info,
+    loggerLevel: Lark.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
   });
@@ -467,7 +525,7 @@ export async function createFeishuWSClient(
  * Create an event dispatcher for an account.
  */
 export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
-  return new feishuClientSdk.EventDispatcher({
+  return new Lark.EventDispatcher({
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,
   });

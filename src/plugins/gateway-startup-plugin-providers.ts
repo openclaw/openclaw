@@ -10,10 +10,11 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import type {
@@ -252,6 +253,7 @@ type ConfiguredMemoryEmbeddingStartupProviderOwner = {
    * `models.providers.<id>.api` owner when a custom provider maps to one.
    */
   ownerIds: ReadonlySet<string>;
+  agentIds: Set<string>;
   source: MemoryEmbeddingStartupProviderSource;
 };
 
@@ -337,30 +339,41 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
   const defaultsBlock = config.memory?.search;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
-  const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
+  const addEffectiveProviders = (
+    override: Record<string, unknown> | undefined,
+    agentId?: string,
+  ) => {
     for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
       defaults,
       override,
     )) {
       const key = `${source}\0${configuredId}`;
-      if (byConfiguredIdAndSource.has(key)) {
+      const existing = byConfiguredIdAndSource.get(key);
+      if (existing) {
+        if (agentId) {
+          existing.agentIds.add(agentId);
+        }
         continue;
       }
       byConfiguredIdAndSource.set(key, {
         configuredId,
         ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
+        agentIds: new Set(agentId ? [agentId] : []),
         source,
       });
     }
   };
-  addEffectiveProviders(undefined);
   const agentEntries = listAgentEntries(config);
+  addEffectiveProviders(undefined, agentEntries.length === 0 ? listAgentIds(config)[0] : undefined);
   if (agentEntries.length === 0) {
     return [...byConfiguredIdAndSource.values()];
   }
   for (const agent of agentEntries) {
     const memory = isRecord(agent.memory) ? agent.memory : undefined;
-    addEffectiveProviders(isRecord(memory?.search) ? memory.search : undefined);
+    addEffectiveProviders(
+      isRecord(memory?.search) ? memory.search : undefined,
+      normalizeAgentId(agent.id),
+    );
   }
   return [...byConfiguredIdAndSource.values()];
 }

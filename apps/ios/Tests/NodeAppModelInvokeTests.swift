@@ -3615,21 +3615,69 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `chat dictation returns transcript and releases audio ownership`() async throws {
         let (talkMode, appModel) = makeTalkModel()
+        let preparation = TalkPreparationBarrier()
+        let reservation = TalkPreparationBarrier()
+        appModel.testTalkCapturePreparationHandler = { await preparation.suspendFirstPreparation() }
+        talkMode._test_setPTTReservedHandler { await reservation.suspendFirstPreparation() }
+        defer {
+            preparation.release()
+            reservation.release()
+            appModel.testTalkCapturePreparationHandler = nil
+            talkMode._test_setPTTReservedHandler(nil)
+            appModel.cancelChatDictation()
+        }
         let transcription = Task { @MainActor in
             try await appModel.transcribeChatDraft()
         }
-        await waitForTalkCondition { appModel.isChatDictationActive }
+        await preparation.waitUntilEntered()
+        #expect(appModel.chatDictationPhase == .starting)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
+        preparation.release()
+
+        await reservation.waitUntilEntered()
+        #expect(appModel.chatDictationPhase == .starting)
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        reservation.release()
+
+        await waitForTalkCondition { appModel.chatDictationPhase == .listening }
         await talkMode._test_handlePushToTalkTranscript(
             "draft from speech",
             isFinal: false,
             captureId: captureId)
+        talkMode.micLevel = 0.6
+        #expect(appModel.chatDictationPartialTranscript == "draft from speech")
+        #expect(appModel.chatDictationLevel == 0.6)
 
         appModel.finishChatDictation()
+        #expect(appModel.chatDictationPhase == .processing)
+        #expect(appModel.chatDictationLevel == 0)
         let transcript = try await transcription.value
         #expect(transcript == "draft from speech")
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `finishing chat dictation without speech explains how to retry`() async throws {
+        let (talkMode, appModel) = makeTalkModel()
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.chatDictationPhase == .listening }
+
+        appModel.finishChatDictation()
+
+        do {
+            _ = try await transcription.value
+            Issue.record("Empty dictation should explain how to retry")
+        } catch {
+            #expect(error.localizedDescription == "No speech heard. Try again and speak near the microphone.")
+        }
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
@@ -3646,6 +3694,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             captureId: captureId)
 
         appModel.cancelChatDictation()
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
 
         let transcript = try await transcription.value
         #expect(transcript == nil)
@@ -3697,10 +3748,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             transcriptionOnly: true)
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
 
+        await talkMode._test_handlePushToTalkTranscript(
+            "another capture's speech",
+            isFinal: false,
+            captureId: captureId)
+        talkMode.micLevel = 0.6
+
         let transcript = try await appModel.transcribeChatDraft()
 
         #expect(transcript == nil)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
         #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
         _ = talkMode.cancelPushToTalk(captureId: captureId)
         _ = await talkMode.awaitPushToTalkOnce(existing)
@@ -3827,6 +3887,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await barrier.waitUntilEntered()
         #expect(appModel.isChatDictationPending)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .starting)
 
         appModel.cancelChatDictation()
         #expect(appModel.isChatDictationPending)
@@ -3837,6 +3898,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         #expect(!appModel.isChatDictationPending)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }

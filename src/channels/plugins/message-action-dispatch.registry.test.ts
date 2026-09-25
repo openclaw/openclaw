@@ -198,7 +198,7 @@ describe("official plugin read-only authority", () => {
     const ctx = { ...fixture.context, action };
     // A client must still defer to the Gateway's attested live registration.
     expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
-    expect(prepareExternalMessageActionTargetForResolution(ctx).params).toBe(ctx.params);
+    expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
     expect(await dispatchChannelMessageAction(ctx)).toBe(receipt);
     expect(fixture.handleAction).toHaveBeenCalledOnce();
   });
@@ -211,6 +211,47 @@ describe("official plugin read-only authority", () => {
     expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
+  it("admits a dashboard read without promoting its origin or replacing native context", async () => {
+    const fixture = registerReader();
+    const assertDashboardReadCurrent = vi.fn();
+    const context = {
+      ...fixture.context,
+      requesterAccountId: undefined,
+      toolContext: undefined,
+      assertDirectAdapterHandoff: vi.fn(),
+    };
+    await expect(prepareExternalMessageActionTargetForResolution(context)).rejects.toThrow(
+      "requires current provider and account context",
+    );
+    const authorized = {
+      ...context,
+      messageActionAuthorization: { assertDashboardReadCurrent },
+    };
+    expect((await prepareExternalMessageActionTargetForResolution(authorized)).params).toBe(
+      context.params,
+    );
+    await expect(dispatchChannelMessageAction(authorized)).resolves.toBe(receipt);
+    expect(assertDashboardReadCurrent).toHaveBeenCalled();
+    expect(fixture.handleAction.mock.calls[0]?.[0].conversationReadOrigin).toBe("delegated");
+    expect(fixture.handleAction.mock.calls[0]?.[0]).not.toHaveProperty(
+      "messageActionAuthorization",
+    );
+    await expect(
+      dispatchChannelMessageAction({
+        ...authorized,
+        requesterAccountId: "another-account",
+        toolContext: fixture.context.toolContext,
+      }),
+    ).rejects.toThrow("requires current provider and account context");
+    assertDashboardReadCurrent.mockImplementation(() => {
+      throw new Error("dashboard admission closed");
+    });
+    await expect(dispatchChannelMessageAction(authorized)).rejects.toThrow(
+      "dashboard admission closed",
+    );
+    expect(fixture.handleAction).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { trusted: false },
     { fenced: false },
@@ -220,7 +261,7 @@ describe("official plugin read-only authority", () => {
     const fixture = registerReader(options);
     Object.assign(fixture.plugin, { trustedOfficialInstall: true });
     fixture.context.params.trustedOfficialInstall = true;
-    expect(() => prepareExternalMessageActionTargetForResolution(fixture.context)).toThrow(
+    await expect(prepareExternalMessageActionTargetForResolution(fixture.context)).rejects.toThrow(
       "exact current conversation",
     );
     await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
@@ -228,6 +269,14 @@ describe("official plugin read-only authority", () => {
     );
     expect(fixture.handleAction).not.toHaveBeenCalled();
     // Existing exact-current and direct-operator behavior is unchanged.
+    await expect(
+      dispatchChannelMessageAction({
+        ...fixture.context,
+        requesterAccountId: undefined,
+        toolContext: undefined,
+        messageActionAuthorization: { assertDashboardReadCurrent: vi.fn() },
+      }),
+    ).rejects.toThrow("exact current conversation");
     expect(
       await dispatchChannelMessageAction({
         ...fixture.context,
@@ -358,9 +407,9 @@ describe("official plugin read-only authority", () => {
       }
       const assertDenied = async () => {
         expect(shouldDeferExternalMessageActionTargetResolution(fixture.context)).toBe(true);
-        expect(() => prepareExternalMessageActionTargetForResolution(fixture.context)).toThrow(
-          "read authority is no longer active",
-        );
+        await expect(
+          prepareExternalMessageActionTargetForResolution(fixture.context),
+        ).rejects.toThrow("read authority is no longer active");
         await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
           "read authority is no longer active",
         );
@@ -442,7 +491,7 @@ describe("official plugin read-only authority", () => {
 
   it("does not refresh a captured route's authority after awaited target resolution", async () => {
     const first = registerReader();
-    const prepared = prepareExternalMessageActionTargetForResolution(first.context);
+    const prepared = await prepareExternalMessageActionTargetForResolution(first.context);
     let replacement: ReturnType<typeof registerReader> | undefined;
     await expect(
       withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {

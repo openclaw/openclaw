@@ -7,6 +7,7 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
+import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   announceCatalogSessionContinued,
@@ -35,7 +36,11 @@ import {
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
-import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  chatHistoryRequests,
+  getChatHistoryLoadState,
+  type InitialChatSnapshotHydration,
+} from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
@@ -62,6 +67,12 @@ import {
   saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
+import {
+  applyChatCacheSnapshot,
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+} from "./session-message-cache.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
@@ -77,6 +88,60 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   // Bumped only by viewport resets: ordinary loads must not invalidate an
   // in-flight prefetch or the join path could never consume it.
   private stagedOlderGeneration = 0;
+
+  protected hydrateStoredChatSnapshot(
+    state: NonNullable<ChatPaneHistory["state"]>,
+    sessionKey: string,
+  ): void {
+    const store = this.sessionSnapshotStore;
+    if (!store) {
+      return;
+    }
+    const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
+    const requests = chatHistoryRequests(state);
+    let startedBeforeReady = this.context.gateway.snapshot.phase !== "connected";
+    let readyAt: number | undefined;
+    const reading = store.read(cacheKey, (prewarmReadyAt) => {
+      startedBeforeReady = true;
+      readyAt = prewarmReadyAt;
+    });
+    const hydration: InitialChatSnapshotHydration = {
+      sessionKey,
+      startedBeforeReady,
+      readyAt,
+      promise: reading
+        .then((snapshot) => {
+          if (
+            !snapshot ||
+            requests.initialSnapshotHydration !== hydration ||
+            this.state !== state ||
+            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey ||
+            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+          ) {
+            return;
+          }
+          // The memory miss fences network replacement; the pane projection merges
+          // live and pending rows that arrived while IndexedDB was pending.
+          applyChatCacheSnapshot(state, snapshot);
+          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+          cacheChatSessionSnapshot(
+            state.chatMessagesBySession,
+            state,
+            { sessionKey },
+            mergedSnapshot,
+          );
+          state.requestUpdate?.();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+            delete requests.initialSnapshotHydration;
+          }
+        }),
+    };
+    requests.initialSnapshotHydration = hydration;
+  }
 
   protected readonly refreshHistory = () => {
     const state = this.state;
@@ -95,7 +160,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
-    void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false, startup });
+    void refreshPageChat(state, {
+      historyLoad: loadChatHistory(state, { startup, supersedeInFlight: true }),
+      awaitHistory: true,
+      scheduleScroll: false,
+      startup,
+    });
   };
 
   protected hasOlderMessages(): boolean {
@@ -224,17 +294,21 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
       ) {
         saveChatSessionScrollPosition(
-          this.presentationId,
+          this.paneId,
           renderedSessionKey,
           captureChatSessionScrollPosition(root),
         );
       }
     }
+    // A shrinking scroll range can move the native offset to its new end.
+    // Only movement away from that edge can imply reader intent without input.
     const hasUpwardIntent =
       !this.loadingOlder &&
+      !this.transcript.isMaintenanceScroll &&
       root !== null &&
       previousScrollTop !== null &&
       root.scrollTop < previousScrollTop &&
+      root.scrollTop < root.scrollHeight - root.clientHeight &&
       root.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
@@ -419,7 +493,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
           );
         }
-        const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
+        const nextMessages = prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
         publishChatSessionProjectionMessages(state, nextMessages);
         const appliedPagination: ChatHistoryPagination = exhausted

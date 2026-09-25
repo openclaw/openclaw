@@ -1,5 +1,6 @@
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromSentinel,
@@ -10,14 +11,19 @@ type Formatter = (value: string) => string;
 
 function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
   const report = renderUpdateRunReport(run);
+  const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const message =
-    run.status === "failed"
+    run.status === "failed" && !reconciled
       ? run.steps
           .filter((step) => step.status === "failed")
           .flatMap((step) => step.failureFacts ?? [])
           .find((fact) => fact.message)?.message
       : undefined;
-  return { ...report, headline: message ? `${report.headline} ${message}` : report.headline };
+  return {
+    ...report,
+    reconciled,
+    headline: message ? `${report.headline} ${message}` : report.headline,
+  };
 }
 
 function readReport(payload: RestartSentinelPayload) {
@@ -32,9 +38,14 @@ export function formatUpdateRestartStatusValue(
   if (!payload || payload.kind !== "update") {
     return null;
   }
-  const headline = readReport(payload).headline;
-  const format =
-    payload.status === "error" ? opts.warn : payload.status === "ok" ? opts.ok : opts.muted;
+  const { headline, reconciled } = readReport(payload);
+  const format = reconciled
+    ? opts.muted
+    : payload.status === "error"
+      ? opts.warn
+      : payload.status === "ok"
+        ? opts.ok
+        : opts.muted;
   return format ? format(headline) : headline;
 }
 

@@ -567,7 +567,7 @@ verify_elevation_code() (
   for arch in arm64 x86_64; do
     worker="$workers/$arch"
     node="$worker/bin/node"
-    entry="$worker/lib/node_modules/openclaw/dist/entry.js"
+    entry="$worker/lib/node_modules/openclaw/dist/mac-node-worker.js"
     metadata="$worker/lib/node_modules/openclaw/dist/build-info.json"
     [[ -f "$node" && -x "$node" && -f "$entry" && -r "$entry" && -f "$metadata" ]] ||
       fail "elevation worker payload is incomplete: $worker"

@@ -4,11 +4,12 @@ import type {
   AgentsListResult,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
@@ -16,6 +17,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
@@ -28,7 +30,6 @@ import type { SidebarSelection } from "./components/chat-sidebar.ts";
 import type { ChatExportResult } from "./export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
-import type { PendingChatAbort } from "./run-lifecycle.ts";
 import type { ChatScrollToEndOptions } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
@@ -78,9 +79,12 @@ export type ChatPageHost = ChatHost &
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelCatalogInitialized?: boolean;
     chatModelCatalogError: string | null;
     chatModelCatalogRefreshFailed?: boolean;
     chatModelCatalogPendingProviders?: readonly string[];
+    chatModelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+    chatModelCatalogRetired?: boolean;
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
@@ -95,7 +99,7 @@ export type ChatPageHost = ChatHost &
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
-    chatSubmitGuards: Map<string, Promise<void>>;
+    chatSubmitGuards: Set<string>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: ChatStreamSegment[];
     toolStreamById: Map<string, ToolStreamEntry>;
@@ -120,8 +124,11 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatReadingHistory: boolean;
     chatIsProgrammaticScroll?: () => boolean;
+    chatIsManualScroll?: () => boolean;
+    chatIsMaintenanceScroll?: () => boolean;
     chatScrollElement?: () => HTMLElement | null;
     chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
+    chatCancelScroll?: () => void;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarSelection | null;
     sidebarFocusPanelId: string;
@@ -157,7 +164,12 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: (slot: "detail" | "workspace") => void;
     updateSidebarLayout: (
       layout: SidebarLayout,
-      options?: { persist?: boolean; dashboardPresentation?: "personal"; geometryOnly?: boolean },
+      options?: {
+        persist?: boolean;
+        dashboardPresentation?: "personal";
+        geometryOnly?: boolean;
+        automaticResource?: "desktop" | "browser";
+      },
     ) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;

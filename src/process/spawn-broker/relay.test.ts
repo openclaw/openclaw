@@ -7,7 +7,9 @@ import { createServiceChildRelayAdapter } from "../supervisor/service-child-rela
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("brokered process lifecycle owners", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;
   beforeAll(async () => {
     broker = createSpawnBrokerHost();

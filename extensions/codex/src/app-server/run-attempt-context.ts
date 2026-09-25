@@ -12,20 +12,22 @@ import {
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
+  readMirroredSessionHistoryMessages,
+  renderCodexSkillsInstructions,
+} from "./attempt-context.js";
+import {
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
-  readMirroredSessionHistoryMessages,
-  renderCodexSkillsCollaborationInstructions,
-} from "./attempt-context.js";
+} from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -166,6 +168,8 @@ export async function prepareCodexAttemptContext(
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
+    agentWorkspaceDeveloperInstructions:
+      connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
     executionWorkspace: resolvedWorkspace,
     effectiveWorkspace,
@@ -177,12 +181,11 @@ export async function prepareCodexAttemptContext(
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
   });
-  // A thread keeps the bounded agent-workspace snapshot captured at creation.
-  // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
-    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
-      workspaceBootstrapContext.threadDeveloperInstructions)
-    : undefined;
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
+  const skillsInstructions = renderCodexSkillsInstructions({
+    attempt: runtimeParams,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+  });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -203,10 +206,6 @@ export async function prepareCodexAttemptContext(
         : undefined,
       watchedSessionsContext,
     });
-  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
-    attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
-  });
   const promptState = {
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
@@ -243,7 +242,7 @@ export async function prepareCodexAttemptContext(
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
-    skillsCollaborationInstructions,
+    skillsInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

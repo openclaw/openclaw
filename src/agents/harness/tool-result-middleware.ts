@@ -13,14 +13,8 @@ import type {
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
-import {
-  hasPluginMessagingDeliveryId,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
-import {
-  isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
-} from "../embedded-agent-messaging.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -374,13 +368,12 @@ function buildDeliveredMessagingFailureFallback(
   );
   const delivered = deliveryFact
     ? deliveryFact.status === "settled"
-    : isPluginNativeMessagingTool(event.toolName) &&
-      isDeliveredMessagingToolResult({
+    : isDeliveredMessagingToolResult({
         toolName: event.toolName,
         args: event.args,
         result,
-      }) &&
-      hasPluginMessagingDeliveryId(result);
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||
@@ -412,7 +405,6 @@ export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
@@ -420,18 +412,11 @@ export function createAgentToolResultMiddlewareRunner(
       runtime: ctx.runtime,
     });
   });
-  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
-    if (resolvedHandlers) {
-      return resolvedHandlers;
-    }
-    resolvedHandlers = await resolvedHandlersLoader.load();
-    return resolvedHandlers;
-  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      const handlersForRun = await resolveHandlers();
+      const handlersForRun = await (handlers ?? resolvedHandlersLoader.load());
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
       // dependency payloads on `details` (SDK objects with methods, cycles)

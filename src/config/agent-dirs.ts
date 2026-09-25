@@ -95,9 +95,13 @@ export function findDuplicateAgentDirs(
   cfg: OpenClawConfig,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
+  const agentIds = collectReferencedAgentIds(cfg);
+  if (agentIds.length < 2) {
+    return [];
+  }
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();
 
-  for (const agentId of collectReferencedAgentIds(cfg)) {
+  for (const agentId of agentIds) {
     const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
     const key = canonicalizeAgentDir(agentDir);
     const entry = byDir.get(key);

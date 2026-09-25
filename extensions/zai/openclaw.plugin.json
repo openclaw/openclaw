@@ -9,7 +9,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "zai-native",
-      "hosts": ["api.z.ai"]
+      "hosts": ["api.z.ai", "open.bigmodel.cn"]
     }
   ],
   "providerRequest": {
@@ -146,8 +146,8 @@
   "modelPricing": {
     "providers": {
       "zai": {
-        "openRouter": {
-          "provider": "z-ai"
+        "modelsDev": {
+          "provider": "zai"
         },
         "liteLLM": {
           "provider": "zai"

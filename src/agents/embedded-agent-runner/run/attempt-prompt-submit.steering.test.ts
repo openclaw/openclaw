@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,7 +17,6 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
-import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
 import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "../../subagents/registry/subagent-registry-state.js";
@@ -57,7 +59,7 @@ async function prepareSteering() {
     sessionKey: childSessionKey,
     defaultSessionId: "kept-child-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: childRunId,
     childSessionKey,
     requesterSessionKey,

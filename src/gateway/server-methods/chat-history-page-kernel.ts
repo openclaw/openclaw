@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readLegacyCompactionHistory } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
@@ -8,6 +9,7 @@ import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.c
 import {
   projectChatDisplayMessagesWithState,
   createChatHistoryRecoveryProjection,
+  type ChatDisplayProjectionOptions,
 } from "../chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -40,6 +42,7 @@ export type ChatHistoryPageKernelOptions = {
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
+  resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
   cliSessionId?: string;
   readCliTailPage?: (tail: ChatHistoryCliTail) => Promise<ChatHistoryPage>;
 };
@@ -92,19 +95,25 @@ function resolveChatHistoryActiveLeafEntryId(
   return resolveSessionTranscriptActiveLeafEntryId(readPage.transcriptEvents ?? []) ?? null;
 }
 
-/** Add checkpoint token metrics to the synthetic transcript compaction marker. */
+/** Preserve token metrics saved by pre-removal builds; new markers own their metrics. */
 export function enrichChatHistoryCompactionMarkers(
   messages: unknown[],
   entry: ChatHistoryPageParams["entry"],
 ): unknown[] {
-  const checkpoints = entry?.compactionCheckpoints;
-  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+  let checkpoints: ReturnType<typeof readLegacyCompactionHistory>;
+  try {
+    checkpoints = readLegacyCompactionHistory(entry);
+  } catch {
+    // Corrupt legacy metadata cannot hide readable transcript history.
+    return messages;
+  }
+  if (checkpoints.length === 0) {
     return messages;
   }
   const checkpointByEntryId = new Map(
     checkpoints.flatMap((checkpoint) => {
-      const entryId = checkpoint.postCompaction?.entryId;
-      return typeof entryId === "string" && entryId ? [[entryId, checkpoint] as const] : [];
+      const entryId = checkpoint.postCompaction.entryId;
+      return entryId ? [[entryId, checkpoint] as const] : [];
     }),
   );
   let changed = false;
@@ -120,10 +129,7 @@ export function enrichChatHistoryCompactionMarkers(
     }
     const tokensBefore = checkpoint.tokensBefore;
     const tokensAfter = checkpoint.tokensAfter;
-    if (
-      (typeof tokensBefore !== "number" || !Number.isFinite(tokensBefore)) &&
-      (typeof tokensAfter !== "number" || !Number.isFinite(tokensAfter))
-    ) {
+    if (tokensBefore === undefined && tokensAfter === undefined) {
       return message;
     }
     changed = true;
@@ -131,10 +137,8 @@ export function enrichChatHistoryCompactionMarkers(
       ...record,
       __openclaw: {
         ...metadata,
-        ...(typeof tokensBefore === "number" && Number.isFinite(tokensBefore)
-          ? { tokensBefore }
-          : {}),
-        ...(typeof tokensAfter === "number" && Number.isFinite(tokensAfter) ? { tokensAfter } : {}),
+        ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+        ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       },
     };
   });
@@ -308,8 +312,10 @@ export async function readChatHistoryPageKernel(
         );
     const project = (messages: unknown[]) =>
       projectChatDisplayMessagesWithState(messages, {
+        subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
+        resolveCronJobName: options.resolveCronJobName,
         ...(options.deferProfileDisplay
           ? {}
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
@@ -327,7 +333,10 @@ export async function readChatHistoryPageKernel(
       const recoveryContext = await readChatHistoryRecoveryContext({
         messages: localMessages,
         createRecovery: (messages) => {
-          const recovery = createChatHistoryRecoveryProjection({ maxChars: effectiveMaxChars });
+          const recovery = createChatHistoryRecoveryProjection({
+            maxChars: effectiveMaxChars,
+            subagentCoordination: options.readers.subagentCoordination,
+          });
           recovery.append(messages);
           return recovery;
         },
@@ -352,7 +361,10 @@ export async function readChatHistoryPageKernel(
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
-      return { messages: augmentChatHistoryWithCanvasBlocks(windowed) };
+      return {
+        messages: augmentChatHistoryWithCanvasBlocks(windowed),
+        ...(projection.activity.length ? { activity: projection.activity } : {}),
+      };
     }
     return {
       ...(isTailPage
@@ -366,6 +378,7 @@ export async function readChatHistoryPageKernel(
           }
         : {}),
       messages: augmentChatHistoryWithCanvasBlocks(windowed),
+      ...(projection.activity.length ? { activity: projection.activity } : {}),
       responseOffset: pageOffset,
       pagination: {
         offset: pageOffset,
@@ -401,6 +414,9 @@ export async function readChatHistoryPageKernel(
         ? { deltaCursor: readPage.deltaCursor }
         : {}),
       messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
+      ...(incrementalTail.projection.activity.length
+        ? { activity: incrementalTail.projection.activity }
+        : {}),
       pagination: {
         offset: offset ?? 0,
         totalMessages: readPage.totalMessages,

@@ -30,13 +30,18 @@ import {
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
+import {
+  buildReleasePublishDispatchCommand,
+  formatReleasePublishPreflight,
+  type PreflightReport,
+} from "../../scripts/lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
   buildTelegramArtifactInputs,
-  assertPlannedReleaseTagIsAbsent,
+  assertReleaseCandidateTag,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -62,6 +67,7 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
+import type { runReleasePublishPreflight } from "../../scripts/release-publish-preflight.mts";
 import { loadReleaseNotesForTag } from "../../scripts/render-github-release-notes.mts";
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -177,12 +183,19 @@ describe("release candidate checklist", () => {
     stopAtRegistry?: boolean;
     publicationRoute?: string;
     registryAdmission?: boolean;
+    preflightFailure?: boolean;
   }>([
     { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
     { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning", failedRegistry: "" },
     { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
     { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
-    { tag: "v2026.9.1-alpha.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
+    {
+      tag: "v2026.9.1-alpha.1",
+      pin: "2026.7.4",
+      expected: undefined,
+      failedRegistry: "",
+      distTag: "alpha",
+    },
     ...["npm", "clawhub"].map((failedRegistry) => ({
       tag: "v2026.9.1",
       pin: "2026.9.1",
@@ -251,8 +264,17 @@ describe("release candidate checklist", () => {
       distTag: "latest",
       publicationRoute: "prepared",
     },
+    ...["normal", "prepared"].map((publicationRoute) => ({
+      tag: "v2026.9.1",
+      pin: "2026.9.1",
+      expected: "passed",
+      launch: "npm-only" as const,
+      distTag: "latest",
+      publicationRoute,
+      preflightFailure: true,
+    })),
   ])(
-    "consumes producer-qualified registry plans ($failedRegistry; $registryAdmission) and records Android evidence for $tag ($pin; $launch; $distTag; $publicationRoute)",
+    "consumes producer-qualified registry plans ($failedRegistry; $registryAdmission) and records Android evidence for $tag ($pin; $launch; $distTag; $publicationRoute; preflight failure=$preflightFailure)",
     async ({
       tag,
       pin,
@@ -264,6 +286,7 @@ describe("release candidate checklist", () => {
       stopAtRegistry,
       publicationRoute = "normal",
       registryAdmission = false,
+      preflightFailure = false,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
@@ -271,6 +294,8 @@ describe("release candidate checklist", () => {
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
+      // A stable tag validated with the beta profile carries the operator's soak waiver.
+      const stableSoakWaiver = distTag === "latest" ? "operator-approved beta soak waiver" : "";
       // The target ref is authoritative even if another checkout has prepared a newer pin.
       writeFileSync(
         join(targetRoot, "apps/android/version.json"),
@@ -287,6 +312,7 @@ describe("release candidate checklist", () => {
         ...(!launch || launch === "skip" ? ["--skip-dispatch"] : []),
         ...(launch === "npm-only" ? ["--npm-preflight-run", "222"] : []),
         ...(distTag ? ["--npm-dist-tag", distTag] : []),
+        ...(stableSoakWaiver ? ["--stable-soak-waiver", stableSoakWaiver] : []),
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
@@ -335,6 +361,64 @@ describe("release candidate checklist", () => {
         dependencyTarballs: [],
         pluginSdkApi: {},
       };
+      const fullManifest = {
+        workflowName: "Full Release Validation",
+        targetSha,
+        releaseProfile: options.releaseProfile,
+      };
+      const authenticatedEvidence = {
+        source: "direct",
+        publicationAdmission: registryAdmission
+          ? {
+              observations: {
+                plans: {
+                  npm: { all: [{ packageName: "@openclaw/example", version: "2026.9.1" }] },
+                  clawhub: { all: [] },
+                },
+              },
+            }
+          : null,
+      };
+      const preflightRows: PreflightReport["rows"] = [
+        {
+          id: "npm.bootstrap",
+          status: preflightFailure ? "FAIL" : "PASS",
+          message: preflightFailure ? "Bootstrap approval is missing." : "Bootstrap is ready.",
+          remediation: preflightFailure ? "Obtain the exact bootstrap approval." : "",
+        },
+      ];
+      const preflight = vi.fn<typeof runReleasePublishPreflight>(async (input, context) => {
+        stages.push("publish-preflight");
+        expect(context?.manifest).toBe(fullManifest);
+        expect(context?.npmManifest).toBe(npmManifest);
+        expect(context?.fullValidationEvidence).toBe(authenticatedEvidence);
+        expect(context).toMatchObject({
+          manifestPath: join(
+            options.outputDir,
+            "full-release-validation/full-release-validation-manifest.json",
+          ),
+          npmManifestPath: join(options.outputDir, "npm-preflight/preflight-manifest.json"),
+          targetSha,
+          toolingSha,
+          allowPlannedTag: true,
+          run: { headSha: targetSha, runAttempt: 1 },
+          npmPreflightRun: { headSha: targetSha, runAttempt: 1 },
+        });
+        expect(input).toMatchObject({
+          fullReleaseValidationRunId: "111",
+          fullReleaseValidationRunAttempt: 1,
+          preflightRunId: "222",
+          tag,
+          publicationRoute,
+          stableSoakWaiver,
+          workflowRef: options.publishWorkflowRef || options.workflowRef,
+        });
+        return {
+          rows: preflightRows,
+          command: buildReleasePublishDispatchCommand(input, "1", input.workflowRef, "777"),
+          failed: preflightFailure,
+        };
+      });
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
       const dispatches: Record<string, string>[] = [];
       const completion = runInNewContext(
@@ -356,7 +440,7 @@ describe("release candidate checklist", () => {
             workflowSha: toolingSha,
           }),
           gitTrackedStatus: () => "",
-          assertPlannedReleaseTagIsAbsent: () => {},
+          assertReleaseCandidateTag: () => {},
           validateTrustedToolingPin,
           validateCandidateCheckout,
           buildReleaseCandidateState,
@@ -406,25 +490,15 @@ describe("release candidate checklist", () => {
               ? JSON.parse(readFileSync(file, "utf8"))
               : file.endsWith("preflight-manifest.json")
                 ? npmManifest
-                : {},
+                : file.endsWith("full-release-validation-manifest.json")
+                  ? fullManifest
+                  : {},
           authenticateFullReleaseValidationEvidence: async () => {
             stages.push("authenticate");
             if (registryAdmission && failedRegistry) {
               throw new Error(`${failedRegistry} registry unavailable`);
             }
-            return {
-              source: "direct",
-              publicationAdmission: registryAdmission
-                ? {
-                    observations: {
-                      plans: {
-                        npm: { all: [{ packageName: "@openclaw/example", version: "2026.9.1" }] },
-                        clawhub: { all: [] },
-                      },
-                    },
-                  }
-                : null,
-            };
+            return authenticatedEvidence;
           },
           downloadResolvedArtifact: async () => ({ name: "npm-preflight" }),
           verifyNpmPreflightProducer: () => ({}),
@@ -432,7 +506,7 @@ describe("release candidate checklist", () => {
           sha256: () => "fixture-digest",
           validatePreflightManifest: () => {},
           validatePluginSdkApiReleaseEvidence: () => ({ status: "passed" }),
-          validateFullManifest: () => {},
+          validateFullManifest: () => stages.push("evidence-validated"),
           preflightCorePackageTarballs,
           preflightDependencyTarballs,
           runParallelsIfNeeded: async () => ({ status: "skipped" }),
@@ -451,6 +525,8 @@ describe("release candidate checklist", () => {
             return { all: [] };
           },
           buildPublishCommand: publishCommand,
+          runReleasePublishPreflight: preflight,
+          formatReleasePublishPreflight,
           formatJsonValue: String,
           formatShippedBaselineExclusions: () => "",
           formatPluginPlanSummary: () => [],
@@ -494,6 +570,7 @@ describe("release candidate checklist", () => {
           expect(waitedRuns).toEqual(launch === "saved-full" ? ["333", "444"] : ["111", "222"]);
         }
         expect(publishCommand).not.toHaveBeenCalled();
+        expect(preflight).not.toHaveBeenCalled();
         expect(existsSync(join(options.outputDir, "release-candidate-evidence.json"))).toBe(false);
         expect(existsSync(join(options.outputDir, "release-candidate-evidence.md"))).toBe(false);
         expect(log.mock.calls.flat().join("\n")).not.toContain("publication / recovery command:");
@@ -506,11 +583,16 @@ describe("release candidate checklist", () => {
       if (failedRegistry) {
         await expect(completion).rejects.toThrow(`${failedRegistry} registry unavailable`);
         expect(stages).toEqual(["dispatch", "wait", "wait", "authenticate"]);
+        expect(preflight).not.toHaveBeenCalled();
         expect(existsSync(join(options.outputDir, "release-candidate-evidence.json"))).toBe(false);
         expect(log.mock.calls.flat().join("\n")).not.toContain("publish command:");
         return;
       }
-      await completion;
+      if (preflightFailure) {
+        await expect(completion).rejects.toThrow("Publish preflight failed");
+      } else {
+        await completion;
+      }
       if (launch === "npm-only") {
         expect(dispatches).toHaveLength(1);
         const dispatched = expectDefined(dispatches[0], "FRV dispatch");
@@ -544,6 +626,8 @@ describe("release candidate checklist", () => {
         ...(registryAdmission
           ? []
           : ["scripts/plugin-npm-release-plan.ts", "scripts/plugin-clawhub-release-plan.ts"]),
+        "evidence-validated",
+        "publish-preflight",
       ]);
       expect(waitedRuns).toEqual(["111", "222"]);
       const evidence = JSON.parse(
@@ -554,6 +638,33 @@ describe("release candidate checklist", () => {
         "utf8",
       );
       const output = log.mock.calls.map(([line]) => line).join("\n");
+      expect(preflight).toHaveBeenCalledOnce();
+      expect(evidence.publishPreflight.rows).toEqual(preflightRows);
+      expect(evidence.publishPreflight.failed).toBe(preflightFailure);
+      expect(summary).toContain("npm.bootstrap");
+      expect(output).toContain("npm.bootstrap");
+      if (publicationRoute === "normal") {
+        expect(evidence.publishCommand).toContain("openclaw_npm_resume_run_id=777");
+      } else {
+        expect(evidence.publishPreflight.command).toBe(evidence.prepareCommand);
+        expect(evidence.publishPreflight.command).toContain("openclaw-release-prepare.yml");
+        expect(output).not.toContain("openclaw-release-publish.yml");
+      }
+      const waiverInput =
+        publicationRoute === "normal"
+          ? `'stable_soak_waiver=${stableSoakWaiver}'`
+          : `"stable_soak_waiver":"${stableSoakWaiver}"`;
+      expect(evidence.publishPreflight.command.includes(waiverInput)).toBe(
+        Boolean(stableSoakWaiver),
+      );
+      if (preflightFailure) {
+        expect(output).toContain("Obtain the exact bootstrap approval.");
+        expect(output).not.toContain("direct publication / recovery command:");
+        expect(output).not.toContain("prepare once for the release button");
+        expect(updateState).not.toHaveBeenCalledWith(statePath, expect.anything(), "completed");
+        return;
+      }
+      expect(updateState).toHaveBeenCalledWith(statePath, expect.anything(), "completed");
       if (registryAdmission) {
         expect(evidence.pluginNpmPlan).toEqual(
           evidence.publicationAdmission.observations.plans.npm,
@@ -883,12 +994,25 @@ describe("release candidate checklist", () => {
     const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
 
     expect(options.targetSha).toBe("a".repeat(40));
-    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => true)).toThrow(
-      "already exists",
-    );
-    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => false)).not.toThrow();
     expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
       "--target-sha must be a full lowercase commit SHA",
+    );
+  });
+
+  it("accepts absent and exact lightweight or annotated tags, rejecting mismatches and lookup errors", () => {
+    const { root, git } = candidateGitFixture({ "package.json": "{}" });
+    git("remote", "add", "origin", root);
+    const targetSha = git("rev-parse", "HEAD");
+    expect(() => assertReleaseCandidateTag("v2026.7.1-beta.4", targetSha, root)).not.toThrow();
+    git("tag", "v2026.7.1-beta.4");
+    git("-c", "tag.gpgSign=false", "tag", "-a", "v2026.7.1-beta.5", "-m", "candidate");
+    for (const tag of ["v2026.7.1-beta.4", "v2026.7.1-beta.5"]) {
+      expect(() => assertReleaseCandidateTag(tag, targetSha, root)).not.toThrow();
+      expect(() => assertReleaseCandidateTag(tag, "f".repeat(40), root)).toThrow("expected");
+    }
+    git("remote", "set-url", "origin", join(root, "missing-origin"));
+    expect(() => assertReleaseCandidateTag("v2026.7.1-beta.4", targetSha, root)).toThrow(
+      "could not resolve release candidate tag",
     );
   });
 
@@ -1932,7 +2056,7 @@ describe("release candidate checklist", () => {
     }
   });
 
-  it("requires stable validation evidence to include soak and blocking performance", () => {
+  it("requires stable validation evidence to include soak", () => {
     const stableManifest = {
       workflowName: "Full Release Validation",
       targetSha: "candidate-sha",
@@ -1961,38 +2085,30 @@ describe("release candidate checklist", () => {
         },
       ),
     ).toThrow("runReleaseSoak=true");
-    expect(() =>
-      validateFullManifest(
-        {
-          ...stableManifest,
-          controls: { performanceBlocking: false },
-        },
-        {
-          targetSha: "candidate-sha",
-          releaseProfile: "stable",
-        },
-      ),
-    ).toThrow("blocking product performance");
   });
 
-  it("keeps product performance advisory for beta release candidates", () => {
-    expect(() =>
-      validateFullManifest(
-        {
-          workflowName: "Full Release Validation",
-          targetSha: "candidate-sha",
-          releaseProfile: "beta",
-          rerunGroup: "all",
-          runReleaseSoak: "false",
-          controls: { performanceBlocking: false },
-        },
-        {
-          targetSha: "candidate-sha",
-          releaseProfile: "beta",
-        },
-      ),
-    ).not.toThrow();
-  });
+  it.each(["beta", "stable", "full"])(
+    "keeps product performance advisory for %s release candidates",
+    (profile) => {
+      expect(() =>
+        validateFullManifest(
+          {
+            workflowName: "Full Release Validation",
+            targetSha: "candidate-sha",
+            releaseProfile: profile,
+            rerunGroup: "all",
+            runReleaseSoak: profile === "beta" ? "false" : "true",
+            controls: { performanceBlocking: false },
+            childRuns: { productPerformance: { conclusion: "failure" } },
+          },
+          {
+            targetSha: "candidate-sha",
+            releaseProfile: profile,
+          },
+        ),
+      ).not.toThrow();
+    },
+  );
 
   it.each([
     {

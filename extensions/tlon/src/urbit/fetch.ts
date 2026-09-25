@@ -14,6 +14,7 @@ type UrbitFetchOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  beforeRequest?: () => void;
   timeoutMs?: number;
   maxRedirects?: number;
   signal?: AbortSignal;
@@ -31,6 +32,7 @@ export async function urbitFetch(params: UrbitFetchOptions) {
   const guarded = await fetchWithSsrFGuard({
     url,
     fetchImpl: params.fetchImpl,
+    beforeRequest: params.beforeRequest,
     init: params.init,
     timeoutMs: params.timeoutMs,
     maxRedirects: params.maxRedirects,

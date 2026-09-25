@@ -18,6 +18,7 @@ import {
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -185,18 +186,13 @@ describe("agent database open timings", () => {
   });
 
   it.each(["definition", "physical"] as const)(
-    "reports actual repairs for %s index drift",
+    "reports schema repairs and refuses physical corruption for %s index drift",
     (drift) => {
       const { options, pathname } = createTimedOpen(0, 1_000);
       const database = openOpenClawAgentDatabase(options);
       const canonicalIndex = database.db
         .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_agent_session_nodes_updated_at'")
         .get();
-      const canonicalIndexCount = database.db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql IS NOT NULL",
-        )
-        .all().length;
       database.db.exec(`
       INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES ('session-one', 'window-one', '{}', 1);
@@ -216,9 +212,25 @@ describe("agent database open timings", () => {
       closeOpenClawAgentDatabaseByPath(pathname);
       if (drift === "physical") {
         closeOpenClawAgentDatabasesForTest();
+        clearOpenClawAgentIntegrityVerification(pathname, options.env);
       }
       logger.warn.mockClear();
 
+      if (drift === "physical") {
+        expect(() => openOpenClawAgentDatabase(options)).toThrow(
+          /integrity_check failed.*idx_agent_session_nodes_updated_at.*openclaw doctor --fix/,
+        );
+        expect(logger.warn).not.toHaveBeenCalled();
+        const unchanged = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
+        try {
+          expect(unchanged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
+            /idx_agent_session_nodes_updated_at/,
+          );
+        } finally {
+          unchanged.close();
+        }
+        return;
+      }
       const reopened = openOpenClawAgentDatabase(options);
       expect(
         reopened.db
@@ -230,19 +242,33 @@ describe("agent database open timings", () => {
       expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining(
+          `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
+        ),
+        {
+          agentId: options.agentId,
+          path: pathname,
+          indexes: ["idx_agent_session_nodes_updated_at"],
+          elapsedMs: 1_000,
+        },
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
         "slow OpenClaw agent database open",
         expect.objectContaining({
-          elapsedMs: drift === "physical" ? 1_310 : 1_150,
-          integrityGateOutcome: drift === "physical" ? "failed" : "cached",
+          elapsedMs: 1_150,
+          integrityGateOutcome: "cached",
           canonicalIndexMs: 1_000,
-          repairedIndexCount: drift === "physical" ? canonicalIndexCount : 1,
+          repairedIndexCount: 1,
           phaseDurationsMs: {
             open: 60,
             validation: 1_000,
             configuration: 80,
-            schema: drift === "physical" ? 90 : 0,
-            registration: drift === "physical" ? 80 : 10,
+            schema: 0,
+            registration: 10,
           },
         }),
       );
@@ -253,6 +279,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     let admissions = 0;
 
@@ -299,6 +326,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen(0);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();

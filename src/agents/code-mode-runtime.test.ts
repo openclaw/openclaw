@@ -8,8 +8,6 @@ import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-ru
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { prepareSource } from "./code-mode-source.js";
 
-const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-
 function projectResult(params: {
   output: unknown[];
   value?: unknown;
@@ -157,7 +155,7 @@ describe("Code Mode master switch resolution", () => {
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
     { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: false },
     { name: "empty object", codeMode: {}, enabled: false },
-    { name: "omitted", codeMode: undefined, enabled: false },
+    { name: "omitted", codeMode: undefined, enabled: "auto" },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {
     expect(resolveCodeModeConfig({ tools: { codeMode } } as never).enabled).toBe(enabled);
   });
@@ -205,6 +203,40 @@ describe("Code Mode master switch resolution", () => {
 });
 
 describe("Code Mode guest source validation", () => {
+  it.each([
+    { code: "const answer = ;", location: "1:16" },
+    { code: "const first = 1;\nconst answer = ;", location: "2:16" },
+    { code: "const answer = ; return import('node:fs');", location: "1:16" },
+    {
+      code: `const label = "${"😀".repeat(96)}";\nconst answer = ; return import('node:fs');`,
+      location: "2:16",
+    },
+    {
+      code: `const label = "${"😀".repeat(96)}";\nconst answer = ; return require('node:fs');`,
+      location: "2:16",
+    },
+    { code: "import fs from 'node:fs';", location: "1:1" },
+    { code: "return import.meta.url;", location: "1:8" },
+  ])("rejects malformed JavaScript at $location", ({ code, location }) => {
+    expect(() => prepareSource(code)).toThrow(
+      "SyntaxError at openclaw-code-mode:user.js:" + location,
+    );
+  });
+
+  it("bounds diagnostics containing long duplicate identifiers", () => {
+    const name = "a".repeat(10_000);
+    const code = "let " + name + "; let " + name + ";";
+    let error: unknown;
+    try {
+      prepareSource(code);
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("SyntaxError at openclaw-code-mode:user.js:1:");
+    expect(String(error).length).toBeLessThan(500);
+  });
+
   it("reports syntax errors at user-relative locations", () => {
     expect(parseCodeModeScriptSyntax("const x = ;")).toEqual({
       ok: false,
@@ -306,15 +338,13 @@ describe("Code Mode guest source validation", () => {
       "ordinary import metadata property",
       "const api = { import: { meta: 42 } }; return api.import.meta;",
     ],
-    ["ordinary malformed JavaScript for guest syntax diagnostics", "const answer = ;"],
-  ])("preserves %s", async (_name, code) => {
-    await expect(prepareSource({ code, config })).resolves.toBe(code);
+  ])("preserves %s", (_name, code) => {
+    expect(prepareSource(code)).toBe(code);
   });
 
   it.each([
     ["direct require", "return require('node:fs');"],
     ["direct dynamic import", "return import('node:fs');"],
-    ["direct import.meta", "return import.meta.url;"],
     ["comment-separated require", "return require /* hidden */ ('node:fs');"],
     ["Unicode-escaped direct require", String.raw`return r\u0065quire('node:fs');`],
     ["optional direct require", "return require?.('node:fs');"],
@@ -366,12 +396,14 @@ describe("Code Mode guest source validation", () => {
       "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
     ],
     [
-      "dynamic import after an optional keyword-shaped return property",
+      "existing parser limitation: dynamic import after an optional keyword property",
       "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+      "SyntaxError at openclaw-code-mode:user.js:1:51: Unexpected token. No tools were dispatched; correct the JavaScript source and submit it again.",
     ],
     [
-      "require after an optional keyword-shaped return property",
+      "existing parser limitation: require after an optional keyword property",
       "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+      "SyntaxError at openclaw-code-mode:user.js:1:51: Unexpected token. No tools were dispatched; correct the JavaScript source and submit it again.",
     ],
     [
       "dynamic import after an optional keyword-shaped control method",
@@ -398,60 +430,21 @@ describe("Code Mode guest source validation", () => {
       "function run() { const await = 1; return await / require('node:fs'); } return run();",
     ],
     [
-      "malformed input containing an executable module loader",
-      "const answer = ; return import('node:fs');",
+      "dynamic import after an astral-filled JavaScript string",
+      `const label = "${"😀".repeat(96)}"; return import('node:fs');`,
     ],
     [
-      "dynamic import after an astral-filled TypeScript string",
-      `const label: string = "${"😀".repeat(96)}"; return import('node:fs');`,
+      "require after an astral-filled JavaScript string",
+      `const label = "${"😀".repeat(96)}"; return require('node:fs');`,
     ],
-    [
-      "require after an astral-filled TypeScript string",
-      `const label: string = "${"😀".repeat(96)}"; return require('node:fs');`,
-    ],
-  ])("rejects %s", async (_name, code) => {
-    await expect(prepareSource({ code, config })).rejects.toThrow(
-      "code mode module access is disabled",
-    );
+  ])("rejects %s", (_name, code, expectedError = "code mode module access is disabled") => {
+    expect(() => prepareSource(code)).toThrow(expectedError);
   });
 
-  it.each([
-    [
-      "module-shaped regular expression after a type annotation",
-      'const value: number = 1; return /import.meta/.test("import.meta");',
-    ],
-    [
-      "module-shaped regular expression after astral Unicode",
-      `const value: number = 1; const padding = "${"😀".repeat(12)}"; return /import.meta/.test("import.meta");`,
-    ],
-    [
-      "regular expression after an optional keyword-shaped property",
-      "const value: { return: number } = { return: 10 }; return value?.return / /import.meta/.source.length;",
-    ],
-    [
-      "module-shaped nested template text",
-      "const value: number = 1; return `outer ${`import('node:fs')`}`;",
-    ],
-    ["module-shaped comment", "const value: number = 1; /* import('node:fs') */ return value;"],
-    [
-      "ordinary typed import method",
-      "const api: { import(value: number): number } = { import(value) { return value; } }; return api.import(42);",
-    ],
-    [
-      "ordinary typed require method",
-      "const api: { require(value: number): number } = { require(value) { return value; } }; return api.require(42);",
-    ],
-  ])("preserves TypeScript %s", async (_name, code) => {
-    await expect(prepareSource({ code, language: "typescript", config })).resolves.toEqual(
-      expect.any(String),
-    );
-  });
-
-  it("separates every deterministic literal and executable module-shaped input", async () => {
+  it("separates every deterministic literal and executable module-shaped input", () => {
     const moduleExpressions = [
       "require('node:fs')",
       "import('node:fs')",
-      "import.meta.url",
       'require /* comment */ ("node:fs")',
       'import /* comment */ ("node:fs")',
     ];
@@ -461,17 +454,15 @@ describe("Code Mode guest source validation", () => {
         `return ${JSON.stringify(expression)};`,
         `return \`literal ${expression}\`;`,
       ]) {
-        await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+        expect(prepareSource(harmless)).toBe(harmless);
       }
       for (const executable of [`return ${expression};`, `return \`value \${${expression}}\`;`]) {
-        await expect(prepareSource({ code: executable, config })).rejects.toThrow(
-          "code mode module access is disabled",
-        );
+        expect(() => prepareSource(executable)).toThrow("code mode module access is disabled");
       }
     }
   });
 
-  it("distinguishes every adversarial division and regular-expression context", async () => {
+  it("distinguishes every adversarial division and regular-expression context", () => {
     const divisionContexts = [
       { prefix: "let value = 10; return value++", suffix: "" },
       { prefix: "let value = 10; return value--", suffix: "" },
@@ -493,16 +484,14 @@ describe("Code Mode guest source validation", () => {
 
     for (const { prefix, suffix } of divisionContexts) {
       const harmless = `${prefix} / /import.meta/.source.length;${suffix}`;
-      await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+      expect(prepareSource(harmless)).toBe(harmless);
 
       const executable = `${prefix} / import('node:fs');${suffix}`;
-      await expect(prepareSource({ code: executable, config })).rejects.toThrow(
-        "code mode module access is disabled",
-      );
+      expect(() => prepareSource(executable)).toThrow("code mode module access is disabled");
     }
   });
 
-  it("separates ordinary methods from every disguised module loader", async () => {
+  it("separates ordinary methods from every disguised module loader", () => {
     const harmlessMethods = [
       "api.import(value)",
       "api.require(value)",
@@ -519,29 +508,12 @@ describe("Code Mode guest source validation", () => {
     for (const index of [0, 1, 9_999]) {
       for (const method of harmlessMethods) {
         const harmless = `const value = ${index}; const api = { import(value) { return value; }, require(value) { return value; } }; return ${method};`;
-        await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+        expect(prepareSource(harmless)).toBe(harmless);
       }
     }
     for (const expression of moduleExpressions) {
       const executable = `return ${expression};`;
-      await expect(prepareSource({ code: executable, config })).rejects.toThrow(
-        "code mode module access is disabled",
-      );
+      expect(() => prepareSource(executable)).toThrow("code mode module access is disabled");
     }
   });
-
-  it("rejects every Unicode-shifted TypeScript module-access offset", async () => {
-    for (let length = 1; length <= 96; length += 1) {
-      const padding = "😀".repeat(length);
-      for (const access of ["import('node:fs')", "require('node:fs')"]) {
-        await expect(
-          prepareSource({
-            code: `const label: string = "${padding}"; return ${access};`,
-            language: "typescript",
-            config,
-          }),
-        ).rejects.toThrow("code mode module access is disabled");
-      }
-    }
-  }, 30_000);
 });

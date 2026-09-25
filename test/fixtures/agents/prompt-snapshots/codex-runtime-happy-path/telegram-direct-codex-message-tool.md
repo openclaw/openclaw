@@ -144,6 +144,10 @@
 ```json
 {
   "additionalContext": {
+    "openclaw_active_computer": {
+      "kind": "application",
+      "value": "Current active computer (latest physical input, not message origin): active_node=unknown"
+    },
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
@@ -234,8 +238,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 882,
-    "roughTokens": 221
+    "chars": 1025,
+    "roughTokens": 257
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -254,28 +258,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 65182,
-    "roughTokens": 16296
+    "chars": 67696,
+    "roughTokens": 16924
   },
   "openClawDeveloperInstructions": {
-    "chars": 2629,
-    "roughTokens": 658
+    "chars": 2992,
+    "roughTokens": 748
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 26463,
-    "roughTokens": 6616
+    "chars": 27055,
+    "roughTokens": 6764
   },
   "totalWithDynamicToolsJson": {
-    "chars": 91647,
-    "roughTokens": 22912
+    "chars": 94753,
+    "roughTokens": 23689
   },
   "userInputText": {
-    "chars": 793,
-    "roughTokens": 199
+    "chars": 879,
+    "roughTokens": 220
   }
 }
 ```
@@ -484,10 +488,11 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
+Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
 
 ### Message Context
@@ -516,6 +521,12 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 
 This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
 
+### Developer: OpenClaw Additional Context (openclaw_active_computer)
+
+```text
+<openclaw_active_computer>Current active computer (latest physical input, not message origin): active_node=unknown</openclaw_active_computer>
+```
+
 ### User: OpenClaw Additional Context (openclaw_current_sender)
 
 ```text
@@ -543,6 +554,7 @@ For the exact current time, use `session_status`.</openclaw_temporal_context>
 ### User: Turn Input Text
 
 ````text
+[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -668,7 +680,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
           "type": "boolean"
         },
         "forceDocument": {

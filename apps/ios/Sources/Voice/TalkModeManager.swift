@@ -613,6 +613,11 @@ final class TalkModeManager: NSObject {
         self.activePTTCaptureId == captureId
     }
 
+    func pushToTalkPartialTranscript(captureId: String) -> String {
+        guard self.activePTTCaptureId == captureId else { return "" }
+        return self.lastTranscript
+    }
+
     func enterScreenshotFixtureMode() {
         self.updateGatewayConnected(true)
         self.isEnabled = false

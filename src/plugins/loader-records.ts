@@ -4,6 +4,7 @@ import { VERSION } from "../version.js";
 import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
+import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
 import type {
   PluginBundleFormat,
   PluginDiagnostic,
@@ -234,28 +235,35 @@ export function recordPluginError(params: {
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
+  const errorCandidates = collectErrorGraphCandidates(params.error, readCauseOrNothing);
+  const errorCode = errorCandidates.map(extractErrorCode).find((code) => code !== undefined);
   // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
   const importHint =
     params.phase === "validation"
       ? undefined
-      : collectErrorGraphCandidates(params.error, readCauseOrNothing)
+      : errorCandidates
           .map((node) => resolvePluginImportHint(node, params.record, params.missingDependencyHint))
           .find((hint) => hint !== undefined);
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
-  const hint = params.phase === "validation" ? undefined : (deprecatedApiHint ?? importHint?.hint);
+  const hint =
+    errorCode === "ENOSPC"
+      ? "ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor"
+      : params.phase === "validation"
+        ? undefined
+        : (deprecatedApiHint ?? importHint?.hint);
   const displayError = hint ? `${hint} (${errorText})` : errorText;
-  params.logger?.error(`${params.logPrefix ?? ""}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;
   params.record.failedAt = new Date();
   params.record.failurePhase = params.phase;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.record.id, params.record.origin);
-  params.registry.diagnostics.push({
+  const diagnostic: PluginDiagnostic = {
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
     message: `${params.diagnosticMessagePrefix ?? ""}${displayError}`,
+    ...(errorCode ? { errorCode } : {}),
     ...(importHint?.sdkCompatibility
       ? {
           code: params.diagnosticCode ?? "sdk-incompatible",
@@ -264,7 +272,10 @@ export function recordPluginError(params: {
       : params.diagnosticCode
         ? { code: params.diagnosticCode }
         : {}),
-  });
+  };
+  params.registry.diagnostics.push(diagnostic);
+  recordPluginLoadDiagnostic(diagnostic);
+  params.logger?.error(`${params.logPrefix ?? ""}${displayError}`);
 }
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */

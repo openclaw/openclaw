@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -91,7 +92,7 @@ describe("cloud transcript write admission", () => {
           ...unusedEnvironments(),
           get: () => environment,
           acquireTurnCredential: async () => credential(),
-          acknowledgeCredentialDelivery: () => true,
+          acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () => tunnel,
         },
       });
@@ -119,7 +120,12 @@ describe("cloud transcript write admission", () => {
         if (change === "run") {
           runCurrent = false;
         } else if (change === "claim") {
-          vi.spyOn(placements, "validateTurnClaim").mockReturnValue(false);
+          const placement = placements.get(SESSION_ID);
+          const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+          if (!claim) {
+            throw new Error("expected current worker claim");
+          }
+          placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {

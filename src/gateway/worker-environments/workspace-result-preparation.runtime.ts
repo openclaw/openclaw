@@ -1,10 +1,11 @@
-import { ownedGitWorkerBytes } from "../../infra/git-worker-context.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { readWorkspaceFileContentsWithLimit } from "./workspace-actual-manifest.js";
+import { readWorkspaceGitEntry, writeWorkspaceGitInput } from "./workspace-git-input.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
-import type { WorkspaceManifestComputationOperations } from "./workspace-manifest-computation.js";
+import type {
+  WorkspaceManifestComputationOperations,
+  WorkspaceManifestValueInputs,
+} from "./workspace-manifest-computation.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
+import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
 import {
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,
@@ -35,27 +36,10 @@ function stagedResultMessage(params: {
   };
 }
 
-function quoteFastImportPath(entryPath: string): string {
-  const bytes = Buffer.from(entryPath);
-  let quoted = '"';
-  for (const byte of bytes) {
-    if (byte === 0) {
-      throw new Error("Cloud workspace staged result path contains a null byte");
-    }
-    if (byte === 0x22 || byte === 0x5c) {
-      quoted += `\\${String.fromCharCode(byte)}`;
-    } else if (byte >= 0x20 && byte < 0x7f) {
-      quoted += String.fromCharCode(byte);
-    } else {
-      quoted += `\\${byte.toString(8).padStart(3, "0")}`;
-    }
-  }
-  return `${quoted}"`;
-}
-
 export async function buildWorkspaceStageInput(
   params: WorkspaceManifestComputationOperations["workspace.manifest.stage-input"]["input"],
-): Promise<Uint8Array> {
+  assertBeforeMutation?: () => void,
+): Promise<null> {
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   const compared = parseChangedWorkspaceResult(
     parseWorkerWorkspaceManifest(
@@ -75,64 +59,41 @@ export async function buildWorkspaceStageInput(
       params.currentManifestRef,
     ),
   );
-  // The authenticated manifests define the complete result. The durable tree
-  // stores only changed resulting blobs; deletions intentionally have no blob.
-  const entries = compared.entries.toSorted((left, right) => left.path.localeCompare(right.path));
-  const prepared = await runTasksWithConcurrency({
-    tasks: entries.map((entry, index) => async () => {
-      const source = localPath(params.stagingRoot, entry.path);
-      if (entry.type === "symlink") {
-        if (!(await absoluteEntryMatches(source, entry))) {
-          throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
-        }
-        return { entry, mark: index + 1, content: Buffer.from(entry.target) };
-      }
-      const snapshot = await readWorkspaceFileContentsWithLimit(source, entry.size).catch(
-        (error: unknown) => {
-          throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`, {
-            cause: error,
-          });
-        },
-      );
-      if (
-        snapshot.type !== "file" ||
-        snapshot.size !== entry.size ||
-        snapshot.mode !== entry.mode ||
-        snapshot.sha256 !== entry.sha256
-      ) {
-        throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
-      }
-      return { entry, mark: index + 1, content: snapshot.content };
-    }),
-    limit: 4,
-    errorMode: "stop",
+  // Deletions are represented by the authenticated manifests and need no blob.
+  await writeWorkspaceGitInput({
+    assertBeforeMutation,
+    inputPath: params.inputPath,
+    ref: stagedResultRef,
+    entries: compared.entries,
+    message: stagedResultMessage(params),
+    readVerifiedContent: async (entry) =>
+      await readWorkspaceGitEntry(params.stagingRoot, entry).catch((error: unknown) => {
+        throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`, {
+          cause: error,
+        });
+      }),
   });
-  if (prepared.hasError) {
-    throw prepared.firstError;
-  }
-  const blobs = prepared.results;
-  const message = stagedResultMessage(params);
-  const chunks: Uint8Array[] = [];
-  for (const blob of blobs) {
-    chunks.push(Buffer.from(`blob\nmark :${blob.mark}\ndata ${blob.content.byteLength}\n`));
-    chunks.push(blob.content, Buffer.from("\n"));
-  }
-  chunks.push(
-    Buffer.from(
-      `commit ${stagedResultRef}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${message.byteLength}\n`,
-    ),
-    ...message.chunks,
-    Buffer.from("\ndeleteall\n"),
-  );
-  for (const blob of blobs) {
-    const mode =
-      blob.entry.type === "symlink"
-        ? "120000"
-        : (blob.entry.mode & 0o111) !== 0
-          ? "100755"
-          : "100644";
-    chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
-  }
-  chunks.push(Buffer.from("done\n"));
-  return ownedGitWorkerBytes(Buffer.concat(chunks));
+  return null;
+}
+
+export async function buildWorkspaceTreeInput(
+  params: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
+  assertBeforeMutation?: () => void,
+): Promise<null> {
+  const source = params.source;
+  await writeWorkspaceGitInput({
+    ...params,
+    assertBeforeMutation,
+    readVerifiedContent: async (entry) =>
+      source.tree === undefined
+        ? await readWorkspaceGitEntry(source.root, entry)
+        : entry.type === "file"
+          ? await readWorkspaceTreeFile({
+              repositoryRoot: source.root,
+              tree: source.tree,
+              entry,
+            })
+          : Buffer.from(entry.target),
+  });
+  return null;
 }

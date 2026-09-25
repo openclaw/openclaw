@@ -44,6 +44,11 @@ on:
         required: false
         default: "[]"
         type: string
+      extension_test_exclude_patterns_json:
+        description: Full Release Validation-only exact extension test paths omitted for a frozen target
+        required: false
+        default: "[]"
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -68,7 +73,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       checkout_revision: ${{ steps.resolve.outputs.sha }}
@@ -100,7 +105,7 @@ jobs:
   preflight:
     name: Build plugin prerelease plan
     needs: [resolve_target]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
@@ -109,6 +114,7 @@ jobs:
       run_plugin_prerelease_node: ${{ steps.manifest.outputs.run_plugin_prerelease_node }}
       plugin_prerelease_node_matrix: ${{ steps.manifest.outputs.plugin_prerelease_node_matrix }}
       node_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.patterns_json }}
+      extension_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.extension_patterns_json }}
       run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
       plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
       run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
@@ -162,66 +168,11 @@ jobs:
             exit 1
           fi
 
-      - name: Validate frozen-target Node exclusions
-        id: node_test_exclusions
-        env:
-          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.node_test_exclude_patterns_json }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-
-          const rawPatterns = process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "";
-          let patterns;
-          try {
-            patterns = JSON.parse(rawPatterns);
-          } catch (error) {
-            console.error(`node_test_exclude_patterns_json must be valid JSON: ${error.message}`);
-            process.exit(1);
-          }
-          if (!Array.isArray(patterns)) {
-            console.error("node_test_exclude_patterns_json must be a JSON array");
-            process.exit(1);
-          }
-          const invalidPattern = patterns.find((pattern) => {
-            if (typeof pattern !== "string" || pattern.length === 0 || pattern !== pattern.trim()) {
-              return true;
-            }
-            const segments = pattern.split("/");
-            return (
-              !pattern.startsWith("src/plugins/") ||
-              !pattern.endsWith(".test.ts") ||
-              pattern.includes("\\") ||
-              pattern.includes("..") ||
-              segments.some((segment) => segment.length === 0 || segment === ".") ||
-              !/^[A-Za-z0-9._/-]+$/u.test(pattern)
-            );
-          });
-          if (invalidPattern !== undefined) {
-            console.error(
-              `Invalid frozen-target Node test omission: ${JSON.stringify(invalidPattern)}`,
-            );
-            process.exit(1);
-          }
-          if (new Set(patterns).size !== patterns.length) {
-            console.error("node_test_exclude_patterns_json must not contain duplicate paths");
-            process.exit(1);
-          }
-          const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
-          if (!fullReleaseValidation && rawPatterns !== "[]") {
-            console.error(
-              "node_test_exclude_patterns_json may differ from [] only when full_release_validation=true",
-            );
-            process.exit(1);
-          }
-          appendFileSync(
-            process.env.GITHUB_OUTPUT,
-            `patterns_json=${JSON.stringify(patterns)}\n`,
-            "utf8",
-          );
-          EOF
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Checkout target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,6 +182,35 @@ jobs:
           fetch-tags: false
           persist-credentials: false
           submodules: false
+
+      - &checkout_exclusion_tooling
+        name: Checkout trusted test exclusion tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .frv-tooling
+          sparse-checkout: scripts/frv-test-exclusions.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Validate frozen-target Node exclusions
+        id: node_test_exclusions
+        env:
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.node_test_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.extension_test_exclude_patterns_json }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { parseTestExclusions } from "./.frv-tooling/scripts/frv-test-exclusions.mjs";
+          const patterns = parseTestExclusions(process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON, "plugins");
+          const extensions = parseTestExclusions(process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON, "extensions");
+          if (process.env.FULL_RELEASE_VALIDATION !== "true" && (patterns.length || extensions.length)) {
+            throw new Error("Test exclusions require full_release_validation=true");
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `patterns_json=${JSON.stringify(patterns)}\nextension_patterns_json=${JSON.stringify(extensions)}\n`);
+          EOF
 
       - name: Setup manifest TypeScript runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -251,6 +231,8 @@ jobs:
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
           PHASE: ${{ inputs.phase }}
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.extension_patterns_json }}
         run: |
           node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, globSync } from "node:fs";
@@ -323,6 +305,10 @@ jobs:
             ).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
+              exclusion_configs: shard.planGroups.map((group) => ({
+                config: group.config,
+                includePatterns: group.roots.map((root) => root.endsWith(".test.ts") ? root : `${root}/**/*.test.ts`),
+              })),
               vitest_config: "",
               vitest_max_workers: shard.extensionIds.some((extensionId) =>
                 extensionId.startsWith("memory-"),
@@ -366,6 +352,7 @@ jobs:
                   extensions_csv: "telegram",
                   includePatterns,
                   vitest_config: group.config,
+                  exclusion_configs: [{ config: group.config, includePatterns }],
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
@@ -437,6 +424,17 @@ jobs:
           const runNode = runIndependent && nodeShards.length > 0;
           const runExtensions = runIndependent && extensionShards.length > 0;
           const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          if (runIndependent && ((process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]" || (process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]")) {
+            const { parseTestExclusions, validateTestExclusions } = await import("./.frv-tooling/scripts/frv-test-exclusions.mjs");
+            await validateTestExclusions({
+              paths: parseTestExclusions(process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON, "plugins"),
+              configs: nodeShards.flatMap((row) => row.configs.map((config) => ({ config, includePatterns: row.includePatterns }))),
+            });
+            await validateTestExclusions({
+              paths: parseTestExclusions(process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON, "extensions"),
+              configs: extensionShards.flatMap((row) => row.exclusion_configs),
+            });
+          }
           const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;
           const runSuite = runStatic || runNode || runExtensions || runInspector || runDocker;
 
@@ -468,7 +466,7 @@ jobs:
     name: Plan plugin npm security artifacts
     needs: [resolve_target]
     if: inputs.phase != 'candidate'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       packages_json: ${{ steps.plan.outputs.packages_json }}
@@ -519,7 +517,7 @@ jobs:
     name: plugin-npm-security-scan
     needs: [resolve_target, plugin-npm-security-plan]
     if: ${{ !cancelled() && always() && needs.resolve_target.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 45
     steps:
       - name: Checkout trusted scanner tooling
@@ -615,7 +613,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -652,7 +650,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -675,6 +673,8 @@ jobs:
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+
+      - *checkout_exclusion_tooling
 
       - name: Run release-only plugin Node shard
         env:
@@ -720,10 +720,10 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          const excludeArgs = excludePatterns.map(
-            (pattern) => `--exclude=${pattern.slice("src/plugins/".length)}`,
-          );
-          const result = spawnSync("pnpm", ["test", "--", ...configs, "--", ...excludeArgs], {
+          childEnv.FRV_TEST_EXCLUDE_PATHS_JSON = JSON.stringify(excludePatterns);
+          childEnv.FRV_TEST_EXCLUDE_SCOPE = "plugins";
+          childEnv.FRV_TEST_CONFIGS_JSON = JSON.stringify(configs);
+          const result = spawnSync(process.execPath, [".frv-tooling/scripts/frv-test-exclusions.mjs", "run", "--", "pnpm", "test", "--", ...configs], {
             env: childEnv,
             stdio: "inherit",
           });
@@ -736,7 +736,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -758,6 +758,8 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - *checkout_exclusion_tooling
+
       - name: Run extension shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -766,13 +768,20 @@ jobs:
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
           OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
+          FRV_TEST_EXCLUDE_PATHS_JSON: ${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}
+          FRV_TEST_EXCLUDE_SCOPE: extensions
+          FRV_TEST_CONFIGS_JSON: ${{ toJson(matrix.exclusion_configs) }}
           OPENCLAW_EXTENSION_VITEST_CONFIG: ${{ matrix.vitest_config }}
         shell: bash
         run: |
           set -euo pipefail
           case "$OPENCLAW_EXTENSION_TASK" in
             extensions-batch)
-              pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
+              # The batch planner also uses exclusions when composing process targets.
+              mapfile -t exclude_args < <(jq -r '.[] | "--exclude=" + .' <<< "$FRV_TEST_EXCLUDE_PATHS_JSON")
+              exclusion_options=()
+              if (( ${#exclude_args[@]} > 0 )); then exclusion_options=(--allow-empty-after-exclude); fi
+              node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
               ;;
             extension-file-shard)
               include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"
@@ -788,7 +797,7 @@ jobs:
           EOF
               OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
                 OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
-                pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+                node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
               trap - EXIT
               rm -f -- "$include_file"
               ;;
@@ -805,7 +814,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -825,7 +834,7 @@ jobs:
 
       - name: Run plugin inspector advisory sweep
         env:
-          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21"
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.26"
           OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
         shell: bash
         run: |
@@ -989,6 +998,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.checkout_revision }}
       include_repo_e2e: false
       include_release_path_suites: false
@@ -1037,7 +1047,7 @@ jobs:
       - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify plugin prerelease suite
@@ -1077,3 +1087,25 @@ jobs:
           check_required "plugin-prerelease-docker" "$RUN_DOCKER" "$DOCKER_RESULT"
           echo "plugin-prerelease-inspector advisory result: ${INSPECTOR_RESULT}"
           exit "$failed"
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs:
+      - resolve_target
+      - preflight
+      - plugin-npm-security-plan
+      - plugin-npm-security-scan
+      - plugin-prerelease-static-shard
+      - plugin-prerelease-node-shard
+      - plugin-prerelease-extension-shard
+      - plugin-prerelease-inspector
+      - plugin-prerelease-docker-suite
+      - plugin-prerelease-suite
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: ${{ inputs.phase == 'candidate' && 'pluginPrereleaseCandidate' || 'pluginPrereleaseIndependent' }}
+      target_sha: ${{ needs.resolve_target.outputs.checkout_revision }}

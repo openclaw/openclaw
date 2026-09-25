@@ -1,16 +1,18 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createWorkerInferenceExecutor,
+  executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 import {
-  acquireSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
@@ -25,7 +27,7 @@ afterEach(async () => {
 describe.each([undefined, "openai-completions"] as const)(
   "initial simple completion with provider API %s",
   (api) => {
-    it.each(["agent", "worker", "raw"] as const)(
+    it.each(["agent", "worker"] as const)(
       "normalizes %s input once without an ambient prepared runtime",
       async (mode) => {
         await withOpenClawTestState({ label: "selected-completion" }, async (state) => {
@@ -137,17 +139,21 @@ module.exports = {
               },
             };
             await state.writeConfig(cfg);
-            const executeWorker = createWorkerInferenceExecutor({
-              resolveSessionTarget: () => ({
-                agentId: "main",
-                sessionEntry: { sessionId: "selected-test", updatedAt: 0 },
-                sessionKey: "agent:main:main",
-                sessionStore: {},
-                storePath: state.path("unused-session-store.sqlite"),
-              }),
-              resolveSessionAuthSelection: async () => undefined,
-              recordUsage: () => {},
-            });
+            const sessionTarget: BoundAgentRunSessionTarget = {
+              agentId: "main",
+              sessionId: "selected-test",
+              sessionKey: "agent:main:main",
+              storePath: state.path("unused-session-store.sqlite"),
+            };
+            if (mode === "worker") {
+              vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
+                expect(target).toEqual(sessionTarget);
+                return { sessionId: "selected-test", updatedAt: 0 };
+              });
+              vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(
+                undefined,
+              );
+            }
 
             for (const [raw, expected] of [
               ["entry", "middle"],
@@ -155,7 +161,9 @@ module.exports = {
               ["plain", "plain"],
             ] as const) {
               if (mode === "worker") {
-                const result = await executeWorker(workerRequest(cfg, provider, raw));
+                const result = await executeWorkerInference(
+                  workerRequest(cfg, provider, raw, sessionTarget),
+                );
                 expect(result).toMatchObject({
                   type: "done",
                   message: {
@@ -165,20 +173,12 @@ module.exports = {
                   },
                 });
               } else {
-                const prepared =
-                  mode === "agent"
-                    ? await acquireSimpleCompletionModelForAgent({
-                        cfg,
-                        agentId: "main",
-                        modelRef: `${provider}/${raw}`,
-                        allowBundledStaticCatalogFallback: true,
-                      })
-                    : await acquireSimpleCompletionModel({
-                        cfg,
-                        provider,
-                        modelId: raw,
-                        allowBundledStaticCatalogFallback: true,
-                      });
+                const prepared = await acquireSimpleCompletionModelForAgent({
+                  cfg,
+                  agentId: "main",
+                  modelRef: `${provider}/${raw}`,
+                  allowBundledStaticCatalogFallback: true,
+                });
                 if ("error" in prepared) {
                   throw new Error(prepared.error);
                 }
@@ -218,9 +218,11 @@ function workerRequest(
   config: OpenClawConfig,
   provider: string,
   model: string,
+  sessionTarget: BoundAgentRunSessionTarget,
 ): WorkerInferenceExecutionParams {
   return {
     config,
+    sessionTarget,
     identity: {
       environmentId: "selected-test",
       credentialHash: "synthetic-fixture",

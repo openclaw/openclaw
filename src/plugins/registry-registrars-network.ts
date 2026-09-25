@@ -22,6 +22,10 @@ import type {
   PluginHttpRouteRegistration,
   PluginRecord,
 } from "./registry-types.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -33,14 +37,28 @@ import type {
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: GatewayRequestHandler,
+  mayDispatch: boolean,
+): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
-    const result = (await handler({ ...opts, respond })) as unknown;
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const invoke = () => handler({ ...opts, respond });
+    // A declared authenticated-request contract composes RPCs with the exact
+    // admitted client, never a synthetic identity or inherited unrelated grant.
+    const result = (
+      scope
+        ? await withPluginRuntimeGatewayRequestScope(
+            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            invoke,
+          )
+        : await invoke()
+    ) as unknown;
     if (!responded && result !== undefined) {
       respond(true, result);
     }
@@ -63,7 +81,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: GatewayMethodProfileAccess;
+      sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+    },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -73,7 +95,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `gateway method already registered: ${trimmed}`);
       return;
     }
-    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    const wrappedHandler = adaptPluginGatewayMethodHandler(
+      handler,
+      canDispatchGatewayMethods(record),
+    );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
@@ -89,6 +114,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         handler: wrappedHandler,
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
+        ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
       }),
     );
   };
@@ -133,7 +159,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     return `${plugin} (${source})`;
   };
 
-  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+  const canDispatchGatewayMethods = (record: PluginRecord): boolean =>
     (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
@@ -177,9 +203,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
-      ...(canDispatchGatewayMethodsFromHttpRoute(record)
-        ? { gatewayMethodDispatchAllowed: true }
-        : {}),
+      ...(canDispatchGatewayMethods(record) ? { gatewayMethodDispatchAllowed: true } : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
     } satisfies PluginHttpRouteRegistration;

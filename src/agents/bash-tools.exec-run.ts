@@ -21,10 +21,7 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  isSecretEgressProxyActive,
-  registerSecretEgressProxyRun,
-} from "../secrets/egress-proxy/registry.js";
+import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -65,7 +62,6 @@ import {
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { createBackgroundExecTask } from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -419,17 +415,15 @@ export function createExecTool(
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
         const useSecretEgress = secretEgressEnabled && host === "gateway";
-        let secretEgressEnv: Record<string, string> | undefined;
         if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
           assertSourceActive();
-          secretEgressEnv = registerSecretEgressProxyRun(
-            defaults.operationalRunInstance,
-            storeEnv.secretEgressBindings ?? [],
-          );
         }
+        const secretEgressBindings = useSecretEgress
+          ? (storeEnv.secretEgressBindings ?? [])
+          : undefined;
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -441,7 +435,6 @@ export function createExecTool(
           pluginEnv: resolvedExecEnvState?.pluginEnv,
           storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
-          secretEgressEnv,
           ...preparedRunEnvironment,
           warnings,
         });
@@ -503,6 +496,7 @@ export function createExecTool(
             command: params.command,
             workdir,
             env,
+            secretEgressBindings,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             requestedEnv,
@@ -567,8 +561,8 @@ export function createExecTool(
         effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
-        // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
-        // before we execute and burn tokens in cron loops.
+        // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
+        // before execution. JavaScript source diagnostics belong to Node.
         if (scriptPreflightCwd && !shouldSkipExecScriptPreflight({ host, security, ask })) {
           await validateScriptFileForShellBleed({
             command: params.command,
@@ -581,6 +575,7 @@ export function createExecTool(
           execCommand: execCommandOverride,
           workdir,
           env,
+          secretEgressBindings,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
@@ -604,6 +599,7 @@ export function createExecTool(
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
           onSettledBeforeNotify: settlement.settle,
+          onActivity: settlement.activity,
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -676,14 +672,18 @@ export function createExecTool(
         markBackgrounded(run.session);
         // Only the guarded yield transition owns task registration. A process
         // that settles before this timer fires must stay out of the task ledger.
-        settlement.backgroundTask = createBackgroundExecTask({
-          processSessionId: run.session.id,
-          command: run.session.command,
-          sessionKey: notifySessionKey,
-          agentId,
-          startedAt: run.startedAt,
-        });
-        backgrounded.resolve({ status: "backgrounded" });
+        const registration = settlement.register(run, notifySessionKey, agentId);
+        const finishPromotion = () => {
+          // Promotion owns the process handle even if it exits during registration.
+          backgrounded.resolve({ status: "backgrounded" });
+        };
+        if (registration) {
+          void withoutGatewayToolCallerIdentity(() =>
+            registration.then(finishPromotion, backgrounded.reject),
+          );
+        } else {
+          finishPromotion();
+        }
       };
 
       try {

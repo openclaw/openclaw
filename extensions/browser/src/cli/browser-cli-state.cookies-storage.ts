@@ -2,17 +2,16 @@
  * Browser CLI cookie and Web Storage commands.
  */
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
-
-function resolveUrl(opts: { url?: string }): string | undefined {
-  return normalizeOptionalString(opts.url);
-}
 
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
   return (
@@ -51,7 +50,7 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const targetId = resolveTargetId(opts.targetId, cmd);
-      const url = resolveUrl(opts);
+      const url = normalizeOptionalString(opts.url);
       if (!url) {
         defaultRuntime.error(danger("Missing required --url option for cookies set"));
         defaultRuntime.exit(1);
@@ -102,7 +101,7 @@ export function registerBrowserCookiesAndStorageCommands(
           parent,
           method: "GET",
           path: `/storage/${kind}`,
-          query: { key: normalizeOptionalString(key), targetId },
+          query: { key: readNonBlankString(key), targetId },
           errorPolicy: "inline",
           print: (result) => defaultRuntime.writeJson(result.values ?? {}),
         });

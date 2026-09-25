@@ -22,7 +22,34 @@ import {
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+
+/** Redeem host-only message authority from a trusted local agent runtime. */
+export function resolveAgentRuntimeMessageActionAuthorization(
+  client: GatewayClient | null,
+): MessageActionAuthorization | undefined {
+  const identity = client?.internal?.agentRuntimeIdentity;
+  const messageActionContext = identity?.messageActionContext;
+  return identity && messageActionContext?.turnCapability
+    ? resolveMessageActionTurnAuthorization({
+        token: messageActionContext.turnCapability,
+        agentId: identity.agentId,
+        runId: identity.operationalRunInstance.runId,
+        sessionKey: identity.sessionKey,
+        sessionId: messageActionContext.sessionId,
+      })
+    : undefined;
+}
+
+/** Resolve the admitted config only while the matching bound action is dispatched. */
+export function resolveAgentRuntimeMessageActionConfig(
+  client: GatewayClient | null,
+): OpenClawConfig | undefined {
+  const token = client?.internal?.agentRuntimeIdentity?.messageActionContext?.turnCapability;
+  return resolveAgentRuntimeMessageActionAuthorization(client)?.scheduled
+    ? readMessageActionInvocationConfig(token)
+    : undefined;
+}
 
 /** Retain the live caller and scheduled source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
@@ -34,18 +61,25 @@ export function createMessageActionRuntimeAuthority(
     authorization?: MessageActionAuthorization;
   },
 ) {
-  const assertScheduledReadCurrent = isFencedProviderReadAction(params.request.action)
-    ? params.authorization?.scheduled?.assertCurrent
+  const assertScheduledSourceCurrent =
+    params.authorization?.scheduled?.assertSourceCurrent ??
+    params.authorization?.scheduled?.assertCurrent;
+  const assertReadCurrent = isFencedProviderReadAction(params.request.action)
+    ? (assertScheduledSourceCurrent ?? params.authorization?.assertDashboardReadCurrent)
     : undefined;
   const assertScheduledWriteCurrent = isScheduledMessageWriteAction(params.request.action)
-    ? params.authorization?.scheduled?.assertCurrent
+    ? assertScheduledSourceCurrent
     : undefined;
-  const assertScheduledActionCurrent = assertScheduledReadCurrent ?? assertScheduledWriteCurrent;
-  const scheduledPolicy = assertScheduledReadCurrent
-    ? params.authorization?.scheduled?.policy
-    : undefined;
+  const assertActionCurrent =
+    assertReadCurrent ??
+    assertScheduledWriteCurrent ??
+    params.authorization?.scheduled?.assertCurrent;
+  const scheduledPolicy =
+    assertReadCurrent || assertScheduledWriteCurrent
+      ? params.authorization?.scheduled?.policy
+      : undefined;
   return {
-    assertScheduledReadCurrent,
+    assertReadCurrent,
     assertScheduledWriteCurrent,
     routeAccountId:
       normalizeOptionalString(params.request.accountId) ??
@@ -55,10 +89,10 @@ export function createMessageActionRuntimeAuthority(
       params.client,
       params.context,
       params.respond,
-      assertScheduledActionCurrent
+      assertActionCurrent
         ? () => {
             params.sessionMutationCommitGuard?.();
-            assertScheduledActionCurrent();
+            assertActionCurrent();
           }
         : params.sessionMutationCommitGuard,
     ),
@@ -138,15 +172,7 @@ export function resolveTrustedMessageActionToolContext(params: {
       ),
     };
   }
-  const messageActionAuthorization = messageActionContext.turnCapability
-    ? resolveMessageActionTurnAuthorization({
-        token: messageActionContext.turnCapability,
-        agentId: identity.agentId,
-        runId: identity.operationalRunInstance.runId,
-        sessionKey: identity.sessionKey,
-        sessionId: messageActionContext.sessionId,
-      })
-    : undefined;
+  const messageActionAuthorization = resolveAgentRuntimeMessageActionAuthorization(params.client);
   return {
     ok: true,
     toolContext: messageActionContext.toolContext,

@@ -10,6 +10,7 @@ import {
 } from "./candidate-stores.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
+import { isSafeToCopyOAuthRoutingScope } from "./oauth-identity.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -139,6 +140,8 @@ export async function fenceOAuthRefreshPeers(params: {
   generation: OAuthCredential;
   fence: OAuthCredential;
   rollbackOnFailure?: boolean;
+  /** Register before CAS; release the provisional observation if another owner wins. */
+  onFence?: (databasePath: string) => () => void;
 }): Promise<OAuthRefreshPeerClaim[]> {
   const claims: OAuthRefreshPeerClaim[] = [];
   try {
@@ -152,6 +155,7 @@ export async function fenceOAuthRefreshPeers(params: {
         continue;
       }
       if (isExactOAuthCredential(credential, params.fence)) {
+        params.onFence?.(candidate.databasePath);
         claims.push({ candidate });
         continue;
       }
@@ -174,6 +178,7 @@ export async function fenceOAuthRefreshPeers(params: {
       }
       let claimed = false;
       const original = { ...credential };
+      const releaseUnclaimedObservation = params.onFence?.(candidate.databasePath);
       const updated = updateCandidateAuthProfileStore({
         candidate,
         profileId: params.profileId,
@@ -193,6 +198,7 @@ export async function fenceOAuthRefreshPeers(params: {
           claims.push({ candidate });
           continue;
         }
+        releaseUnclaimedObservation?.();
         if (current?.type === "oauth") {
           assertCredentialAllowsClaim({
             candidate,
@@ -342,6 +348,7 @@ export function settleOAuthRefreshPeerClaims(params: {
             claim.original !== undefined &&
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
+            isSafeToCopyOAuthRoutingScope(claim.original, inherited) &&
             hasUsableOAuthCredential(inherited) &&
             (hasMatchingOAuthIdentity(claim.original, inherited) ||
               (!hasOAuthIdentity(claim.original) &&

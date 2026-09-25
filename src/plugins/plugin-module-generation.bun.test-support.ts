@@ -36,14 +36,14 @@ function write(value: string) {
   fs.writeFileSync(path.join(root, "extra.ts"), `export const value = ${JSON.stringify(value)};`);
 }
 
-function createInstance(rootDir = root, standalone = false) {
+function createInstance(rootDir = root, standalone = false, entry = "index.ts") {
   const instance = new PluginInstance("bun-generation-fixture");
   instances.push(instance);
   cleanups.set(instance, 0);
   instance.lifecycle.onDispose(() => {
     cleanups.set(instance, cleanups.get(instance)! + 1);
   });
-  const source = path.join(rootDir, "index.ts");
+  const source = path.join(rootDir, entry);
   withPluginCache(createPluginCache(), () =>
     bindPluginInstanceModuleLoader({ instance, origin: "config", source, rootDir, standalone }),
   );
@@ -104,6 +104,38 @@ try {
 }
 
 try {
+  const previousJsx = process.env.JITI_JSX;
+  process.env.JITI_JSX = "1";
+  try {
+    for (const extension of ["tsx", "mtsx", "ctsx"]) {
+      const entry = `index.${extension}`;
+      const directory = fixture(`jsx-${extension}`, {
+        [entry]: `import { helper } from './helper.jsx';
+          const React = { createElement: (tag: string, props: { label: string }) => [tag, props.label] };
+          export const value = [<demo label="ready" />, helper];`,
+        "helper.jsx": `const React = { createElement: (tag, props) => [tag, props.label] };
+          export const helper = <helper label="ready" />;`,
+      });
+      const instance = createInstance(directory, false, entry);
+      const loaded = instance.loadModule(path.join(directory, entry)) as { value: string[][] };
+      assert.deepEqual(
+        loaded.value,
+        [
+          ["demo", "ready"],
+          ["helper", "ready"],
+        ],
+        extension,
+      );
+      assert.deepEqual(await instance.dispose(), { errors: [] });
+    }
+  } finally {
+    if (previousJsx === undefined) {
+      delete process.env.JITI_JSX;
+    } else {
+      process.env.JITI_JSX = previousJsx;
+    }
+  }
+
   write("before");
   fs.linkSync(path.join(root, "helper.ts"), path.join(root, "hardlinked.ts"));
   const first = load();

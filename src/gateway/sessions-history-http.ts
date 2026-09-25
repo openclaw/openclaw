@@ -1,6 +1,7 @@
 // Gateway HTTP session history endpoint.
 // Serves JSON and SSE history snapshots backed by session transcripts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,8 +17,6 @@ import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptUpdateVersion,
 } from "../sessions/transcript-events.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
@@ -27,6 +26,7 @@ import {
   SSE_CONTENT_TYPE,
 } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -43,6 +43,7 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
@@ -131,13 +132,7 @@ function resolveSessionHistoryHttpClient(
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    getResolvedAuth?: () => ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionHistoryPath(url);
@@ -158,12 +153,9 @@ export async function handleSessionHistoryHttpRequest(
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     operatorMethod: "chat.history",
     resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
@@ -235,14 +227,14 @@ export async function handleSessionHistoryHttpRequest(
   const publishAuthorizedHistory = async (publish: () => void): Promise<boolean> => {
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      ...opts,
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
       trustedProxies: cfgLocal.gateway?.trustedProxies,
       allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
       cfg: cfgLocal,
     });
-    if (!currentRequestAuth.ok) {
+    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
       return false;
     }
     if (
@@ -332,6 +324,10 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
+  // Legacy selectors map lexically to SQLite; following a JSON symlink could merge owners.
+  const historyStorePath = path.resolve(target.storePath);
+  const historyLifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  const historyDatabasePath = resolveTranscriptPathForComparison(target.readSource?.path);
   const transcriptCandidates = new Set(
     resolveSessionTranscriptCandidates(
       historyTarget.sessionId,
@@ -498,14 +494,43 @@ export async function handleSessionHistoryHttpRequest(
 
   streamResources.unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     // Filter the global fan-out before retaining messages or scheduling async work.
+    const updateTarget = update.target;
     const updateMatchesIdentity =
-      update.target?.sessionId === historyTarget.sessionId &&
-      normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
+      updateTarget?.sessionId === historyTarget.sessionId &&
+      normalizeAgentId(updateTarget.agentId) === normalizeAgentId(target.agentId) &&
+      (updateTarget.sessionKey === historyTarget.sessionKey ||
+        resolveSessionStoreKey({
+          cfg: getRuntimeConfig(),
+          sessionKey: updateTarget.sessionKey,
+          storeAgentId: target.agentId,
+        }) === historyTarget.sessionKey);
+    const updateLifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+    if (updateTarget && !updateMatchesIdentity) {
+      return;
+    }
     const updatePath = resolveTranscriptUpdatePathForComparison(update);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
-    if (update.message === undefined || limit !== undefined || cursor !== undefined) {
+    if (
+      updateLifecycleRevision !== historyLifecycleRevision ||
+      update.message === undefined ||
+      limit !== undefined ||
+      cursor !== undefined
+    ) {
+      queueStreamRefresh();
+      return;
+    }
+    const updateStorePath = updateTarget?.storePath
+      ? path.resolve(updateTarget.storePath)
+      : undefined;
+    const updateMatchesStore = updateStorePath?.endsWith(".sqlite")
+      ? historyDatabasePath !== undefined &&
+        resolveTranscriptUpdatePathForComparison(update, "storePath") === historyDatabasePath
+      : updateStorePath === historyStorePath;
+    if (updateTarget?.sessionKey !== historyTarget.sessionKey || !updateMatchesStore) {
+      // Legacy notifications and unfamiliar aliases can invalidate canonical history,
+      // but their carried payload does not establish physical or lifecycle ownership.
       queueStreamRefresh();
       return;
     }

@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -19,6 +20,42 @@ import org.junit.Test
 
 class ChatTimelineTest {
   @Test
+  fun preparedQuietHistoryKeepsRawDetailsAndUnknownOutcomes() {
+    val quiet = ChatToolActivity("wait", "process", "action: poll", "raw result", false)
+    val unknown = ChatAgentActivity("tool:unknown", "tool", "end", "Outcome unknown", toolCallId = "unknown")
+    val messages =
+      listOf(
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = quiet.copy(result = null))), 0, activity = listOf(unknown.copy(itemId = "tool:wait", toolCallId = "wait", phase = "start", title = "Process", status = "running"))),
+        ChatMessage("quiet", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet)), 1, activity = emptyList()),
+        ChatMessage("unknown", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet.copy(toolCallId = "unknown"))), 2, activity = listOf(unknown)),
+      )
+    val group =
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
+        .single()
+    assertTrue(group.tools.all { it.activityPrepared })
+    assertEquals(listOf("raw result", "raw result"), group.tools.map { it.result })
+    assertEquals("Outcome unknown", completedToolGroupSummary(group.tools))
+    assertEquals(null, group.tools.first().activity)
+    val legacyResult = messages.map { if (it.id == "quiet") it.copy(activity = null) else it }
+    val legacyGroup =
+      prepareChatHistory(legacyResult, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
+        .single()
+    assertEquals(
+      "Process",
+      legacyGroup.tools
+        .first()
+        .activity
+        ?.title,
+    )
+  }
+
+  @Test
   fun groupsContiguousToolOnlyMessagesWithoutSwallowingAssistantText() {
     val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)
     val result = ChatToolActivity("call-1", "read", null, "contents", false)
@@ -33,10 +70,10 @@ class ChatTimelineTest {
     val timeline = prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
 
     assertEquals(
-      listOf("message:assistant-after", "completed-tools:call", "message:assistant-before"),
+      listOf("message:assistant-after", "tools:root", "message:assistant-before"),
       timeline.items.map(::chatTimelineItemKey),
     )
-    val group = timeline.items.filterIsInstance<ChatTimelineItem.CompletedTools>().single()
+    val group = timeline.items.filterIsInstance<ChatTimelineItem.ToolActivity>().single()
     assertEquals(listOf(ChatToolActivity("call-1", "read", "path: README.md", "contents", false)), group.tools)
   }
 
@@ -58,7 +95,7 @@ class ChatTimelineTest {
 
     val timeline = prepareChatHistory(listOf(mixed), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
 
-    assertEquals(listOf("completed-tools:mixed", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(listOf("tools:root", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
     assertTrue((timeline.items[1] as ChatTimelineItem.Message).message.matchesFullRead(mixed))
     assertEquals(
       "Checking now.",
@@ -175,7 +212,7 @@ class ChatTimelineTest {
       )
 
     assertEquals(
-      listOf("stream", "tools", "thinking", "message:user-1", "message:assistant-1"),
+      listOf("stream", "tools:user-1", "thinking", "message:user-1", "message:assistant-1"),
       timeline.items.map(::chatTimelineItemKey),
     )
     assertEquals(3, timeline.readAnchorIndex)
@@ -624,7 +661,7 @@ class ChatTimelineTest {
       )
 
     assertEquals(
-      listOf("tools", "subagent-activity"),
+      listOf("tools:root", "subagent-activity"),
       timeline.items.map(::chatTimelineItemKey),
     )
     val row = timeline.items.filterIsInstance<ChatTimelineItem.SubagentActivity>().single()

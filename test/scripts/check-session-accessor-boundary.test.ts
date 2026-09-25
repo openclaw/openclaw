@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
@@ -24,6 +24,14 @@ import {
   migratedTranscriptWriterFiles,
   readOnlyGatewaySessionAccessorFiles,
 } from "../../scripts/check-session-accessor-boundary.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string) {
+  return [content, "source.ts", parser.parseSourceFile("source.ts", content)] as const;
+}
 
 describe("session accessor boundary guard", () => {
   it("keeps Gateway read paths on non-materializing accessors", () => {
@@ -31,11 +39,13 @@ describe("session accessor boundary guard", () => {
       readOnlyGatewaySessionAccessorFiles.has("src/gateway/server-methods/sessions-read.ts"),
     ).toBe(true);
     expect(
-      findReadOnlySessionAccessorViolations(`
+      findReadOnlySessionAccessorViolations(
+        ...parseFixture(`
         import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
         listSessionEntriesCore({ storePath });
         sessionUtils.loadSessionEntry(sessionKey);
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports materializing session entry accessor "listSessionEntriesCore"' },
       { line: 2, reason: 'imports materializing session entry accessor "loadSessionEntry"' },
@@ -43,11 +53,13 @@ describe("session accessor boundary guard", () => {
       { line: 4, reason: 'references materializing session entry accessor "loadSessionEntry"' },
     ]);
     expect(
-      findReadOnlySessionAccessorViolations(`
+      findReadOnlySessionAccessorViolations(
+        ...parseFixture(`
         import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
         listSessionEntriesReadOnly({ storePath });
         sessionUtils.loadSessionEntryReadOnly(sessionKey);
       `),
+      ),
     ).toEqual([]);
   });
 
@@ -87,7 +99,6 @@ describe("session accessor boundary guard", () => {
         "src/config/sessions/goals.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
-        "src/gateway/session-compaction-checkpoints.ts",
         "src/gateway/session-history-state.ts",
         "src/gateway/sessions-history-http.ts",
         "src/gateway/session-utils.ts",
@@ -99,8 +110,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",
@@ -178,7 +187,6 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
         "src/auto-reply/reply/agent-runner-execution.ts",
         "src/auto-reply/reply/agent-runner-memory.ts",
-        "src/auto-reply/reply/agent-runner-session-reset.ts",
         "src/auto-reply/reply/agent-runner.ts",
         "src/auto-reply/reply/body.ts",
         "src/auto-reply/reply/commands-acp/lifecycle.ts",
@@ -201,8 +209,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",
@@ -214,7 +220,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-shared.ts",
         "src/gateway/server-methods/sessions-subscriptions.ts",
         "src/gateway/server-node-events.ts",
-        "src/gateway/session-compaction-checkpoints.ts",
         "src/infra/outbound/outbound-session.ts",
         "src/plugins/host-hook-cleanup.ts",
         "src/plugins/host-hook-state.ts",
@@ -276,18 +281,22 @@ describe("session accessor boundary guard", () => {
 
   it("allows the exact beta.5 compatibility exports without opening aliases", () => {
     expect(
-      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+      findSessionStoreRuntimeFileBackedCompatExportViolations(
+        ...parseFixture(`
         export function loadSessionStore() {}
         export function updateSessionStore() {}
         export function resolveSessionFilePath() {}
         export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
       `),
+      ),
     ).toEqual([]);
     expect(
-      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+      findSessionStoreRuntimeFileBackedCompatExportViolations(
+        ...parseFixture(`
         export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
         export { saveSessionStore } from "../config/sessions/store.js";
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -302,11 +311,13 @@ describe("session accessor boundary guard", () => {
 
   it("collects file-backed SDK session compatibility exports", () => {
     expect(
-      collectSessionStoreRuntimeFileBackedCompatExports(`
+      collectSessionStoreRuntimeFileBackedCompatExports(
+        ...parseFixture(`
         export const loadSessionStore = loadSessionStoreImpl;
         export { resolveSessionFilePath } from "../config/sessions/paths.js";
         export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
       `),
+      ),
     ).toEqual(
       new Map([
         ["loadSessionStore", { line: 2, sourceName: "loadSessionStore" }],
@@ -319,10 +330,12 @@ describe("session accessor boundary guard", () => {
 
   it("flags unratcheted file-backed SDK session compatibility exports", () => {
     expect(
-      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+      findSessionStoreRuntimeFileBackedCompatExportViolations(
+        ...parseFixture(`
         export { readSessionEntries } from "../config/sessions/store-load.js";
         export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -337,10 +350,12 @@ describe("session accessor boundary guard", () => {
 
   it("flags legacy reader imports", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         import { loadSessionStore, readSessionEntries as readEntries } from "../config/sessions.js";
         import { readSessionEntry, readSessionStoreReadOnly } from "../config/sessions/store-load.js";
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports legacy session store access "loadSessionStore"' },
       { line: 2, reason: 'imports legacy session store access "readSessionEntries"' },
@@ -351,7 +366,8 @@ describe("session accessor boundary guard", () => {
 
   it("flags direct and namespace legacy access calls", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         loadSessionStore(storePath);
         sessions.readSessionEntries(storePath);
         sessions["loadSessionStore"](storePath);
@@ -359,6 +375,7 @@ describe("session accessor boundary guard", () => {
         resolveSessionStoreEntry({ store, sessionKey });
         resolveSessionStoreEntryCore({ store, sessionKey });
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
       { line: 3, reason: 'references legacy session store access "readSessionEntries"' },
@@ -371,11 +388,13 @@ describe("session accessor boundary guard", () => {
 
   it("flags aliased namespace reader references", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         const load = sessions.loadSessionStore;
         const { readSessionEntries: readEntries } = sessions;
         const { loadSessionStore } = sessions;
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'references legacy session store access "loadSessionStore"' },
       { line: 3, reason: 'aliases legacy session store access "readSessionEntries"' },
@@ -385,11 +404,13 @@ describe("session accessor boundary guard", () => {
 
   it("flags legacy whole-store writes", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         import { saveSessionStore, updateSessionStore } from "../config/sessions.js";
         saveSessionStore(storePath, store);
         updateSessionStore(storePath, update);
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports legacy session store access "saveSessionStore"' },
       { line: 2, reason: 'imports legacy session store access "updateSessionStore"' },
@@ -400,16 +421,19 @@ describe("session accessor boundary guard", () => {
 
   it("allows migrated accessor reads", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
         listSessionEntriesCore({ storePath });
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
     expect(
-      findMemoryHostSessionCorpusBoundaryViolations(`
+      findMemoryHostSessionCorpusBoundaryViolations(
+        ...parseFixture(`
         function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
           return loadSessionTranscriptClassificationForSessionsDir(resolveSessionTranscriptsDirForAgent(agentId));
         }
@@ -417,6 +441,7 @@ describe("session accessor boundary guard", () => {
           return readSessionTranscriptClassificationStore("sessions.json");
         }
       `),
+      ),
     ).toEqual([
       {
         line: 3,
@@ -433,7 +458,8 @@ describe("session accessor boundary guard", () => {
 
   it("follows memory-host corpus helper calls when checking legacy access", () => {
     expect(
-      findMemoryHostSessionCorpusBoundaryViolations(`
+      findMemoryHostSessionCorpusBoundaryViolations(
+        ...parseFixture(`
         function loadViaHelper() {
           return readSessionTranscriptClassificationStore("sessions.json");
         }
@@ -441,6 +467,7 @@ describe("session accessor boundary guard", () => {
           return loadViaHelper(agentId);
         }
       `),
+      ),
     ).toEqual([
       {
         line: 3,
@@ -452,7 +479,8 @@ describe("session accessor boundary guard", () => {
 
   it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
     expect(
-      findMemoryHostSessionCorpusBoundaryViolations(`
+      findMemoryHostSessionCorpusBoundaryViolations(
+        ...parseFixture(`
         function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
           return listSessionEntriesCore({ agentId });
         }
@@ -460,18 +488,21 @@ describe("session accessor boundary guard", () => {
           return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
         }
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags legacy writer imports and calls", () => {
     expect(
-      findSessionAccessorWriteBoundaryViolations(`
+      findSessionAccessorWriteBoundaryViolations(
+        ...parseFixture(`
         import { applySessionStoreEntryPatch, saveSessionStore, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
         saveSessionStore(storePath, store);
         updateSessionStore(storePath, () => undefined);
         sessions.updateSessionStoreEntry({ storePath, sessionKey, update });
         applySessionStoreEntryPatch({ storePath, sessionKey, patch });
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports legacy session store writer "applySessionStoreEntryPatch"' },
       { line: 2, reason: 'imports legacy session store writer "saveSessionStore"' },
@@ -486,19 +517,23 @@ describe("session accessor boundary guard", () => {
 
   it("allows migrated accessor writes", () => {
     expect(
-      findSessionAccessorWriteBoundaryViolations(`
+      findSessionAccessorWriteBoundaryViolations(
+        ...parseFixture(`
         import { updateSessionEntry } from "../config/sessions/session-accessor.js";
         updateSessionEntry({ storePath, sessionKey }, () => undefined);
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags legacy transcript writer imports", () => {
     expect(
-      findTranscriptWriterBoundaryViolations(`
+      findTranscriptWriterBoundaryViolations(
+        ...parseFixture(`
         import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
         import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
       { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
@@ -507,11 +542,13 @@ describe("session accessor boundary guard", () => {
 
   it("flags direct and namespace legacy transcript writer calls", () => {
     expect(
-      findTranscriptWriterBoundaryViolations(`
+      findTranscriptWriterBoundaryViolations(
+        ...parseFixture(`
         appendSessionTranscriptMessage({ transcriptPath, message });
         transcriptEvents.emitSessionTranscriptUpdate({ sessionFile });
         transcriptAppend["appendSessionTranscriptMessage"]({ transcriptPath, message });
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'calls legacy transcript writer "appendSessionTranscriptMessage"' },
       { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
@@ -521,17 +558,20 @@ describe("session accessor boundary guard", () => {
 
   it("allows migrated transcript writer helpers", () => {
     expect(
-      findTranscriptWriterBoundaryViolations(`
+      findTranscriptWriterBoundaryViolations(
+        ...parseFixture(`
         import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
         appendTranscriptMessage(scope, { message });
         publishTranscriptUpdate(scope, { messageId });
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags legacy writers inside the gateway sessions.create lifecycle", () => {
     expect(
-      findGatewaySessionCreateLifecycleViolations(`
+      findGatewaySessionCreateLifecycleViolations(
+        ...parseFixture(`
         const handlers = {
           "sessions.create": async () => {
             await updateSessionStore(storePath, () => undefined);
@@ -542,6 +582,7 @@ describe("session accessor boundary guard", () => {
           },
         };
       `),
+      ),
     ).toEqual([
       { line: 4, reason: 'calls legacy sessions.create lifecycle writer "updateSessionStore"' },
       {
@@ -553,24 +594,28 @@ describe("session accessor boundary guard", () => {
 
   it("allows the gateway sessions.create lifecycle accessor seam", () => {
     expect(
-      findGatewaySessionCreateLifecycleViolations(`
+      findGatewaySessionCreateLifecycleViolations(
+        ...parseFixture(`
         const handlers = {
           "sessions.create": async () => {
             await createSessionEntryWithTranscript(scope, createEntry);
           },
         };
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags gateway manual compact trim file mutations", () => {
     expect(
-      findSessionCompactManualTrimBoundaryViolations(`
+      findSessionCompactManualTrimBoundaryViolations(
+        ...parseFixture(`
         import { archiveFileOnDisk } from "../session-utils.js";
         import { readRecentSessionTranscriptLines } from "../session-transcript-readers.js";
         const tail = readRecentSessionTranscriptLines(scope);
         const archived = archiveFileOnDisk(filePath, "bak");
       `),
+      ),
     ).toEqual([
       { line: 2, reason: 'imports legacy session store manual compact trim "archiveFileOnDisk"' },
       {
@@ -588,12 +633,14 @@ describe("session accessor boundary guard", () => {
 
   it("flags direct lifecycle cleanup helper usage", () => {
     expect(
-      findSessionLifecycleCleanupBoundaryViolations(`
+      findSessionLifecycleCleanupBoundaryViolations(
+        ...parseFixture(`
         import { archiveRemovedSessionTranscripts } from "../config/sessions/store.js";
         import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
         archiveRemovedSessionTranscripts({ removedSessionFiles, referencedSessionIds, storePath, reason: "deleted" });
         cleanupArchivedSessionTranscripts({ directories, rules });
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -617,16 +664,19 @@ describe("session accessor boundary guard", () => {
 
   it("ignores comments and strings that describe legacy readers", () => {
     expect(
-      findSessionAccessorBoundaryViolations(`
+      findSessionAccessorBoundaryViolations(
+        ...parseFixture(`
         // loadSessionStore and readSessionEntries used to be called here.
         const description = "loadSessionStore";
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
     expect(
-      findEmbeddedAgentSessionTargetViolations(`
+      findEmbeddedAgentSessionTargetViolations(
+        ...parseFixture(`
         const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, entry);
         agentRuntime.runEmbeddedAgent({
           sessionId,
@@ -638,6 +688,7 @@ describe("session accessor boundary guard", () => {
           sessionFile: transcriptPath,
         });
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -658,13 +709,15 @@ describe("session accessor boundary guard", () => {
 
   it("allows embedded-agent calls that pass sessionTarget identity", () => {
     expect(
-      findEmbeddedAgentSessionTargetViolations(`
+      findEmbeddedAgentSessionTargetViolations(
+        ...parseFixture(`
         agentRuntime.runEmbeddedAgent({
           sessionId,
           sessionKey,
           sessionTarget: { agentId, sessionId, sessionKey, storePath },
         });
       `),
+      ),
     ).toEqual([]);
   });
 });

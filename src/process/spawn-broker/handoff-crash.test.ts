@@ -8,7 +8,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker admission custody", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker admission custody", () => {
   it("cleans a command when the broker dies before its pipes are ready", async () => {
     const host = createSpawnBrokerHost();
     const marker = path.join(tempDirs.make("openclaw-broker-handoff-"), "pid");

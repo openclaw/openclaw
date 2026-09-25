@@ -10,6 +10,7 @@ type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
+  doneMessage?: string;
   cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
@@ -69,7 +70,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 </div>`
               : props.state.phase === "done"
                 ? html`<div role="status">
-                    ${t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
+                    ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
                   </div>`
                 : props.state.phase === "error" || props.state.phase === "cancelled"
                   ? html`<div class="callout danger" role="alert">
@@ -90,7 +91,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                   : html`
                       ${
                         props.state.validationError
-                          ? html`<div class="callout danger" role="alert">
+                          ? html`<div
+                              id="model-setup-wizard-validation-error"
+                              class="callout danger"
+                              role="alert"
+                            >
                               ${props.state.validationError}
                             </div>`
                           : nothing
@@ -101,6 +106,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         value: props.value,
                         busy: props.state.busy,
                         inputId: WIZARD_TEXT_INPUT_ID,
+                        validationErrorId: props.state.validationError
+                          ? "model-setup-wizard-validation-error"
+                          : undefined,
                         confirmAffirmativeLabel:
                           props.mode === "prepare" && props.state.step.type === "confirm"
                             ? t("modelSetup.wizard.continue")

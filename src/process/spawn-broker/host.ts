@@ -13,13 +13,16 @@ import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restorePipePrefix } from "./pipe.js";
+import { holdPipe, restorePipePrefix, restoreStdinPipe } from "./pipe.js";
 import {
   SpawnBrokerError,
   type BrokerRequest,
   type BrokerResponse,
   type BrokerSpawnOptions,
 } from "./protocol.js";
+
+const spawnBrokerWorkerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
+export const spawnBrokerEntryPath = fileURLToPath(spawnBrokerWorkerUrl);
 
 const MAX_REQUESTS = 256;
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
@@ -157,6 +160,7 @@ export class SpawnBrokerHost {
       child.fail(error);
     };
     if (!this.available || this.closing || this.requests.size >= MAX_REQUESTS) {
+      child.markNotStarted();
       queueMicrotask(() => fail(new SpawnBrokerError("Spawn broker is unavailable")));
       return request;
     }
@@ -201,8 +205,7 @@ export class SpawnBrokerHost {
       return;
     }
     const generation = this.generation++;
-    const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
-    const child = spawn(process.execPath, resolveRuntimeWorkerArgv(worker), {
+    const child = spawn(process.execPath, resolveRuntimeWorkerArgv(spawnBrokerWorkerUrl), {
       stdio: ["inherit", "ignore", "ignore", "ipc"],
       detached: true,
       serialization: "advanced",
@@ -317,17 +320,26 @@ export class SpawnBrokerHost {
       if (message.type === "owned") {
         request.pid = message.pid;
       } else if (message.type === "pipe") {
-        if (message.closed && message.fd === 0) {
-          const stdin = new Socket();
-          request.child.attachPipe(message.fd, stdin);
-          stdin.destroy();
-        } else if (handle instanceof Socket) {
-          if (message.fd > 0) {
-            holdPipe(handle);
+        try {
+          if (message.closed && message.fd === 0) {
+            const stdin = new Socket();
+            request.child.attachPipe(message.fd, stdin);
+            stdin.destroy();
+          } else if (handle instanceof Socket) {
+            if (message.fd === 0) {
+              restoreStdinPipe(handle);
+            } else {
+              holdPipe(handle);
+            }
+            request.child.attachPipe(message.fd, handle);
+          } else {
+            throw new SpawnBrokerError("Spawn broker pipe transfer failed");
           }
-          request.child.attachPipe(message.fd, handle);
-        } else {
-          fail(new SpawnBrokerError("Spawn broker pipe transfer failed"));
+        } catch (error) {
+          if (handle instanceof Socket) {
+            handle.destroy();
+          }
+          fail(toErrorObject(error, "Spawn broker pipe setup failed"));
           if (child.connected) {
             child.disconnect();
           }
@@ -342,6 +354,11 @@ export class SpawnBrokerHost {
           restorePipePrefix(pipe, message.bytes);
         }
       } else if (message.type === "execa-result") {
+        // Started commands publish their owned PID first on this ordered channel.
+        // A failed result without that admission is the worker's no-process outcome.
+        if (request.pid === undefined && message.result.failed) {
+          request.child.markNotStarted();
+        }
         request.result?.resolve(message.result);
         request.resultSettled = true;
         this.retire(message.id, request);
@@ -354,6 +371,14 @@ export class SpawnBrokerHost {
         this.retire(message.id, request);
       }
     });
+  }
+
+  /** Join cleanup already retained by this host, including recorded failures. */
+  async waitForCleanup(): Promise<void> {
+    await Promise.allSettled([...this.cleanups].map((cleanup) => cleanup.settled));
+    if (this.cleanupErrors.length) {
+      throw new AggregateError(this.cleanupErrors, "Spawn broker cleanup did not complete");
+    }
   }
 
   close(): Promise<void> {
@@ -380,10 +405,7 @@ export class SpawnBrokerHost {
           clearTimeout(timer);
         }
       }
-      await Promise.allSettled([...this.cleanups].map((cleanup) => cleanup.settled));
-      if (this.cleanupErrors.length) {
-        throw new AggregateError(this.cleanupErrors, "Spawn broker cleanup did not complete");
-      }
+      await this.waitForCleanup();
     } finally {
       process.removeListener("exit", this.onParentExit);
     }

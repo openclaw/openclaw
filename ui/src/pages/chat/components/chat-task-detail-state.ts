@@ -1,9 +1,16 @@
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { TasksHistoryResult } from "../../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  resolveGatewayErrorDetailCode,
+  type GatewayBrowserClient,
+} from "../../../api/gateway.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
@@ -18,9 +25,13 @@ type LoadedTaskTranscript = {
   nextCursor?: string;
   loading: boolean;
   error?: "refresh" | "older";
+  capacityMessage?: string;
 };
 
-type TaskTranscriptLoad = { status: "loading" } | LoadedTaskTranscript | { status: "error" };
+type TaskTranscriptLoad =
+  | { status: "loading" }
+  | LoadedTaskTranscript
+  | { status: "error"; capacityMessage?: string };
 
 type TaskDetailState = {
   client: GatewayBrowserClient;
@@ -180,7 +191,9 @@ async function loadTranscriptPage(
     state.lastRequestStartedAt = Date.now();
     state.refreshPending = false;
   }
-  state.load = previous ? { ...previous, loading: true, error: undefined } : { status: "loading" };
+  state.load = previous
+    ? { ...previous, loading: true, error: undefined, capacityMessage: undefined }
+    : { status: "loading" };
   host.requestUpdate?.();
   let load: TaskTranscriptLoad;
   try {
@@ -189,7 +202,7 @@ async function loadTranscriptPage(
       limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
       ...(cursor ? { cursor } : {}),
     });
-    const messages = visibleChatHistoryMessages(result.messages);
+    const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
     const previousMessages = previous?.messages ?? [];
     const earlier = cursor ? messages : previousMessages;
     const later = cursor ? previousMessages : messages;
@@ -217,10 +230,16 @@ async function loadTranscriptPage(
             : undefined,
       loading: false,
     };
-  } catch {
+  } catch (error) {
+    const capacityMessage =
+      error instanceof GatewayRequestError &&
+      error.gatewayCode === "UNAVAILABLE" &&
+      resolveGatewayErrorDetailCode(error) === GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY
+        ? formatUiError(error)
+        : undefined;
     load = previous
-      ? { ...previous, loading: false, error: cursor ? "older" : "refresh" }
-      : { status: "error" };
+      ? { ...previous, loading: false, error: cursor ? "older" : "refresh", capacityMessage }
+      : { status: "error", ...(capacityMessage ? { capacityMessage } : {}) };
   }
   const current = host.taskDetailState;
   if (

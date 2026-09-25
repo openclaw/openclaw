@@ -85,7 +85,7 @@ export async function generateReportPeriods(params: {
   const statuses: Record<string, SourceStatus> = {};
   for (const period of params.periods) {
     runtime.signal.throwIfAborted();
-    const previous = await store.getPeriod(period.period, period.key);
+    const previous = await store.getPeriodDocument(period.period, period.key);
     runtime.signal.throwIfAborted();
     let report;
     if (period.period === "day") {

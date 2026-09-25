@@ -361,7 +361,7 @@ describe("report-test-temp-creations", () => {
     );
   });
 
-  it("ignores large non-test diffs in staged and branch reports", () => {
+  it("handles large data and test-directory docs in staged and branch reports", () => {
     const root = tempDirs.make("openclaw-temp-report-large-diff-");
     const env = createNestedGitEnv();
     const git = (...args: string[]) =>
@@ -386,7 +386,10 @@ describe("report-test-temp-creations", () => {
       path.join(root, "generated", "catalog.json"),
       Buffer.alloc(65 * 1024 * 1024, "x"),
     );
-    git("add", "generated/catalog.json");
+    const doc = "docs/reference/test/runner-internals.md";
+    fs.mkdirSync(path.dirname(path.join(root, doc)), { recursive: true });
+    fs.writeFileSync(path.join(root, doc), "# Test runner\n\nManual setup notes.\n");
+    git("add", "generated/catalog.json", doc);
     expect(report("--staged")).toEqual([]);
 
     fs.mkdirSync(path.join(root, "src"));
@@ -397,6 +400,8 @@ describe("report-test-temp-creations", () => {
     const expected = [{ file, line: 1, reason: "new mkdtemp temp directory creation", source }];
     expect(report("--staged")).toEqual(expected);
     git("commit", "-q", "-m", "generated data and test");
+    expect(report("--staged")).toEqual([]);
+    expect(report("--staged", "--base", "HEAD^")).toEqual(expected);
     expect(report("--base", "HEAD^", "--head", "HEAD")).toEqual(expected);
     expect(report("--base", "HEAD^", "--head", "HEAD", "--no-merge-base")).toEqual(expected);
   });

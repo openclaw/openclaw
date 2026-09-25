@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
@@ -92,6 +93,7 @@ describe("resolveGatewayService", () => {
     const service = resolveGatewayService();
     expect(service.label).toBe(label);
     expect(service.loadedText).toBe(loadedText);
+    expect(service.unsupportedReason).toBeUndefined();
   });
 
   it.each([
@@ -119,9 +121,11 @@ describe("resolveGatewayService", () => {
 
   it("keeps FreeBSD service ownership external and explains the package and foreground paths", async () => {
     mockProcessPlatform("freebsd");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     const service = resolveGatewayService();
     const runtime = await service.readRuntime(process.env);
     expect(runtime.status).toBe("unknown");
+    expect(service.unsupportedReason).toBe(runtime.detail);
     expect(runtime.detail).toContain("not supported by this CLI on FreeBSD");
     expect(runtime.detail).toContain("openclaw_user to your onboarding account");
     expect(runtime.detail).toContain('openclaw_enable="YES" in /etc/rc.conf');
@@ -145,6 +149,16 @@ describe("resolveGatewayService", () => {
       command: null,
       runtime,
     });
+    const { collectGatewayDaemonFindings } = await import("../flows/doctor-core-checks.runtime.js");
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        fixHint: runtime.detail,
+      }),
+    ]);
   });
 
   it("gives FreeBSD node hosts their own foreground recovery command", async () => {
@@ -152,6 +166,7 @@ describe("resolveGatewayService", () => {
     const service = resolveNodeService();
     const runtime = await service.readRuntime(process.env);
     expect(runtime.status).toBe("unknown");
+    expect(service.unsupportedReason).toBe(runtime.detail);
     expect(runtime.detail).toContain("Node service management is not supported");
     expect(runtime.detail).toContain("`openclaw node run`");
     expect(runtime.detail).not.toContain("service openclaw");
@@ -339,15 +354,21 @@ describe("readGatewayServiceState", () => {
             `[Service]\nExecStart=/missing/openclaw ${node ? "node run" : "gateway"}\n`,
           );
         }
+        const native = await import("./systemd-peer-native.js");
+        for (const method of ["openSystemdBroker", "openSystemdPrivatePeer"] as const) {
+          vi.spyOn(native, method).mockRejectedValue(
+            new Error("Synthetic native manager unavailable"),
+          );
+        }
+        vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockResolvedValue({
+          stdout: "",
+          stderr: "service manager unavailable",
+          code: 1,
+          termination: "error",
+          errorCode: "ENOENT",
+        });
         if (node) {
           // Only the fixture HOME contains definitions; no native manager is contacted.
-          vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockResolvedValue({
-            stdout: "",
-            stderr: "service manager unavailable",
-            code: 1,
-            termination: "error",
-            errorCode: "ENOENT",
-          });
           const access = fs.access;
           vi.spyOn(fs, "access").mockImplementation(async (target, mode) => {
             if (!String(target).startsWith(`${home}${path.sep}`)) {
@@ -411,16 +432,24 @@ describe("readGatewayServiceState", () => {
           phase: "inspect",
           timeoutMs: 2_000,
         });
+        expect(result.blockMessage).toBeUndefined();
         if (condition === "absent") {
-          expect(result.blockMessage).toBeUndefined();
           expect(result.serviceMutationSkipMessage).toContain("no Gateway service or listener");
           expect(result.serviceUpdateVerdict?.kind).toBe("absent");
-        } else if (portUsage) {
-          expect(result.blockMessage).toContain("Refusing to mutate code");
-          expect(result.serviceUpdateVerdict).toMatchObject({ kind: "unavailable" });
         } else {
-          expect(result.blockMessage).toContain("busctl executable is unavailable");
-          expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
+          expect(result.serviceUpdateVerdict).toMatchObject({
+            kind: "unavailable",
+            inspectionReason: "service-manager-unavailable",
+          });
+          expect(result.serviceMutationSkipMessage).toContain(
+            "No supported service manager detected",
+          );
+          expect(result.serviceMutationSkipMessage).toContain(
+            "Restart the Gateway you launched manually after the update.",
+          );
+          expect(result.serviceEnv === undefined).toBe(true);
+          expect(result.serviceDefinitionEnv === undefined).toBe(true);
+          expect(result.serviceNodeRunner === undefined).toBe(true);
         }
         expect(result.serviceMutationAllowed).toBe(false);
         expect(result.stopped).toBe(false);

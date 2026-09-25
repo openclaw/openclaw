@@ -661,12 +661,13 @@ describe("OpenAI Responses provider prompt observer", () => {
     const options = {
       openclawCodeModeToolSurface: true,
       openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
-      onPayload: async () => {
+      onPayload: async (payload: unknown) => {
         await Promise.resolve();
+        const request = payload as { metadata?: Record<string, string> };
         return {
           model: "gpt-5.4",
           stream: true,
-          metadata: { caller: "kept" },
+          metadata: { ...request.metadata, caller: "kept" },
           input: [
             { type: "message", role: "developer", content: prompt },
             {
@@ -708,6 +709,44 @@ describe("OpenAI Responses provider prompt observer", () => {
     });
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
+
+  it.each([
+    { azure: false, remove: false },
+    { azure: true, remove: false },
+    { azure: false, remove: true },
+    { azure: true, remove: true },
+  ])(
+    "honors the payload hook's metadata choice (azure=$azure, remove=$remove)",
+    async ({ azure, remove }) => {
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: {
+          ...initialHost.plugin,
+          resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
+        },
+      });
+      const run = await runObservedRequest({
+        azure,
+        context: createContext("prompt"),
+        options: {
+          onPayload: (payload: unknown) => {
+            const request = payload as Record<string, unknown>;
+            expect(request.metadata).toEqual({ host: "added" });
+            if (remove) {
+              delete request.metadata;
+            }
+            return request;
+          },
+        },
+      });
+      expect(run.requests).toHaveLength(1);
+      if (remove) {
+        expect(run.requests[0]).not.toHaveProperty("metadata");
+      } else {
+        expect(run.requests[0]?.metadata).toEqual({ host: "added" });
+      }
+    },
+  );
 
   it("observes each staged encrypted-content recovery attempt", async () => {
     const prompt = "PRIVATE-REPLAY-PROMPT";

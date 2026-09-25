@@ -59,7 +59,7 @@ vi.mock("./project-clone-runtime.js", () => ({
   cloneProjectCheckout: fixture.clone,
 }));
 
-vi.mock("../state/openclaw-state-worker-store.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: OpenClawStateLeaseContext,
     _context: unknown,

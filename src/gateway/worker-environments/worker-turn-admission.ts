@@ -109,15 +109,6 @@ export async function waitForInitialWorkerPlacement(params: {
   };
 }
 
-const CURRENT_WORKER_BUILD_REMEDIATION =
-  "redispatch the session so its worker can bootstrap the current build before retrying.";
-
-function withCurrentWorkerBuildRemediation(reason: string): string {
-  return reason.endsWith(CURRENT_WORKER_BUILD_REMEDIATION)
-    ? reason
-    : `${reason}; ${CURRENT_WORKER_BUILD_REMEDIATION}`;
-}
-
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
@@ -219,10 +210,7 @@ export function resolvePlacementIdentity(
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
-  const failureDetail =
-    placement.state === "failed"
-      ? `: ${withCurrentWorkerBuildRemediation(placement.recoveryError)}`
-      : "";
+  const failureDetail = placement.state === "failed" ? `: ${placement.recoveryError}` : "";
   if (
     placement.state !== "active" ||
     !placement.remoteWorkspaceDir ||

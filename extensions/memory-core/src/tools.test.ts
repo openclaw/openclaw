@@ -18,7 +18,7 @@ import {
   setMemorySourceCounts,
   setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
-import { applyProjectRanking } from "./memory/project-ranking.js";
+import { applyProjectRanking, prepareActiveProjectKeys } from "./memory/project-ranking.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 import {
@@ -923,7 +923,7 @@ describe("memory_search corpus labels", () => {
             projectKey: "github.com/acme/Gamma",
           },
         ],
-        opts?.activeProjectKeys,
+        prepareActiveProjectKeys(opts?.activeProjectKeys),
       );
     });
     const tool = createMemorySearchToolOrThrow({

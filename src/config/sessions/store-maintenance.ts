@@ -14,7 +14,7 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import type { SessionEntry } from "./types.js";
@@ -66,16 +66,17 @@ export type ResolvedSessionMaintenanceConfigInput = Omit<
     Pick<ResolvedSessionMaintenanceConfig, "archiveDashboardAfterMs" | "modelRunPruneAfterMs">
   >;
 
-function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.pruneAfter;
+function resolveMaintenanceDuration(raw: unknown, fallback: number): number;
+function resolveMaintenanceDuration(raw: unknown, fallback: null): number | null;
+function resolveMaintenanceDuration(raw: unknown, fallback: number | null): number | null {
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return DEFAULT_SESSION_PRUNE_AFTER_MS;
+    return fallback;
   }
   try {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
-    return DEFAULT_SESSION_PRUNE_AFTER_MS;
+    return fallback;
   }
 }
 
@@ -84,16 +85,8 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
   if (raw === false || raw === 0) {
     return null;
   }
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS;
-  }
-  try {
-    const parsed = parseDurationMs(normalized, { defaultUnit: "d" });
-    return parsed > 0 ? parsed : null;
-  } catch {
-    return DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS;
-  }
+  const parsed = resolveMaintenanceDuration(raw, DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS);
+  return parsed > 0 ? parsed : null;
 }
 
 function resolveResetArchiveRetentionMs(
@@ -103,31 +96,7 @@ function resolveResetArchiveRetentionMs(
   // old archive artifacts under pressure). An explicit duration opts back into
   // wall-clock deletion; parse failures stay on the keep side because losing
   // history is the worse failure mode.
-  const raw = maintenance?.resetArchiveRetention;
-  if (raw === false) {
-    return null;
-  }
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return null;
-  }
-  try {
-    return parseDurationMs(normalized, { defaultUnit: "d" });
-  } catch {
-    return null;
-  }
-}
-
-function resolvePreserveRecentMs(maintenance?: SessionMaintenanceConfig): number | null {
-  const raw = maintenance?.preserveRecent;
-  if (raw === false || raw === undefined) {
-    return null;
-  }
-  try {
-    return parseDurationMs(normalizeStringifiedOptionalString(raw) ?? "", { defaultUnit: "d" });
-  } catch {
-    return null;
-  }
+  return resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null);
 }
 
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
@@ -187,15 +156,17 @@ function resolveHighWaterBytes(
 export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {
-  const pruneAfterMs = resolvePruneAfterMs(maintenance);
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
-    pruneAfterMs,
+    pruneAfterMs: resolveMaintenanceDuration(
+      maintenance?.pruneAfter,
+      DEFAULT_SESSION_PRUNE_AFTER_MS,
+    ),
     archiveDashboardAfterMs: resolveArchiveDashboardAfterMs(maintenance),
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
-    preserveRecentMs: resolvePreserveRecentMs(maintenance),
+    preserveRecentMs: resolveMaintenanceDuration(maintenance?.preserveRecent, null),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),

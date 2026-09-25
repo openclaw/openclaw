@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { triageAfterFailure } from "../../commands/triage-failure.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -65,6 +64,7 @@ import {
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -73,7 +73,6 @@ import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
-import { parsePort } from "../shared/parse-port.js";
 import {
   isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
@@ -86,6 +85,7 @@ import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import { resolveGatewayStartupMaintenanceReason } from "./startup-maintenance.js";
 import { createGatewayCliStartupTrace } from "./startup-trace.js";
+import { triageGatewayStartupFailure } from "./startup-triage.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -670,7 +670,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  const portOverride = parsePort(opts.port);
+  const portOverride = parseTcpPort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
     defaultRuntime.exit(1);
@@ -989,16 +989,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       return;
     }
     triageAttempted = true;
-    await triageAfterFailure(
-      defaultRuntime,
-      {
-        kind: "gateway-startup",
-        phase: "startup",
-        error: formatErrorMessage(error),
-        gateway: "verify-running",
-      },
-      signal,
-    );
+    await triageGatewayStartupFailure(defaultRuntime, error, signal);
   };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
@@ -1076,6 +1067,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         hostLifecycle,
         startupOperation,
       } = {}) => {
+        const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -1088,10 +1080,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           startupStartedAt,
           hostLifecycle,
           startupOperation,
+          prepareConfigSnapshot: snapshotPreparation.prepareHostConfigSnapshot,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
-          ...(startupConfigSnapshotReadForThisStart
-            ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
-            : {}),
+          startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
           ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),

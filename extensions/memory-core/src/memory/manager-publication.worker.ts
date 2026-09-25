@@ -1,20 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
-import { supportsNodeSqliteExtensionLoading } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  supportsNodeSqliteExtensionLoading,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
-import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db.js";
+import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import type {
   MemoryPublicationConnection,
   MemoryPublicationOperations,
   MemoryPublicationResult,
-  MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
@@ -48,6 +48,33 @@ export function openExistingSqliteWorkerBackend(
   const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(context.databasePath), {
     allowExtension: !process.permission && supportsNodeSqliteExtensionLoading(),
   });
+  return createPublicationBackend(input, context.databasePath, db, true, (stage) =>
+    requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+  );
+}
+
+/** Agent publication borrows its executor connection; only private shadows open their own. */
+export function bindSqliteWorkerBackend(
+  input: MemoryPublicationConnection,
+  context: {
+    databasePath: string;
+    database: DatabaseSync;
+    admit(stage: "transaction" | "commit"): void;
+  },
+): SqliteWorkerBackend<MemoryPublicationOperations> {
+  return createPublicationBackend(input, context.databasePath, context.database, false, (stage) =>
+    context.admit(stage),
+  );
+}
+
+function createPublicationBackend(
+  input: MemoryPublicationConnection,
+  databasePath: string,
+  db: DatabaseSync,
+  ownsConnection: boolean,
+  admit: (stage: "transaction" | "commit") => void,
+): SqliteWorkerBackend<MemoryPublicationOperations> {
+  const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   let staged:
     | {
         operation: string;
@@ -64,11 +91,22 @@ export function openExistingSqliteWorkerBackend(
       if (!Number.isSafeInteger(value)) {
         throw new Error("Invalid memory publication connection policy");
       }
-      db.exec(`PRAGMA ${name} = ${value}`);
+      if (ownsConnection) {
+        db.exec(`PRAGMA ${name} = ${value}`);
+      } else {
+        const row = db.prepare(`PRAGMA ${name}`).get();
+        if (!row || Number(Object.values(row)[0]) !== value) {
+          throw new Error(
+            `Memory publication differs from its canonical connection policy: ${name}`,
+          );
+        }
+      }
     }
     // Connection-local scratch spills to SQLite's temporary storage instead of
     // retaining a second complete source in the Worker or its broker queue.
-    db.exec("PRAGMA temp_store = FILE");
+    if (ownsConnection) {
+      db.exec("PRAGMA temp_store = FILE");
+    }
     db.exec(
       "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
     );
@@ -78,12 +116,6 @@ export function openExistingSqliteWorkerBackend(
     const discard = () => {
       db.exec("DELETE FROM temp.memory_publication_input");
       staged = undefined;
-    };
-    const configure = (state: MemoryPublicationState) => {
-      if (state.extensionPath && state.extensionPath !== loadedExtension) {
-        db.loadExtension(state.extensionPath);
-        loadedExtension = state.extensionPath;
-      }
     };
     const transact = <T>(
       run: (hooks: { onBegin: () => void; withCommit: (commit: () => void) => void }) => T,
@@ -100,11 +132,11 @@ export function openExistingSqliteWorkerBackend(
             entered = true;
             db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
             assertPath();
-            requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+            admit("transaction");
           },
           withCommit: (commit) => {
             assertPath();
-            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+            admit("commit");
             commit();
             committed = true;
           },
@@ -162,7 +194,12 @@ export function openExistingSqliteWorkerBackend(
           }
           return undefined;
         }
-        configure(command.input.state);
+        const extensionPath = command.input.state.extensionPath;
+        if (extensionPath && extensionPath !== loadedExtension) {
+          loadSqliteVecExtensionFromPath(db, extensionPath);
+          assertPath();
+          loadedExtension = extensionPath;
+        }
         if (command.type === "database.publish") {
           const publication = command.input;
           return transact((hooks) => {
@@ -241,11 +278,17 @@ export function openExistingSqliteWorkerBackend(
         return outcome;
       },
       close() {
-        db.close();
+        if (ownsConnection) {
+          db.close();
+        } else {
+          db.exec("DROP TABLE temp.memory_publication_input");
+        }
       },
     };
   } catch (error) {
-    db.close();
+    if (ownsConnection) {
+      db.close();
+    }
     throw error;
   }
 }

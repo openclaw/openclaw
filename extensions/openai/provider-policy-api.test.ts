@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
-  projectRealtimeVoicePublicProjection,
+  resolveModelAuthPolicy,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -17,33 +17,38 @@ describe("OpenAI provider policy artifact", () => {
     vi.unstubAllEnvs();
   });
 
-  it("projects private realtime model routing without exposing the model", () => {
-    const config = { model: "gpt-live-test-canary", voice: "marin" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config: { voice: "marin" },
-      clientHints: {
-        modelSource: "gateway",
-        gatewayRelaySupported: false,
-      },
-    });
-  });
-
-  it("does not add routing hints for public realtime models", () => {
-    const config = { model: "gpt-realtime", voice: "marin" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config,
-    });
-  });
-
-  it("preserves the released realtime route without routing hints", () => {
-    const config = { model: "gpt-live-1-codex", voice: "spruce" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config,
-    });
-  });
+  it.each([
+    ["oauth", undefined, "openai-chatgpt-responses", undefined, "subscription", true],
+    ["api-key", undefined, "openai-responses", undefined, "api-key", true],
+    [
+      "oauth",
+      "chatgpt-token-sharing",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      "api-key",
+      true,
+    ],
+    ["oauth", "chatgpt-token-sharing", "openai-chatgpt-responses", undefined, "api-key", false],
+    [
+      "oauth",
+      "chatgpt-token-sharing",
+      "openai-responses",
+      "https://example.com/v1",
+      "api-key",
+      false,
+    ],
+    ["oauth", "chatgpt-identity", "openai-responses", undefined, null, false],
+  ] as const)(
+    "authorizes %s/%s for %s at %s as %s: %s",
+    (mode, authFlow, api, baseUrl, authRequirement, compatible) => {
+      expect(
+        resolveModelAuthPolicy({ provider: "openai", mode, authFlow, api, baseUrl }),
+      ).toMatchObject({
+        authRequirement,
+        compatible,
+      });
+    },
+  );
 
   it.each([
     ["openai", "gpt-5.6", "gpt-5.6-sol", true],
@@ -298,7 +303,7 @@ describe("OpenAI provider policy artifact", () => {
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
         },
         {
           api: "openai-chatgpt-responses",

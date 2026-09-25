@@ -1,6 +1,7 @@
 import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
+  AgentHarness,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
@@ -54,6 +55,28 @@ async function releaseSessionSubscription(
       );
     }
   }
+}
+
+/** Retire the old native context when the host commits a rewind or branch switch. */
+export async function withCodexAppServerSessionContextReset<T>(
+  bindingStore: CodexAppServerBindingStore,
+  params: Parameters<NonNullable<AgentHarness["withSessionContextReset"]>>[0],
+  run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+): Promise<T> {
+  params.assertCurrent();
+  const plan = await bindingStore.prepareSessionGenerationReclaim({
+    kind: "session",
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  params.assertCurrent();
+  // Prepare the recorded predecessor directly; a rejected cut must not adopt or reset it.
+  const sessionId =
+    plan.kind === "verify" && plan.expectedPreviousSessionId === params.previousSessionId
+      ? plan.expectedPreviousSessionId
+      : params.sessionId;
+  return withCodexAppServerSessionDeletion(bindingStore, { ...params, sessionId }, run);
 }
 
 /** Prepare exact binding deletion before the session owner commits either database. */

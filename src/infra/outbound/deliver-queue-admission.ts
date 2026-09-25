@@ -2,6 +2,8 @@
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -11,7 +13,6 @@ import {
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import {
   loadPendingDelivery,
   type QueuedDelivery,
@@ -19,6 +20,7 @@ import {
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
@@ -67,7 +69,7 @@ export function restoreQueuedDeliveryCustody(
   const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
     (prepared) => prepared.payload,
   );
-  return { ...params, ...custody, payloads };
+  return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */
@@ -108,6 +110,7 @@ export async function stageAndEnqueueOutboundDelivery(
     {
       stateDir,
       payloads: acceptedPayloads,
+      ...(params.sessionGeneration ? { artifactFormat: "session-generation-v1" as const } : {}),
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.
@@ -135,6 +138,8 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     return null;
   }
+  // Take custody before checking generation: temporary lifecycle mutations must
+  // leave a completed result available for recovery.
   try {
     const initialProducerClaim = options?.claimForLiveDelivery
       ? createInitialDeliveryProducerClaim()
@@ -160,6 +165,7 @@ export async function stageAndEnqueueOutboundDelivery(
       silent: params.silent,
       mirror: params.mirror,
       session: params.session,
+      sessionGeneration: params.sessionGeneration,
       gatewayClientScopes: params.gatewayClientScopes,
       preparedMessageId: params.preparedMessageId,
       completionRetention: params.completionRetention,
@@ -167,11 +173,12 @@ export async function stageAndEnqueueOutboundDelivery(
       deliveryCompletion: params.deliveryCompletion,
     };
     if (params.deliveryIntentId) {
-      const queued = options?.getStablePreparation
+      const preparation = await options?.getStablePreparation?.();
+      const queued = preparation
         ? await enqueuePreparedDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            await options.getStablePreparation(),
+            preparation,
             stateDir,
             staged.mediaStageId,
             params.deliveryQueueStateContext,
@@ -210,12 +217,25 @@ export async function stageAndEnqueueOutboundDelivery(
       ...(initialProducerClaim ? { producerClaimId: initialProducerClaim.producerClaimId } : {}),
     };
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(
-      staged.mediaStageId,
-      stateDir,
-      params.deliveryQueueStateContext,
-    );
-    await releaseSpoolArtifacts(staged.artifacts, stateDir);
+    if (isDeliveryRecoveryOwnedRetry(err)) {
+      throw err;
+    }
+    const errors: unknown[] = [err];
+    try {
+      cancelDeliveryQueueMediaRetention(
+        staged.mediaStageId,
+        stateDir,
+        params.deliveryQueueStateContext,
+      );
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+    try {
+      await releaseSpoolArtifacts(staged.artifacts, stateDir);
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+    throwSqliteLifecycleErrors(errors, "Delivery queue admission and media cleanup failed");
     throw err;
   }
 }

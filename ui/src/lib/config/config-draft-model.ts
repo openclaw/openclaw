@@ -33,6 +33,16 @@ import {
 
 const autoAllowlistedPluginIdsByState = new WeakMap<RuntimeConfigState, Set<string>>();
 
+export function comparableSnapshotRaw(
+  snapshot: RuntimeConfigState["configSnapshot"],
+): string | null {
+  if (typeof snapshot?.raw === "string") {
+    return snapshot.raw;
+  }
+  const editable = resolveEditableSnapshotConfig(snapshot);
+  return editable ? serializeConfigForm(editable) : null;
+}
+
 export function clearConfigDraftTracking(state: RuntimeConfigState): void {
   autoAllowlistedPluginIdsByState.delete(state);
 }
@@ -129,7 +139,9 @@ export function applyConfigSnapshot(
   options: LoadConfigOptions = {},
 ) {
   const preservePendingChanges =
-    (state.configFormDirty || state.configRecoveryError !== null) &&
+    (state.configFormDirty ||
+      state.configRecoveryError !== null ||
+      options.preservePendingChanges === true) &&
     options.discardPendingChanges !== true;
   if (options.discardPendingChanges === true) {
     // Discard resets pending edits and stale save status, but NOT the restart
@@ -314,7 +326,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   return sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
-    state.configRawOriginalParsed,
+    // The draft original is include-resolved source; raw only describes the root file.
+    state.configFormOriginal,
   );
 }
 
@@ -328,6 +341,15 @@ export type ConfigSubmittedDraft = {
 };
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
+
+export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
+  return (
+    isRecord(value) &&
+    isRecord(value.config) &&
+    typeof value.hash === "string" &&
+    value.hash.length > 0
+  );
+}
 
 export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
   const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
@@ -354,8 +376,9 @@ export function adoptConfigWriteAck(
   options: { raw?: ConfigSnapshot["raw"] } = {},
 ) {
   const acknowledgedRaw = options.raw ?? serializeConfigForm(ack.config);
-  const currentRaw = serializeFormForSubmit(state);
   const currentForm = configFormForSubmit(state);
+  // A refresh may already contain the submitted write; replay the actual local draft.
+  const currentRaw = currentForm ? serializeConfigForm(currentForm) : state.configRaw;
   const previous = resolveEditableSnapshotConfig(submitted.independentSnapshot);
   const staleForm = Boolean(
     currentForm &&
@@ -444,7 +467,10 @@ function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   ) {
     return;
   }
-  if (!state.configFormDirty && state.configAutoSaveStatus === "error") {
+  if (
+    state.configAutoSaveStatus === "rejected" ||
+    (!state.configFormDirty && state.configAutoSaveStatus === "error")
+  ) {
     state.lastError = null;
   }
   state.configAutoSaveStatus = "idle";
@@ -604,7 +630,11 @@ export function updateConfigFormValue(
   });
 }
 
-export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
+export function updateConfigRawValue(
+  state: RuntimeConfigState,
+  value: string,
+  hasPendingDraftWrite = false,
+) {
   // Raw drafts may carry JSON5 comments; warm the parser before any
   // mutateConfigForm/diff path needs it synchronously.
   void warmJson5().catch(() => undefined);
@@ -612,8 +642,12 @@ export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
   state.configFormDirty = value !== state.configRawOriginal;
   if (state.configFormDirty) {
     state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
-  } else {
+  } else if (!hasPendingDraftWrite) {
     resetConfigPendingChanges(state);
+  } else {
+    // The refreshed snapshot may contain the pending write, not this raw revert.
+    state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+    clearConfigDraftTracking(state);
   }
   // Raw edits own submission; a clean revert also restores the saved form
   // above so a later form edit cannot resurrect discarded values.

@@ -45,6 +45,16 @@ export function dismissConfirmedActionPopovers(owner: ParentNode): void {
   }
 }
 
+export function isConfirmedActionPopoverFocused(owner: Node): boolean {
+  for (const popover of confirmedActionPopovers) {
+    const popoverOwner = confirmedActionOwners.get(popover);
+    if (popoverOwner && owner.contains(popoverOwner) && popover.contains(document.activeElement)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveViewportBounds() {
   const viewport = window.visualViewport;
   const left = viewport?.offsetLeft ?? 0;

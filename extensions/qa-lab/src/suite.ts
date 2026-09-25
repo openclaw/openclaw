@@ -1,13 +1,10 @@
-// QA Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
@@ -20,6 +17,7 @@ import {
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
+import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
@@ -154,33 +152,15 @@ export function formatQaSuiteRunStartProgress(params: {
 }
 
 async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const { response, release } = await fetchWithSsrFGuard({
-        url: `${baseUrl}/readyz`,
-        policy: { allowPrivateNetwork: true },
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        auditContext: "qa-lab-suite-wait-for-lab-ready",
-      });
-      try {
-        const ready = response.ok;
-        await discardIgnoredResponseBody(response);
-        if (ready) {
-          return;
-        }
-      } finally {
-        await release();
-      }
-    } catch {
-      // retry
-    }
-    const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) {
-      await sleep(Math.min(100, remainingMs));
-    }
+  const ready = await waitForQaHttpReady(
+    `${baseUrl}/readyz`,
+    timeoutMs,
+    100,
+    "qa-lab-suite-wait-for-lab-ready",
+  );
+  if (!ready) {
+    throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
 }
 
 export async function waitForQaLabReadyOrStopOwned(params: {
@@ -461,7 +441,7 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
     }
   };
   const deadlineMs = Date.now() + 20_000;
-  await params.gateway.signalProcess("SIGUSR2");
+  await params.gateway.signalProcess("SIGQUIT");
   let snapshotPath: string | undefined;
   while (Date.now() < deadlineMs) {
     const next = (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(

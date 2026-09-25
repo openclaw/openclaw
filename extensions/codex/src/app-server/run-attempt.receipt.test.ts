@@ -147,6 +147,7 @@ describe("saved assistant occurrence settlement", () => {
             turn: {
               id: "turn-1",
               status,
+              items: [],
               error: { message: error },
             },
           },

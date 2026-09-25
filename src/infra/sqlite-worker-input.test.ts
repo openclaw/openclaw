@@ -1,50 +1,33 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
-  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
+  reserveSqliteWorkerInputPreparation,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
-import type { SqliteWorkerTransferFrame } from "./sqlite-worker-transfer.js";
+import {
+  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
+  type SqliteWorkerTransferFrame,
+} from "./sqlite-worker-transfer.js";
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
+const { stores, databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-input-", () => {
+  vi.restoreAllMocks();
+});
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const payload = (mib: number) => "x".repeat(mib * 1024 * 1024);
-const databasePath = () => path.join(dirs.make("sqlite-worker-input-"), "store.sqlite");
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string, signal?: AbortSignal) {
-  return store.execute({ type: "append", input: { value } }, { signal });
-}
 
 async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected: string[]) {
   const rows = await store.execute({ type: "read", input: undefined });
@@ -156,6 +139,9 @@ describe("SQLite worker staged input", () => {
 
   it("charges a queued 40 MiB command in full and frees its credits on cancellation", async () => {
     const store = await open(databasePath());
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+    );
     const hold = holdReply(() => true);
     const ahead = append(store, "ahead");
     const cancelQueued = new AbortController();
@@ -176,6 +162,9 @@ describe("SQLite worker staged input", () => {
       expect(await ahead).toMatchObject({ writes: 1 });
       await expectRows(store, ["ahead"]);
     } finally {
+      for (const prepared of concurrentInputs) {
+        prepared.release();
+      }
       cancelQueued.abort();
       replacementCancel.abort();
       hold.release();
@@ -185,6 +174,9 @@ describe("SQLite worker staged input", () => {
 
   it("reserves 32 MiB for active oversized input while preserving cancellation and queue credit", async () => {
     const store = await open(databasePath());
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+    );
     const hold = holdFirstStagedChunk();
     const activeCancel = new AbortController();
     const queuedCancel = new AbortController();
@@ -210,6 +202,9 @@ describe("SQLite worker staged input", () => {
       expect(await active).toMatchObject({ writes: 1 });
       await expectRows(store, [value]);
     } finally {
+      for (const prepared of concurrentInputs) {
+        prepared.release();
+      }
       queuedCancel.abort();
       replacementCancel.abort();
       hold.release();
@@ -247,7 +242,7 @@ describe("SQLite worker staged input", () => {
         { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
       ]);
       stores.delete(store);
-      await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+      await expect(store.close()).resolves.toBeUndefined();
       const recovered = await open(file);
       await expectRows(recovered, []);
       expect(await append(recovered, value)).toMatchObject({ writes: 1 });

@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectChannelAccount } from "../../channels/account-inspection.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
@@ -129,7 +130,7 @@ export async function resolveHealthAccountContext(params: {
   let account: unknown;
   if (inspectedEnabled !== false && !hasConfiguredUnavailableCredentialStatus(inspectedAccount)) {
     try {
-      account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+      account = await resolveChannelAccount(params);
     } catch (error) {
       diagnostics.push(
         `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,

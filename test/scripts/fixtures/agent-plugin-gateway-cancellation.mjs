@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 
 const controls = process.env.AGENT_PLUGIN_E2E_FIXTURE_DIR;
 const phase = process.env.AGENT_PLUGIN_E2E_WRITE_PHASE;
@@ -32,24 +33,11 @@ fsPromises.writeFile = async (file, ...args) => {
   }
   heldWrite = true;
   fs.writeFileSync(path.join(controls, "fixture-root"), path.dirname(path.dirname(name)));
-  await new Promise((resolve, reject) => {
-    const release = path.join(controls, "release");
-    const watcher = fs.watch(controls, () => {
-      if (fs.existsSync(release)) {
-        watcher.close();
-        resolve();
-      }
-    });
-    watcher.once("error", (error) => {
-      watcher.close();
-      reject(error);
-    });
-    process.stdout.write("fixture-write-ready\n");
-    if (fs.existsSync(release)) {
-      watcher.close();
-      resolve();
-    }
-  });
+  const release = path.join(controls, "release");
+  process.stdout.write("fixture-write-ready\n");
+  while (!fs.existsSync(release)) {
+    await setImmediate();
+  }
 };
 
 const spawn = childProcess.spawn.bind(childProcess);

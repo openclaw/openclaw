@@ -6,7 +6,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runBuiltCli } from "../../test/cli-json-stdout.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
@@ -125,18 +124,20 @@ it("keeps runtime memory registrations through local command preparation", async
 });
 
 describe("agent command static capabilities", () => {
-  it.each([
+  const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },
     { inventory: "authored", contextTokens: 640_000, thinking: "off" },
     { inventory: "replace", contextTokens: 1_000_000, thinking: "medium" },
     { inventory: "generic", contextTokens: 200_000, thinking: "off" },
     { inventory: "explicit off", contextTokens: 1_000_000, thinking: "off" },
-  ])("uses prepared $inventory capabilities on the first request", async (testCase) => {
+  ] as const;
+  const key = "synthetic-static-capability-key";
+
+  it.each(cases)("uses prepared $inventory capabilities on the first request", async (testCase) => {
     await withTempHome(
       async (home) => {
         const configPath = path.join(home, "openclaw.json");
         const stateDir = path.join(home, "state");
-        const key = "synthetic-static-capability-key";
         const requests: Array<{ method?: string; url?: string; auth?: string; model: string }> = [];
         const server = http.createServer((req, res) => {
           const chunks: Buffer[] = [];
@@ -189,36 +190,53 @@ describe("agent command static capabilities", () => {
           }
           const baseUrl = `http://127.0.0.1:${address.port}/proxy/v1`;
           const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
-          if (testCase.inventory === "replace") {
-            await fs.writeFile(configPath, JSON.stringify({ models: { mode: "replace" } }));
-          }
-          const onboard = runBuiltCli(
-            home,
-            [
-              "onboard",
-              "--non-interactive",
-              "--accept-risk",
-              "--skip-health",
-              "--auth-choice",
-              "litellm-api-key",
-              "--litellm-api-key",
-              key,
-              "--custom-base-url",
-              baseUrl,
-              "--workspace",
-              path.join(home, "workspace"),
-              "--skip-channels",
-              "--skip-skills",
-              "--skip-ui",
-              "--no-install-daemon",
-            ],
-            env,
-            { inheritEnvironment: false },
-          );
-          expect(onboard.status, onboard.stderr).toBe(0);
-          const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+          const primary = "litellm/claude-opus-4-6";
+          // LiteLLM onboarding and replace-mode config generation are covered in
+          // extensions/litellm/index.test.ts. This integration test needs only the
+          // exact config inputs for each isolated first local request.
+          const litellmProvider = {
+            baseUrl,
+            api: "openai-completions",
+            apiKey: key,
+            models:
+              testCase.inventory === "replace"
+                ? [
+                    {
+                      id: "claude-opus-4-6",
+                      name: "Claude Opus 4.6",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      contextWindow: 1_000_000,
+                      maxTokens: 128_000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ]
+                : ([] as Array<Record<string, unknown>>),
+          };
+          const providers: Record<string, typeof litellmProvider> = { litellm: litellmProvider };
+          const config = {
+            agents: {
+              defaults: {
+                workspace: path.join(home, "workspace"),
+                models: { [primary]: { alias: "LiteLLM" } },
+                model: { primary },
+              },
+              entries: {
+                main: {
+                  name: "main",
+                  workspace: path.join(home, "workspace"),
+                  agentDir: path.join(stateDir, "agents", "main", "agent"),
+                },
+              },
+            },
+            plugins: { entries: { litellm: { enabled: true } } },
+            models: {
+              mode: testCase.inventory === "replace" ? "replace" : "merge",
+              providers,
+            },
+          };
           if (testCase.inventory === "authored") {
-            config.models.providers.litellm.models = [
+            litellmProvider.models = [
               {
                 id: config.agents.defaults.model.primary.slice("litellm/".length),
                 name: "Authored fixture",
@@ -230,14 +248,14 @@ describe("agent command static capabilities", () => {
               },
             ];
           } else if (testCase.inventory === "replace") {
-            expect(config.models.providers.litellm.models).toHaveLength(1);
+            expect(litellmProvider.models).toHaveLength(1);
           } else if (testCase.inventory === "generic") {
             config.models.providers = {
               "proxy-fixture": { baseUrl, api: "openai-completions", apiKey: key, models: [] },
             };
             config.agents.defaults.model.primary = "proxy-fixture/plain-fixture";
           } else {
-            config.models.providers.litellm.models = [];
+            litellmProvider.models = [];
           }
           await fs.writeFile(configPath, JSON.stringify(config));
           expect(requests).toEqual([]);
@@ -271,13 +289,13 @@ describe("agent command static capabilities", () => {
           expect(output.payloads).toEqual([{ text: "STATIC_OK", mediaUrl: null }]);
           expect(output.meta.agentMeta.contextTokens).toBe(testCase.contextTokens);
           expect(output.meta.requestShaping.thinking).toBe(testCase.thinking);
-          const primary = config.agents.defaults.model.primary;
+          const selectedPrimary = config.agents.defaults.model.primary;
           expect(requests).toEqual([
             {
               method: "POST",
               url: "/proxy/v1/chat/completions",
               auth: `Bearer ${key}`,
-              model: primary.slice(primary.indexOf("/") + 1),
+              model: selectedPrimary.slice(selectedPrimary.indexOf("/") + 1),
             },
           ]);
         } finally {

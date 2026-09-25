@@ -43,6 +43,71 @@ const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+it("keeps subscription-sharing OAuth in the host and hands native Codex only an isolated placeholder", async () => {
+  const profileId = "openai:token-sharing:test";
+  const credential = {
+    type: "oauth" as const,
+    provider: "openai",
+    authFlow: "chatgpt-token-sharing",
+    access: "synthetic-scoped-access",
+    refresh: "synthetic-refresh",
+    expires: Date.now() + 60_000,
+    issuer: "https://auth.openai.com",
+    clientId: "synthetic-client",
+    idToken: `header.${Buffer.from(JSON.stringify({ sub: "synthetic-subject" })).toString("base64url")}.signature`,
+  };
+  const params = {
+    authRequirement: "api-key" as const,
+    authProfileId: profileId,
+    resolvedApiKey: credential.access,
+    authProfileStore: { version: 1, profiles: { [profileId]: credential } },
+    homeScope: "agent" as const,
+    subscriptionProfileRequiredError: "required",
+    subscriptionProfileUnusableError: "unusable",
+  };
+  const handoff = await resolveCodexAppServerPreparedAuthHandoff(params);
+  expect(handoff.authProfileId).toBe(profileId);
+  expect(handoff.preparedAuth?.kind).toBe("profile");
+  if (handoff.preparedAuth?.kind !== "profile") {
+    throw new Error("expected profile handoff");
+  }
+  expect(handoff.preparedAuth.snapshot).toMatchObject({
+    inferenceAuth: "host-oauth",
+    loginParams: { type: "apiKey" },
+  });
+  expect(JSON.stringify(handoff.preparedAuth.snapshot)).not.toContain(credential.access);
+  expect(handoff.preparedAuth.snapshot).not.toHaveProperty("chatgptAccountId");
+  const h = createClientHarness();
+  try {
+    const applying = applyCodexAppServerAuthProfile({
+      client: h.client,
+      preparedAuth: handoff.preparedAuth,
+      authRequirement: "api-key",
+      startOptions: {
+        transport: "stdio",
+        command: "codex",
+        args: [],
+        homeScope: "agent",
+        headers: {},
+      },
+    });
+    const login = JSON.parse(await h.waitForWrite(0));
+    expect(login.method).toBe("account/login/start");
+    expect(login.params).toEqual(handoff.preparedAuth.snapshot?.loginParams);
+    expect(JSON.stringify(login)).not.toContain(credential.access);
+    h.send({ id: login.id, result: { type: "apiKey" } });
+    await applying;
+  } finally {
+    h.client.close();
+  }
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, homeScope: "user" }),
+  ).rejects.toThrow("isolated home");
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, requirePreparedAuth: true }),
+  ).rejects.toThrow("managed local");
+});
+
 type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
 type MockCacheResult = {
   status: "independent" | "shared";
@@ -3442,9 +3507,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
       expect(rejection).toBeInstanceOf(Error);
       expect(rejection).toMatchObject({
-        status: 401,
         code: "selected_auth_profile_unavailable",
       });
+      expect(rejection).not.toHaveProperty("status");
       expect((rejection as Error).message).toBe(
         'Codex app-server auth profile "anthropic:work" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
       );
@@ -3453,39 +3518,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  });
-
-  it("fails subscription auth instead of falling back to an API key", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const request = vi.fn(async () => ({ type: "apiKey" }));
-    vi.stubEnv("CODEX_API_KEY", "placeholder");
-    let rejection: unknown;
-    try {
-      await applyCodexAppServerAuthProfile({
-        client: { request } as never,
-        agentDir,
-        authProfileId: "openai:work",
-        authProfileStore: {
-          version: 1,
-          profiles: {},
-        },
-        authRequirement: "subscription",
-        startOptions: createStartOptions({
-          env: { CODEX_API_KEY: "placeholder" },
-        }),
-      });
-    } catch (error) {
-      rejection = error;
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-
-    expect(rejection).toBeInstanceOf(Error);
-    expect(rejection).toMatchObject({
-      status: 401,
-      code: "selected_auth_profile_unavailable",
-    });
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("preserves transient subscription credential resolution errors", async () => {

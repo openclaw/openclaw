@@ -5,6 +5,7 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -68,7 +69,7 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
-export function ensureBoardSchema(database: OpenClawAgentDatabase): void {
+export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }
@@ -170,6 +171,7 @@ function upsertTabs(
         ),
     );
   }
+  sessionChanges.emit({ sessionKey: next.sessionKey, storePath: database.path }, database.db);
 }
 
 function updateWidgetLayouts(
@@ -287,16 +289,16 @@ export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: strin
   }
 }
 
-export function readBoardSessionKeys(database: BoardDatabaseHandle): string[] {
+export function readBoardSessionKeys(database: BoardDatabaseHandle, sessionKey: string): string[] {
   if (!boardTablesPresent(database)) {
     return [];
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  // Every persisted widget belongs to a tab, so tab owners cover the board inventory.
-  return executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("board_tabs").select("session_key").distinct(),
-  ).rows.map((row) => row.session_key);
+  const query = db.selectFrom("board_tabs").select("session_key").distinct();
+  // Every persisted widget belongs to a tab.
+  return executeSqliteQuerySync(database.db, query.where("session_key", "=", sessionKey)).rows.map(
+    (row) => row.session_key,
+  );
 }
 
 export function readBoardSnapshotWithHtmlViewMetadata(

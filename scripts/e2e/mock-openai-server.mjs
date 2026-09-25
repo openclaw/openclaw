@@ -5,6 +5,7 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
+import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -550,7 +551,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: "sleep 3 && echo openclaw-draft-proof",
+      command: "sleep 2 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -781,7 +782,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
         : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
-      language: "javascript",
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -931,8 +932,10 @@ const server = http.createServer((req, res) => {
           seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
+          requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
+          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
@@ -1006,7 +1009,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: "sleep 3 && echo openclaw-draft-proof" },
+            { command: "sleep 2 && echo openclaw-draft-proof" },
           );
           return;
         }

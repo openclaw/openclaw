@@ -455,7 +455,7 @@ describe("history descriptor observation order", () => {
     async (retried) => {
       const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
       const lifecycle = new AbortController();
-      const router = createRouter<RouteId, ApplicationContext<RouteId>, null, ChatRouteData>({
+      const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
         routes: [
           definePage({
             id: "chat",

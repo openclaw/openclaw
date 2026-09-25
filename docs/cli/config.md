@@ -102,7 +102,17 @@ combined with a legacy `default: true` marker.
 For root-file writes, changing `session.store` clears a copied
 `agents.defaults.sessionStore.agentId` because that owner belongs to the previous
 store. To assign the destination store's owner, set that owner path explicitly in
-the same batch.
+the same batch. Unrelated writes preserve the owner, including when `session.store`
+is unset and per-agent default stores apply. A committed write that clears the
+owner prints a warning naming the key and the store change.
+
+If an older version already removed the owner, Doctor checks the retained config
+backups and offers to restore the most recent owner with the same authored
+`session.store` value. Restoration
+requires interactive confirmation because the removal might have been intentional;
+unattended Doctor runs show the recovery command instead. If no usable backup
+remains, the legacy-session finding names `agents.defaults.sessionStore.agentId`
+so you can assign the owner explicitly.
 
 ### `config get`
 
@@ -158,6 +168,8 @@ The schema is JSON in both modes. `--json` is accepted as the explicit
 machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
+
+Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 

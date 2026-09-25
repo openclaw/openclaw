@@ -1,7 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { resolveMessageReceiptPrimaryId } from "../channels/message/receipt.js";
+import {
+  listMessageReceiptSourceTargets,
+  resolveMessageReceiptPrimaryId,
+} from "../channels/message/receipt.js";
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
@@ -11,6 +14,7 @@ type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
   sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
+  deliveredTargets?: string[];
   partialDelivery: boolean;
   createdThreadIds: string[];
 };
@@ -18,7 +22,14 @@ type EmbeddedMessageDeliveryFact = {
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
 const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
@@ -103,7 +114,24 @@ function visitPluginEnvelope(
 
 const PLUGIN_SIGNALS = {
   dryRun: (record: Record<string, unknown>, status: string | undefined) =>
-    record.dryRun === true || status === "dry_run",
+    record.dryRun === true || status === "dry_run" || normalizeStatus(record.status) === "dry_run",
+  failure: (record: Record<string, unknown>) =>
+    record.ok === false ||
+    record.success === false ||
+    record.isError === true ||
+    record.delivered === false ||
+    record.complete === false ||
+    Boolean(record.error) ||
+    [record.status, record.deliveryStatus].some((value) => {
+      const status = normalizeStatus(value);
+      return (
+        status === "error" ||
+        status === "incomplete" ||
+        status === "partial_failed" ||
+        status === "dry_run" ||
+        (status !== undefined && NON_DELIVERY_STATUSES.has(status))
+      );
+    }),
   partial: (record: Record<string, unknown>, status: string | undefined) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
@@ -163,15 +191,26 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryId(value: unknown): string | undefined {
-  let found: string | undefined;
+function readPluginDeliveryIdentity(value: unknown) {
+  let primaryPlatformMessageId: string | undefined;
+  const deliveredTargets = new Set<string>();
   visitPluginEnvelope(value, (record) => {
-    found = [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
+    primaryPlatformMessageId ??= [
+      record.messageId,
+      record.pollId,
+      asOptionalRecord(record.message)?.id,
+    ]
       .map(deliveryId)
       .find(Boolean);
-    return found !== undefined;
+    for (const target of listMessageReceiptSourceTargets(record)) {
+      deliveredTargets.add(target);
+    }
+    return false;
   });
-  return found;
+  return {
+    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+  };
 }
 
 export function projectPluginMessageDeliveryFact(
@@ -186,16 +225,15 @@ export function projectPluginMessageDeliveryFact(
   if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
     return undefined;
   }
-  const primaryPlatformMessageId = readPluginDeliveryId(value);
   return {
     status: "settled",
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
   };
 }
@@ -256,6 +294,10 @@ export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
   currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  const payloadDelivery = result.dryRun
+    ? undefined
+    : projectPluginMessageDeliveryFact(result.payload);
+  const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
     return result.dryRun
       ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
@@ -270,15 +312,15 @@ export function projectEmbeddedMessageDeliveryFact(
             partialDelivery: false,
             createdThreadIds: [],
           }
-        : undefined;
+        : partialDelivery;
   }
   if (result.kind === "poll") {
     return result.handledBy === "core" && result.pollResult
       ? projectPoll(result.pollResult)
-      : undefined;
+      : partialDelivery;
   }
   if (result.kind !== "broadcast") {
-    return undefined;
+    return partialDelivery;
   }
   const entries = result.payload.results.map((entry) => ({
     entry,
@@ -294,8 +336,13 @@ export function projectEmbeddedMessageDeliveryFact(
   }));
   const facts = entries.flatMap(({ fact }) => (fact ? [fact] : []));
   const settled = facts.find((fact) => fact.status === "settled");
-  if (settled || entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
-    return settled;
+  if (settled) {
+    return entries.some(({ entry }) => !entry.ok) && !settled.partialDelivery
+      ? { ...settled, partialDelivery: true }
+      : settled;
+  }
+  if (entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
+    return undefined;
   }
   return (
     facts.find((fact) => fact.status === "suppressed") ??
@@ -304,6 +351,14 @@ export function projectEmbeddedMessageDeliveryFact(
       partialDelivery: false,
       createdThreadIds: [],
     }
+  );
+}
+
+export function hasAcceptedBroadcastDelivery(result: MessageActionResult): boolean {
+  return (
+    !result.dryRun &&
+    result.kind === "broadcast" &&
+    result.payload.results.some((entry) => entry.ok || entry.sentBeforeError)
   );
 }
 

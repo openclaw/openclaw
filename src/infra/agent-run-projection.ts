@@ -10,11 +10,34 @@ export function projectedRunIdentity(agentId: string, value: string): string {
   return `${normalizeAgentId(agentId)}\0${value}`;
 }
 
+/** Activity selected by a session key must belong to the agent encoded in that key. */
+export function* iterateProjectedAgentRunSessionKeys(index: ProjectedAgentRunIndex) {
+  for (const identity of index.sessionKeys.keys()) {
+    const key = identity.slice(identity.indexOf("\0") + 1);
+    const agentId = parseAgentSessionKey(key)?.agentId;
+    if (agentId && identity === projectedRunIdentity(agentId, key)) {
+      yield key;
+    }
+  }
+}
+
 export function areAgentRunModelsEqual(
   left: AgentRunModel | null | undefined,
   right: AgentRunModel | null | undefined,
 ): boolean {
   return left?.provider === right?.provider && left?.model === right?.model;
+}
+
+/** Admission waits cannot hide an independently running or queued producer. */
+export function mergeProjectedAgentRunStates(
+  previous: ProjectedAgentRunState | undefined,
+  next: ProjectedAgentRunState | undefined,
+): ProjectedAgentRunState | undefined {
+  return previous === "running" ||
+    next === undefined ||
+    (previous === "queued" && next !== "running")
+    ? previous
+    : next;
 }
 
 /** Canonicalizes every run-context field consumed by the session projection. */
@@ -50,7 +73,7 @@ export function buildAgentRunProjectionIndex(params: {
     status: ProjectedAgentRunState,
   ) => {
     const previous = index.get(key);
-    if (previous !== "running" && !(previous === "queued" && status === "capacity-wait")) {
+    if (previous !== status && mergeProjectedAgentRunStates(previous, status) === status) {
       index.set(key, status);
     }
   };

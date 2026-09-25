@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot info behavior.
 import type { UserFromGetMe } from "grammy/types";
 
 export type TelegramBotInfo = UserFromGetMe;

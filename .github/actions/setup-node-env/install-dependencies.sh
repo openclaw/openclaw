@@ -75,7 +75,9 @@ fi
 if [ "$install_status" -ne 0 ] && [ "$DEPENDENCY_CACHE_HIT" = "true" ]; then
   echo "::warning::Restored dependency store failed pnpm reconciliation; retrying from an empty store"
   clear_dependency_modules
-  rm -rf "${PNPM_CONFIG_STORE_DIR:?}"
+  # Bootstrap already authenticated these archives; dependency repair must not
+  # publish a replacement cache that loses its offline pnpm bootstrap.
+  find "${PNPM_CONFIG_STORE_DIR:?}" -mindepth 1 -maxdepth 1 ! -name toolchain -exec rm -rf -- {} +
   install_status=0
   run_pnpm_install --prefer-offline || install_status="$?"
 fi

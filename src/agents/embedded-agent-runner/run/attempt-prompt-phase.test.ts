@@ -62,6 +62,7 @@ beforeEach(() => {
   }
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
+    callableToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
     uncompactedEffectiveTools: [{ name: "read" }],
     tools: [{ name: "read" }],
@@ -99,7 +100,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
       for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
         await session.agent.streamFn(testModel, {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}turn ${index}`,
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`,
           messages: [],
           tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
         });

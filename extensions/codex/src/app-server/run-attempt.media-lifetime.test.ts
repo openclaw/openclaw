@@ -51,7 +51,12 @@ describe("Codex attempt TTS media lifetime", () => {
       });
       setActivePluginRegistry(registry);
       const createBridge = vi.spyOn(dynamicTools, "createCodexDynamicToolBridge");
-      const harness = createStartedThreadHarness();
+      const started = createDeferred<void>();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          started.resolve();
+        }
+      });
       const params = createParams(
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
@@ -62,16 +67,23 @@ describe("Codex attempt TTS media lifetime", () => {
       setCodexTestModelSupportsTools(params, true);
       const audioPath = path.join(tempDir, "reply.opus");
       const earlierPath = path.join(tempDir, "earlier.opus");
-      const host = await createHostTtsRuntimeContract(params, audioPath);
+      const host = await createHostTtsRuntimeContract(params, audioPath, {
+        nativeModelPolicySupport: "exact",
+      });
       params.hostCapabilities = host.hostCapabilities;
+      // Own the attempt clock before cold preparation arms its watchdog.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params);
+      const attemptEnded = run.then(() => {
+        throw new Error("Codex attempt settled before the expected fixture progress");
+      });
       let handle:
         | MockInstance<
             ReturnType<typeof dynamicTools.createCodexDynamicToolBridge>["handleToolCall"]
           >
         | undefined;
       try {
-        await harness.waitForMethod("turn/start");
+        await Promise.race([started.promise, attemptEnded]);
         const bridge = createBridge.mock.results[0]?.value;
         if (!bridge) {
           throw new Error("Expected the attempt's real dynamic tool bridge");
@@ -99,7 +111,6 @@ describe("Codex attempt TTS media lifetime", () => {
             }),
           ).toMatchObject({ success: true });
         }
-        vi.useFakeTimers();
         const response = harness.handleServerRequest({
           id: "host-tts",
           method: "item/tool/call",
@@ -112,7 +123,13 @@ describe("Codex attempt TTS media lifetime", () => {
             arguments: { text: "Read this aloud.", timeoutMs: 1 },
           },
         });
-        await entered.promise;
+        await Promise.race([
+          entered.promise,
+          attemptEnded,
+          response.then(() => {
+            throw new Error("TTS request settled before entering result middleware");
+          }),
+        ]);
         if (timedOut) {
           await vi.advanceTimersByTimeAsync(1);
           expect(await response).toMatchObject({ success: false });
@@ -122,7 +139,6 @@ describe("Codex attempt TTS media lifetime", () => {
         await Promise.all(handle.mock.results.map((entry) => entry.value));
         expect(await response).toMatchObject({ success: !timedOut });
         expect(host.synthesis).toHaveBeenCalledTimes(earlierAccepted ? 2 : 1);
-        vi.useRealTimers();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         const result = await run;
         const expectedMedia = earlierAccepted ? [earlierPath] : timedOut ? [] : [audioPath];
@@ -143,7 +159,6 @@ describe("Codex attempt TTS media lifetime", () => {
         await Promise.allSettled(handle?.mock.results.map((entry) => entry.value) ?? []);
         vi.useRealTimers();
         host.close();
-        setActivePluginRegistry(createEmptyPluginRegistry());
       }
     },
   );

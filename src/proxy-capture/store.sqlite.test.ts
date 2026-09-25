@@ -5,6 +5,7 @@ import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
@@ -22,6 +23,7 @@ const cleanupDirs: string[] = [];
 afterEach(() => {
   closeDebugProxyCaptureStore();
   closeOpenClawStateDatabaseForTest();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   cleanupTempDirs(cleanupDirs);
 });
@@ -157,6 +159,50 @@ describe("DebugProxyCaptureStore", () => {
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
   });
+
+  it.each(["quiet", "active"] as const)(
+    "retains %s capture through idle expiry and releases its native handle after close",
+    (activity) => {
+      const options = { env: makeStateEnv("openclaw-proxy-capture-idle-") };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const store = getDebugProxyCaptureStore(options);
+      const intervals =
+        activity === "quiet"
+          ? [SQLITE_IDLE_HANDLE_TTL_MS + 1]
+          : [SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1, SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1];
+      try {
+        for (const [index, interval] of intervals.entries()) {
+          vi.advanceTimersByTime(interval);
+          store.recordEvent({
+            sessionId: "retained-capture",
+            ts: index,
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+            protocol: "https",
+            direction: "outbound",
+            kind: "request",
+            flowId: `retained-${index}`,
+          });
+        }
+        expect(store.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+          intervals.map((_, index) => `retained-${index}`).toReversed(),
+        );
+        store.close();
+        expect(store.db.isOpen).toBe(true);
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+        expect(store.db.isOpen).toBe(true);
+        vi.advanceTimersByTime(1);
+        expect(store.db.isOpen).toBe(false);
+
+        const reopened = getDebugProxyCaptureStore(options);
+        expect(reopened.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+          intervals.map((_, index) => `retained-${index}`).toReversed(),
+        );
+      } finally {
+        store.close();
+      }
+    },
+  );
 
   it("rebinds a cached shared store after the state database closes underneath it", () => {
     const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };

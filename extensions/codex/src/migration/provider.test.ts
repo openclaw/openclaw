@@ -1,278 +1,35 @@
-// Codex tests cover provider plugin behavior.
+// Register native mocks before migration modules load.
+// oxfmt-ignore
+import {
+  appServerRequest,
+  sourceAppServerClientScope,
+  createCodexFixture,
+  createCodexTestRoot,
+  createConfigRuntime,
+  createFailingConfigRuntime,
+  expectRecordFields,
+  fakeJwt,
+  findItem,
+  loadTargetAuthStore,
+  makeContext,
+  writeFile,
+} from "./provider.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  loadAuthProfileStoreForSecretsRuntime,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  updateAuthProfileStoreWithLock,
-  upsertAuthProfile,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { codexAppInventoryResponse } from "../app-server/app-inventory.test-helpers.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import { pluginList, pluginSummary } from "../app-server/plugin-inventory.test-helpers.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import type { CodexAppServerCloseResult } from "../app-server/transport.js";
-import { readCodexCliActiveApiKeyAsync } from "./cli-credentials.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 import { discoverCodexSource } from "./source.js";
 
-const closeCredentialReader = vi.hoisted(() => vi.fn<() => Promise<CodexAppServerCloseResult>>());
-const appServerRequest = vi.hoisted(() => vi.fn());
-const sourceAppServerClientScope = vi.hoisted(() => vi.fn());
-const credentialStorage = vi.hoisted(() => ({
-  mode: "file",
-  requiredMode: undefined as string | undefined,
-  accountType: "apiKey",
-}));
-
-vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../app-server/managed-binary.js")>()),
-  resolveManagedCodexPackageEntrypoint: () => "/fixture/codex.js",
-  resolveManagedCodexNativeCommand: () => "/fixture/codex",
-}));
-
-vi.mock("../app-server/client.js", () => ({
-  CodexAppServerClient: {
-    async start(options: { env: { CODEX_HOME: string } }) {
-      return {
-        initialize: async () => undefined,
-        getRuntimeIdentity: () => ({ codexHome: options.env.CODEX_HOME }),
-        getModelCatalogRevision: () => 0,
-        getCloseError: () => undefined,
-        close: () => undefined,
-        closeAndWait: closeCredentialReader,
-        async request(method: string) {
-          if (method === "account/read") {
-            return { account: { type: credentialStorage.accountType }, requiresOpenaiAuth: true };
-          }
-          if (method === "config/read") {
-            return { config: { cli_auth_credentials_store: credentialStorage.mode } };
-          }
-          if (method === "configRequirements/read") {
-            return {
-              requirements: credentialStorage.requiredMode
-                ? { cli_auth_credentials_store: credentialStorage.requiredMode }
-                : null,
-            };
-          }
-          throw new Error(`Unexpected credential request: ${method}`);
-        },
-      };
-    },
-  },
-}));
-
-vi.mock("../app-server/request.js", () => ({
-  requestCodexAppServerJson: appServerRequest,
-  withCodexAppServerJsonClient: sourceAppServerClientScope,
-}));
-
-const tempWorkspaces: TempWorkspace[] = [];
-
-const logger = {
-  info() {},
-  warn() {},
-  error() {},
-  debug() {},
-};
-
-async function writeFile(filePath: string, content = ""): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, "utf8");
-}
-
-function makeContext(params: {
-  source: string;
-  stateDir: string;
-  workspaceDir: string;
-  overwrite?: boolean;
-  includeSecrets?: boolean;
-  targetAgentId?: string;
-  itemKinds?: readonly string[];
-  verifyPluginApps?: boolean;
-  providerOptions?: MigrationProviderContext["providerOptions"];
-  reportDir?: string;
-  config?: MigrationProviderContext["config"];
-  runtime?: MigrationProviderContext["runtime"];
-}): MigrationProviderContext {
-  return {
-    config:
-      params.config ??
-      ({
-        agents: {
-          defaults: {
-            workspace: params.workspaceDir,
-          },
-        },
-      } as MigrationProviderContext["config"]),
-    runtime: params.runtime,
-    source: params.source,
-    stateDir: params.stateDir,
-    includeSecrets: params.includeSecrets,
-    targetAgentId: params.targetAgentId,
-    itemKinds: params.itemKinds,
-    overwrite: params.overwrite,
-    providerOptions:
-      params.providerOptions ?? (params.verifyPluginApps ? { verifyPluginApps: true } : undefined),
-    reportDir: params.reportDir,
-    logger,
-  };
-}
-
-function findItem(items: readonly { id?: string }[], id: string) {
-  const item = items.find((entry) => entry.id === id);
-  if (!item) {
-    throw new Error(`Expected migration item ${id}`);
-  }
-  return item as Record<string, unknown>;
-}
-
-function findItemByReason(items: readonly { reason?: string }[], reason: string) {
-  const item = items.find((entry) => entry.reason === reason);
-  if (!item) {
-    throw new Error(`Expected migration item reason ${reason}`);
-  }
-  return item as Record<string, unknown>;
-}
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function fakeJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
-  return path.join(fixture.stateDir, "agents", agentId, "agent");
-}
-
-function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
-  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
-}
-
-async function createCodexFixture(): Promise<{
-  root: string;
-  homeDir: string;
-  codexHome: string;
-  stateDir: string;
-  workspaceDir: string;
-}> {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-migrate-codex-",
-  });
-  tempWorkspaces.push(workspace);
-  const root = workspace.dir;
-  const homeDir = path.join(root, "home");
-  const codexHome = path.join(root, ".codex");
-  const stateDir = path.join(root, "state");
-  const workspaceDir = path.join(root, "workspace");
-  vi.stubEnv("HOME", homeDir);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-  await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"), "# Tweet helper\n");
-  await writeFile(path.join(codexHome, "skills", ".system", "system-skill", "SKILL.md"));
-  await writeFile(path.join(homeDir, ".agents", "skills", "personal-style", "SKILL.md"));
-  await writeFile(
-    path.join(
-      codexHome,
-      "plugins",
-      "cache",
-      "openai-primary-runtime",
-      "documents",
-      "1.0.0",
-      ".codex-plugin",
-      "plugin.json",
-    ),
-    JSON.stringify({ name: "documents" }),
-  );
-  await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-5.5"\n');
-  await writeFile(path.join(codexHome, "hooks", "hooks.json"), "{}\n");
-  return { root, homeDir, codexHome, stateDir, workspaceDir };
-}
-
-function sourceAppCacheKey(fixture: { codexHome: string }): string {
-  return buildCodexPluginAppCacheKey({
-    appServer: {
-      start: {
-        transport: "stdio",
-        command: "codex",
-        commandSource: "managed",
-        managedCommandOrder: "desktop-first",
-        args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-        env: {
-          CODEX_HOME: fixture.codexHome,
-          HOME: path.dirname(fixture.codexHome),
-        },
-      },
-    },
-  });
-}
-
-afterEach(async () => {
-  vi.useRealTimers();
-  vi.unstubAllEnvs();
-  clearRuntimeAuthProfileStoreSnapshots();
-  closeCredentialReader.mockReset();
-  appServerRequest.mockReset();
-  sourceAppServerClientScope.mockReset();
-  defaultCodexAppInventoryCache.clear();
-  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
-});
-
 describe("buildCodexMigrationProvider", () => {
-  beforeEach(() => {
-    closeCredentialReader.mockResolvedValue({ exited: true, cleanup: "closed" });
-    credentialStorage.mode = "file";
-    credentialStorage.requiredMode = undefined;
-    credentialStorage.accountType = "apiKey";
-    appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
-    sourceAppServerClientScope.mockImplementation(
-      async (
-        options: Record<string, unknown>,
-        run: (
-          request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
-        ) => Promise<unknown>,
-      ) => await run(async (request) => await appServerRequest({ ...options, ...request })),
-    );
-  });
-
   it("preserves whitespace in nonempty CODEX_HOME values", async () => {
-    const workspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-migrate-codex-",
-    });
-    tempWorkspaces.push(workspace);
-    const root = workspace.dir;
+    const root = await createCodexTestRoot();
     const codexHome = path.join(root, " spaced ");
     await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -615,45 +372,45 @@ describe("buildCodexMigrationProvider", () => {
   });
 
   it("discovers installed plugins from the API-key curated marketplace", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed") {
-        return {
-          marketplaces: [
-            {
-              name: "openai-api-curated",
-              path: path.join(
-                fixture.codexHome,
-                ".tmp/plugins/.agents/plugins/api_marketplace.json",
-              ),
-              interface: null,
-              plugins: [
-                pluginSummary("google-calendar@openai-api-curated", {
-                  name: "google-calendar",
-                  installed: true,
-                  enabled: true,
-                }),
-              ],
-            },
+    const { codexHome } = await createCodexFixture();
+    const marketplacePath = path.join(
+      codexHome,
+      ".tmp/plugins/.agents/plugins/api_marketplace.json",
+    );
+    appServerRequest
+      .mockResolvedValueOnce({
+        marketplaces: pluginList(
+          [
+            pluginSummary("google-calendar@openai-api-curated", {
+              name: "google-calendar",
+              installed: true,
+              enabled: true,
+            }),
           ],
-          marketplaceLoadErrors: [],
-        } satisfies v2.PluginInstalledResponse;
-      }
-      throw new Error(`unexpected request ${method}`);
+          { name: "openai-api-curated", path: marketplacePath },
+        ).marketplaces,
+        marketplaceLoadErrors: [],
+      })
+      .mockResolvedValueOnce(pluginRead("google-calendar"));
+
+    const source = await discoverCodexSource({
+      input: codexHome,
+      evaluatePluginMigrationEligibility: true,
     });
 
-    const source = await discoverCodexSource({ input: fixture.codexHome });
-
     expect(source.pluginDiscoveryError).toBeUndefined();
-    expect(source.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginName: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          migratable: true,
-        }),
-      ]),
+    expectRecordFields(
+      source.plugins.find((plugin) => plugin.pluginName === "google-calendar"),
+      { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, migratable: true },
     );
+    expect(appServerRequest.mock.calls.map(([request]) => request.method)).toEqual([
+      "plugin/installed",
+      "plugin/read",
+    ]);
+    expect(mockCallArg(appServerRequest, 1).requestParams).toEqual({
+      marketplacePath,
+      pluginName: "google-calendar",
+    });
   });
 
   it("ignores unrelated marketplace errors when no curated plugins are installed", async () => {
@@ -857,637 +614,6 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
-  it("imports only the selected API key without changing configuration", async () => {
-    const fixture = await createCodexFixture();
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "apikey",
-        OPENAI_API_KEY: "fixture-selected-key",
-      }),
-    );
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      itemKinds: ["auth"],
-      includeSecrets: true,
-      providerOptions: { credentialKind: "api_key", configPatchMode: "none" },
-      config: {
-        agents: { defaults: { model: { primary: "other/model" }, models: { "other/model": {} } } },
-      },
-    });
-    const before = structuredClone(ctx.config);
-    const provider = buildCodexMigrationProvider();
-    const plan = await provider.plan(ctx);
-    expect(plan.items.map(({ id }) => id)).toEqual(["auth:openai:api-key"]);
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai:api-key").status).toBe("migrated");
-    expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toMatchObject({
-      type: "api_key",
-      provider: "openai",
-      key: "fixture-selected-key",
-    });
-    expect(ctx.config).toEqual(before);
-  });
-
-  it.each([false, true])(
-    "does not persist credentials after uncertain reader cleanup (exited=%s)",
-    async (exited) => {
-      const fixture = await createCodexFixture();
-      await writeFile(
-        path.join(fixture.codexHome, "auth.json"),
-        JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-selected-key" }),
-      );
-      const ctx = makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        itemKinds: ["auth"],
-        includeSecrets: true,
-        providerOptions: { credentialKind: "api_key", configPatchMode: "none" },
-      });
-      const provider = buildCodexMigrationProvider();
-      const plan = await provider.plan(ctx);
-      closeCredentialReader.mockResolvedValue({ exited, cleanup: "uncertain" });
-
-      await expect(provider.apply(ctx, plan)).rejects.toThrow(
-        "The Codex credential reader could not stop. No credential was imported.",
-      );
-
-      expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toBeUndefined();
-    },
-  );
-
-  it.each(["changed", "cancelled"])("does not persist a %s selected import", async (change) => {
-    const fixture = await createCodexFixture();
-    const authPath = path.join(fixture.codexHome, "auth.json");
-    await writeFile(
-      authPath,
-      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-first-key" }),
-    );
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      itemKinds: ["auth"],
-      includeSecrets: true,
-      providerOptions: { credentialKind: "api_key", configPatchMode: "none" },
-    });
-    const provider = buildCodexMigrationProvider();
-    const plan = await provider.plan(ctx);
-    if (change === "changed") {
-      await writeFile(
-        authPath,
-        JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-second-key" }),
-      );
-      const result = await provider.apply(ctx, plan);
-      expect(findItem(result.items, "auth:openai:api-key").status).toBe("skipped");
-    } else {
-      ctx.signal = AbortSignal.abort(new Error("Sign-in cancelled"));
-      await expect(provider.apply(ctx, plan)).rejects.toThrow("Sign-in cancelled");
-    }
-    expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toBeUndefined();
-  });
-
-  it.each(["keyring", "auto", "ephemeral"])(
-    "does not borrow a file key when native requirements select %s storage",
-    async (mode) => {
-      const fixture = await createCodexFixture();
-      await writeFile(
-        path.join(fixture.codexHome, "auth.json"),
-        JSON.stringify({
-          auth_mode: "apikey",
-          OPENAI_API_KEY: "fixture-stale-file-key",
-        }),
-      );
-      credentialStorage.requiredMode = mode;
-
-      expect(
-        await readCodexCliActiveApiKeyAsync({
-          codexHome: fixture.codexHome,
-          allowKeychainPrompt: false,
-        }),
-      ).toBeUndefined();
-    },
-  );
-
-  it("does not import an inactive API key alongside native ChatGPT sign-in", async () => {
-    const fixture = await createCodexFixture();
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        OPENAI_API_KEY: "fixture-inactive-key",
-      }),
-    );
-    credentialStorage.accountType = "chatgpt";
-    expect(
-      await readCodexCliActiveApiKeyAsync({
-        codexHome: fixture.codexHome,
-        allowKeychainPrompt: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse another user's OAuth profile in the same ChatGPT workspace", async () => {
-    const fixture = await createCodexFixture();
-    const jwt = (user: string) =>
-      fakeJwt({
-        exp: 2_000_000_000,
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "shared-workspace",
-          chatgpt_user_id: user,
-        },
-      });
-    const existing = {
-      type: "oauth" as const,
-      provider: "openai",
-      access: jwt("previous-user"),
-      refresh: "previous-refresh",
-      expires: 2_000_000_000_000,
-      accountId: "shared-workspace",
-    };
-    upsertAuthProfile({
-      profileId: "openai:account-shared-workspace",
-      credential: existing,
-      agentDir: targetAgentDir(fixture),
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: jwt("new-user"),
-          refresh_token: "new-refresh",
-          account_id: "shared-workspace",
-        },
-      }),
-    );
-    const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      itemKinds: ["auth"],
-      includeSecrets: true,
-      providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-    });
-    const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai").status).toBe("conflict");
-    await provider.apply(ctx, plan);
-    expect(loadTargetAuthStore(fixture).profiles["openai:account-shared-workspace"]).toEqual(
-      existing,
-    );
-  });
-
-  it.each([
-    {
-      state: "expired",
-      expires: 1_899_999_999_999,
-      planStatus: "skipped",
-      resultStatus: "skipped",
-    },
-    {
-      state: "usable",
-      expires: 2_000_000_000_000,
-      planStatus: "planned",
-      resultStatus: "migrated",
-    },
-    {
-      state: "expires before apply",
-      expires: 2_000_000_000_000,
-      planStatus: "planned",
-      resultStatus: "skipped",
-    },
-  ])(
-    "preserves a same-account local OAuth profile that is $state",
-    async ({ state, expires, planStatus, resultStatus }) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_900_000_000_000);
-      try {
-        const fixture = await createCodexFixture();
-        credentialStorage.accountType = "chatgpt";
-        const claims = {
-          chatgpt_account_id: "same-account",
-          chatgpt_user_id: "same-user",
-        };
-        const profileId = "openai:existing-account";
-        const existing = {
-          type: "oauth" as const,
-          provider: "openai",
-          access: fakeJwt({ exp: expires / 1000, "https://api.openai.com/auth": claims }),
-          refresh: "old-refresh",
-          expires,
-          accountId: "same-account",
-        };
-        const unrelated = { type: "api_key" as const, provider: "other", key: "unrelated-key" };
-        const seeded = await updateAuthProfileStoreWithLock({
-          agentDir: targetAgentDir(fixture),
-          stateDir: fixture.stateDir,
-          updater(store) {
-            store.profiles[profileId] = existing;
-            store.profiles["other:retained"] = unrelated;
-            return true;
-          },
-        });
-        expect(seeded?.profiles).toEqual({ [profileId]: existing, "other:retained": unrelated });
-        await writeFile(
-          path.join(fixture.codexHome, "auth.json"),
-          JSON.stringify({
-            auth_mode: "chatgpt",
-            tokens: {
-              access_token: fakeJwt({ exp: 2_100_000_000, "https://api.openai.com/auth": claims }),
-              refresh_token: "new-native-refresh",
-              account_id: "same-account",
-            },
-          }),
-        );
-        const ctx = makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
-          itemKinds: ["auth"],
-          includeSecrets: true,
-          providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-          config: {
-            agents: { defaults: { model: "other/retained", workspace: fixture.workspaceDir } },
-          },
-        });
-        const configBefore = structuredClone(ctx.config);
-        const provider = buildCodexMigrationProvider();
-        const plan = await provider.plan(ctx);
-        expect(findItem(plan.items, "auth:openai").status).toBe(planStatus);
-        if (state === "expired") {
-          expect(findItem(plan.items, "auth:openai")).toMatchObject({
-            reason: "existing OAuth profile requires sign-in",
-            details: { credentialImportUnavailable: true },
-          });
-        }
-        if (state === "expires before apply") {
-          clock.mockReturnValue(2_000_000_000_001);
-        }
-        const result = await provider.apply(ctx, plan);
-        expect(findItem(result.items, "auth:openai").status).toBe(resultStatus);
-        expect(loadTargetAuthStore(fixture).profiles).toEqual({
-          [profileId]: existing,
-          "other:retained": unrelated,
-        });
-        expect(ctx.config).toEqual(configBefore);
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
-
-  it.each(["user", "agent"] as const)(
-    "preserves the configured CLI-backed profile during explicit import (homeScope=%s)",
-    async (homeScope) => {
-      const fixture = await createCodexFixture();
-      vi.stubEnv("CODEX_HOME", fixture.codexHome);
-      credentialStorage.accountType = "chatgpt";
-      const access = fakeJwt({
-        exp: 2_100_000_000,
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "native-account",
-          chatgpt_user_id: "native-user",
-        },
-      });
-      const nativeAuth = JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: access,
-          refresh_token: "native-refresh",
-          account_id: "native-account",
-        },
-      });
-      await writeFile(path.join(fixture.codexHome, "auth.json"), nativeAuth);
-      const config: MigrationProviderContext["config"] = {
-        agents: {
-          defaults: {
-            workspace: fixture.workspaceDir,
-            model: "openai/gpt-5.4@openai:default",
-          },
-        },
-        auth: {
-          profiles: { "openai:default": { provider: "openai", mode: "oauth" } },
-          order: { openai: ["openai:default"] },
-        },
-        plugins: { entries: { codex: { config: { appServer: { homeScope } } } } },
-      };
-      const before = structuredClone(config);
-      const ctx = makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        config,
-        includeSecrets: true,
-        itemKinds: ["auth"],
-        providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-      });
-      const provider = buildCodexMigrationProvider();
-
-      const result = await provider.apply(ctx, await provider.plan(ctx));
-
-      expect(findItem(result.items, "auth:openai")).toMatchObject({
-        status: "migrated",
-        details: { profileId: "openai:default" },
-      });
-      expect(loadTargetAuthStore(fixture).profiles).toEqual({
-        "openai:default": expect.objectContaining({
-          type: "oauth",
-          provider: "openai",
-          access,
-          accountId: "native-account",
-        }),
-      });
-      expect(config).toEqual(before);
-      expect(await fs.readFile(path.join(fixture.codexHome, "auth.json"), "utf8")).toBe(nativeAuth);
-
-      const repeated = await provider.apply(ctx, await provider.plan(ctx));
-      expect(findItem(repeated.items, "auth:openai")).toMatchObject({
-        status: "migrated",
-        details: { profileId: "openai:default", wroteAuthProfile: false },
-      });
-    },
-  );
-
-  it.each(["fresh install", "other source home", "missing user", "managed account"])(
-    "keeps the account-scoped import identity for %s",
-    async (scenario) => {
-      const fixture = await createCodexFixture();
-      vi.stubEnv(
-        "CODEX_HOME",
-        scenario === "other source home"
-          ? path.join(fixture.root, "other-codex")
-          : fixture.codexHome,
-      );
-      credentialStorage.accountType = "chatgpt";
-      const access = fakeJwt({
-        exp: 2_100_000_000,
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "native-account",
-          ...(scenario === "missing user" ? {} : { chatgpt_user_id: "native-user" }),
-        },
-      });
-      await writeFile(
-        path.join(fixture.codexHome, "auth.json"),
-        JSON.stringify({
-          auth_mode: "chatgpt",
-          tokens: {
-            access_token: access,
-            refresh_token: "native-refresh",
-            account_id: "native-account",
-          },
-        }),
-      );
-      if (scenario === "managed account") {
-        upsertAuthProfile({
-          profileId: "openai:managed",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: fakeJwt({
-              exp: 2_100_000_000,
-              "https://api.openai.com/auth": {
-                chatgpt_account_id: "managed-account",
-                chatgpt_user_id: "managed-user",
-              },
-            }),
-            refresh: "managed-refresh",
-            expires: 2_100_000_000_000,
-          },
-          agentDir: targetAgentDir(fixture),
-        });
-      }
-      const ctx = makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        includeSecrets: true,
-        itemKinds: ["auth"],
-        providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-        config: {
-          agents: { defaults: { workspace: fixture.workspaceDir } },
-          ...(scenario === "fresh install"
-            ? {}
-            : { auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } } }),
-        },
-      });
-      const before = structuredClone(ctx.config);
-      const provider = buildCodexMigrationProvider();
-
-      const result = await provider.apply(ctx, await provider.plan(ctx));
-
-      expect(findItem(result.items, "auth:openai")).toMatchObject({
-        status: "migrated",
-        details: { profileId: "openai:account-native-account" },
-      });
-      expect(loadTargetAuthStore(fixture).profiles["openai:default"]).toBeUndefined();
-      expect(ctx.config).toEqual(before);
-    },
-  );
-
-  it("does not fill the legacy pin after another account is imported during planning", async () => {
-    const fixture = await createCodexFixture();
-    vi.stubEnv("CODEX_HOME", fixture.codexHome);
-    credentialStorage.accountType = "chatgpt";
-    const access = fakeJwt({
-      exp: 2_100_000_000,
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "native-account",
-        chatgpt_user_id: "native-user",
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: access,
-          refresh_token: "native-refresh",
-          account_id: "native-account",
-        },
-      }),
-    );
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      includeSecrets: true,
-      itemKinds: ["auth"],
-      providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-      config: {
-        agents: { defaults: { workspace: fixture.workspaceDir } },
-        auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
-      },
-    });
-    const provider = buildCodexMigrationProvider();
-    const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai")).toMatchObject({
-      status: "planned",
-      details: { profileId: "openai:default" },
-    });
-    const managed = {
-      type: "oauth" as const,
-      provider: "openai",
-      access: "managed-access",
-      refresh: "managed-refresh",
-      expires: 2_100_000_000_000,
-    };
-    upsertAuthProfile({
-      profileId: "openai:managed",
-      credential: managed,
-      agentDir: targetAgentDir(fixture),
-    });
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai").status).toBe("conflict");
-    expect(loadTargetAuthStore(fixture).profiles).toEqual({ "openai:managed": managed });
-  });
-
-  it("rejects a different inherited account added at the planned legacy destination", async () => {
-    const fixture = await createCodexFixture();
-    vi.stubEnv("CODEX_HOME", fixture.codexHome);
-    credentialStorage.accountType = "chatgpt";
-    const nativeAuth = JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: fakeJwt({
-          exp: 2_100_000_000,
-          "https://api.openai.com/auth": {
-            chatgpt_account_id: "native-account",
-            chatgpt_user_id: "native-user",
-          },
-        }),
-        refresh_token: "native-refresh",
-        account_id: "native-account",
-      },
-    });
-    await writeFile(path.join(fixture.codexHome, "auth.json"), nativeAuth);
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      includeSecrets: true,
-      itemKinds: ["auth"],
-      providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-      config: {
-        agents: { defaults: { workspace: fixture.workspaceDir } },
-        auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
-      },
-    });
-    const configBefore = structuredClone(ctx.config);
-    const provider = buildCodexMigrationProvider();
-    const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai")).toMatchObject({
-      status: "planned",
-      details: { profileId: "openai:default" },
-    });
-    const inherited = {
-      type: "oauth" as const,
-      provider: "openai",
-      access: fakeJwt({
-        exp: 2_100_000_000,
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "shared-account",
-          chatgpt_user_id: "shared-user",
-        },
-      }),
-      refresh: "shared-refresh",
-      expires: 2_100_000_000_000,
-    };
-    upsertAuthProfile({ profileId: "openai:default", credential: inherited });
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai").status).toBe("conflict");
-    clearRuntimeAuthProfileStoreSnapshots();
-    expect(loadTargetAuthStore(fixture).profiles).toEqual({ "openai:default": inherited });
-    await updateAuthProfileStoreWithLock({
-      agentDir: targetAgentDir(fixture),
-      stateDir: fixture.stateDir,
-      updater: (localStore) => {
-        expect(localStore.profiles).toEqual({});
-        return false;
-      },
-    });
-    expect(ctx.config).toEqual(configBefore);
-    expect(await fs.readFile(path.join(fixture.codexHome, "auth.json"), "utf8")).toBe(nativeAuth);
-  });
-
-  it.each([
-    {
-      state: "usable",
-      expires: 2_100_000_000_000,
-      status: "migrated",
-    },
-    { state: "expired", expires: 1_000, status: "skipped" },
-  ])("checks inherited matching OAuth after planning ($state)", async ({ expires, status }) => {
-    const fixture = await createCodexFixture();
-    vi.stubEnv("CODEX_HOME", fixture.codexHome);
-    credentialStorage.accountType = "chatgpt";
-    const access = fakeJwt({
-      exp: 2_100_000_000,
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "native-account",
-        chatgpt_user_id: "native-user",
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: access,
-          refresh_token: "native-refresh",
-          account_id: "native-account",
-        },
-      }),
-    );
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      includeSecrets: true,
-      itemKinds: ["auth"],
-      providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
-      config: {
-        agents: { defaults: { workspace: fixture.workspaceDir } },
-        auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
-      },
-    });
-    const provider = buildCodexMigrationProvider();
-    const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai").status).toBe("planned");
-    const inherited = {
-      type: "oauth" as const,
-      provider: "openai",
-      access,
-      refresh: "shared-refresh",
-      expires,
-    };
-    upsertAuthProfile({ profileId: "openai:default", credential: inherited });
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai").status).toBe(status);
-    await updateAuthProfileStoreWithLock({
-      agentDir: targetAgentDir(fixture),
-      stateDir: fixture.stateDir,
-      updater: (localStore) => {
-        expect(localStore.profiles).toEqual({});
-        return false;
-      },
-    });
-    clearRuntimeAuthProfileStoreSnapshots();
-    expect(loadTargetAuthStore(fixture).profiles["openai:default"]).toMatchObject({ access });
-    expect(loadAuthProfileStoreForSecretsRuntime().profiles).toEqual({
-      "openai:default": inherited,
-    });
-  });
-
   it("imports Codex auth.json OAuth into the selected agent and seeds cached models", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
@@ -1582,335 +708,6 @@ describe("buildCodexMigrationProvider", () => {
       fallbacks: [],
       primary: "openai/gpt-6-astra",
     });
-  });
-
-  it("reports Codex OAuth config auth profile conflicts during planning", async () => {
-    const fixture = await createCodexFixture();
-    const accessToken = fakeJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_conflict",
-        chatgpt_plan_type: "plus",
-      },
-      "https://api.openai.com/profile": {
-        email: "codex@example.test",
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: accessToken,
-          refresh_token: "refresh-conflict-token",
-          account_id: "acct_conflict",
-        },
-      }),
-    );
-    const configState: MigrationProviderContext["config"] = {
-      agents: {
-        defaults: {
-          workspace: fixture.workspaceDir,
-        },
-      },
-      auth: {
-        profiles: {
-          "openai:account-acct_conflict": {
-            provider: "openai",
-            mode: "api_key",
-          },
-        },
-      },
-    };
-    const provider = buildCodexMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        config: configState,
-        includeSecrets: true,
-      }),
-    );
-
-    expect(findItem(plan.items, "auth:openai")).toEqual(
-      expect.objectContaining({
-        status: "conflict",
-        reason: "auth profile exists",
-        details: expect.objectContaining({
-          profileId: "openai:account-acct_conflict",
-        }),
-      }),
-    );
-  });
-
-  it("reports late-created Codex API key config auth profile conflicts before writing", async () => {
-    const fixture = await createCodexFixture();
-    const reportDir = path.join(fixture.root, "report");
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({ OPENAI_API_KEY: "sk-codex" }),
-    );
-    const configState: MigrationProviderContext["config"] = {
-      agents: {
-        defaults: {
-          workspace: fixture.workspaceDir,
-        },
-      },
-    };
-    const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      config: configState,
-      runtime: createConfigRuntime(configState),
-      reportDir,
-      includeSecrets: true,
-    });
-    const plan = await provider.plan(ctx);
-    configState.auth = {
-      profiles: {
-        "openai:codex-import": {
-          provider: "anthropic",
-          mode: "api_key",
-        },
-      },
-    };
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai:api-key")).toEqual(
-      expect.objectContaining({
-        status: "conflict",
-        reason: "auth profile exists",
-      }),
-    );
-    expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toBeUndefined();
-  });
-
-  it("skips Codex OAuth import when the source account changes after planning", async () => {
-    const fixture = await createCodexFixture();
-    const reportDir = path.join(fixture.root, "report");
-    const plannedAccessToken = fakeJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_planned",
-      },
-      "https://api.openai.com/profile": {
-        email: "planned@example.test",
-      },
-    });
-    const changedAccessToken = fakeJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_changed",
-      },
-      "https://api.openai.com/profile": {
-        email: "changed@example.test",
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: plannedAccessToken,
-          refresh_token: "refresh-planned-token",
-          account_id: "acct_planned",
-        },
-      }),
-    );
-    const configState: MigrationProviderContext["config"] = {
-      agents: {
-        defaults: {
-          workspace: fixture.workspaceDir,
-        },
-      },
-    };
-    const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      config: configState,
-      runtime: createConfigRuntime(configState),
-      reportDir,
-      includeSecrets: true,
-    });
-    const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai").details).toEqual(
-      expect.objectContaining({
-        profileId: "openai:account-acct_planned",
-        sourceProfileId: "openai:account-acct_planned",
-      }),
-    );
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: changedAccessToken,
-          refresh_token: "refresh-changed-token",
-          account_id: "acct_changed",
-        },
-      }),
-    );
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(findItem(result.items, "auth:openai")).toEqual(
-      expect.objectContaining({
-        status: "skipped",
-        reason: "auth credential no longer present",
-      }),
-    );
-    const authStore = loadTargetAuthStore(fixture);
-    expect(authStore.profiles["openai:account-acct_planned"]).toBeUndefined();
-    expect(authStore.profiles["openai:account-acct_changed"]).toBeUndefined();
-    expect(configState.auth).toBeUndefined();
-  });
-
-  it("does not collapse Codex OAuth accounts that share an email", async () => {
-    const fixture = await createCodexFixture();
-    const reportDir = path.join(fixture.root, "report");
-    const sharedEmail = "shared@example.com";
-    const accessToken = fakeJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_new",
-        chatgpt_plan_type: "plus",
-      },
-      "https://api.openai.com/profile": {
-        email: sharedEmail,
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: accessToken,
-          refresh_token: "refresh-new-token",
-          account_id: "acct_new",
-        },
-      }),
-    );
-    upsertAuthProfile({
-      agentDir: targetAgentDir(fixture),
-      profileId: "openai:account-acct_old",
-      credential: {
-        type: "oauth",
-        provider: "openai",
-        access: "old-access-token",
-        refresh: "old-refresh-token",
-        expires: Date.now() + 60_000,
-        accountId: "acct_old",
-        email: sharedEmail,
-      },
-    });
-    const configState: MigrationProviderContext["config"] = {
-      agents: {
-        defaults: {
-          workspace: fixture.workspaceDir,
-        },
-      },
-    };
-    const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      config: configState,
-      runtime: createConfigRuntime(configState),
-      reportDir,
-      includeSecrets: true,
-    });
-
-    const plan = await provider.plan(ctx);
-    expectRecordFields(findItem(plan.items, "auth:openai"), {
-      status: "planned",
-    });
-    expect(findItem(plan.items, "auth:openai").details).toEqual(
-      expect.objectContaining({
-        profileId: "openai:account-acct_new",
-      }),
-    );
-
-    const result = await provider.apply(ctx, plan);
-
-    expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
-    const authStore = loadTargetAuthStore(fixture);
-    expect(authStore.profiles?.["openai:account-acct_old"]).toEqual(
-      expect.objectContaining({
-        access: "old-access-token",
-        accountId: "acct_old",
-        email: sharedEmail,
-      }),
-    );
-    expect(authStore.profiles?.["openai:account-acct_new"]).toEqual(
-      expect.objectContaining({
-        access: accessToken,
-        accountId: "acct_new",
-        email: sharedEmail,
-      }),
-    );
-  });
-
-  it("reports Codex auth import when config update fails after profile write", async () => {
-    const fixture = await createCodexFixture();
-    const reportDir = path.join(fixture.root, "report");
-    const accessToken = fakeJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_test",
-      },
-      "https://api.openai.com/profile": {
-        email: "codex@example.test",
-      },
-    });
-    await writeFile(
-      path.join(fixture.codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: accessToken,
-          refresh_token: "refresh-test-token",
-          account_id: "acct_test",
-        },
-      }),
-    );
-    const configState: MigrationProviderContext["config"] = {
-      agents: {
-        defaults: {
-          workspace: fixture.workspaceDir,
-        },
-      },
-    };
-    const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
-      config: configState,
-      runtime: createFailingConfigRuntime(configState),
-      reportDir,
-      includeSecrets: true,
-    });
-    const plan = await provider.plan(ctx);
-
-    const result = await provider.apply(ctx, plan);
-
-    expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
-    expect(findItem(result.items, "auth:openai").details).toEqual(
-      expect.objectContaining({
-        configUpdated: false,
-      }),
-    );
-    const authStore = loadTargetAuthStore(fixture);
-    expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
-      expect.objectContaining({
-        type: "oauth",
-        provider: "openai",
-        access: accessToken,
-      }),
-    );
   });
 
   it("returns Codex auth config patches without direct config writes in return mode", async () => {
@@ -2092,11 +889,13 @@ describe("buildCodexMigrationProvider", () => {
     {
       state: "missing from the committed installed runtime",
       installedApp: undefined,
+      metadataAvailable: true,
       reason: "app_missing",
       expectedApp: { id: "asdk_app_readwise", name: "Readwise" },
     },
     {
       state: "disabled in the committed runtime despite authorized metadata",
+      metadataAvailable: true,
       installedApp: {
         id: "asdk_app_readwise",
         runtimeName: "Readwise",
@@ -2113,6 +912,7 @@ describe("buildCodexMigrationProvider", () => {
     },
     {
       state: "enabled but not callable in the committed runtime",
+      metadataAvailable: true,
       installedApp: {
         id: "asdk_app_readwise",
         runtimeName: "Readwise",
@@ -2128,9 +928,21 @@ describe("buildCodexMigrationProvider", () => {
         isCallable: false,
       },
     },
+    {
+      state: "disabled in the committed runtime with missing metadata",
+      installedApp: {
+        id: "asdk_app_readwise",
+        runtimeName: "Readwise",
+        enabled: false,
+        callable: false,
+      } satisfies v2.InstalledApp,
+      metadataAvailable: false,
+      reason: "app_disabled",
+      expectedApp: { id: "asdk_app_readwise", name: "Readwise", isEnabled: false },
+    },
   ])(
     "fails closed when an authorized source app is $state",
-    async ({ installedApp, reason, expectedApp }) => {
+    async ({ installedApp, metadataAvailable, reason, expectedApp }) => {
       const fixture = await createCodexFixture();
       appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
         if (method === "plugin/installed") {
@@ -2148,9 +960,10 @@ describe("buildCodexMigrationProvider", () => {
           return { apps: installedApp ? [installedApp] : [] } satisfies v2.AppsInstalledResponse;
         }
         if (method === "app/read") {
-          return codexAppInventoryResponse("app/read", [
-            appInfo("asdk_app_readwise", { name: "Readwise" }),
-          ]);
+          return codexAppInventoryResponse(
+            "app/read",
+            metadataAvailable ? [appInfo("asdk_app_readwise", { name: "Readwise" })] : [],
+          );
         }
         throw new Error(`unexpected request ${method}`);
       });
@@ -2347,10 +1160,11 @@ describe("buildCodexMigrationProvider", () => {
           return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail" })]);
         }
         if (method === "account/read") {
-          return {
+          const response: unknown = {
             account,
             requiresOpenaiAuth: true,
-          } satisfies CodexGetAccountResponse;
+          };
+          return response;
         }
         throw new Error(`unexpected request ${method}`);
       });
@@ -2831,117 +1645,130 @@ describe("buildCodexMigrationProvider", () => {
     await fs.access(path.join(reportDir, "report.json"));
   });
 
-  it("installs selected curated plugins during apply and writes codexPlugins config", async () => {
-    const fixture = await createCodexFixture();
-    const reportDir = path.join(fixture.root, "report");
-    const configState: MigrationProviderContext["config"] = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: { sandbox: "workspace-write" },
+  it.each([
+    { marketplace: "openai-curated", initiallyMissing: true },
+    { marketplace: "openai-curated-remote", initiallyMissing: false },
+    { marketplace: "openai-api-curated", initiallyMissing: false },
+  ])(
+    "installs selected $marketplace plugins as soon as the catalog loads",
+    async ({ marketplace, initiallyMissing }) => {
+      const fixture = await createCodexFixture();
+      const reportDir = path.join(fixture.root, "report");
+      const configState: MigrationProviderContext["config"] = {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: { sandbox: "workspace-write" },
+              },
             },
           },
         },
-      },
-      agents: { defaults: { workspace: fixture.workspaceDir } },
-    } as MigrationProviderContext["config"];
-    let targetPluginListCalls = 0;
-    let targetPluginListCallsAtInstall = 0;
-    appServerRequest.mockImplementation(
-      async ({ method, agentDir }: { method: string; agentDir?: string }) => {
-        const isTarget = typeof agentDir === "string";
-        if (method === "plugin/installed" && !isTarget) {
-          return pluginMetadata(method, [
-            pluginSummary("google-calendar", { installed: true, enabled: true }),
-          ]);
-        }
-        if (method === "plugin/list" && isTarget) {
-          targetPluginListCalls += 1;
-          if (targetPluginListCalls === 1) {
-            return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+        agents: { defaults: { workspace: fixture.workspaceDir } },
+      } as MigrationProviderContext["config"];
+      let targetPluginListCalls = 0;
+      let targetPluginListCallsAtInstall = 0;
+      appServerRequest.mockImplementation(
+        async ({ method, agentDir }: { method: string; agentDir?: string }) => {
+          const isTarget = typeof agentDir === "string";
+          if (method === "plugin/installed" && !isTarget) {
+            return pluginMetadata(method, [
+              pluginSummary("google-calendar", { installed: true, enabled: true }),
+            ]);
           }
-          return pluginMetadata(method, [
-            pluginSummary("google-calendar", { installed: true, enabled: true }),
-          ]);
-        }
-        if (method === "plugin/read") {
-          return pluginRead("google-calendar");
-        }
-        if (method === "plugin/install") {
-          targetPluginListCallsAtInstall = targetPluginListCalls;
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        if (method === "app/installed" || method === "app/read") {
-          return codexAppInventoryResponse(method, []);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    );
-    const provider = buildCodexMigrationProvider({
-      runtime: createConfigRuntime(configState),
-    });
-
-    const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        reportDir,
-        config: configState,
-      }),
-    );
-
-    const installCall = appServerRequest.mock.calls.find(
-      ([arg]) => (arg as { method?: string }).method === "plugin/install",
-    )?.[0] as Record<string, unknown>;
-    expect(targetPluginListCallsAtInstall).toBe(2);
-    expectRecordFields(installCall, {
-      method: "plugin/install",
-      requestParams: {
-        marketplacePath: "/marketplaces/openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
-    const pluginItem = findItem(result.items, "plugin:google-calendar");
-    expectRecordFields(pluginItem, {
-      status: "migrated",
-      reason: "already active",
-    });
-    expectRecordFields(pluginItem.details, {
-      code: "already_active",
-      installAttempted: true,
-    });
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), {
-      status: "migrated",
-    });
-    expect(configState.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
-      sandbox: "workspace-write",
-    });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
-      enabled: true,
-      allow_destructive_actions: true,
-      plugins: {
-        "google-calendar": {
-          enabled: true,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
+          if (method === "plugin/list" && isTarget) {
+            targetPluginListCalls += 1;
+            if (initiallyMissing && targetPluginListCalls === 1) {
+              return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+            }
+            if (
+              targetPluginListCalls > (initiallyMissing ? 2 : 1) &&
+              !targetPluginListCallsAtInstall
+            ) {
+              throw new Error("Curated inventory was polled again before installation");
+            }
+            const listed = pluginList([
+              pluginSummary(`google-calendar@${marketplace}`, {
+                installed: true,
+                enabled: true,
+                remotePluginId:
+                  marketplace === "openai-curated-remote" ? "remote-calendar-id" : null,
+              }),
+            ]);
+            listed.marketplaces[0]!.name = marketplace;
+            listed.marketplaces[0]!.path =
+              marketplace === "openai-curated-remote" ? null : `/marketplaces/${marketplace}`;
+            return listed;
+          }
+          if (method === "plugin/read") {
+            return pluginRead("google-calendar");
+          }
+          if (method === "plugin/install") {
+            targetPluginListCallsAtInstall = targetPluginListCalls;
+            return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+          }
+          if (method === "app/installed" || method === "app/read") {
+            return codexAppInventoryResponse(method, []);
+          }
+          throw new Error(`unexpected request ${method}`);
         },
-      },
-    });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).not.toHaveProperty("*");
-  });
+      );
+      const provider = buildCodexMigrationProvider({
+        runtime: createConfigRuntime(configState),
+      });
+
+      const result = await provider.apply(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          reportDir,
+          config: configState,
+        }),
+      );
+
+      const installCall = appServerRequest.mock.calls.find(
+        ([arg]) => (arg as { method?: string }).method === "plugin/install",
+      )?.[0] as Record<string, unknown>;
+      expect(targetPluginListCallsAtInstall).toBe(initiallyMissing ? 2 : 1);
+      expectRecordFields(installCall, {
+        method: "plugin/install",
+        requestParams:
+          marketplace === "openai-curated-remote"
+            ? { remoteMarketplaceName: marketplace, pluginName: "remote-calendar-id" }
+            : { marketplacePath: `/marketplaces/${marketplace}`, pluginName: "google-calendar" },
+      });
+      const pluginItem = findItem(result.items, "plugin:google-calendar");
+      expectRecordFields(pluginItem, {
+        status: "migrated",
+        reason: "already active",
+      });
+      expectRecordFields(pluginItem.details, {
+        code: "already_active",
+        installAttempted: true,
+      });
+      expectRecordFields(findItem(result.items, "config:codex-plugins"), {
+        status: "migrated",
+      });
+      expect(configState.plugins?.entries?.codex?.enabled).toBe(true);
+      expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
+        sandbox: "workspace-write",
+      });
+      expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+        enabled: true,
+        allow_destructive_actions: true,
+        plugins: {
+          "google-calendar": {
+            enabled: true,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          },
+        },
+      });
+      expect(configState.plugins?.entries?.codex?.config?.codexPlugins).not.toHaveProperty("*");
+    },
+  );
 
   it("leaves selected Codex plugins as warnings when target curated plugins never load", async () => {
     vi.stubEnv("OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS", "1");
@@ -2966,15 +1793,6 @@ describe("buildCodexMigrationProvider", () => {
             marketplaceLoadErrors: [],
             featuredPluginIds: [],
           } satisfies v2.PluginListResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
         }
         if (method === "app/installed" || method === "app/read") {
           return codexAppInventoryResponse(method, []);
@@ -3033,15 +1851,6 @@ describe("buildCodexMigrationProvider", () => {
         }
         if (method === "plugin/list" && isTarget) {
           throw new Error("codex app-server plugin/list timed out");
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
         }
         if (method === "app/installed" || method === "app/read") {
           return codexAppInventoryResponse(method, []);
@@ -3484,15 +2293,6 @@ describe("buildCodexMigrationProvider", () => {
           ],
         } satisfies v2.PluginInstallResponse;
       }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
       if (method === "app/installed" || method === "app/read") {
         return codexAppInventoryResponse(method, []);
       }
@@ -3556,12 +2356,6 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/install") {
         throw new Error("install failed");
       }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
       throw new Error(`unexpected request ${method}`);
     });
     const provider = buildCodexMigrationProvider({
@@ -3616,6 +2410,41 @@ describe("buildCodexMigrationProvider", () => {
   });
 });
 
+function findItemByReason(items: readonly { reason?: string }[], reason: string) {
+  const item = items.find((entry) => entry.reason === reason);
+  if (!item) {
+    throw new Error(`Expected migration item reason ${reason}`);
+  }
+  return item as Record<string, unknown>;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function sourceAppCacheKey(fixture: { codexHome: string }): string {
+  return buildCodexPluginAppCacheKey({
+    appServer: {
+      start: {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "desktop-first",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+        env: {
+          CODEX_HOME: fixture.codexHome,
+          HOME: path.dirname(fixture.codexHome),
+        },
+      },
+    },
+  });
+}
+
 function createCalendarPluginMigrationRequest() {
   return async ({ method }: { method: string }) => {
     if (method === "plugin/installed" || method === "plugin/list") {
@@ -3629,49 +2458,11 @@ function createCalendarPluginMigrationRequest() {
     if (method === "plugin/install") {
       return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
     }
-    if (method === "skills/list") {
-      return { data: [] } satisfies v2.SkillsListResponse;
-    }
-    if (method === "hooks/list") {
-      return { data: [] } satisfies v2.HooksListResponse;
-    }
-    if (method === "config/mcpServer/reload") {
-      return {};
-    }
     if (method === "app/installed" || method === "app/read") {
       return codexAppInventoryResponse(method, []);
     }
     throw new Error(`unexpected request ${method}`);
   };
-}
-
-function createConfigRuntime(
-  configState: MigrationProviderContext["config"],
-): MigrationProviderContext["runtime"] {
-  type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
-  type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
-  type MutateConfigFileResult = Awaited<ReturnType<Runtime["config"]["mutateConfigFile"]>>;
-  return {
-    config: {
-      current: () => configState,
-      mutateConfigFile: async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
-        const result = await params.mutate(configState, {
-          snapshot: {} as never,
-          previousHash: null,
-        });
-        return {
-          path: "/tmp/openclaw.json",
-          previousHash: null,
-          persistedHash: "test-persisted-hash",
-          snapshot: {} as never,
-          nextConfig: configState,
-          afterWrite: { mode: "auto" },
-          followUp: { mode: "auto", requiresRestart: false },
-          result,
-        };
-      },
-    },
-  } as unknown as MigrationProviderContext["runtime"];
 }
 
 function pluginMetadata(
@@ -3688,21 +2479,6 @@ function pluginMetadata(
   return response;
 }
 
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
-  return {
-    marketplaces: [
-      {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
-        interface: null,
-        plugins,
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
-}
-
 function pluginRead(pluginName: string, apps: v2.AppSummary[] = []): v2.PluginReadResponse {
   return {
     plugin: {
@@ -3715,21 +2491,6 @@ function pluginRead(pluginName: string, apps: v2.AppSummary[] = []): v2.PluginRe
       mcpServers: [],
     },
   };
-}
-
-function createFailingConfigRuntime(
-  configState: MigrationProviderContext["config"],
-): MigrationProviderContext["runtime"] {
-  type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
-  type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
-  return {
-    config: {
-      current: () => configState,
-      mutateConfigFile: async (_params: MutateConfigFileParams): Promise<never> => {
-        throw new Error("config write failed");
-      },
-    },
-  } as unknown as MigrationProviderContext["runtime"];
 }
 
 function pluginApp(id: string, overrides: Partial<v2.AppSummary> = {}): v2.AppSummary {
@@ -3769,18 +2530,4 @@ function chatGptAccount(): CodexGetAccountResponse {
   };
 }
 
-function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
-  return {
-    id,
-    name: id,
-    source: { type: "remote" },
-    installed: false,
-    enabled: false,
-    installPolicy: "AVAILABLE",
-    authPolicy: "ON_USE",
-    availability: "AVAILABLE",
-    interface: null,
-    ...overrides,
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

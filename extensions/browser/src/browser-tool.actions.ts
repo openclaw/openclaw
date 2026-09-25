@@ -9,6 +9,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
@@ -41,7 +42,6 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "./browser/constants.js";
-import { formatErrorMessage } from "./infra/errors.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 
@@ -87,6 +87,7 @@ function withLocalActTimeout(
 type BrowserTabLike = {
   suggestedTargetId?: unknown;
   tabId?: unknown;
+  webExtensionTabId?: unknown;
   label?: unknown;
   title?: unknown;
   url?: unknown;
@@ -103,11 +104,18 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
   const source = tab as BrowserTabLike;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
+  const webExtensionTabId =
+    typeof source.webExtensionTabId === "number" &&
+    Number.isSafeInteger(source.webExtensionTabId) &&
+    source.webExtensionTabId >= 0
+      ? source.webExtensionTabId
+      : undefined;
   const label = readStringValue(source.label);
   const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
   return {
     ...(suggestedTargetId ? { suggestedTargetId } : {}),
     ...(tabId ? { tabId } : {}),
+    ...(webExtensionTabId !== undefined ? { webExtensionTabId } : {}),
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
@@ -296,43 +304,29 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
-/** Read recent network requests, keeping counts aligned with the bounded payload. */
-export async function executeRequestsAction(
+/** Read browser debug logs, keeping counts aligned with the bounded payload. */
+export async function executeDebugLogAction(
+  kind: "requests" | "errors",
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const filter = normalizeOptionalString(input.filter);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
   const limit =
     readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
     50;
-  const result = await browserRequests(proxyRequest ?? baseUrl, {
-    targetId,
-    filter,
-    clear,
+  const options = {
+    targetId: normalizeOptionalString(input.targetId),
+    clear: typeof input.clear === "boolean" ? input.clear : undefined,
     profile,
     signal,
-  });
-  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
-}
-
-/** Read recent page errors, keeping counts aligned with the bounded payload. */
-export async function executeErrorsAction(
-  params: Parameters<typeof executeConsoleAction>[0],
-): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
-  const limit =
-    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
-    50;
-  const result = await browserErrors(proxyRequest ?? baseUrl, {
-    targetId,
-    clear,
-    profile,
-    signal,
-  });
+  };
+  if (kind === "requests") {
+    const result = await browserRequests(proxyRequest ?? baseUrl, {
+      ...options,
+      filter: normalizeOptionalString(input.filter),
+    });
+    return formatBrowserDebugLogResult(kind, result, result.requests, limit);
+  }
+  const result = await browserErrors(proxyRequest ?? baseUrl, options);
   return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
@@ -428,32 +422,17 @@ export async function executeDownloadAction(params: {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
-  const download = action === "download";
-  const request = download
-    ? {
-        kind: "download" as const,
-        body: {
+  const options = { targetId, timeoutMs, profile, signal: params.signal };
+  const result =
+    action === "download"
+      ? await browserDownload(proxyRequest ?? baseUrl, {
+          ...options,
           ref: readStringParam(input, "ref", { required: true }),
           path: readStringParam(input, "path", { required: true }),
-          targetId,
-          timeoutMs,
-        },
-      }
-    : {
-        kind: "waitfordownload" as const,
-        body: { path: readStringParam(input, "path"), targetId, timeoutMs },
-      };
-  const result =
-    request.kind === "download"
-      ? await browserDownload(proxyRequest ?? baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
         })
       : await browserWaitForDownload(proxyRequest ?? baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
+          ...options,
+          path: readStringParam(input, "path"),
         });
   params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
   return formatBrowserExternalToolResult({ kind: "download", payload: result });

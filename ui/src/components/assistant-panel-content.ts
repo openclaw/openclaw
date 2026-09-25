@@ -19,7 +19,7 @@ export class OpenClawAssistantPanelContent extends OpenClawLightDomElement {
   @property() destination: "home" | "custodian" = "custodian";
   @property() sessionKey = "";
   @property() agentId = "";
-  @property({ attribute: false }) context: ApplicationContext<RouteId> | undefined;
+  @property({ attribute: false }) context: ApplicationContext | undefined;
   @property() pageRouteId: RouteId = "chat";
   @property() pageSessionKey = "";
   @property() pageAgentId = "";

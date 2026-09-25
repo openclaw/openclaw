@@ -10,6 +10,7 @@ import {
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
 } from "./subagent-announce-output.test-support.js";
+import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
@@ -222,7 +223,22 @@ describe("readSubagentOutput", () => {
         ],
       },
     },
+    {
+      shape: "nested function alias",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: { tool_name: "sessions_yield" } }],
+      },
+    },
+    {
+      shape: "string function name",
+      assistant: {
+        role: "assistant",
+        content: [{ type: "function_call", function: "sessions_yield" }],
+      },
+    },
   ])("does not expose a $shape yield turn as completion output", async ({ assistant }) => {
+    expect(assistantCallsSessionsYield(assistant)).toBe(true);
     installOutputDeps({
       messages: [assistant, { role: "tool", content: '{"status":"yielded"}' }],
     });
@@ -230,7 +246,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it.each(["toolUse", "functionCall", "function_call"])(
+  it.each(["toolUse", "functionCall", "tool_call", "function_call"])(
     "does not synthesize output from provider-specific %s transcript blocks",
     async (type) => {
       installOutputDeps({

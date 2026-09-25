@@ -1,6 +1,9 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
   commandRpcMocks,
   config,
@@ -13,8 +16,75 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog failure recovery", () => {
+  it("settles a successful prefix recovery probe before the next activity check", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const native = Array.from({ length: 96 }, (_, i) =>
+      idleThread({ id: `prefix-${i}`, source: "cli", recencyAt: 1_000 - i }),
+    );
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+      expect(method).toBe("thread/list");
+      const offset = Number(params.cursor ?? 0);
+      return {
+        data: native.slice(offset, offset + 64),
+        nextCursor: offset + 64 < native.length ? String(offset + 64) : null,
+      };
+    });
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({
+        appServer: {
+          transport: "websocket",
+          url: "wss://prefix-recovery.example.test/codex",
+          authToken: "synthetic-catalog-token",
+        },
+      }),
+      getRuntimeConfig: () => undefined,
+    });
+    const source = (await factory.homesForAgent("main"))[0]!;
+    const control = factory.forRequest("main", source);
+    const harness = createClientHarness();
+    try {
+      await observeCodexCatalogClient(harness.client, {
+        startOptions: source.appServer.start,
+        agentDir: source.agentDir,
+      });
+      await control.initialize();
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      const notify = async (name: string) => {
+        native[0]!.name = name;
+        harness.send({ method: "thread/started", params: { thread: native[0]! } });
+        await vi.waitFor(async () => {
+          expect((await control.listPage({})).sessions[0]?.name).toBe(name);
+        });
+      };
+      await notify("First activity");
+      commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("temporary outage"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+      await notify("Recovery activity");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+      await notify("Later activity");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
+      expect(
+        commandRpcMocks.codexControlRequest.mock.calls
+          .slice(2)
+          .every((call) => call[2].useStateDbOnly === true && call[2].cursor === undefined),
+      ).toBe(true);
+    } finally {
+      await harness.client.closeAndWait();
+      await factory.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([true, false])(
-    "backs off a whole title search without intermediate or cached recovery (runtime config %s)",
+    "backs off complete home hydration independently of memory queries (runtime config %s)",
     async (hasConfig) => {
       let now = 0;
       let recovered = false;
@@ -39,66 +109,31 @@ describe("Codex catalog failure recovery", () => {
         };
       });
       const search = () => control.listPage({ limit: 1, searchTerm: "Wanted" });
-      await expect(search()).rejects.toBe(failure);
+      await expect(control.initialize()).rejects.toBe(failure);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
+      await expect(control.initialize()).rejects.toBe(failure);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
-      expect((await control.listPage({ limit: 1 })).sessions[0]?.threadId).toBe("head");
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
+      await expect(control.initialize()).rejects.toBe(failure);
+      const partial = await search();
+      expect(partial.sessions).toEqual([]);
+      expect(partial.nextCursor).toEqual(expect.any(String));
+      await expect(
+        control.listPage({ limit: 1, searchTerm: "Wanted", cursor: partial.nextCursor }),
+      ).rejects.toBe(failure);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
       now += 5_000;
       recovered = true;
+      await control.initialize();
       expect((await search()).sessions[0]?.threadId).toBe("match");
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(7);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(9);
+      expect((await control.listPage({ limit: 10 })).sessions).toHaveLength(3);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(9);
     },
   );
 
-  it("ignores an older page failure after a successful recovery", async () => {
-    const control = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => config,
-    }).forRequest("main");
-    const older = createDeferred<unknown>();
-    const started = createDeferred<void>();
-    const held = createDeferred<unknown>();
-    const currentStarted = createDeferred<void>();
-    commandRpcMocks.codexControlRequest.mockImplementationOnce(() => {
-      started.resolve();
-      return older.promise;
-    });
-    const failure = new Error("obsolete outage");
-    const oldPage = control
-      .listPage({ cursor: "older", limit: 1 })
-      .catch((error: unknown) => error);
-    let current: Promise<unknown> | undefined;
-    try {
-      await started.promise;
-      commandRpcMocks.codexControlRequest.mockRejectedValueOnce(failure);
-      await expect(control.listPage({ limit: 1 })).rejects.toBe(failure);
-      commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-      await expect(control.listPage({ limit: 1 })).resolves.toEqual({ sessions: [] });
-      older.reject(failure);
-      await expect(oldPage).resolves.toBe(failure);
-
-      commandRpcMocks.codexControlRequest.mockImplementationOnce(() => {
-        currentStarted.resolve();
-        return held.promise;
-      });
-      current = control.listPage({ cursor: "current", limit: 1 });
-      await currentStarted.promise;
-      await expect(control.listPage({ cursor: "independent", limit: 1 })).resolves.toEqual({
-        sessions: [],
-      });
-    } finally {
-      older.resolve({ data: [] });
-      held.resolve({ data: [] });
-      await Promise.allSettled([oldPage, current]);
-    }
-  });
-
-  it("shares native results across concurrent lists and backs off a repeatedly failing host", async () => {
+  it("shares cold initialization and keeps host backoff observable to catalog callers", async () => {
     let now = 0;
     const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
@@ -106,28 +141,12 @@ describe("Codex catalog failure recovery", () => {
       now: () => now,
     });
     const home = (await control.homesForAgent("main"))[0]!;
+    const request = control.forRequest("main", home);
     const { api, getProvider } = createGatewayApi(createRuntime().runtime, config);
-    const allPagesStarted = createDeferred<void>();
-    let startedPages = 0;
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
-      control: {
-        ...control,
-        forRequest(...args) {
-          const request = control.forRequest(...args);
-          return {
-            ...request,
-            listPage(...pageArgs) {
-              const pending = request.listPage(...pageArgs);
-              if (++startedPages === 18) {
-                allPagesStarted.resolve();
-              }
-              return pending;
-            },
-          };
-        },
-      },
+      control,
       getRuntimeConfig: () => config,
     });
     const provider = getProvider()!;
@@ -135,48 +154,67 @@ describe("Codex catalog failure recovery", () => {
       provider.list({ agentId: "main", hostIds: [home.hostId], limitPerHost: 1, search });
     const failed = createDeferred<unknown>();
     const started = createDeferred<void>();
+    const failure = new Error("native host timed out");
     commandRpcMocks.codexControlRequest.mockImplementation(() => {
       started.resolve();
       return failed.promise;
     });
-    const calls = Array.from({ length: 18 }, () => list());
+    const calls = Array.from({ length: 18 }, () => request.initialize());
+    const settled = Promise.allSettled(calls);
+    let listDelivered = false;
+    const pendingList = list().then((result) => {
+      listDelivered = true;
+      return result;
+    });
+    const observedList = Promise.allSettled([pendingList]);
     try {
       await started.promise;
-      // Home discovery can still be pending after the first native request starts.
-      await allPagesStarted.promise;
-      now += 60_000;
-      failed.reject(new Error("native host timed out"));
-      const hosts = await Promise.all(calls);
+      await nextTurn();
+      expect(listDelivered).toBe(false);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-      for (const result of hosts) {
-        expect(result).toEqual(hosts[0]);
-        expect(result).toMatchObject([
-          {
-            hostId: home.hostId,
-            connected: false,
-            sessions: [],
-            error: { code: "APP_SERVER_UNAVAILABLE" },
-          },
-        ]);
-      }
+      now += 60_000;
+      failed.reject(failure);
+      expect(await settled).toEqual(
+        Array.from({ length: 18 }, () => ({ status: "rejected", reason: failure })),
+      );
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      expect((await pendingList)[0]).toMatchObject({
+        connected: false,
+        sessions: [],
+        error: { code: "APP_SERVER_UNAVAILABLE" },
+      });
 
-      // One immediate recovery attempt is allowed; another failure opens backoff.
-      await list();
+      // The background producer retains its immediate retry and source backoff.
+      await expect(request.initialize()).rejects.toBe(failure);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
       const duringBackoff = await Promise.all(Array.from({ length: 18 }, () => list("other")));
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
       expect(
-        duringBackoff.every((result) => result[0]?.error?.code === "APP_SERVER_UNAVAILABLE"),
+        duringBackoff.every(
+          (result) =>
+            result[0]?.connected === false && result[0]?.error?.code === "APP_SERVER_UNAVAILABLE",
+        ),
       ).toBe(true);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      const blocked = await Promise.allSettled(
+        Array.from({ length: 18 }, () => request.initialize()),
+      );
+      expect(blocked.every((result) => result.status === "rejected")).toBe(true);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
 
       now += 5_000;
       commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-      const recovered = await Promise.all(Array.from({ length: 18 }, () => list()));
+      await Promise.all(Array.from({ length: 18 }, () => request.initialize()));
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-      expect(recovered.every((result) => result[0]?.connected && !result[0]?.error)).toBe(true);
+      const recovered = await Promise.all(Array.from({ length: 18 }, () => list()));
+      expect(
+        recovered.every(
+          (result) => result[0]?.connected && !result[0]?.error && result[0]?.sessions.length === 0,
+        ),
+      ).toBe(true);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
     } finally {
       failed.resolve({ data: [] });
-      await Promise.allSettled(calls);
+      await Promise.all([settled, observedList]);
     }
   });
 
@@ -192,9 +230,10 @@ describe("Codex catalog failure recovery", () => {
         "thread/list",
       );
       commandRpcMocks.codexControlRequest.mockRejectedValue(failure);
-      await expect(control.listPage({ cursor: "bad", limit: 1 })).rejects.toBe(failure);
-      await expect(control.listPage({ cursor: "bad", limit: 1 })).rejects.toBe(failure);
+      await expect(control.initialize()).rejects.toBe(failure);
+      await expect(control.initialize()).rejects.toBe(failure);
       commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
+      await control.initialize();
       await expect(control.listPage({ limit: 1 })).resolves.toEqual({ sessions: [] });
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
     },

@@ -4,10 +4,12 @@ import JSZip from "jszip";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.ts";
 import type { AssistantMessage, Model } from "../../../packages/ai/src/types.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiSessionUrl,
   navigateToControlUiSession,
@@ -21,6 +23,8 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const retainedImageBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsHeERQyjAWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0B06OyaOxP7RwAAAAASUVORK5CYII=";
 const replayModel: Model<"openai-responses"> = {
   id: "gpt-5.6-luna",
   name: "Mock OpenAI",
@@ -63,6 +67,19 @@ function historyHasAssistantText(history: unknown, text: string): boolean {
   });
 }
 
+function imageInHistory(history: unknown): Record<string, unknown> | undefined {
+  const messages = asOptionalRecord(history)?.messages;
+  return Array.isArray(messages)
+    ? messages
+        .flatMap((message) => {
+          const content = asOptionalRecord(message)?.content;
+          return Array.isArray(content) ? content : [];
+        })
+        .map(asOptionalRecord)
+        .find((block) => block?.type === "image")
+    : undefined;
+}
+
 function readRawAssistantMessages(stateDir: string): PersistedAssistantMessage[] {
   const database = openNodeSqliteDatabase(
     path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
@@ -95,7 +112,7 @@ function readModelReplayError(messages: AssistantMessage[]): string | null {
 }
 
 suite.define(() => {
-  it("renders sanitized omitted and retained image history", { timeout: 180_000 }, async () => {
+  it("renders recoverable and omitted image history", { timeout: 180_000 }, async () => {
     const gatewayOwner = createQaLiveLaneGateway();
     const gateway = await gatewayOwner.start({
       repoRoot: process.cwd(),
@@ -134,29 +151,58 @@ suite.define(() => {
       });
     };
     const omittedSessionKey = "agent:qa:omitted-image-history";
+    const recoveredSessionKey = "agent:qa:recovered-image-history";
     const retainedSessionKey = "agent:qa:retained-image-history";
     const retainedImageUrl = "https://example.invalid/retained-history-image.png";
-    await seed(omittedSessionKey, "omitted-image-history", [
-      {
-        type: "image",
-        mimeType: "image/png",
-        data: Buffer.from("omitted inline image").toString("base64"),
-      },
-    ]);
-    await seed(retainedSessionKey, "retained-image-history", [
-      { type: "image", mimeType: "image/png", source: { type: "url", url: retainedImageUrl } },
-    ]);
     try {
+      // Startup admits the fixture rows into the child Gateway's resident projection.
+      await gateway.gateway.restartAfterStateMutation(async () => {
+        await seed(omittedSessionKey, "omitted-image-history", [
+          { type: "image", mimeType: "image/png", omitted: true, bytes: 12 * 1024 },
+        ]);
+        await seed(recoveredSessionKey, "recovered-image-history", [
+          { type: "image", mimeType: "image/png", data: retainedImageBase64 },
+        ]);
+        await seed(retainedSessionKey, "retained-image-history", [
+          {
+            type: "image",
+            mimeType: "image/png",
+            source: { type: "url", url: retainedImageUrl },
+          },
+        ]);
+      });
       const omittedHistory = await gateway.gateway.call("chat.history", {
         sessionKey: omittedSessionKey,
+        limit: 10,
+      });
+      const recoveredHistory = await gateway.gateway.call("chat.history", {
+        sessionKey: recoveredSessionKey,
         limit: 10,
       });
       const retainedHistory = await gateway.gateway.call("chat.history", {
         sessionKey: retainedSessionKey,
         limit: 10,
       });
-      expect(JSON.stringify(omittedHistory)).toContain('"omitted":true');
-      expect(JSON.stringify(omittedHistory)).not.toContain("omitted inline image");
+      const omittedImage = imageInHistory(omittedHistory);
+      const recoveredImage = imageInHistory(recoveredHistory);
+      expect(omittedImage).toMatchObject({ omitted: true, bytes: 12 * 1024 });
+      expect(omittedImage).not.toHaveProperty("artifactId");
+      expect(recoveredImage).toMatchObject({ omitted: true, mimeType: "image/png" });
+      expect(recoveredImage).not.toHaveProperty("data");
+      expect(JSON.stringify(recoveredHistory)).not.toContain(retainedImageBase64);
+      const artifactId = recoveredImage?.artifactId;
+      if (typeof artifactId !== "string") {
+        throw new Error("Persisted image history is missing its artifact reference");
+      }
+      const download = await gateway.gateway.call("artifacts.download", {
+        sessionKey: recoveredSessionKey,
+        artifactId,
+      });
+      expect(download).toMatchObject({
+        artifact: { id: artifactId, type: "image", mimeType: "image/png" },
+        encoding: "base64",
+        data: retainedImageBase64,
+      });
       expect(JSON.stringify(retainedHistory)).toContain(retainedImageUrl);
 
       await suite.withPage(
@@ -169,6 +215,12 @@ suite.define(() => {
           viewport: { width: 1280, height: 900 },
         },
         async ({ page }) => {
+          await page.route(retainedImageUrl, (route) =>
+            route.fulfill({
+              contentType: "image/png",
+              body: Buffer.from(retainedImageBase64, "base64"),
+            }),
+          );
           await page.addInitScript(
             ({ gatewayUrl, token }) => {
               (
@@ -194,11 +246,66 @@ suite.define(() => {
             await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
           }
 
+          await navigateToControlUiSession(page, recoveredSessionKey);
+          const recoveredPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+          const preview = recoveredPane.locator("img.chat-message-image");
+          await preview.waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              preview.evaluate((image) =>
+                image instanceof HTMLImageElement ? image.naturalWidth : 0,
+              ),
+            )
+            .toBe(64);
+          expect(
+            await recoveredPane
+              .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
+              .count(),
+          ).toBe(0);
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "02-recovered-image.png"),
+            });
+          }
+          await recoveredPane.locator(".chat-message-image-button").press("Enter");
+          const expanded = page.locator("openclaw-image-lightbox .image");
+          await expanded.waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              expanded.evaluate((image) =>
+                image instanceof HTMLImageElement ? image.naturalWidth : 0,
+              ),
+            )
+            .toBe(64);
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "03-recovered-lightbox.png"),
+            });
+          }
+          await page.getByRole("button", { name: "Close image preview" }).click();
+          await page.reload();
+          await preview.waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              preview.evaluate((image) =>
+                image instanceof HTMLImageElement ? image.naturalWidth : 0,
+              ),
+            )
+            .toBe(64);
+
           await navigateToControlUiSession(page, retainedSessionKey);
           const retainedPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-          await retainedPane
-            .locator(`img.chat-message-image[src="${retainedImageUrl}"]`)
-            .waitFor({ state: "visible" });
+          const retainedPreview = retainedPane.locator(
+            `img.chat-message-image[src="${retainedImageUrl}"]`,
+          );
+          await retainedPreview.waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              retainedPreview.evaluate((image) =>
+                image instanceof HTMLImageElement ? image.naturalWidth : 0,
+              ),
+            )
+            .toBe(64);
           expect(
             await retainedPane
               .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
@@ -210,8 +317,10 @@ suite.define(() => {
               {
                 gateway: {
                   omittedHasMarker: JSON.stringify(omittedHistory).includes('"omitted":true'),
-                  omittedExcludesInlinePayload:
-                    !JSON.stringify(omittedHistory).includes("omitted inline image"),
+                  recoveredArtifactId: artifactId,
+                  recoveredExcludesInlinePayload:
+                    !JSON.stringify(recoveredHistory).includes(retainedImageBase64),
+                  downloadedPixelsMatch: asOptionalRecord(download)?.data === retainedImageBase64,
                   retainedIncludesUrl: JSON.stringify(retainedHistory).includes(retainedImageUrl),
                 },
                 ui: {
@@ -232,7 +341,9 @@ suite.define(() => {
             )}\n`,
           );
           if (captureUiProof) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "04-retained-image.png"),
+            });
           }
         },
       );
@@ -261,6 +372,15 @@ suite.define(() => {
           controlUiEnabled: false,
         });
         await writeFile(path.join(gateway.gateway.workspaceDir, "slides.pptx"), await createPptx());
+        expect(await gateway.gateway.call("config.get", {})).toMatchObject({
+          config: {
+            agents: {
+              entries: {
+                qa: { model: { primary: "mock-openai/gpt-5.6-luna" } },
+              },
+            },
+          },
+        });
 
         await suite.withPage(
           {
@@ -282,7 +402,22 @@ suite.define(() => {
               },
               { gatewayUrl: gateway.gateway.wsUrl, token: gateway.gateway.token },
             );
-            await page.goto(new URL("chat", suite.server.baseUrl).href);
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:qa:main"));
+            await waitForControlUiGatewayReady(page);
+            // Exercise media delivery only after the target session owns its composer;
+            // cold startup can still replace the initial empty draft before this point.
+            await page.waitForFunction(() => {
+              const pane = document.querySelector<
+                HTMLElement & {
+                  state?: { connected: boolean; sessionKey: string; chatLoading: boolean };
+                }
+              >("openclaw-chat-pane.chat-pane-cache__pane--visible");
+              return (
+                pane?.state?.connected === true &&
+                pane.state.sessionKey === "agent:qa:main" &&
+                !pane.state.chatLoading
+              );
+            });
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill("Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
             await page.getByRole("button", { name: "Send message" }).click();

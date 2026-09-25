@@ -17,7 +17,9 @@ const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond 
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
 export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   heartbeat: "[OpenClaw heartbeat poll]",
-  exec: "[OpenClaw exec completion]",
+  exec: "[OpenClaw exec completion]\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.",
+  // Saved transcripts still contain the marker without the disablement hint.
+  legacyExec: "[OpenClaw exec completion]",
   cron: "[OpenClaw cron wake]",
   event: "[OpenClaw session event]",
 } as const;

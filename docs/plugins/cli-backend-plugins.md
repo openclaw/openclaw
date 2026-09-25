@@ -213,6 +213,11 @@ Omit `reliability.watchdog` to inherit the standard profiles, including the
 longer resumed-run budget for cron and explicit timeouts. Set it only when a
 backend intentionally needs its own watchdog policy.
 
+Recovery retries stay inside the operator-configured `timeoutMs`: elapsed time
+is measured monotonically, so an NTP correction or manual clock change can
+neither shorten a retry that still has budget nor let a hung CLI outlive its
+timeout.
+
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
 - Leave it undefined or set it to `"replace-binding"` to preserve the legacy
@@ -308,6 +313,10 @@ launchers outside the declared package, required external dependency
 declarations, oversized trees, and unknown scripts. Declare this only when that
 tree contains the complete inference implementation; optional tool integrations
 do not make an external implementation graph safe.
+
+On Windows, supported JavaScript entrypoints run through the verified Node
+executable selected from `PATH`. Explicit script paths do not require their
+suffix in `PATHEXT`; bare command lookup still follows `PATH` and `PATHEXT`.
 
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain

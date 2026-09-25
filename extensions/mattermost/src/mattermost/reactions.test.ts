@@ -1,10 +1,9 @@
-// Mattermost tests cover reactions plugin behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addMattermostReaction, removeMattermostReaction } from "./reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
-  requestUrl,
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {
@@ -372,6 +371,29 @@ describe("mattermost reactions", () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("reports an accepted removal as success when its 200 body cannot be read", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      if (requestUrl(url).endsWith("/api/v4/users/me")) {
+        return Response.json({ id: "BOT123" });
+      }
+      expect(init?.method).toBe("DELETE");
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          throw new TypeError("terminated");
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const result = await removeReactionWithFetch(fetchMock);
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      expect.stringMatching(/\/api\/v4\/users\/me$/),
+      expect.stringMatching(/\/api\/v4\/users\/BOT123\/posts\/POST1\/reactions\/thumbsup$/),
+    ]);
   });
 
   it("caches the bot user id across reaction mutations", async () => {

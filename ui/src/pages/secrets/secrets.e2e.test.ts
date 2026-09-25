@@ -135,6 +135,31 @@ async function activeGatewayIdentity(page: Page) {
 }
 
 suite.define(() => {
+  it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
+    await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": { entries: [secretEntry] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const row = page.getByRole("row", { name: secretEntry.name });
+      const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
+      await trigger.waitFor({ state: "visible" });
+      await row.hover();
+      await page.evaluate(() => document.fonts.ready);
+      const [buttonBox, tableBox] = await Promise.all([
+        trigger.boundingBox(),
+        page.locator(".secrets-store__table-wrap").boundingBox(),
+      ]);
+      if (!buttonBox || !tableBox) {
+        throw new Error("Expected row actions and table to have layout boxes");
+      }
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width);
+    });
+  });
+
   it("keeps long secret names inside the Name column", async () => {
     await suite.withPage(
       {
@@ -252,7 +277,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
@@ -366,7 +391,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Secrets" }).waitFor();
+        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
@@ -589,7 +614,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
       await page.getByText(/Gateway\/admin required/u).waitFor();
       expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);

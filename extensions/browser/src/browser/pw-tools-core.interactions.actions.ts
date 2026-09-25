@@ -72,7 +72,10 @@ export async function clickViaPlaywright(
         throwIfInteractionAborted(opts.signal);
         await sleepWithAbort(delayMs, opts.signal);
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
       }
@@ -260,7 +263,10 @@ export async function typeViaPlaywright(
       if (opts.slowly) {
         await locator.click({ timeout, signal });
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await locator.type(text, { timeout, signal, delay: 75 });
@@ -269,7 +275,10 @@ export async function typeViaPlaywright(
       }
       if (opts.submit) {
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await locator.press("Enter", { timeout, signal });
@@ -354,9 +363,9 @@ export async function evaluateViaPlaywright(
     }
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
+      page,
       targetId: opts.targetId,
       ssrfPolicy: opts.ssrfPolicy,
-      reason: "evaluate aborted",
     }).catch(() => {});
   });
   if (signal?.aborted) {

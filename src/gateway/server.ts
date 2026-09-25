@@ -22,9 +22,35 @@ export async function startGatewayServer(
   opts: import("./server-public.js").GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
+  let stopDatabaseAdmission: (() => Promise<void>) | undefined;
   const start = async () => {
-    const mod = await loadServerStart();
-    return await mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+    const { createSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
+    const readOnlyWorkers = createSqliteReadOnlyWorkerScope();
+    const { withAgentDatabaseStartupAdmission } =
+      await import("../state/agent-database-startup.js");
+    try {
+      const server = await readOnlyWorkers.run(() =>
+        withAgentDatabaseStartupAdmission(async (admission) => {
+          stopDatabaseAdmission = () => admission.stop();
+          const mod = await loadServerStart();
+          return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+        }),
+      );
+      return {
+        ...server,
+        close: (closeOptions: Parameters<typeof server.close>[0]) =>
+          readOnlyWorkers.run(async () => {
+            try {
+              await server.close(closeOptions);
+            } finally {
+              await readOnlyWorkers.close();
+            }
+          }),
+      };
+    } catch (error) {
+      await readOnlyWorkers.close();
+      throw error;
+    }
   };
   // Transferable stdio sockets are a Node contract; Bun keeps its native transport.
   if (process.platform !== "linux" || process.versions.bun) {
@@ -47,6 +73,11 @@ export async function startGatewayServer(
   if (!broker) {
     return await start();
   }
+  const closeBroker = async () => {
+    // A failed required core join can stop before the admission sidecar runs.
+    await stopDatabaseAdmission?.();
+    await broker.close();
+  };
   try {
     const { createSubsystemLogger } = await import("../logging/subsystem.js");
     logger = createSubsystemLogger("gateway");
@@ -60,18 +91,12 @@ export async function startGatewayServer(
             await server.close(closeOptions);
           } finally {
             // Process scopes and relay extinction joins finish before their transport closes.
-            await broker.close();
+            await closeBroker();
           }
         }),
     };
   } catch (error) {
-    await broker.close();
+    await closeBroker();
     throw error;
   }
-}
-
-/** Clears prepared model-catalog generations between tests. */
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
-  const mod = await loadServerStart();
-  await mod.resetPreparedModelCatalogForTestCore();
 }

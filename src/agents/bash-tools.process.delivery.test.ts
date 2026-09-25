@@ -40,9 +40,9 @@ import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 
-afterEach(() => {
+afterEach(async () => {
   resetGlobalHookRunner();
-  resetCodeModeTestState();
+  await resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 

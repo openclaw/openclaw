@@ -212,7 +212,7 @@ suite.define(() => {
     }
   });
 
-  it("preserves native actions across adopted session menu entry points", async () => {
+  it.each([false, true])("preserves adopted session menus (touch: %s)", async (hasTouch) => {
     const adoptedKey = "agent:main:adopted-native-menu";
     const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const proofDir = proofRoot
@@ -220,6 +220,7 @@ suite.define(() => {
       : undefined;
     const context = await suite.newBrowserContext({
       deviceScaleFactor: 2,
+      hasTouch,
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 1100, width: 1440 },
@@ -270,7 +271,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`[data-session-key="${adoptedKey}"]`);
       await row.waitFor({ state: "visible" });
-      const menuButton = row.locator('[data-session-menu="true"]');
+      const menuTrigger = row.locator(".sidebar-recent-session__link");
       const catalogMenu = () => page.locator("openclaw-catalog-session-menu");
       const menuValues = async () =>
         catalogMenu()
@@ -298,20 +299,20 @@ suite.define(() => {
         }
       };
 
-      await row.hover();
-      await menuButton.hover();
-      await menuButton.click();
-      await assertCatalogMenu("01-button");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => catalogMenu().count()).toBe(0);
-
-      await row.click({ button: "right" });
-      await assertCatalogMenu("02-context");
+      const touchMenu = row.locator("[data-sidebar-session-menu]");
+      if (hasTouch) {
+        await touchMenu.tap();
+        await assertCatalogMenu("touch");
+      } else {
+        expect(await touchMenu.isVisible()).toBe(false);
+        await row.click({ button: "right" });
+        await assertCatalogMenu("context");
+      }
       await page.keyboard.press("Escape");
       await expect.poll(() => catalogMenu().count()).toBe(0);
 
       for (const key of ["ContextMenu", "Shift+F10"]) {
-        await menuButton.focus();
+        await menuTrigger.focus();
         await page.keyboard.press(key);
         await assertCatalogMenu(key);
         await page.keyboard.press("Escape");

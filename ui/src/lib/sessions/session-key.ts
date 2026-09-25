@@ -43,8 +43,11 @@ export function parseAgentSessionKey(
 ): ParsedAgentSessionKey | null {
   // Display ownership historically tolerates empty segments and folds the tail.
   // Store identities and URL literals apply their own stricter policies.
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   return parseAgentSessionKeyParts(
-    normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean).join(":"),
+    normalized.startsWith(":") || normalized.endsWith(":") || normalized.includes("::")
+      ? normalized.split(":").filter(Boolean).join(":")
+      : normalized,
   );
 }
 

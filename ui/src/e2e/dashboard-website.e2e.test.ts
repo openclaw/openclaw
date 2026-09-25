@@ -74,7 +74,6 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": { count: 1, sessions: [sessionRow], defaults: {}, path: "", ts: 1 },
             "sessions.patch": {},
-            "sessions.describe": { session: sessionRow },
             "sessions.resolve": {
               ok: true,
               key: sessionKey,

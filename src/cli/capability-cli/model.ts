@@ -36,7 +36,7 @@ import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -393,7 +393,7 @@ async function buildModelProviders(rawAgentId?: string) {
         cfg,
         providerId: entry.provider,
         agentId,
-        envVars: getProviderEnvVars(entry.provider),
+        envVars: getProviderEnvVarsCore(entry.provider),
       }),
       selected: selectedProvider === entry.provider,
     };

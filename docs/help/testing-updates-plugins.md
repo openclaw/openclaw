@@ -19,6 +19,7 @@ keys and network-touching suites, see [Testing live](/help/testing-live).
 
 - [What we protect](#what-we-protect) - the guarantees these lanes exist to defend.
 - [Local proof during development](#local-proof-during-development) - the commands to run while you iterate.
+- [Headless node auto-update proof](#headless-node-auto-update-proof) - installed-node activation and shared-Gateway safeguards.
 - [Docker lanes](#docker-lanes) - lane reference: what each lane runs and when.
 - [Package Acceptance](#package-acceptance) - lane reference: the acceptance matrix and its gates.
 - [Release default](#release-default) - which lanes a release candidate must clear.
@@ -87,6 +88,44 @@ Release npm preflight uses the same readable diff against the prior published
 dist-tag and prints the 8-character acknowledgement digest required when that
 release changes the Plugin SDK API.
 
+## Headless node auto-update proof
+
+`pnpm test:e2e:node-auto-update <built-openclaw.tgz> [new-artifact-directory]`
+runs a real installed-package scenario on Linux. Run it in a task-owned Testbox
+or Crabbox with Node, npm, and registry access. It needs no provider credentials
+and is opt-in; the default `pnpm test:e2e` aggregate does not run it.
+
+Build and pack the candidate on the test host, then pass that exact tarball:
+
+```bash
+pnpm build
+node scripts/package-openclaw-for-docker.mjs --skip-build \
+  --output-dir /tmp/openclaw-node-update-package \
+  --output-name openclaw-node-update.tgz
+pnpm test:e2e:node-auto-update \
+  /tmp/openclaw-node-update-package/openclaw-node-update.tgz \
+  /tmp/openclaw-node-update-proof
+```
+
+The proof starts isolated Gateway, paired-node, supervisor, and fixture-registry
+processes. It verifies busy-work deferral, idle activation, preserved pairing
+and launch options, activation cooldown, all three public opt-outs, and retention
+of the working node when a candidate is malformed. A same-state Gateway/node
+case confirms that the Gateway process, configuration, and global installation
+stay unchanged while the node activates its private runtime. A separate cell
+runs the published `openclaw@2026.9.4` updater against the candidate.
+
+A legacy-plugin case returns from its command while a child keeps running,
+then proves that a missing idle-work callback blocks activation both during
+that work and after the child finishes.
+
+Use a new artifact directory outside the source checkout for every run, or omit
+it to create a fresh temporary directory. The scenario retains `observations.json`
+and per-process logs there and stops its child processes on completion or failure.
+Collect the proof before stopping the remote lease. This scenario proves Linux
+behavior; it does not establish Windows or macOS activation coverage. See
+[Node auto-updates](/cli/node#automatic-updates) for the operator contract.
+
 ## Docker lanes
 
 The Docker lanes are the product-level proof. They install or update a real
@@ -127,7 +166,9 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status.
+  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
+  OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
@@ -139,10 +180,38 @@ Important lanes:
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
 
+Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
+model refs to run one `openclaw agent --local` marker turn per model after the
+update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
+OpenAI uses `OPENAI_API_KEY`; missing selected keys fail the lane. Docker forwards
+only selected provider keys. Each turn has its own session and
+`live-<provider>.json` / `.err` artifacts (additional models from the same provider
+use `-2`, `-3`, etc.). `summary.json` records `liveModels.models` entries with
+`model`, `ok`, and `latencyMs`.
+
+The legacy `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1` form still selects
+`openai/gpt-5.5`, or `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL` when supplied.
+An explicit model list takes precedence over that flag; the summary records
+`liveModels.source` and `overridesLiveOpenai`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS` budget (default 180 seconds)
+applies separately to each turn. Live turns use the recipe's configured thinking
+default so each model can apply its supported reasoning levels. Scenarios that
+prohibit live providers retain that restriction.
+
+Frozen extended-stable candidate targets use their historical runner and reject
+both live-selection variables before Docker starts, with exit code 2.
+
+```bash
+# Export the three provider keys before invoking the lane.
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.5 \
+OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview" \
+pnpm test:docker:published-upgrade-survivor
+```
+
 Useful published-upgrade survivor variants:
 
 ```bash
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.4.23 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.1 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=versioned-runtime-deps \
 pnpm test:docker:published-upgrade-survivor
 
@@ -196,14 +265,19 @@ strings are equal. Select one with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO` and set
 `projects-doctor` preserves one registered project and one configured workspace,
 then runs the real `doctor --lint --only core/doctor/project-clone-shape --json`
 twice. It checks stored rows, schema, sentinels, and read-only snapshot cleanup.
-`projects-startup-migration` creates a project and managed worktree through the
-published owners using local Git, then imports synthetic legacy session JSON/JSONL
-through published Doctor. It requires the updater's candidate Doctor repair to fill
-in the registered project's canonical workspace before the first Gateway startup.
-Both normal Gateway starts must leave the repaired session and transcript unchanged,
-perform no workspace backfill, become ready, and report clean shutdown before
-persisted readback. The fixture is a supported legacy-format import, not a
-historical runtime-generated session. No additional Doctor recovery pass runs. Set
+`projects-startup-migration` prepares two independent project/worktree specimens
+through the published owners using local Git. Each has a verified backup and
+synthetic legacy session JSON/JSONL imported through published Doctor. The update
+must repair the first specimen's canonical workspace through candidate Doctor.
+The second state stays outside that update's discovery. Before startup, the
+candidate's Doctor schema owner runs under its maintenance lock to upgrade that
+database while preserving the legacy workspace fields and exact session/transcript
+bytes. Its first normal Gateway startup must preserve that state. After
+clean shutdown, an explicit `doctor --fix --non-interactive` repairs its canonical
+workspace; a second startup must leave the repaired state unchanged. These are
+supported legacy-format imports, not historical runtime-generated sessions.
+Both Gateway runs must become ready and report clean shutdown before persisted
+readback. Set
 `OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS` to a reviewed JSON file containing the
 candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
 triples of compiled basename, exact export symbol, and SHA-256. The snapshot
@@ -233,6 +307,13 @@ the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
+
+Published companion package versions retain identical archive bytes throughout
+the fixture. If a source candidate still uses the published companion's version,
+the registry and installation assertions preserve that published archive. A new
+companion version instead uses the prepared candidate artifact. The npm integrity
+guard remains enabled in both cases; the fixture never replaces a published
+version's bytes to make an update pass.
 
 The ownerless cron job is created before adding the second agent because newer
 baselines reject ambiguous new jobs. Approval snapshots are written back through
@@ -332,15 +413,15 @@ when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay
-from every published stable release since 2026.4.23, pass
-`baselines=all-since-2026.4.23`:
+from every published stable release since 2026.6.1, pass
+`baselines=all-since-2026.6.1`:
 
 ```bash
 gh workflow run update-migration.yml \
   --ref main \
   -f workflow_ref=main \
   -f package_ref=main \
-  -f baselines=all-since-2026.4.23 \
+  -f baselines=all-since-2026.6.1 \
   -f scenarios=plugin-deps-cleanup
 ```
 
@@ -419,8 +500,13 @@ and also runs on every canonical `main` push that runs CI. Docs-only pushes
 matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
-npm-published releases. Exact versions, `all-since-2026.4.23`, and
+npm-published releases. Exact versions, `all-since-2026.6.1`, and
 `release-history` remain available through `published_upgrade_survivor_baselines`.
+Current tooling executes baselines from `2026.6.1` onward. `release-history`
+selects the six most recent supported stable releases without adding older
+March or April anchors. To replay pre-June upgrades, select matching historical
+tooling; for an old installation, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+before installing the latest release.
 Use those overrides when replaying migrations outside the bounded supported
 baseline set.
 
@@ -469,18 +555,15 @@ in Testbox unless explicitly doing local proof.
 
 ## Legacy compatibility
 
-Compatibility leniency is narrow and time boxed:
+Package Acceptance applies current metadata and persistence contracts without
+the retired pre-June 2026 warning or skip paths. Reproducing acceptance of those
+historical candidates requires their historical `workflow_ref` tooling.
 
-- Packages through `2026.4.25`, including `2026.4.25-beta.*`, may tolerate
-  already-shipped package metadata gaps in Package Acceptance.
-- The published `2026.4.26` package may warn for local build metadata stamp
-  files already shipped.
-- Later packages must satisfy modern contracts. The same gaps fail instead of
-  warning or skipping.
-
-Do not add new startup migrations for these old shapes. Add or extend a doctor
-repair, then prove it with `upgrade-survivor`, `published-upgrade-survivor`, or
-`update-restart-auth` when the update command owns the restart.
+For retained upgrade contracts, keep migrations in Doctor and prove changes with
+`upgrade-survivor`, `published-upgrade-survivor`, or `update-restart-auth` when the
+update command owns the restart. Pre-June task and flow sidecar imports are
+retired; use the [intermediate upgrade procedure](/install/updating) to preserve
+those records.
 
 ## Adding coverage
 

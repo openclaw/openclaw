@@ -18,10 +18,8 @@ function captureLegacySessionSources(stateDir) {
 }
 
 function usesMissingPathFixture() {
-  return (
-    ["base", "missing-load-path"].includes(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO) &&
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "manual"
-  );
+  // Artifact-only base/manual rows seed sessions without the missing-path scenario.
+  return process.env.OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED === "1";
 }
 
 function fixturePath() {

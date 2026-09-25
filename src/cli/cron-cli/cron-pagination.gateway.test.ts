@@ -65,6 +65,8 @@ function installRealCronGateway(
   } = {},
 ) {
   const state = createMockCronStateForJobs({ jobs });
+  // Pagination observes the loaded snapshot of a running Gateway.
+  state.schedulerStarted = true;
   const config = options.config ?? {};
   state.deps.defaultAgentId = tryResolveAmbientOwnerAgentId(config);
   let listCalls = 0;

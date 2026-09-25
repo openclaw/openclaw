@@ -25,6 +25,8 @@ import {
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
+import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type {
   ApplicationContext,
@@ -41,6 +43,7 @@ import {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { loadSettings } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 vi.mock("./stale-chunk-reload.ts", async () => {
@@ -345,7 +348,6 @@ describe("OpenClaw shell source initialization", () => {
       agentsListClient: null,
       agentsListSource: null,
       context: undefined,
-      criticalNoticeRuntime: null,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
       previousGatewayPhase: null,
@@ -469,12 +471,14 @@ describe("OpenClaw shell route session commits", () => {
     shell.routeState = { routeId: "chat" };
     shell.navigate("dashboard");
     expect(navigate).toHaveBeenLastCalledWith("dashboard", {
-      pathname: "/dashboard/main/12345678",
+      pathname: "/dashboard/main/1234567890abcdef1234567890abcdef",
     });
 
     shell.routeState = { routeId: "dashboard" };
     shell.navigate("chat");
-    expect(navigate).toHaveBeenLastCalledWith("chat", { pathname: "/chat/main/12345678" });
+    expect(navigate).toHaveBeenLastCalledWith("chat", {
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
+    });
   });
 
   it("preserves catalog identity when routing a slash-command draft", () => {
@@ -520,6 +524,7 @@ describe("OpenClaw shell route session commits", () => {
         gateway: { setSessionKey: vi.fn(), snapshot },
         sessions: createRouteSessions(),
         chatSubmissions: createChatSubmissions(),
+        placementStartup: { get: vi.fn(() => null) },
         replace,
       } as unknown as ApplicationContext,
     };
@@ -588,8 +593,20 @@ describe("OpenClaw shell server preferences", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
-    const updateNavigation = vi.fn();
-    const refreshTheme = vi.fn();
+    const gateway = {
+      connection: { gatewayUrl: "ws://sidebar.test" },
+      snapshot: { phase: "connected" },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
+    const navigation = createApplicationNavigationPreferences(theme);
+    const navigationChanged = vi.fn();
+    const stopNavigation = navigation.subscribe(navigationChanged);
+    onTestFinished(() => {
+      stopNavigation();
+      theme.dispose();
+      resetServerUiPrefsSync();
+    });
     const runtimeConfig = {
       state: {
         configSnapshot: {
@@ -599,12 +616,9 @@ describe("OpenClaw shell server preferences", () => {
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://sidebar.test" },
-        snapshot: { phase: "connected" },
-      },
-      navigation: { update: updateNavigation },
-      theme: { refresh: refreshTheme },
+      gateway,
+      navigation,
+      theme,
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
@@ -615,9 +629,9 @@ describe("OpenClaw shell server preferences", () => {
 
     shell.reconcileServerUiPrefs(runtimeConfig);
 
-    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
-    expect(refreshTheme).toHaveBeenCalledOnce();
-    resetServerUiPrefsSync();
+    expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
+    expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));
+    expect(loadSettings(gateway.connection.gatewayUrl).sidebarEntries).toEqual(sidebarEntries);
   });
 });
 
@@ -996,7 +1010,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     // and the navigation is marked for the chat loader to re-derive from the gateway.
     expect(setAgent).toHaveBeenCalledWith("main");
     expect(navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(

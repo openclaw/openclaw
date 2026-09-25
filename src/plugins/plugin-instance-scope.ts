@@ -20,11 +20,14 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
+  retainWork(): () => void;
+  reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
+    kind?: "work" | "custody",
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T): T;
+  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: { includeConsumers?: boolean }): Promise<PluginInstanceDisposalResult>;
   resume(): void;
@@ -73,6 +76,26 @@ export function getPluginInstanceOwner(
   instance: PluginInstanceResource,
 ): PluginInstanceOwner | undefined {
   return pluginInstanceState.records.get(instance);
+}
+
+/**
+ * Checks the exact invocation authority currently carrying plugin runtime scope.
+ *
+ * A plugin ID is stable across replacement, so it cannot fence delayed work by
+ * itself. The invocation token and instance lifecycle together identify the
+ * still-admitted instance that may read prepared capability inputs.
+ */
+export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
+  const current = pluginInstanceInvocation.getStore();
+  // SAFETY: PluginInstance is the only producer of this private invocation scope.
+  const instance = current?.instance as PluginInstanceHandle | undefined;
+  return (
+    instance?.pluginId === pluginId &&
+    instance.hasActiveCall &&
+    instance.acceptingCalls &&
+    !instance.owner?.revoked &&
+    !instance.lifecycle.signal.aborted
+  );
 }
 
 /** Direct SDK registrars retain the same owner as registrations made through api. */

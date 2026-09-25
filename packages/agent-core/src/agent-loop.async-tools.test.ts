@@ -520,7 +520,11 @@ it("preserves external cancellation when an output-limited async batch hits the 
           {
             type: "openai_responses_terminal",
             timestamp: 1,
-            details: { eventType: "response.incomplete", incompleteReason: "max_output_tokens" },
+            details: {
+              eventType: "response.incomplete",
+              stopReason: "length",
+              incompleteReason: "max_output_tokens",
+            },
           },
         ],
       },
@@ -615,6 +619,7 @@ it.each(["error", "aborted", "output-limit"] as const)(
                   timestamp: 1,
                   details: {
                     eventType: "response.incomplete",
+                    stopReason: "length",
                     incompleteReason: "max_output_tokens",
                   },
                 },

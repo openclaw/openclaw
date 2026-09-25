@@ -1,5 +1,6 @@
 /** Installed systemd scope discovery and dueling-manager diagnostics. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -12,7 +13,7 @@ import type {
 } from "./service-types.js";
 import { execSystemctl, isSystemdUnitActive } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
-import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
+import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 
 const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/etc/systemd/system",
@@ -121,6 +122,42 @@ export async function assertNoSystemGatewayOwnership(
   await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
 }
 
+/**
+ * Activation admission after the system-scope probe refused. An unverifiable
+ * probe cannot make a loaded user unit whose artifacts this account owns a
+ * competing manager; a proven system owner and an unloaded or foreign user unit
+ * still refuse with the original error.
+ */
+export async function admitUserUnitActivationPastUnverifiableOwnership(
+  env: GatewayServiceEnv,
+  error: unknown,
+  timeoutMs?: number,
+): Promise<void> {
+  if (!isSystemSystemdOwnershipError(error) || error.ownership.status !== "unverifiable") {
+    throw error;
+  }
+  const { readSystemdDefinitionMutationCapability } =
+    await import("./systemd-definition-mutation.js");
+  const capability = await readSystemdDefinitionMutationCapability(env, {
+    requireLoaded: true,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  }).catch(() => undefined);
+  if (capability?.kind !== "writable") {
+    throw error;
+  }
+}
+
+export async function assertNoSystemGatewayOwnershipForActivation(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  try {
+    await assertNoSystemGatewayOwnership(env, timeoutMs);
+  } catch (error) {
+    await admitUserUnitActivationPastUnverifiableOwnership(env, error, timeoutMs);
+  }
+}
+
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   unitName: string;
   unitPath: string;
@@ -156,16 +193,8 @@ async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
 ): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
-  let userPath: string | null;
   try {
-    userPath = resolveSystemdUnitPath(env);
-  } catch {
-    userPath = null;
-  }
-  if (!userPath) {
-    return null;
-  }
-  try {
+    const userPath = resolveSystemdUnitPath(env);
     await fs.access(userPath);
     return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
   } catch {
@@ -201,7 +230,14 @@ export async function findSystemdGatewayInstallation(
     findUserSystemdGatewayScope(env),
     findSystemSystemdGatewayScope(env),
   ]);
-  if (user && system) {
+  if (system) {
+    // A template is shared; native inspection needs this account's runnable instance.
+    system.unitName = system.unitName.replace(
+      /@\.service$/,
+      () => `@${os.userInfo().username}.service`,
+    );
+  }
+  if (user) {
     // Only the SAME canonical gateway installed in both scopes is a dueling
     // conflict (issue #79375). A marker-owned system unit with a *different*
     // name is an intentional separate gateway — e.g. a rescue bot on the same
@@ -209,12 +245,9 @@ export async function findSystemdGatewayInstallation(
     // be treated as a duplicate of the user unit, or doctor could remove a
     // legitimate user gateway. The user unit is always canonical; the direct
     // system path is canonical too, so the real #79375 case still matches.
-    if (user.unitName === system.unitName) {
+    if (user.unitName === system?.unitName) {
       return { kind: "dueling", user, system };
     }
-    return { kind: "user", user };
-  }
-  if (user) {
     return { kind: "user", user };
   }
   if (system) {

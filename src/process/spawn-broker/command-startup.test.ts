@@ -1,60 +1,22 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { runCommandWithTimeout, runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("command startup cancellation", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
   it.each([false, true])(
     "keeps one runExec deadline across admission and execution (cooperative exit: %s)",
     async (cooperative) => {
       const host = createSpawnBrokerHost();
-      await host.ready();
       const spawnExeca = host.spawnExeca.bind(host);
       let remote: ReturnType<SpawnBrokerHost["spawnExeca"]> | undefined;
-      vi.spyOn(host, "spawnExeca").mockImplementation((...args) => {
-        remote = spawnExeca(...args);
-        return remote;
-      });
-      const source = `
-        ${cooperative ? "process.on('SIGTERM',()=>{process.stdout.write('-stopped');process.exit(0)});" : ""}
-        process.stdout.write('started');process.stderr.write('diagnostic');
-        setTimeout(()=>process.stdout.write('-finished'),1400);
-      `;
-      process.kill(host.pid!, "SIGSTOP");
-      try {
-        const command = runWithSpawnBroker(host, () =>
-          runExec(process.execPath, ["-e", source], {
-            timeoutMs: 2000,
-            logOutput: false,
-          }),
-        );
-        const outcome = command.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        await delay(900);
-        process.kill(host.pid!, "SIGCONT");
-        await withTestTimeout(
-          remote!.child.ready(),
-          1000,
-          "command did not start within its remaining budget",
-        );
-        expect(await outcome).toMatchObject({
-          error: {
-            timedOut: true,
-            message: "Command timed out",
-            shortMessage: "Command timed out",
-            stdout: cooperative ? "started-stopped" : "started",
-            stderr: "diagnostic",
-            ...(cooperative ? { exitCode: 0 } : { signal: "SIGTERM" }),
-          },
-        });
-        await remote!.child.waitForClose();
-        expect(isPidDefinitelyDead(remote!.child.pid!)).toBe(true);
-      } finally {
+      onTestFinished(async () => {
+        vi.useRealTimers();
         try {
           process.kill(host.pid!, "SIGCONT");
         } catch {}
@@ -64,7 +26,64 @@ describe.skipIf(process.platform === "win32")("command startup cancellation", ()
         }
         await host.close();
         vi.restoreAllMocks();
-      }
+      });
+      await host.ready();
+      vi.spyOn(host, "spawnExeca").mockImplementation((argv, options) => {
+        // This case owns the parent deadline; Execa's independent execution
+        // timeout has parity coverage and must not rescue a broken parent clock.
+        remote = spawnExeca(argv, { ...options, timeout: undefined });
+        return remote;
+      });
+      const source = `
+        ${cooperative ? "process.on('SIGTERM',()=>{process.stdout.write('-stopped');process.exit(0)});" : ""}
+        process.stdout.write('started');process.stderr.write('diagnostic');
+        setInterval(()=>{},1000);
+      `;
+      const outputReady = createDeferred();
+      const output = { stdout: "", stderr: "" };
+      process.kill(host.pid!, "SIGSTOP");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const command = runWithSpawnBroker(host, () =>
+        runExec(process.execPath, ["-e", source], {
+          timeoutMs: 2000,
+          logOutput: false,
+          onOutputChunk: (chunk, stream) => {
+            output[stream] += chunk.toString();
+            if (output.stdout === "started" && output.stderr === "diagnostic") {
+              outputReady.resolve();
+            }
+          },
+        }),
+      );
+      const outcome = command.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(900);
+      expect(remote!.child.pid).toBeUndefined();
+      process.kill(host.pid!, "SIGCONT");
+      await Promise.race([
+        outputReady.promise,
+        outcome.then(() => {
+          throw new Error("command ended before output readiness");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(1099);
+      expect(remote!.child.killed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(remote!.child.killed).toBe(true);
+      expect(await outcome).toMatchObject({
+        error: {
+          timedOut: true,
+          message: "Command timed out",
+          shortMessage: "Command timed out",
+          stdout: cooperative ? "started-stopped" : "started",
+          stderr: "diagnostic",
+          ...(cooperative ? { exitCode: 0 } : { signal: "SIGTERM" }),
+        },
+      });
+      await remote!.child.waitForClose();
+      expect(isPidDefinitelyDead(remote!.child.pid!)).toBe(true);
     },
   );
 

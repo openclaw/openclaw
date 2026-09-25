@@ -161,6 +161,44 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
   });
 
+  it.each([
+    { extension: "sqlite", registeredAgentId: "ops" },
+    { extension: "json", registeredAgentId: "main" },
+  ])(
+    "rejects inconclusive ownership for a $extension locator and retries after recovery",
+    ({ extension, registeredAgentId }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-inconclusive-session-owner-"));
+      const occupiedNames = Array.from("bcdefghijklmnopqrstuvwxyz0123456789");
+      for (const name of occupiedNames) {
+        fs.writeFileSync(path.join(root, name), "preserve");
+      }
+      const missingDirectory = path.join(root, "a");
+      const resolve = () =>
+        resolveSqliteTargetFromSessionStorePath(
+          path.join(missingDirectory, `shared.${extension}`),
+          {
+            agentId: "main",
+            defaultAgentId: "main",
+            registeredDatabases: [
+              { agentId: registeredAgentId, path: path.join(missingDirectory, "unrelated.sqlite") },
+            ],
+          },
+        );
+
+      expect(resolve).toThrow("Cannot determine whether database paths alias");
+      expect(fs.readdirSync(root).toSorted()).toEqual(occupiedNames.toSorted());
+      for (const name of occupiedNames) {
+        fs.unlinkSync(path.join(root, name));
+      }
+      expect(resolve()).toMatchObject({
+        agentId: "main",
+        ownerSource: "configured-default",
+        path: path.join(missingDirectory, "shared.sqlite"),
+      });
+      expect(fs.readdirSync(root)).toEqual([]);
+    },
+  );
+
   it("does not treat ambiguous suffix registration as ownership", () => {
     const storePath = path.join("tmp", "stores", "shared.json");
     const ambiguousPath = path.resolve("tmp", "stores", "shared.worker.sqlite");

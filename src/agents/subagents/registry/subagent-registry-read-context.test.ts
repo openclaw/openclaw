@@ -276,6 +276,50 @@ describe("subagent registry read index", () => {
     }
   });
 
+  it("advances the clock over retained groups after the source map is cleared", () => {
+    const startedAt = Date.UTC(2026, 0, 1);
+    const root = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:reused";
+    const active = makeRun({
+      runId: "older-active",
+      childSessionKey,
+      generation: 1,
+      createdAt: startedAt,
+      startedAt,
+    });
+    const ended = makeRun({
+      runId: "newer-ended",
+      childSessionKey,
+      generation: 2,
+      createdAt: startedAt + 100,
+      startedAt: startedAt + 100,
+      endedAt: startedAt + 500,
+      cleanupCompletedAt: startedAt + 500,
+    });
+    const descendant = makeRun({
+      runId: "active-descendant",
+      createdAt: startedAt,
+      startedAt,
+    });
+    const runs = toRunMap([active, ended, descendant]);
+    const grouped = buildSubagentRunReadIndexFromRuns({ runs, now: startedAt + 1_000 });
+    runs.clear();
+
+    const before = grouped.atTime(startedAt + 1_000);
+    expect(before.getDisplaySubagentRun(childSessionKey)).toBe(active);
+    expect(before.countActiveDescendantRuns(root)).toBe(1);
+    expect(before.countPendingDescendantRuns(root)).toBe(1);
+    const after = grouped.atTime(startedAt + 2 * 60 * 60_000 + 1);
+    expect(after.getDisplaySubagentRun(childSessionKey)).toBe(ended);
+    expect(after.countActiveDescendantRuns(root)).toBe(0);
+    expect(after.countPendingDescendantRuns(root)).toBe(0);
+    expect(after.hasDescendantRunAwaitingSettle(root)).toBe(false);
+    expect(grouped.getDisplaySubagentRun(childSessionKey)).toBe(active);
+    expect(before.countActiveDescendantRuns(root)).toBe(1);
+    expect(after.inputs).toBe(before.inputs);
+    expect(after.inputs).toBe(grouped.inputs);
+  });
+
   it("normalizes display lookup keys for whitespace-padded child session keys", () => {
     const normalizedChildSessionKey = "agent:main:subagent:whitespace-child";
     const run = makeRun({

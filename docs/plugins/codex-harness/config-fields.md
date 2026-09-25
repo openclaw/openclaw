@@ -61,6 +61,7 @@ is required.
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -83,9 +84,30 @@ is required.
 }
 ```
 
+With `enabled: true`, `domains` uses Codex's native host matching. Hosts absent
+from the effective native allowlist are denied unless the configured approval
+policy permits an explicit exception. Set `approvalPolicy: "never"`, as above,
+to prevent approval-based exceptions. Native system requirements can contribute
+allowed domains or select a managed allowlist, so this map does not replace the
+system's network policy. Explicit denies in the effective policy take precedence
+over overlapping allows and cannot be approved.
+
+Use `*.example.com` for subdomains or `**.example.com` for both the apex domain
+and subdomains. These restrictions apply to commands run through the Codex
+sandbox. They do not restrict Gateway traffic, model-provider requests, or
+unrelated MCP processes.
+
+With `networkProxy.enabled: true`, invalid configuration fails with the rejected
+field path, without logging configuration values. After a plugin update, saved
+configuration with blank optional `networkProxy.profileName` or
+`remoteWorkspaceRoot` values needs an explicit `openclaw doctor --fix` before
+Codex can run. Doctor removes those blank values while keeping the domain policy.
+Fix other invalid fields manually before retrying. Valid configurations need no
+repair.
+
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile: Codex managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
-Domain entries use `allow` or `deny`; Unix socket entries use Codex's
-`allow` or `none` values.
+Domain entries use `allow` or `deny`. Unix socket entries use `allow` or `none`;
+OpenClaw translates `none` to Codex's native `deny` permission.

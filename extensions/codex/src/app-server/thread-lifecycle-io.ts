@@ -10,6 +10,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
+import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -140,6 +141,9 @@ export async function resumeExistingCodexThread(
       (await params.buildFinalConfigPatch?.({
         action: "resume",
         binding: resumeBinding,
+        ...(context.nativeModelInputTools
+          ? { nativeModelInputTools: context.nativeModelInputTools }
+          : {}),
       })) ?? {
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -173,6 +177,7 @@ export async function resumeExistingCodexThread(
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
+        skillsInstructions: params.skillsInstructions,
         config: resumeConfig,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -181,6 +186,7 @@ export async function resumeExistingCodexThread(
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
         shellEnvironment: params.shellEnvironment,
+        shellPathPrepend: params.shellPathPrepend,
         disableLoginShell: params.disableLoginShell,
       }),
     );
@@ -206,14 +212,12 @@ export async function resumeExistingCodexThread(
             params.client,
             params.inferenceRoute,
             resumeParams.config,
+            requestModelProvider ??
+              (resumeBinding.preserveNativeModel
+                ? (configuration.modelProvider ?? undefined)
+                : undefined),
+            params.inferenceProviderRoutes,
           );
-          if (
-            params.inferenceRoute &&
-            resumeParams.modelProvider != null &&
-            resumeParams.modelProvider !== "openai"
-          ) {
-            throw new Error("Codex inference route requires the native OpenAI provider");
-          }
         },
       }),
     );
@@ -266,6 +270,10 @@ export async function resumeExistingCodexThread(
       // Keeping its previous client id disables warm reuse after every restart.
       clientId: resolveCodexAppServerClientInstanceId(params.client),
       pendingResumeConfiguration: undefined,
+      ...(resumeBinding.agentWorkspaceDeveloperInstructions === undefined &&
+      params.agentWorkspaceDeveloperInstructions !== undefined
+        ? { agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions }
+        : {}),
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId,
@@ -483,7 +491,12 @@ export async function startFreshCodexThread(
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const finalConfigPatch = (await params.buildFinalConfigPatch?.({ action: "start" })) ?? {
+  const finalConfigPatch = (await params.buildFinalConfigPatch?.({
+    action: "start",
+    ...(context.nativeModelInputTools
+      ? { nativeModelInputTools: context.nativeModelInputTools }
+      : {}),
+  })) ?? {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
@@ -504,6 +517,7 @@ export async function startFreshCodexThread(
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
+      skillsInstructions: params.skillsInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -515,6 +529,7 @@ export async function startFreshCodexThread(
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: params.shellEnvironment,
+      shellPathPrepend: params.shellPathPrepend,
       disableLoginShell: params.disableLoginShell,
     }),
   );
@@ -529,14 +544,13 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(params.client, params.inferenceRoute, startParams.config);
-    if (
-      params.inferenceRoute &&
-      startParams.modelProvider != null &&
-      startParams.modelProvider !== "openai"
-    ) {
-      throw new Error("Codex inference route requires the native OpenAI provider");
-    }
+    assertCodexInferenceRouteConfig(
+      params.client,
+      params.inferenceRoute,
+      startParams.config,
+      requestModelProvider,
+      params.inferenceProviderRoutes,
+    );
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
@@ -587,6 +601,7 @@ export async function startFreshCodexThread(
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   const modelProvider = resolveCodexAppServerModelProvider({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
     authProfileStore: params.params.authProfileStore,
@@ -695,9 +710,9 @@ export async function startFreshCodexThread(
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
-    ...(startParams.ephemeral
-      ? { liveThreadEphemeralPolicy: startParams.developerInstructions }
-      : {}),
+    liveThreadEphemeralPolicy: startParams.ephemeral
+      ? createCodexEphemeralThreadPolicy(params)
+      : undefined,
     // Transient starts do not own the persisted binding, so their native
     // subscriptions must be released instead of entering the warm cache.
     ...(!preserveExistingBinding
@@ -717,6 +732,7 @@ export async function startFreshCodexThread(
       : {}),
     lifecycle: {
       action: "started",
+      ...(preserveExistingBinding ? { preserveExistingBinding: true as const } : {}),
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding: true } : {}),
     },
   };

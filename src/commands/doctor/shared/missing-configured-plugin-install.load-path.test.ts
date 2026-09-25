@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -244,47 +245,61 @@ describe("configured plugin install health for explicit load paths", () => {
       sourcePath: sourceAlias,
     });
 
-    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toEqual([
-      expect.objectContaining({ kind: "missing-installed-payload", pluginId: "kilocode" }),
-    ]);
+    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toEqual([]);
     const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
     expect(repair.records).toHaveProperty("kilocode");
     expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("kilocode");
   });
 
-  it("does not install a provider plugin already present at a configured load path", async () => {
-    const rootDir = tempDirs.make("openclaw-load-path-provider-");
-    const pluginDir = path.join(rootDir, "kilocode-provider");
-    writeProviderPlugin(pluginDir);
+  it.each([false, true])(
+    "does not install a provider already selected by load path (missing npm shadow: %s)",
+    async (npmShadow) => {
+      const rootDir = tempDirs.make("openclaw-load-path-provider-");
+      const pluginDir = path.join(rootDir, "kilocode-provider");
+      writeProviderPlugin(pluginDir);
 
-    const cfg = {
-      plugins: {
-        load: { paths: [pluginDir] },
-      },
-    };
-    const env = {
-      KILOCODE_API_KEY: "test-key",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
-      VITEST: "true",
-    };
-    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toContain("kilocode");
+      const cfg = {
+        plugins: {
+          load: { paths: [pluginDir] },
+        },
+      };
+      const env = {
+        KILOCODE_API_KEY: "test-key",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+        VITEST: "true",
+      };
+      const records: Record<string, PluginInstallRecord> = npmShadow
+        ? {
+            kilocode: {
+              source: "npm" as const,
+              spec: "@openclaw/kilocode-provider",
+              installPath: path.join(rootDir, "missing-npm-package"),
+            },
+          }
+        : {};
+      if (npmShadow) {
+        await seedInstalledPluginIndex(records, { config: cfg, env });
+      }
+      const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+      expect(snapshot.plugins.map((plugin) => plugin.id)).toContain("kilocode");
 
-    const issues = await detectConfiguredPluginInstallHealthIssues({
-      cfg,
-      env,
-    });
-    expect(issues).toStrictEqual([]);
+      const issues = await detectConfiguredPluginInstallHealthIssues({
+        cfg,
+        env,
+      });
+      expect(issues).toStrictEqual([]);
 
-    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toMatchObject({
-      changes: [],
-      records: {},
-      warnings: [],
-    });
-  });
+      const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
+      expect(repair).toMatchObject({
+        changes: [],
+        records,
+        warnings: [],
+      });
+      expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+    },
+  );
 
   it("keeps a configured Gmail Codex app bundle without package.json", async () => {
     const { cfg, env, pluginDir } = await createConfiguredCodexBundleFixture("valid");

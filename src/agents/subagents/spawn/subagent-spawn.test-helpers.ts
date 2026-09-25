@@ -5,6 +5,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { expect, vi } from "vitest";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
+import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -22,6 +24,35 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
 };
+
+export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+export function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+export function expectRegisteredSubagentRun(
+  mock: unknown,
+  expected: Partial<RegisterSubagentRunParams>,
+  options: Pick<RegisterSubagentRunOptions, "assertCurrent"> = {
+    assertCurrent: expect.any(Function),
+  },
+) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining(expected),
+    expect.objectContaining(options),
+  );
+}
 
 /** Orchestration fixtures assume a supported model; support policy has its own owner tests. */
 export async function supportedSpawnModelChoice(
@@ -90,6 +121,23 @@ export function createSubagentSpawnTestConfig(
     },
     ...overrides,
   };
+}
+
+export function createConfigOverride(overrides?: Record<string, unknown>) {
+  return createSubagentSpawnTestConfig(os.tmpdir(), {
+    agents: {
+      defaults: {
+        workspace: os.tmpdir(),
+      },
+      list: [
+        {
+          id: "main",
+          workspace: "/tmp/workspace-main",
+        },
+      ],
+    },
+    ...overrides,
+  });
 }
 
 /** Mock gateway calls for the common accepted-spawn flow. */
@@ -420,10 +468,37 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
-    getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
-    registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    registerSubagentRun: vi.fn(
+      (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
+        if (!record.queued || !options?.retainOwnership) {
+          return params.registerSubagentRunMock?.(record, options);
+        }
+        let retained = false;
+        const result = params.registerSubagentRunMock?.(record, {
+          ...options,
+          retainOwnership(scope) {
+            retained = true;
+            options.retainOwnership?.(scope);
+          },
+        } satisfies RegisterSubagentRunOptions);
+        return Promise.resolve(result).then(() => {
+          // Successful queued registration transfers custody; stricter test scopes win.
+          if (!retained) {
+            options.retainOwnership?.({
+              canLaunch: () => true,
+              canAcceptLaunch: () => true,
+              canCleanupSession: () => true,
+              canRetireReservation: () => true,
+              waitForClaim: () => undefined,
+              settleFailedLaunch: async (error) => {
+                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+              },
+            });
+          }
+        });
+      },
+    ),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),

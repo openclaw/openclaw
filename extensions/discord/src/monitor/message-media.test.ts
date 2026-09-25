@@ -612,6 +612,56 @@ describe("resolveMediaList", () => {
     ]);
   });
 
+  it("does not classify a duration-bearing video attachment as audio", async () => {
+    const attachment = attachmentFixture("att-video-duration", "PXL_2024.mp4", {
+      content_type: "video/mp4",
+      duration_secs: 11.262232780456543,
+    });
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        contentType: "video/mp4",
+      },
+    ]);
+  });
+
+  it("keeps a fetched video MIME over a declared duration-only attachment", async () => {
+    const attachment = attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
+      content_type: "video/quicktime",
+      duration_secs: 5.5,
+    });
+    mockDownload("/tmp/PXL_2024.mov", { buffer: "video", contentType: "video/quicktime" });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/PXL_2024.mov",
+        contentType: "video/quicktime",
+        fileName: "PXL_2024.mov",
+      },
+    ]);
+  });
+
+  it("keeps an image with a duration field as an image, not audio", async () => {
+    const attachment = attachmentFixture("att-image-duration", "photo.png", {
+      content_type: "image/png",
+      duration_secs: 0.5,
+    });
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([
+      {
+        contentType: "image/png",
+      },
+    ]);
+  });
+
   it("keeps a type-only fact when saveMediaBuffer fails", async () => {
     const attachment = attachmentFixture("att-save-fail", "photo.png");
     readRemoteMediaBuffer.mockResolvedValueOnce({

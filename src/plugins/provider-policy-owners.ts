@@ -152,3 +152,13 @@ export function listTrustedExternalProviderPolicyOwners(
     )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
+
+/** Lists policy owners available from bundled code or trusted installed plugins. */
+export function listProviderPolicyOwners(
+  providerId: string,
+  registry: ProviderPolicyRegistry,
+): PluginManifestRecord[] {
+  const bundled = resolveBundledProviderPolicyOwner(normalizeProviderId(providerId), registry);
+  const installed = listTrustedExternalProviderPolicyOwners(providerId, registry);
+  return [...new Set([...(bundled ? [bundled] : []), ...installed])];
+}

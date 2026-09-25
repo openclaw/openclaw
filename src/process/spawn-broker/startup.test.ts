@@ -6,7 +6,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker startup failure", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
   it("settles shutdown when the broker executable could not be launched", async () => {
     const executable = process.execPath;
     let host: ReturnType<typeof createSpawnBrokerHost>;

@@ -1,6 +1,12 @@
 // Child process adapter wraps spawned child processes for the supervisor.
-import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 import type { Writable } from "node:stream";
+import {
+  spawnWindowsJobChild,
+  WindowsJobSetupError,
+  type ManagedWindowsJob,
+  type WindowsJobExtinction,
+} from "../../../../scripts/lib/managed-windows-job.mts";
 import { toErrorObject } from "../../../infra/errors.js";
 import {
   resolveWindowsExecutablePath,
@@ -217,22 +223,77 @@ export async function createChildAdapter(
       throw new Error("child construction aborted");
     }
   };
-  const spawned = await spawnWithFallback({
-    assertCurrent: () => {
-      assertCurrent();
-      params.beforeSpawn?.();
-    },
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
-    options,
-    fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
-  });
+  let windowsJob: ManagedWindowsJob | undefined;
+  let windowsCleanup: Promise<WindowsJobExtinction> | undefined;
+  const launchGate = createDeferredCore();
+  let windowsFallback: WindowsJobExtinction = { status: "uncertain", reason: "job-unavailable" };
+  let tryWindowsJob = true;
+  const spawnChild = () =>
+    spawnWithFallback({
+      ...(process.platform === "win32"
+        ? {
+            spawnImpl: (command, args, spawnOptions) => {
+              if (!tryWindowsJob) {
+                return spawn(command, args, spawnOptions);
+              }
+              const owned = spawnWindowsJobChild(
+                command,
+                args,
+                { ...spawnOptions, signal: params.abortSignal },
+                async (launch) => {
+                  await launchGate.promise;
+                  assertCurrent();
+                  params.beforeSpawn?.();
+                  launch();
+                },
+              );
+              if (!owned) {
+                return spawn(command, args, spawnOptions);
+              }
+              windowsJob = owned.job;
+              windowsCleanup = owned.job.certify();
+              void windowsCleanup.catch(() => {});
+              params.onSpawnCleanup?.(windowsCleanup);
+              return owned.child;
+            },
+          }
+        : {}),
+      assertCurrent: () => {
+        assertCurrent();
+        params.beforeSpawn?.();
+      },
+      argv: [preparedSpawn.command, ...preparedSpawn.args],
+      options,
+      fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
+    });
+
+  let spawned: Awaited<ReturnType<typeof spawnChild>>;
+  try {
+    spawned = await spawnChild();
+    if (windowsJob) {
+      await windowsJob.admission;
+    }
+  } catch (error) {
+    if (!(error instanceof WindowsJobSetupError)) {
+      throw error;
+    }
+    // No command has been admitted. Retire the launcher before the ordinary spawn.
+    await windowsJob?.certify();
+    windowsFallback = { status: "uncertain", reason: error.reason, cause: error.cause };
+    windowsJob = undefined;
+    windowsCleanup = undefined;
+    tryWindowsJob = false;
+    spawned = await spawnChild();
+  }
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
   const events = createProcessAdapterEvents();
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
       try {
-        params.onWorkerMessage?.(message);
+        if (!windowsJob?.isControlMessage(message)) {
+          params.onWorkerMessage?.(message);
+        }
       } catch {
         // Worker diagnostics cannot change child supervision.
       }
@@ -288,12 +349,16 @@ export async function createChildAdapter(
   const cleanup = createDeferredCore();
   // Worker errors can precede wait(), including while secret delivery is still pending.
   void completion.promise.catch(() => {});
-  void cleanup.promise.catch(() => {});
   let waitSettled = false;
   let processClosed = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
   let hardKillRequested = false;
+  let treeSignaling: Promise<void> | undefined;
+  const cleanupOutcome = Promise.allSettled([cleanup.promise]).then((outcomes) => {
+    clearForceKillWaitFallback();
+    return outcomes;
+  });
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -323,23 +388,26 @@ export async function createChildAdapter(
       return;
     }
     waitSettled = true;
-    clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
     completion.resolve(value);
   };
 
   const settleObservedClose = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
     processClosed = true;
-    cleanup.resolve();
+    // Native close fences new signals; join all already-admitted deliveries before success.
+    if (treeSignaling) {
+      treeSignaling = treeSignaling.then(() => cleanup.resolve(), cleanup.reject);
+    } else {
+      cleanup.resolve();
+    }
     settleWait(value);
   };
 
-  const rejectPendingWait = (error: Error) => {
+  const rejectPendingWait = (error: unknown) => {
     if (waitSettled) {
       return;
     }
     waitSettled = true;
-    clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
     completion.reject(error);
   };
@@ -522,6 +590,16 @@ export async function createChildAdapter(
       });
     });
   const kill = (signal?: NodeJS.Signals) => {
+    if (windowsJob) {
+      try {
+        windowsJob.stop();
+      } catch (error) {
+        cleanup.reject(error);
+        rejectPendingWait(error);
+      }
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
+      return;
+    }
     // A delayed private-input failure must not signal a PID whose child has closed.
     if (processClosed) {
       if (signal === undefined || signal === "SIGKILL") {
@@ -537,20 +615,29 @@ export async function createChildAdapter(
         // Let the tree owner traverse the live root before directly killing it.
         // On Windows, killing the root first can make `taskkill /T` lose the
         // descendant relationship. (#71662)
-        void signalProcessTreeForChildAndWait(pid, "SIGKILL").then(() => {
+        const previousSignal = treeSignaling;
+        treeSignaling = (async () => {
           try {
-            child.kill("SIGKILL");
-          } catch {
-            // ignore kill errors
+            await signalProcessTreeForChildAndWait(pid, "SIGKILL");
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // The native close observation still owns confirmation.
+            }
+            windowsTreeKillCompleted = true;
+            if (childCloseState) {
+              settleObservedClose(resolveObservedExitState(childCloseState));
+              return;
+            }
+            maybeSettleAfterExit();
+            scheduleForcedWindowsCloseSettlement();
+          } catch (error) {
+            cleanup.reject(error);
+            rejectPendingWait(error);
+          } finally {
+            await previousSignal;
           }
-          windowsTreeKillCompleted = true;
-          if (childCloseState) {
-            settleObservedClose(resolveObservedExitState(childCloseState));
-            return;
-          }
-          maybeSettleAfterExit();
-          scheduleForcedWindowsCloseSettlement();
-        });
+        })();
       } else {
         windowsTreeKillCompleted = true;
         try {
@@ -575,7 +662,6 @@ export async function createChildAdapter(
 
   const dispose = () => {
     awaitedStdout?.close();
-    clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
     if (params.ownedWorker !== undefined) {
       disconnectWorkerIpc();
@@ -586,7 +672,9 @@ export async function createChildAdapter(
     // Error handling and Node's child-close bookkeeping must remain attached during destroy.
     child.stdout.destroy();
     child.stderr.destroy();
-    child.removeAllListeners();
+    if (!windowsJob) {
+      child.removeAllListeners();
+    }
     events.clear();
   };
 
@@ -620,7 +708,9 @@ export async function createChildAdapter(
     : undefined;
 
   const adapter: WorkerChildAdapter = {
-    pid: child.pid ?? undefined,
+    get pid() {
+      return windowsJob?.commandPid ?? child.pid;
+    },
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: true,
@@ -630,14 +720,23 @@ export async function createChildAdapter(
     onExit: events.onExit,
     onError: events.onError,
     wait,
+    ...(process.platform === "win32" && {
+      waitForExtinction: () => windowsCleanup ?? cleanup.promise.then(() => windowsFallback),
+    }),
     kill,
     dispose,
     closeStartGate,
     openStartGate,
   };
-  params.onSpawnCleanup?.(cleanup.promise);
+  if (!windowsCleanup) {
+    params.onSpawnCleanup?.(adapter.waitForExtinction?.() ?? cleanup.promise);
+  }
+  launchGate.resolve();
   const ready = (async () => {
     try {
+      if (windowsJob) {
+        await windowsJob.ready;
+      }
       // Construction may outlive admission; publish cleanup before any private input.
       assertCurrent();
       if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
@@ -657,7 +756,10 @@ export async function createChildAdapter(
     } catch (error) {
       kill("SIGKILL");
       try {
-        await cleanup.promise;
+        const [outcome] = await cleanupOutcome;
+        if (outcome.status === "rejected") {
+          throw outcome.reason;
+        }
       } finally {
         dispose();
       }

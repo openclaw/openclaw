@@ -15,6 +15,7 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
+import { listManagedImageRecordEntriesInDatabase } from "../../gateway/managed-image-record-store.kernel.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -59,7 +60,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
   const params: DispatchCronDeliveryParams = {
-    cfg,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),
     job,
@@ -72,7 +72,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
     lifecycleRevision: "run-generation",
     sessionUpdatedAt: 1000,
     runStartedAt: 1000,
-    runEndedAt: 2000,
     timeoutMs: 30000,
     resolvedDelivery: { ok: false, mode: "implicit", error: new Error("No external channel") },
     deliveryPlan: resolveCronDeliveryPlan(job),
@@ -90,25 +89,33 @@ async function createCompletionFixture(state: OpenClawTestState) {
     deliveryPayloads: [payload],
     isAborted: () => false,
     abortReason: () => "aborted",
-    withRunSession: (result) => ({ ...result, sessionId: "report-run" }),
   };
   const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
+  const database = openOpenClawStateDatabase({ env: state.env });
   const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
+  const readDownloads = async () =>
+    (await Promise.allSettled(downloads)).map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
   let updates = 0;
   const unsubscribe = onSessionTranscriptUpdate((update) => {
     if (update.target.sessionId !== sessionId) {
       return;
     }
     updates += 1;
-    for (const { record } of records()) {
-      downloads.push(
-        resolveManagedOutgoingMediaArtifactDownload({
-          sessionKey,
-          agentId: "main",
-          stateDir: state.stateDir,
-          artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
-        }),
-      );
+    // Observe records at publication, before a wrongly late write could make the test pass.
+    for (const { record } of listManagedImageRecordEntriesInDatabase(database.db, sessionKey)) {
+      const pending = resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        agentId: "main",
+        stateDir: state.stateDir,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
+      });
+      void pending.catch(() => {});
+      downloads.push(pending);
     }
   });
   return {
@@ -116,9 +123,12 @@ async function createCompletionFixture(state: OpenClawTestState) {
     params,
     scope,
     records,
-    downloads,
+    downloads: readDownloads,
     updates: () => updates,
-    unsubscribe,
+    dispose: async () => {
+      unsubscribe();
+      await readDownloads();
+    },
     commit: () => commitCurrentSessionCronCompletion(params),
     messages: async () =>
       (await loadTranscriptEvents(scope)).filter(
@@ -156,10 +166,10 @@ describe("current-session completion delivery", () => {
             expect(readAssistantDisplayContent(message)).toEqual([
               expect.objectContaining({ type: "image" }),
             ]);
-            expect(fixture.records()).toHaveLength(1);
+            expect(await fixture.records()).toHaveLength(1);
           }
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -186,7 +196,7 @@ describe("current-session completion delivery", () => {
             deliveryError: "No external channel",
           });
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -212,13 +222,15 @@ describe("current-session completion media", () => {
             await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           }
           const original = await fixture.messages();
-          const originalIds = fixture.records().map(({ record }) => record.attachmentId);
+          const originalIds = (await fixture.records()).map(({ record }) => record.attachmentId);
           expect(original).toHaveLength(1);
           await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           expect(await fixture.messages()).toEqual(original);
-          expect(fixture.records().map(({ record }) => record.attachmentId)).toEqual(originalIds);
+          expect((await fixture.records()).map(({ record }) => record.attachmentId)).toEqual(
+            originalIds,
+          );
           expect(fixture.updates()).toBeGreaterThan(0);
-          for (const { record } of fixture.records()) {
+          for (const { record } of await fixture.records()) {
             expect(record).toMatchObject({
               messageId: readTranscriptEventId(original[0]),
               retentionClass: "history",
@@ -233,13 +245,14 @@ describe("current-session completion media", () => {
               ),
             ).resolves.toEqual(PNG);
           }
-          expect(fixture.downloads.length).toBeGreaterThan(0);
-          for (const download of await Promise.all(fixture.downloads)) {
+          const downloads = await fixture.downloads();
+          expect(downloads.length).toBeGreaterThan(0);
+          for (const download of downloads) {
             expect(download).toMatchObject({ type: "image" });
           }
         } finally {
           database.db.exec("DROP TRIGGER IF EXISTS fail_report_promotion");
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -272,7 +285,7 @@ describe("current-session completion media", () => {
           expect.objectContaining({ type: "image" }),
         ]);
       } finally {
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });
@@ -296,7 +309,7 @@ describe("current-session completion media", () => {
             expect(readAssistantDisplayContent(message)).toEqual([
               expect.objectContaining({ type: "image" }),
             ]);
-            expect(fixture.records()).toHaveLength(1);
+            expect(await fixture.records()).toHaveLength(1);
           } else {
             expect(message?.content).toEqual([
               {
@@ -318,10 +331,10 @@ describe("current-session completion media", () => {
             } else {
               expect(message).not.toHaveProperty("openclawDisplayContent");
             }
-            expect(fixture.records()).toEqual([]);
+            expect(await fixture.records()).toEqual([]);
           }
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -359,7 +372,7 @@ describe("current-session completion media", () => {
           }),
         ]);
       } finally {
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });
@@ -382,9 +395,9 @@ describe("current-session completion media", () => {
             { type: "text", text: "Report" },
             expect.objectContaining({ type: workspaceOnly ? "attachment_error" : "image" }),
           ]);
-          expect(fixture.records()).toHaveLength(workspaceOnly ? 0 : 1);
+          expect(await fixture.records()).toHaveLength(workspaceOnly ? 0 : 1);
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -401,7 +414,7 @@ describe("current-session completion media", () => {
       const commit = fixture.commit();
       try {
         await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
-        expect(fixture.records()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
         await replaceSessionEntry(fixture.scope, {
           sessionId: "replacement-session",
           lifecycleRevision: "replacement-generation",
@@ -409,13 +422,13 @@ describe("current-session completion media", () => {
         });
         admission.release();
         await expect(commit).resolves.toMatchObject({ ok: false });
-        expect(fixture.records()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
         expect(await fixture.messages()).toEqual([]);
         expect(fixture.updates()).toBe(0);
       } finally {
         admission.release();
         await commit;
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });

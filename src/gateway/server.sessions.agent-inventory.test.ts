@@ -1,4 +1,4 @@
-/** Real tool → Gateway handler → SQLite listing boundary; no provider or turn execution. */
+/** Real tool → Gateway handler → resident session rows; no provider or turn execution. */
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -10,6 +10,9 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -32,7 +35,7 @@ test.each(inventorySizes)(
   "lists 37 sparse matches from %i stored rows through the real tool and Gateway handler",
   async (rowCount) => {
     const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { entries: { main: { default: true } } };
+    testState.agentsConfig = { list: [{ id: "main", default: true }] };
     const selected = ensureProfileForEmail("inventory-owner@example.test");
     const other = ensureProfileForEmail("inventory-other@example.test");
     const entries: Record<string, SessionEntry> = {};
@@ -68,6 +71,10 @@ test.each(inventorySizes)(
       ...current,
       tools: { ...current.tools, sessions: { ...current.tools?.sessions, visibility: "all" } },
     };
+    const backfilled = observeSessionRowBackfill(Object.keys(entries));
+    const projection = await createSessionRowProjection({ cfg });
+    await backfilled;
+    await projection.ensureMaterialized();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -77,7 +84,7 @@ test.each(inventorySizes)(
       }
       requests.push({ method: request.method, params: request.params });
       const response = await directSessionReq<T>(request.method, request.params, {
-        context: { getRuntimeConfig: () => cfg },
+        context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
       });
       if (!response.ok) {
         throw new Error(response.error?.message ?? "Gateway inventory request failed");
@@ -102,8 +109,7 @@ test.each(inventorySizes)(
       exactBatch: vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch"),
     };
     const transcripts = [
-      vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch"),
-      vi.spyOn(sessionAccessor, "readSessionTranscriptWatermarkBatch"),
+      vi.spyOn(sessionAccessor, "readSessionTranscriptWatermark"),
       vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage"),
       vi.spyOn(sessionAccessor, "loadTranscriptEvents"),
     ];
@@ -116,9 +122,7 @@ test.each(inventorySizes)(
       ...Array.from({ length: sampleCount }, (_, index) => "warm-" + (index + 1)),
     ];
     try {
-      // The first read follows fixture seeding, not a fresh process/database open.
-      // Warm requests reuse metadata caches, but the harness creates a new Gateway
-      // context each time, so measurements exclude completed-response-cache hits.
+      // The warmed Gateway serves this inventory from its resident metadata.
       for (const phase of phases) {
         requests.length = 0;
         for (const spy of [
@@ -171,10 +175,7 @@ test.each(inventorySizes)(
         });
         expect(returnedKeys).toEqual(expectedKeys);
         for (const transcript of transcripts) {
-          // Empty batch calls are no-ops; metadata listing must never request transcript rows.
-          expect(
-            transcript.mock.calls.every(([scopes]) => Array.isArray(scopes) && scopes.length === 0),
-          ).toBe(true);
+          expect(transcript).not.toHaveBeenCalled();
         }
         expect(materialization.fullLookup).not.toHaveBeenCalled();
         console.info(
@@ -209,6 +210,7 @@ test.each(inventorySizes)(
         }),
       );
     } finally {
+      projection.dispose();
       eventLoop.disable();
       for (const spy of [
         ...Object.values(sql),

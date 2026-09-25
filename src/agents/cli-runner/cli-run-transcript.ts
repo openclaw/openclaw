@@ -6,10 +6,12 @@ import {
   patchSessionEntryCore,
   resolveSessionEntrySelection,
   resolveSessionTranscriptDatabasePath,
-  type SessionEntryReadSource,
-  type SessionTranscriptReadScope,
-  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type {
+  SessionEntryReadSource,
+  SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -37,6 +39,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "../harness/context-engine-lifecycle.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -45,7 +48,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
-export function buildCliHookUserMessage(prompt: string): unknown {
+export function buildCliHookUserMessage(prompt: string): Extract<AgentMessage, { role: "user" }> {
   return {
     role: "user",
     content: prompt,
@@ -85,14 +88,6 @@ export function buildCliHookAssistantMessage(params: {
 
 function isAgentMessage(value: unknown): value is AgentMessage {
   return Boolean(value && typeof value === "object" && "role" in value);
-}
-
-function buildCliContextEngineUserMessage(prompt: string): AgentMessage {
-  return {
-    role: "user",
-    content: prompt,
-    timestamp: Date.now(),
-  } as AgentMessage;
 }
 
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
@@ -195,11 +190,24 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: (write) =>
-        runAgentHarnessBeforeMessageWriteHook({
+      beforeMessageWrite: (write) => {
+        const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
+          message: projectAgentHarnessTranscriptMessageForDisplay({
+            hidden: false,
+            inputProvenance: runParams.inputProvenance,
+            message: write.message,
+          }),
           prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
-        }),
+        });
+        return message
+          ? projectAgentHarnessTranscriptMessageForDisplay({
+              hidden: false,
+              inputProvenance: runParams.inputProvenance,
+              message,
+            })
+          : null;
+      },
       message: {
         ...buildAssistantMessage({
           model: {
@@ -483,7 +491,7 @@ export async function finalizeCliContextEngineTurn(params: {
     const prePromptMessages = params.historyMessages.filter(isAgentMessage);
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
-      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+      turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
     }
     if (params.assistantText) {
       turnMessages.push(

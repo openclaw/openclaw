@@ -1,4 +1,3 @@
-// Feishu plugin module implements card action behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -157,6 +156,7 @@ function resolveCallbackTarget(event: FeishuCardActionEvent): string {
 }
 
 async function dispatchSyntheticCommand(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   command: string;
@@ -174,6 +174,7 @@ async function dispatchSyntheticCommand(params: {
     log: params.runtime?.log ?? console.log,
   });
   await handleFeishuMessage({
+    trackTask: params.trackTask,
     cfg: params.cfg,
     event: buildSyntheticMessageEvent(
       params.event,
@@ -319,6 +320,7 @@ async function sendInvalidInteractionNotice(params: {
 }
 
 export async function handleFeishuCardAction(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   botOpenId?: string;
@@ -356,7 +358,6 @@ export async function handleFeishuCardAction(params: {
         reason: decoded.reason,
         accountId,
       });
-      completeFeishuCardAction(event.token, account.accountId);
       return;
     }
 
@@ -375,7 +376,6 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         const prompt =
@@ -390,7 +390,6 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         await sendCardFeishu({
@@ -413,7 +412,6 @@ export async function handleFeishuCardAction(params: {
           }),
           accountId,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -424,7 +422,6 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -437,10 +434,10 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         await dispatchSyntheticCommand({
+          trackTask: params.trackTask,
           cfg,
           event,
           command,
@@ -451,7 +448,6 @@ export async function handleFeishuCardAction(params: {
           accountId,
           chatType: envelope.c?.t,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -461,7 +457,6 @@ export async function handleFeishuCardAction(params: {
         reason: "malformed",
         accountId,
       });
-      completeFeishuCardAction(event.token, account.accountId);
       return;
     }
 
@@ -472,6 +467,7 @@ export async function handleFeishuCardAction(params: {
     );
 
     await dispatchSyntheticCommand({
+      trackTask: params.trackTask,
       cfg,
       event,
       command: content,
@@ -481,9 +477,7 @@ export async function handleFeishuCardAction(params: {
       channelRuntime: params.channelRuntime,
       accountId,
     });
+  } finally {
     completeFeishuCardAction(event.token, account.accountId);
-  } catch (err) {
-    completeFeishuCardAction(event.token, account.accountId);
-    throw err;
   }
 }

@@ -198,25 +198,28 @@ describe("legacy migration with invalid plugin config", () => {
       ],
     });
 
-    const result = migrateLegacyConfig({
+    const raw = {
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
-          llm: { idleTimeoutSeconds: 120 },
         },
       },
-    });
+      session: { typingMode: "thinking" },
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result).toEqual({
       config: {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
+            typingMode: "thinking",
           },
         },
+        session: {},
       },
       changes: [
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
+        "Moved session.typingMode → agents.defaults.typingMode.",
         "Migration applied; other validation issues remain — run doctor to review.",
       ],
       partiallyValid: true,

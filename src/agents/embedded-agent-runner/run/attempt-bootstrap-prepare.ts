@@ -56,6 +56,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
+      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
       chatType: attempt.chatType,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/github",
+  "version": "2026.9.6",
+  "private": true,
+  "description": "OpenClaw GitHub link reader plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

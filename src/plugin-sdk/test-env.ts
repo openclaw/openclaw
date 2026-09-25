@@ -1,4 +1,8 @@
 // Repo-local helpers for environment, network, filesystem, and time fixtures.
+export {
+  getCliProcessTestTimeout,
+  runCliProcessChild,
+} from "../cli/cli-process-child.test-helpers.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 export { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
@@ -14,9 +18,11 @@ export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
+export { acquireTestPortBlock } from "../test-utils/port-claims.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";
+export { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 export { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 export { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";

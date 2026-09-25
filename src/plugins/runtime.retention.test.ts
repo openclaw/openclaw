@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginRuntimeRetentionEntrypoint } from "./runtime-retention-entrypoint.test-support.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -30,9 +31,7 @@ it.each([
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./runtime.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(pluginRuntimeRetentionEntrypoint)),
         mode,
       ],
       { timeout: 20_000 },

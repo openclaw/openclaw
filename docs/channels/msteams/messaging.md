@@ -25,6 +25,15 @@ action requires both `teamId` and `channelId`. Use the Microsoft Teams team ID,
 including when Slack is also configured; the shared `teamId` field accepts each
 provider's ID format. These actions retain the configured Teams access rules.
 
+## Graph actions
+
+After the Teams action handler starts, pinning, unpinning, adding or removing
+reactions, changing participants, and renaming conversations recheck their caller
+before each Graph request. Cancellation during the handler's token preparation,
+target authorization, or participant lookup stops its next request. Cancellation
+does not undo a mutation Microsoft has already accepted. Existing account, target,
+and owner/admin rules still apply; pinning and unpinning remain limited to chats.
+
 ## Reply style: threads vs posts
 
 Teams has two channel UI styles over the same underlying data model:
@@ -82,6 +91,19 @@ When `replyStyle: "thread"` is in effect and the bot was @mentioned from inside 
 The thread root is taken from the stored `threadId` on the conversation reference. Older stored references that predate `threadId` fall back to `activityId` (whatever inbound activity last seeded the conversation), so existing deployments keep working without a re-seed.
 
 When `replyStyle: "top-level"` is in effect, channel-thread inbounds are intentionally answered as new top-level posts; no thread suffix is attached. This is correct for Threads-style channels; top-level posts where you expected threaded replies means `replyStyle` is set incorrectly for that channel.
+
+## Delivery cancellation and retries
+
+Task and queue deliveries of text, images, files, and presentation cards check
+their current delivery authority before each Teams request, including after
+token acquisition and rate-limit waits. Cancellation stops requests that have
+not yet begun. Messages and file cards already accepted by Teams retain their
+delivery receipts; a partially completed text-and-media send retains its
+accepted parts.
+
+Required SharePoint uploads, member lookups, sharing links, and redirects check
+the same authority before continuing. An uploaded SharePoint file is preparation
+for the Teams file card; the upload alone does not confirm delivery to the chat.
 
 ## Outbound mentions
 

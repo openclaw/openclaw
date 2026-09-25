@@ -25,8 +25,8 @@ import {
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
-import type { UserProfilesDatabase } from "./user-profiles-schema.js";
 import { ensureProfileForEmail, linkEmail, setAvatar } from "./user-profiles.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tempDirs = createTempDirTracker();
 const statePaths: string[] = [];
@@ -297,6 +297,32 @@ describe("personal model accounts", () => {
     },
   );
 
+  it.each([
+    { displayName: "Sign in with ChatGPT", label: "account@example.test · Sign in with ChatGPT" },
+    { displayName: "account@example.test", label: "account@example.test" },
+  ])("identifies an owned account as $label", ({ displayName, label }) => {
+    const options = stateOptions();
+    const owner = ensureProfileForEmail("owner@example.test", options);
+    const { authProfileId } = connectUserModelAccount(
+      {
+        ownerProfileId: owner.id,
+        credential: {
+          type: "token",
+          provider: "example",
+          token: "synthetic-account-label-token",
+          email: "account@example.test",
+          displayName,
+        },
+        assertCurrent() {},
+      },
+      options,
+    );
+    expect(listUserModelAccounts({ profileId: owner.id }, options).accounts[0]?.label).toBe(label);
+    expect(
+      readUserModelAccountSummary({ profileId: owner.id, authProfileId }, options)?.label,
+    ).toBe(label);
+  });
+
   it("lists retained owned accounts without secrets and can select them again after clearing a default", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("inventory-alice@example.test", options);
@@ -311,6 +337,9 @@ describe("personal model accounts", () => {
           access: "synthetic-inventory-access",
           refresh: "synthetic-inventory-refresh",
           expires: 123,
+          clientId: "synthetic-client",
+          authorizationScope: "openid profile resource.invoke offline_access",
+          grantedScope: "openid offline_access",
         },
         assertCurrent() {},
       },
@@ -350,6 +379,11 @@ describe("personal model accounts", () => {
 
     clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
     closeOpenClawStateDatabaseByPath(options.path);
+    expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
+      clientId: "synthetic-client",
+      authorizationScope: "openid profile resource.invoke offline_access",
+      grantedScope: "openid offline_access",
+    });
     expect(
       readUserModelAccountSummary(
         { profileId: alice.id, authProfileId: first.authProfileId },

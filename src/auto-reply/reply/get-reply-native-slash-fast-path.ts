@@ -11,33 +11,30 @@ import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
+import { recordSessionCreated } from "../../sessions/session-created.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isAuthorizedTextSlashCommandTurn,
   isNativeCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
-import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import {
-  takeCommandSessionMetadataChangesFromTargets,
-  type CommandSessionMetadataChange,
-} from "./command-session-metadata.js";
+import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -47,9 +44,6 @@ import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
 type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
-type InternalGetReplyOptions = GetReplyOptions & {
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-};
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
@@ -113,7 +107,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
   preparedModelCatalog?: ModelCatalogSnapshot;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   skillFilter?: string[];
 }): Promise<
   | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -152,7 +146,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }
     const persistedInitialEntry = persistence.entry;
     if (creatingSession) {
-      recordSessionCreated({
+      recordSessionCreated(params.cfg, {
         sessionKey: sessionState.sessionKey,
         agentId: params.agentId,
         entry: persistedInitialEntry,
@@ -300,16 +294,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   let loadedSkillCommands: SkillCommandSpec[] | undefined;
   const loadNativeSkillCommands = async () => {
-    loadedSkillCommands ??= (await skillCommandsRuntimeLoader.load()).listSkillCommandsForWorkspace(
-      {
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        skillFilter: params.skillFilter,
-        sessionEntry: sessionState.sessionEntry,
-        sessionKey: sessionState.sessionKey,
-      },
-    );
+    loadedSkillCommands ??= await (
+      await skillCommandsRuntimeLoader.load()
+    ).prepareSkillCommandsForWorkspace({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      skillFilter: params.skillFilter,
+      sessionEntry: sessionState.sessionEntry,
+      sessionKey: sessionState.sessionKey,
+    });
     return loadedSkillCommands;
   };
 
@@ -377,9 +371,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     params.ctx,
   ]);
   if (commandSessionMetadataChanges) {
-    (params.opts as InternalGetReplyOptions | undefined)?.onSessionMetadataChanges?.(
-      commandSessionMetadataChanges,
-    );
+    params.opts?.onSessionMetadataChanges?.(commandSessionMetadataChanges);
   }
   if (!commandResult.shouldContinue) {
     params.typing.cleanup();

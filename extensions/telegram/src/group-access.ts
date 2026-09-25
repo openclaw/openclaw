@@ -1,4 +1,3 @@
-// Telegram plugin module implements group access behavior.
 import type {
   ChannelGroupPolicy,
   OpenClawConfig,
@@ -57,33 +56,10 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   if (params.topicConfig?.enabled === false) {
     return { allowed: false, reason: "topic-disabled" };
   }
-  if (!params.isGroup) {
-    // For DMs, check allowFrom override if present
-    if (params.enforceAllowOverride && params.hasGroupAllowOverride) {
-      if (
-        !isGroupAllowOverrideAuthorized({
-          effectiveGroupAllow: params.effectiveGroupAllow,
-          senderId: params.senderId,
-          senderUsername: params.senderUsername,
-          requireSenderForAllowOverride: params.requireSenderForAllowOverride,
-        })
-      ) {
-        return { allowed: false, reason: "group-override-unauthorized" };
-      }
-    }
-    return { allowed: true };
-  }
-  if (!params.enforceAllowOverride || !params.hasGroupAllowOverride) {
-    return { allowed: true };
-  }
-
   if (
-    !isGroupAllowOverrideAuthorized({
-      effectiveGroupAllow: params.effectiveGroupAllow,
-      senderId: params.senderId,
-      senderUsername: params.senderUsername,
-      requireSenderForAllowOverride: params.requireSenderForAllowOverride,
-    })
+    params.enforceAllowOverride &&
+    params.hasGroupAllowOverride &&
+    !isGroupAllowOverrideAuthorized(params)
   ) {
     return { allowed: false, reason: "group-override-unauthorized" };
   }

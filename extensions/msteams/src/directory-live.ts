@@ -1,4 +1,3 @@
-// Msteams plugin module implements directory live behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,

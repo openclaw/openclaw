@@ -1,8 +1,4 @@
-// Whatsapp plugin module implements inbound policy behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -20,6 +16,7 @@ import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
+import { getWhatsAppRuntime } from "./runtime.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = {
@@ -126,7 +123,7 @@ export async function resolveWhatsAppIngressAccess(params: {
   includeCommand?: boolean;
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getWhatsAppRuntime().channel.inbound.ingress.resolveStable({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
     identity: {

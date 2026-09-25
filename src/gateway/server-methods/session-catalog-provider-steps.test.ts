@@ -25,7 +25,9 @@ describe("session catalog provider steps", () => {
   it("constructs a source only after initial admission and never for a retired queued request", async () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
     const blocker = provider({ list: () => gate.promise });
-    const active = Array.from({ length: 4 }, () => listSessionCatalogProvider(blocker, {}));
+    const active = Array.from({ length: 16 }, (_, index) =>
+      listSessionCatalogProvider({ ...blocker, id: `blocking-${index}` }, {}),
+    );
     const next = vi.fn(async () => ({ done: true as const, hosts: [] }));
     const close = vi.fn();
     const createListOperation = vi.fn<NonNullable<SessionCatalogProvider["createListOperation"]>>(
@@ -59,8 +61,11 @@ describe("session catalog provider steps", () => {
 
   it("hands off after a settled step while keeping one publication registration lifetime", async () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
-    const active = Array.from({ length: 3 }, () =>
-      listSessionCatalogProvider(provider({ list: () => gate.promise }), {}),
+    const active = Array.from({ length: 15 }, (_, index) =>
+      listSessionCatalogProvider(
+        provider({ id: `blocking-${index}`, list: () => gate.promise }),
+        {},
+      ),
     );
     const step = createDeferredCore<{ done: false }>();
     const publication = createDeferredCore<SessionCatalogHost>();
@@ -73,7 +78,7 @@ describe("session catalog provider steps", () => {
     };
     const order: string[] = [];
     const onHost = vi.fn();
-    const lifetime = new SessionCatalogListLifetime(() => true, []);
+    const lifetime = new SessionCatalogListLifetime(() => true, [], ["fixture"]);
     const catalog = provider({
       createListOperation: (params) => {
         let first = true;
@@ -99,6 +104,7 @@ describe("session catalog provider steps", () => {
     );
     const healthy = listSessionCatalogProvider(
       provider({
+        id: "healthy",
         list: async () => {
           order.push("healthy");
           return [];
@@ -128,15 +134,18 @@ describe("session catalog provider steps", () => {
     const before = getActiveGatewayRootWorkHolders();
     const root = tryBeginGatewayRootWorkAdmission("catalog-step-publication")!;
     const blocker = createDeferredCore<SessionCatalogHost[]>();
-    const active = Array.from({ length: 3 }, () =>
-      listSessionCatalogProvider(provider({ list: () => blocker.promise }), {}),
+    const active = Array.from({ length: 15 }, (_, index) =>
+      listSessionCatalogProvider(
+        provider({ id: `blocking-${index}`, list: () => blocker.promise }),
+        {},
+      ),
     );
     const first = createDeferredCore<{ done: false }>();
     let host: ReturnType<typeof createDeferredCore<SessionCatalogHost>> | undefined;
     const next = vi.fn(() => first.promise);
     const close = vi.fn(() => host?.reject(new Error("list operation closed")));
     const owner = new AbortController();
-    const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+    const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal], ["fixture"]);
     const catalog = provider({
       createListOperation: (params) => {
         return {
@@ -157,6 +166,7 @@ describe("session catalog provider steps", () => {
     const healthyStarted = createDeferredCore();
     const healthy = listSessionCatalogProvider(
       provider({
+        id: "healthy",
         list: () => {
           healthyStarted.resolve();
           return blocker.promise;

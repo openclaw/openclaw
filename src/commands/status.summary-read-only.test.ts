@@ -33,7 +33,7 @@ describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(() => {
+  function registerTelegramFixture() {
     const telegram = createOutboundTestPlugin({
       id: "telegram",
       outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
@@ -51,6 +51,10 @@ describe("getStatusSummary read-only session access", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", plugin: telegram, source: "test" }]),
     );
+  }
+
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
   });
 
   afterEach(() => {
@@ -85,6 +89,7 @@ describe("getStatusSummary read-only session access", () => {
   it.each([undefined, "owner"])(
     "resolves the configured owner DM without writing session state for target %s",
     async (target) => {
+      registerTelegramFixture();
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-owner-"));
       const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
 
@@ -232,7 +237,7 @@ describe("getStatusSummary read-only session access", () => {
         const timeline = state.path("status-timeline.jsonl");
         const scan = await withEnvAsync(
           { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timeline },
-          () => scanStatus({ timeoutMs: 100 }),
+          () => scanStatus({ timeoutMs: 100, gatewayProbeDeadlineMs: performance.now() + 100 }),
         );
         expect(scan.agentStatus.totalSessions).toBe(12);
         expect(scan.agentStatus.agents[0]?.lastUpdatedAt).toBe(12);

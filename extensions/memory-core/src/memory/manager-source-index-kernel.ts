@@ -1,16 +1,12 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  hashText,
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { DatabaseSync } from "node:sqlite";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   markMemoryVectorRebuildRequired,
@@ -88,7 +84,6 @@ export class MemorySourceIndexKernel {
     this.clear(entry.path, source);
     let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
     let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
-    let ftsStatement: StatementSync | undefined;
     let hasEmbeddings = false;
     for (const { chunk, embedding } of rows) {
       hasEmbeddings ||= embedding.length > 0;
@@ -105,13 +100,6 @@ export class MemorySourceIndexKernel {
       if (vectorReady && embedding.length > 0) {
         writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
         writeVector(id, embedding);
-      }
-      if (this.state.fts.enabled && this.state.fts.available) {
-        ftsStatement ??= this.database.prepare(
-          `INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-            ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        ftsStatement.run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
     const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
@@ -197,14 +185,6 @@ export class MemorySourceIndexKernel {
           markMemoryVectorRebuildRequired(this.database);
         }
       }
-    }
-    if (this.state.fts.enabled && this.state.fts.available) {
-      try {
-        // Lexical search is model-agnostic; remove every model for this source.
-        this.database
-          .prepare(`DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE path = ? AND source = ?`)
-          .run(pathname, source);
-      } catch {}
     }
     executeSqliteQuerySync(
       this.database,

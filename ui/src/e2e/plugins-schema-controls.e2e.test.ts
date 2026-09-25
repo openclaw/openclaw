@@ -106,7 +106,10 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
-        await page.getByRole("heading", { name: "Workboard settings", exact: true }).waitFor();
+        await page
+          .locator(".plugin-editor")
+          .getByRole("searchbox", { name: "Search settings", exact: true })
+          .waitFor();
         const editor = page.locator(".plugin-editor__control");
         await editor.first().waitFor();
         if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
@@ -147,7 +150,10 @@ suite.define(() => {
           )
           .toBe("saved");
         await page.reload();
-        await page.getByRole("heading", { name: "Workboard settings", exact: true }).waitFor();
+        await page
+          .locator(".plugin-editor")
+          .getByRole("searchbox", { name: "Search settings", exact: true })
+          .waitFor();
         if (json) {
           await expect
             .poll(async () => JSON.parse(await editor.locator("textarea").inputValue()))

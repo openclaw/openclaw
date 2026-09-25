@@ -20,6 +20,7 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -49,7 +50,10 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
   const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
-  return listCoreToolSections({ swarmEnabled }).map((section) => ({
+  return listCoreToolSections({
+    swarmEnabled,
+    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
+  }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -186,11 +190,10 @@ function buildPluginGroups(params: {
       groups.set(groupId, existing);
     }
   }
-  return [...groups.values()]
-    .map((group) =>
-      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
-    )
-    .toSorted((a, b) => a.label.localeCompare(b.label));
+  return Array.from(groups.values(), (group) => {
+    group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
+    return group;
+  }).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Build the merged core/plugin tool catalog for one agent. */

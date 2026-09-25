@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
@@ -119,6 +119,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     this.clearMemoryRetryState();
 
     const fileEntries = await resolveMemorySourceFileEntries({
+      files: this.memoryFiles,
       workspaceDir: this.workspaceDir,
       settings: this.settings,
       concurrency: this.getIndexConcurrency(),

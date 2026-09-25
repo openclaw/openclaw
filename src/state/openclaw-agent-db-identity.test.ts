@@ -91,8 +91,10 @@ it("retains cold existing stores read-only without registering or creating missi
   );
   expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual(registry);
   claim.release();
-  expect(readOnlyDatabase.db.isOpen).toBe(false);
+  expect(readOnlyDatabase.db.isOpen).toBe(true);
   expect(() => claim.assertCurrent()).toThrow("no longer current");
+  closeOpenClawAgentDatabaseByPath(database.path);
+  expect(readOnlyDatabase.db.isOpen).toBe(false);
 
   const missing = path.join(directory, "missing", "agent.sqlite");
   expect(retainOpenClawAgentDatabaseReadOnly({ agentId: "main", env, path: missing })).toEqual({

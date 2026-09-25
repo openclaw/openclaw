@@ -352,13 +352,14 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await loading.waitFor();
     const loadingSections = page.locator('.model-setup__loading[role="status"][aria-busy="true"]');
     await loadingSections.locator(".model-setup__loading-sections").waitFor();
-    expect(await loadingSections.locator(".settings-section").count()).toBe(4);
+    expect(await loadingSections.locator(".settings-section").count()).toBe(5);
     expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
     expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
     await page.evaluate(() => document.fonts.ready);
     // Compare section layouts at rest, not the shell's translated entrance frame.
     await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
+      "Use an installed agent",
       "Found on this Gateway",
       "Run a model locally",
       "Set up and verify a model",

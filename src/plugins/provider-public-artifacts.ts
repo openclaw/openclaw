@@ -1,12 +1,17 @@
 import path from "node:path";
 // Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import {
+  listProviderPolicyOwners,
   listTrustedExternalProviderPolicyOwners,
   resolveBundledProviderPolicyOwner,
 } from "./provider-policy-owners.js";
@@ -21,13 +26,15 @@ import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
-export { listTrustedExternalProviderPolicyOwners };
+export { listProviderPolicyOwners } from "./provider-policy-owners.js";
 
 type ProviderPolicyRegistry = { plugins: readonly PluginManifestRecord[] };
 
 type ProviderPolicyMetadata = {
   manifestRegistry?: ProviderPolicyRegistry;
   loadManifestRegistry?: () => ProviderPolicyRegistry | undefined;
+  /** Direct result from this synchronous resolution; null records an observed miss. */
+  directSurface?: BundledProviderPolicySurface | null;
 };
 
 function resolveBundledProviderPolicyPlugin(
@@ -59,7 +66,10 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const directSurface = resolveDirectBundledProviderPolicySurface(normalizedProviderId);
+  const directSurface =
+    options.directSurface === undefined
+      ? resolveDirectBundledProviderPolicySurface(normalizedProviderId)
+      : options.directSurface;
   if (directSurface) {
     return directSurface;
   }
@@ -81,8 +91,35 @@ export function resolveBundledProviderPolicySurface(
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
 export function resolveProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: ProviderPolicyRegistry } = {},
+  options: {
+    manifestRegistry?: ProviderPolicyRegistry;
+    config?: OpenClawConfig;
+    directSurface?: BundledProviderPolicySurface | null;
+  } = {},
 ): ProviderPolicySurface | null {
+  if (options.config?.plugins) {
+    const registry =
+      options.manifestRegistry ??
+      getCurrentPluginMetadataSnapshotRuntime({
+        config: options.config,
+        allowScopedSnapshot: true,
+      })?.manifestRegistry ??
+      loadPluginManifestRegistryCore({ config: options.config });
+    const normalizedConfig = normalizePluginsConfig(options.config.plugins);
+    for (const owner of listProviderPolicyOwners(providerId, registry)) {
+      if (!passesManifestOwnerBasePolicy({ plugin: owner, normalizedConfig })) {
+        continue;
+      }
+      const surface =
+        owner.origin === "bundled"
+          ? resolveDirectBundledProviderPolicySurface(path.basename(owner.rootDir))
+          : resolveProviderPolicySurfaceForOwner(owner);
+      if (surface) {
+        return surface;
+      }
+    }
+    return null;
+  }
   const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
   if (bundledSurface) {
     return bundledSurface;
@@ -92,18 +129,16 @@ export function resolveProviderPolicySurface(
     return null;
   }
   return (
-    loadTrustedExternalProviderPolicyArtifacts(
+    loadProviderPolicyArtifacts(
       listTrustedExternalProviderPolicyOwners(providerId, options.manifestRegistry),
     )?.surface ?? null
   );
 }
 
-/** Loads the first usable policy surface from caller-selected trusted owners. */
-export function loadTrustedExternalProviderPolicyArtifacts(
-  owners: readonly PluginManifestRecord[],
-) {
+/** Loads the first usable policy surface from caller-selected admitted owners. */
+export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
   for (const owner of owners) {
-    const surface = resolveTrustedExternalProviderPolicySurface(owner);
+    const surface = resolveProviderPolicySurfaceForOwner(owner);
     if (surface) {
       return { owner, surface };
     }
@@ -112,11 +147,11 @@ export function loadTrustedExternalProviderPolicyArtifacts(
   return owner ? { owner, surface: null } : null;
 }
 
-/** Loads policy hooks from a host-verified official external plugin install. */
-function resolveTrustedExternalProviderPolicySurface(
+/** Loads policy hooks from the selected bundled or host-verified official owner. */
+export function resolveProviderPolicySurfaceForOwner(
   record: PluginManifestRecord,
 ): ProviderPolicySurface | null {
-  if (record.trustedOfficialInstall !== true) {
+  if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
   const modulePath = resolvePluginRootPublicSurfacePath({

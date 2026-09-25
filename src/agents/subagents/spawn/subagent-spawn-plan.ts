@@ -18,8 +18,8 @@ import {
 } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
@@ -34,11 +34,6 @@ export function splitModelRef(ref?: string) {
   if (slash > 0 && slash < trimmed.length - 1) {
     const provider = trimmed.slice(0, slash);
     const model = trimmed.slice(slash + 1);
-    return { provider, model };
-  }
-  const provider = undefined;
-  const model = trimmed;
-  if (model) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
@@ -104,7 +99,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
   let choice;
   try {
-    choice = await getSubagentSpawnDeps().prepareModelChoice({
+    choice = await prepareModelChoice({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       workspaceDir: params.workspaceDir,
@@ -162,21 +157,17 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     status: "ok" as const,
     resolvedModel,
     ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
-    modelApplied: Boolean(resolvedModel),
+    modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      ...(resolvedModel
+      model: resolvedModel,
+      modelOverrideSource,
+      ...(modelOrigin
         ? {
-            model: resolvedModel,
-            modelOverrideSource,
-            ...(modelOrigin
-              ? {
-                  // Selected child models are session overrides, not legacy fallback residue.
-                  // Self-origin metadata keeps cleanup from discarding them before first use.
-                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
-                  modelOverrideFallbackOriginModel: modelOrigin.model,
-                }
-              : {}),
+            // Selected child models are session overrides, not legacy fallback residue.
+            // Self-origin metadata keeps cleanup from discarding them before first use.
+            modelOverrideFallbackOriginProvider: modelOrigin.provider,
+            modelOverrideFallbackOriginModel: modelOrigin.model,
           }
         : {}),
       ...(authProfileId

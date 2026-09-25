@@ -3,6 +3,7 @@ import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -12,10 +13,15 @@ import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
+import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
+} from "../delivery-evidence.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import {
   hasAsyncActivity,
@@ -24,7 +30,6 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasOnlySilentAssistantReply,
   isIncompleteTerminalAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
@@ -101,9 +106,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
     params.attempt.hasToolMediaBlockReply ||
-    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+    resolveSourceReplyDelivery(params.attempt) !== "missing"
   ) {
     return null;
   }
@@ -112,7 +116,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasAsyncActivity(params.attempt.toolMetas)) {
+  // Failed or incomplete model steps still need a warning when their lifecycle
+  // snapshot contains unfinished work; only a normal stop can leave that work pending.
+  if (
+    hasAsyncActivity(params.attempt.toolMetas) ||
+    (!params.aborted &&
+      assistant?.stopReason === "stop" &&
+      (params.attempt.itemLifecycle.activeCount > 0 ||
+        params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount))
+  ) {
     return null;
   }
 
@@ -127,8 +139,23 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const failureFacts = promptError
+    ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+    : undefined;
+  // A non-replayable harness failure may have no assistant message to carry its error.
+  // Share classified copy with thrown failures; never display raw prompt diagnostics.
+  const promptFailureText = failureFacts
+    ? (failureFacts.providerRequestError?.userMessage ??
+      failureFacts.formatFailureText ??
+      renderAssistantRequestFailureCopy({
+        reason: failureFacts.reason,
+        status: failureFacts.status,
+        code: failureFacts.code,
+      }))
+    : undefined;
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
+    return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
@@ -148,7 +175,7 @@ export function resolveIncompleteTurnPayloadText(params: {
       }),
     });
   }
-  return "⚠️ Agent couldn't generate a response. Please try again.";
+  return promptFailureText ?? "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
 /**
@@ -174,10 +201,6 @@ export function shouldRetryMissingAssistantTurn(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
   ) {
-    return false;
-  }
-
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
     return false;
   }
 

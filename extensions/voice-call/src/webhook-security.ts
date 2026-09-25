@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook security behavior.
 import crypto from "node:crypto";
 import { isIP } from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -402,18 +401,6 @@ function createTwilioReplayKey(params: {
   )}`;
 }
 
-function decodeBase64OrBase64Url(input: string): Buffer {
-  // Telnyx docs say Base64; some tooling emits Base64URL. Accept both.
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padLen = (4 - (normalized.length % 4)) % 4;
-  const padded = normalized + "=".repeat(padLen);
-  return Buffer.from(padded, "base64");
-}
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
 function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
   const trimmed = publicKey.trim();
 
@@ -423,11 +410,11 @@ function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
   }
 
   // Base64-encoded raw Ed25519 key (32 bytes) or Base64-encoded DER SPKI key.
-  const decoded = decodeBase64OrBase64Url(trimmed);
+  const decoded = Buffer.from(trimmed, "base64");
   if (decoded.length === 32) {
     // JWK is the easiest portable way to import raw Ed25519 keys in Node crypto.
     return crypto.createPublicKey({
-      key: { kty: "OKP", crv: "Ed25519", x: base64UrlEncode(decoded) },
+      key: { kty: "OKP", crv: "Ed25519", x: decoded.toString("base64url") },
       format: "jwk",
     });
   }
@@ -483,7 +470,7 @@ export function verifyTelnyxWebhook(
 
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
-    const signatureBuffer = decodeBase64OrBase64Url(signature);
+    const signatureBuffer = Buffer.from(signature, "base64");
     // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
     const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
@@ -516,7 +503,7 @@ export function verifyTelnyxWebhook(
 export function verifyTwilioWebhook(
   ctx: WebhookContext,
   authToken: string,
-  options?: {
+  options?: WebhookUrlOptions & {
     /** Override the public URL (e.g., from config) */
     publicUrl?: string;
     /**
@@ -529,26 +516,6 @@ export function verifyTwilioWebhook(
     allowNgrokFreeTierLoopbackBypass?: boolean;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /**
-     * Whitelist of allowed hostnames for host header validation.
-     * Prevents host header injection attacks.
-     */
-    allowedHosts?: string[];
-    /**
-     * Explicitly trust X-Forwarded-* headers without a whitelist.
-     * WARNING: Only enable if you trust your proxy configuration.
-     * @default false
-     */
-    trustForwardingHeaders?: boolean;
-    /**
-     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
-     * be trusted from these IPs.
-     */
-    trustedProxyIPs?: string[];
-    /**
-     * The remote IP address of the request (for proxy validation).
-     */
-    remoteIP?: string;
   },
 ): TwilioVerificationResult {
   // Allow skipping verification for development/testing
@@ -778,31 +745,11 @@ function validatePlivoV3Signature(params: {
 export function verifyPlivoWebhook(
   ctx: WebhookContext,
   authToken: string,
-  options?: {
+  options?: WebhookUrlOptions & {
     /** Override the public URL origin (host) used for verification */
     publicUrl?: string;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /**
-     * Whitelist of allowed hostnames for host header validation.
-     * Prevents host header injection attacks.
-     */
-    allowedHosts?: string[];
-    /**
-     * Explicitly trust X-Forwarded-* headers without a whitelist.
-     * WARNING: Only enable if you trust your proxy configuration.
-     * @default false
-     */
-    trustForwardingHeaders?: boolean;
-    /**
-     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
-     * be trusted from these IPs.
-     */
-    trustedProxyIPs?: string[];
-    /**
-     * The remote IP address of the request (for proxy validation).
-     */
-    remoteIP?: string;
   },
 ): PlivoVerificationResult {
   if (options?.skipVerification) {

@@ -42,11 +42,7 @@ import {
   resolveToCwd,
 } from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import {
-  createReadToolDetails,
-  readToolInputSchema,
-  readToolOutputSchema,
-} from "./read-tool-contract.js";
+import { createReadToolDetails } from "./read-tool-contract.js";
 import {
   getTextOutput,
   invalidArgText,
@@ -58,6 +54,7 @@ import {
 } from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 function normalizeReadError(error: unknown, filePath: string): Error {
@@ -489,9 +486,10 @@ export function createReadToolDefinition(
                 ? "[Current model does not support images. The image will be omitted from this request.]"
                 : undefined;
             if (mimeType) {
-              const base64 = buffer.toString("base64");
+              // Backends may reuse their Buffer while image preparation awaits processing.
+              const imageBytes = Buffer.from(buffer);
               const processed = await processImage(
-                { type: "image", data: base64, mimeType },
+                { data: imageBytes, mimeType },
                 { autoResizeImages },
               );
               if (!processed.ok) {

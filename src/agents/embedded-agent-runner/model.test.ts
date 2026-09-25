@@ -21,8 +21,13 @@ import {
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
-import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
+import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
+import {
+  createEmptyPreparedModelRuntimeFixture,
+  guardModelFixtureAuth,
+} from "./model.fixture.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
 
 let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
@@ -125,32 +130,6 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
 
   return {
     ...actual,
-    shouldSuppressBuiltInModelCore: ({
-      provider,
-      id,
-      baseUrl,
-      config,
-    }: {
-      provider?: string;
-      id?: string;
-      baseUrl?: string;
-      config?: unknown;
-    }) => {
-      if (
-        (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
-        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
-      ) {
-        return true;
-      }
-      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
-        return true;
-      }
-      return (
-        (provider === "qwen" || provider === "modelstudio") &&
-        id?.trim().toLowerCase() === "qwen3.6-plus" &&
-        isQwenCodingPlanBaseUrl(baseUrl ?? resolveConfiguredQwenBaseUrl(config))
-      );
-    },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
         (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
@@ -218,6 +197,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     if (!("fork" in modelRegistry)) {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const snapshot = {
       catalogOwner: undefined,
       agentDir: input.agentDir,
@@ -225,10 +205,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
       activeProjectKeys: [],
       config: input.config ?? {},
       authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      metadataSnapshot,
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
+      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+        preparedSnapshotState.configuredRuntimeModels,
+        metadataSnapshot,
+      ),
       inlineProviderModels: preparedSnapshotState.inlineProviderModels,
       createStores: () => ({ authStorage, modelRegistry }),
     };
@@ -604,61 +588,13 @@ function makeVllmQwenConfig(
 }
 
 describe("resolveModel", () => {
-  it("consumes a directly prepared model through configured overrides and normalization", async () => {
-    const preparedModel = {
-      ...makeModel("prepared-model"),
-      provider: "acme",
-      name: "Prepared Model",
-      api: "openai-completions" as const,
-      baseUrl: "https://discovered.example/v1",
-      input: ["text" as const],
-      contextWindow: 65_536,
-      maxTokens: 8_192,
-    };
-    const prepareProviderDynamicModel = vi.fn(async () => {
-      auth.spy.mockImplementation(() => {
-        throw new Error("Auth storage became unavailable after model preparation");
-      });
-      return preparedModel;
-    });
-    const runProviderDynamicModel = vi.fn(() => undefined);
-    const normalizeProviderResolvedModelWithPlugin = vi.fn(
-      ({ context }: { context: { model: Model } }) => ({
-        ...context.model,
-        name: "Normalized Prepared Model",
-      }),
-    );
-    const cfg = makeProviderConfig("acme", {
-      api: "openai-responses",
-      baseUrl: "https://configured.example/v1",
-      headers: { "X-Tenant": "tenant-a" },
-    });
-
-    const result = await resolveModelAsync("acme", "prepared-model", state.agentDir(), cfg, {
-      runtimeHooks: {
-        ...createRuntimeHooks(),
-        prepareProviderDynamicModel,
-        runProviderDynamicModel,
-        normalizeProviderResolvedModelWithPlugin,
-      },
-      skipAgentDiscovery: true,
-    });
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "acme",
-      id: "prepared-model",
-      name: "Normalized Prepared Model",
-      api: "openai-responses",
-      baseUrl: "https://configured.example/v1",
-      contextWindow: 65_536,
-      maxTokens: 8_192,
-    });
-    expect(expectResolvedModel(result).headers).toEqual(
-      expect.objectContaining({ "X-Tenant": "tenant-a" }),
-    );
-    expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
-    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
-    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  registerModelAuthReadTests({
+    getAgentDir: () => state.agentDir(),
+    getAuthSpy: () => auth.spy,
+    createRuntimeHooks,
+    makeProviderConfig,
+    expectResolvedModel,
+    expectRecordFields,
   });
 
   it.each([
@@ -1112,6 +1048,14 @@ describe("resolveModel", () => {
       api: "openai-completions",
       models: [{ id: "deepseek-v4-pro", name: "Configured DeepSeek" }],
     });
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const configuredRuntimeModels = [
+      {
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        model: makeDeepSeekCatalogModel(),
+      },
+    ];
     const preparedModelRuntime = {
       catalogOwner: undefined,
       agentDir: state.agentDir(),
@@ -1121,15 +1065,13 @@ describe("resolveModel", () => {
       observationConfig: cfg,
       isCurrent: () => true,
       authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      metadataSnapshot,
       modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [
-        {
-          provider: "deepseek",
-          modelId: "deepseek-v4-pro",
-          model: makeDeepSeekCatalogModel(),
-        },
-      ],
+      configuredRuntimeModels,
+      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+        configuredRuntimeModels,
+        metadataSnapshot,
+      ),
       inlineProviderModels: buildInlineProviderModels(cfg.models?.providers ?? {}),
       createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
     } satisfies PreparedModelRuntimeSnapshot;
@@ -1220,21 +1162,12 @@ describe("resolveModel", () => {
       makeMistralCatalogModel({ input: ["text"] }),
     );
 
-    const preparedModelRuntime = {
-      catalogOwner: undefined,
+    const preparedModelRuntime = createEmptyPreparedModelRuntimeFixture({
       agentDir: state.agentDir(),
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
       config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
       createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-    } satisfies PreparedModelRuntimeSnapshot;
+    });
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -1261,21 +1194,12 @@ describe("resolveModel", () => {
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const config = {};
-    const preparedModelRuntime = {
-      catalogOwner: undefined,
+    const preparedModelRuntime = createEmptyPreparedModelRuntimeFixture({
       agentDir: state.agentDir(),
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
       config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
       metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
       createStores: createEmptyAgentDiscoveryStores,
-    } satisfies PreparedModelRuntimeSnapshot;
+    });
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",
       id: "gemini-3.1-pro-preview",
@@ -2435,7 +2359,7 @@ describe("resolveModel", () => {
 
   it.each([false, true])(
     "keeps exact configured routes ahead of legacy rows (reversed=%s)",
-    (reverse) => {
+    async (reverse) => {
       const exact = { ...makeModel("Model"), baseUrl: "https://exact.example.test/v1" };
       const legacy = {
         ...makeModel("custom/Model"),
@@ -2454,7 +2378,7 @@ describe("resolveModel", () => {
         },
       };
       for (const row of [exact, legacy]) {
-        const resolved = resolveModelWithRegistry({
+        const resolved = await resolveModelWithRegistry({
           provider: "custom",
           modelId: row.id,
           cfg,
@@ -2471,7 +2395,7 @@ describe("resolveModel", () => {
 
   it.each([false, true])(
     "merges exact rows before provider defaults (empty headers=%s)",
-    (emptyHeaders) => {
+    async (emptyHeaders) => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -2491,7 +2415,7 @@ describe("resolveModel", () => {
           },
         },
       };
-      const resolved = resolveModelWithRegistry({
+      const resolved = await resolveModelWithRegistry({
         provider: "custom",
         modelId: "Model",
         cfg,
@@ -4704,7 +4628,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("passes configured workspaceDir through direct registry dynamic hooks", () => {
+  it("passes configured workspaceDir through direct registry dynamic hooks", async () => {
     const runProviderDynamicModel = vi.fn(
       (params: {
         workspaceDir?: string;
@@ -4732,7 +4656,7 @@ describe("resolveModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveModelWithRegistry({
+    const result = await resolveModelWithRegistry({
       provider: "openai",
       modelId: "gpt-5.4",
       agentDir: state.agentDir("state"),

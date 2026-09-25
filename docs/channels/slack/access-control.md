@@ -26,6 +26,8 @@ Available action groups in current Slack tooling:
 
 Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
+Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
+
 In a Slack conversation, delegated `member-info` reads only the current requester
 on the same account; omitting `userId` selects that requester. `emoji-list` uses
 the trusted current workspace. Both metadata actions work without a channel target
@@ -186,7 +188,11 @@ restart the Slack monitor. The Gateway remains running.
 
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 
-    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+    `allowBots` defaults to `true`. Bot-authored messages follow the same channel access and mention rules as other messages; messages from this bot are always ignored. Set `allowBots: false` to prevent other bots from triggering turns, or `allowBots: "mentions"` to require a mention even in rooms with `requireMention: false`. Room settings override account settings, which override `channels.slack.allowBots`. Existing explicit `false` values remain disabled after an update.
+
+    Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+
+    `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.
 

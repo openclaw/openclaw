@@ -1,20 +1,15 @@
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
-  type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  appendLocalMediaParentRoots,
-  getAgentScopedMediaLocalRoots,
-} from "../../media/local-roots.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantReplyContent,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
@@ -28,9 +23,17 @@ import {
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
 } from "./chat-broadcast.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import {
+  captureWebchatReplyMediaScope,
+  withPreparedWebchatReplyMedia,
+  type WebchatReplyMediaRequesterContext,
+} from "./chat-reply-media.js";
+import {
+  readChatSendReplyPayload,
+  type DeliveredChatSendReply,
+} from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
+import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   assistantTranscriptScope,
@@ -39,30 +42,26 @@ import {
   type SourceReplyContentState,
   type SourceReplyTranscriptMirrorMetadata,
 } from "./chat-transcript-persistence.js";
-import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type DeliveredReply = {
-  payload: ReplyPayload;
-  kind: "block" | "final";
-};
-
-function selectChatSendAgentReplyPayloads(params: {
-  deliveredReplies: readonly DeliveredReply[];
+function selectChatSendAgentReplyInputs(params: {
+  deliveredReplies: readonly DeliveredChatSendReply[];
   hasReturnedAgentErrorPayloads: boolean;
-}): ReplyPayload[] {
+}): ReplyDispatchOperation[] {
   return params.deliveredReplies
     .filter((entry) => {
-      const { payload } = entry;
+      const payload = readChatSendReplyPayload(entry.input);
       return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
         isSourceReplyTranscriptMirrorPayload(payload)
         ? entry.kind === "final" && payload.isError !== true
         : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);
     })
-    .map((entry) => entry.payload);
+    .map((entry) => entry.input);
 }
 
 type FinalizeChatSendAgentRepliesBase = {
+  requesterContext?: WebchatReplyMediaRequesterContext;
+  abortSignal?: AbortSignal;
   accountId: string | undefined;
   context: GatewayRequestContext;
   emitFirstAssistantServerTiming: () => void;
@@ -100,7 +99,7 @@ export function createChatSendLateReplyFinalizer(
       const result = await finalizeChatSendAgentReplyPayloads({
         ...params,
         emitFirstAssistantServerTiming: () => {},
-        payloads,
+        inputs: payloads.map((payload) => ({ kind: "raw", payload })),
         isCurrent,
         session: { ...session, clientRunId: runId },
         suppressFinal: completion.kind === "failed" || completion.kind === "aborted",
@@ -202,7 +201,7 @@ export function createChatSendLateReplyFinalizer(
 
 async function finalizeChatSendAgentReplyPayloads(
   params: FinalizeChatSendAgentRepliesBase & {
-    payloads: readonly ReplyPayload[];
+    inputs: readonly ReplyDispatchOperation[];
     suppressFinal?: boolean;
     publishMessage?: (message: Record<string, unknown>, deliveryAuthorized: () => boolean) => void;
     isCurrent?: () => boolean;
@@ -210,7 +209,7 @@ async function finalizeChatSendAgentReplyPayloads(
 ): Promise<ChatSendAgentReplyFinalization> {
   const { accountId, context, emitFirstAssistantServerTiming, session } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
-  const agentRunReplyPayloads = [...params.payloads];
+  const agentRunReplyPayloads = params.inputs.map(readChatSendReplyPayload);
   if (agentRunReplyPayloads.length === 0) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -229,74 +228,81 @@ async function finalizeChatSendAgentReplyPayloads(
   const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
     isSourceReplyTranscriptMirrorPayload,
   );
-  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
+  const mediaScope = captureWebchatReplyMediaScope({
+    requesterContext: params.requesterContext,
     cfg,
     sessionKey,
     agentId,
+    sessionLoadOptions,
     accountId,
-    payloads: agentRunReplyPayloads,
+    assertCurrent: () => {
+      if (!deliveryAuthorized()) {
+        throw new Error("Chat media delivery is no longer authorized.");
+      }
+    },
   });
   const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
     sessionKey,
     sessionLoadOptions,
   );
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-  const mediaLocalRoots = appendLocalMediaParentRoots(
-    getAgentScopedMediaLocalRoots(cfg, agentId),
-    latestStorePath ? [latestStorePath] : undefined,
-  );
-  const buildReplyContent = async (payloads: typeof finalPayloads) => {
-    const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(payloads, {
-      localRoots: mediaLocalRoots,
-      onLocalAudioAccessDenied: (err) => {
-        context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
+  const { finalInputsByIndex, sourceReplyContentStates, sourceReplyBroadcastContent } =
+    await withPreparedWebchatReplyMedia(
+      {
+        scope: mediaScope,
+        storePath: latestStorePath,
+        inputs: params.inputs,
+        abortSignal: params.abortSignal,
+        includeSensitiveMedia: false,
+        onLocalAudioAccessDenied: (err) => {
+          context.logGateway.warn(
+            `webchat audio embedding denied local path: ${formatForLog(err)}`,
+          );
+        },
+        onManagedMediaPrepareError: (message) => {
+          context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
+        },
       },
-    });
-    const content = await buildAssistantReplyContent({
-      sessionKey,
-      agentId,
-      payloads,
-      transcriptMediaMessage: mediaMessage,
-      managedMediaLocalRoots: mediaLocalRoots,
-      includeSensitiveMedia: false,
-      onManagedMediaPrepareError: (message) => {
-        context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
+      async ({ payloads: normalizedPayloads, inputsByIndex, buildContent }) => {
+        const contentStates: SourceReplyContentState[] = [];
+        const broadcastContent: AssistantDisplayContentBlock[] = [];
+        for (const [replyIndex] of agentRunReplyPayloads.entries()) {
+          const finalPayload = normalizedPayloads[replyIndex];
+          if (!finalPayload) {
+            continue;
+          }
+          const {
+            assistantContent: replyAssistantContent,
+            persistedAssistantContent: persistedContent,
+            mediaMessage: replyMediaMessage,
+          } = await buildContent(inputsByIndex[replyIndex] ?? []);
+          const replyBroadcastContent = hasAssistantDisplayMediaContent(replyAssistantContent)
+            ? replyAssistantContent
+            : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
+              ? replyMediaMessage?.content
+              : replyAssistantContent;
+          const state: SourceReplyContentState = {
+            broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
+            persistedContent: persistedContent ? [...persistedContent] : [],
+            hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
+            backedManagedOutgoingContent: false,
+          };
+          contentStates[replyIndex] = state;
+          if (state.broadcastContent.length > 0) {
+            broadcastContent.push(...state.broadcastContent);
+          }
+        }
+        return {
+          finalInputsByIndex: inputsByIndex,
+          sourceReplyContentStates: contentStates,
+          sourceReplyBroadcastContent: broadcastContent,
+        };
       },
-    });
-    return { ...content, mediaMessage };
-  };
-  const sourceReplyContentStates: SourceReplyContentState[] = [];
-  const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
-  for (const [replyIndex] of agentRunReplyPayloads.entries()) {
-    const finalPayload = finalPayloads[replyIndex];
-    if (!finalPayload) {
-      continue;
-    }
-    const {
-      assistantContent: replyAssistantContent,
-      persistedAssistantContent: persistedContent,
-      mediaMessage: replyMediaMessage,
-    } = await buildReplyContent([finalPayload]);
-    const replyBroadcastContent = hasAssistantDisplayMediaContent(replyAssistantContent)
-      ? replyAssistantContent
-      : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
-        ? replyMediaMessage?.content
-        : replyAssistantContent;
-    const state: SourceReplyContentState = {
-      broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-      persistedContent: persistedContent ? [...persistedContent] : [],
-      hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
-      backedManagedOutgoingContent: false,
-    };
-    sourceReplyContentStates[replyIndex] = state;
-    if (state.broadcastContent.length > 0) {
-      sourceReplyBroadcastContent.push(...state.broadcastContent);
-    }
-  }
+    );
 
   const displayReply =
     extractAssistantDisplayText(sourceReplyBroadcastContent) ??
-    buildTranscriptReplyText(finalPayloads);
+    buildTranscriptReplyTextFromInputs(finalInputsByIndex.flat());
   if (!sourceReplyBroadcastContent.length && !displayReply) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -306,31 +312,13 @@ async function finalizeChatSendAgentReplyPayloads(
     metadata: SourceReplyTranscriptMirrorMetadata;
     state: SourceReplyContentState;
   }> = [];
-  for (const [replyIndex, sourceReplyPayload] of agentRunReplyPayloads.entries()) {
-    const state = sourceReplyContentStates[replyIndex];
-    if (!state || !hasAssistantDisplayMediaContent(state.persistedContent)) {
-      continue;
-    }
-    const mirrorMetadata = getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-    const mirrorIdempotencyKey = mirrorMetadata?.idempotencyKey;
-    if (typeof mirrorIdempotencyKey !== "string" || mirrorIdempotencyKey.trim().length === 0) {
-      continue;
-    }
-    if (!state.hasManagedOutgoingContent) {
-      state.backedManagedOutgoingContent = true;
-    }
-    sourceReplyPersistenceRequests.push({
-      idempotencyKey: mirrorIdempotencyKey,
-      metadata: mirrorMetadata,
-      state,
-    });
-  }
   const sourceReplyMirrorCandidates: Array<{
     idempotencyKey: string;
     metadata: SourceReplyTranscriptMirrorMetadata;
   }> = [];
   for (const [replyIndex, sourceReplyPayload] of agentRunReplyPayloads.entries()) {
-    if (!sourceReplyContentStates[replyIndex]) {
+    const state = sourceReplyContentStates[replyIndex];
+    if (!state) {
       continue;
     }
     const mirrorMetadata = getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
@@ -342,10 +330,17 @@ async function finalizeChatSendAgentReplyPayloads(
     ) {
       continue;
     }
-    sourceReplyMirrorCandidates.push({
+    const candidate = {
       idempotencyKey: mirrorIdempotencyKey,
       metadata: mirrorMetadata,
-    });
+    };
+    sourceReplyMirrorCandidates.push(candidate);
+    if (hasAssistantDisplayMediaContent(state.persistedContent)) {
+      if (!state.hasManagedOutgoingContent) {
+        state.backedManagedOutgoingContent = true;
+      }
+      sourceReplyPersistenceRequests.push({ ...candidate, state });
+    }
   }
 
   const attachSourceReplyManagedImages = async (attachParams: {
@@ -452,16 +447,18 @@ async function finalizeChatSendAgentReplyPayloads(
 /** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
 export async function finalizeChatSendSourceReplies(
   params: FinalizeChatSendAgentRepliesBase & {
-    deliveredReplies: readonly DeliveredReply[];
+    deliveredReplies: readonly DeliveredChatSendReply[];
     hasReturnedAgentErrorPayloads: boolean;
     suppressFinal?: boolean;
   },
 ): Promise<boolean> {
   const result = await finalizeChatSendAgentReplyPayloads({
+    requesterContext: params.requesterContext,
+    abortSignal: params.abortSignal,
     accountId: params.accountId,
     context: params.context,
     emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
-    payloads: selectChatSendAgentReplyPayloads(params),
+    inputs: selectChatSendAgentReplyInputs(params),
     session: params.session,
     suppressFinal: params.suppressFinal,
   });

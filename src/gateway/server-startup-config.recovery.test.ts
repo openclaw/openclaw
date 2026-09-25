@@ -28,6 +28,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
@@ -624,21 +625,21 @@ describe("gateway startup config validation", () => {
   it.each(["Nix", "read-only"])("rejects legacy config entries in %s mode", async (mode) => {
     const legacySnapshot = buildInvalidConfigSnapshot({
       rawConfig: {
-        heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
+        session: { typingMode: "thinking" },
       },
       config: {} as OpenClawConfig,
       issues: [
         {
-          path: "heartbeat",
+          path: "session.typingMode",
           message:
-            "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+            'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
         },
       ],
       legacyIssues: [
         {
-          path: "heartbeat",
+          path: "session.typingMode",
           message:
-            "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+            'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
         },
       ],
     });

@@ -7,7 +7,8 @@ import {
   getCommandLaneSnapshot,
   listCommandLaneTotals,
 } from "./command-queue.js";
-import { CommandLane, STATIC_COMMAND_LANES } from "./lanes.js";
+import { getQueueState } from "./command-queue.state.js";
+import { CommandLane, STATIC_COMMAND_LANES, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
 type DynamicCommandLaneSummary = {
   laneCount: number;
@@ -18,15 +19,44 @@ type DynamicCommandLaneSummary = {
 
 const STATIC_COMMAND_LANE_SET: ReadonlySet<string> = new Set(STATIC_COMMAND_LANES);
 
+function getSubagentLaneSnapshot(): CommandLaneSnapshot {
+  const snapshot: CommandLaneSnapshot = {
+    ...getCommandLaneSnapshot(CommandLane.Subagent),
+    concurrencyScope: "session",
+    saturatedLaneCount: 0,
+  };
+  for (const state of getQueueState().lanes.values()) {
+    if (!state.lane.startsWith(SUBAGENT_LANE_PREFIX)) {
+      continue;
+    }
+    const activeCount = state.activeTaskIds.size;
+    snapshot.activeCount += activeCount;
+    snapshot.queuedCount += state.queue.length;
+    snapshot.draining ||= state.draining;
+    snapshot.generation = Math.max(snapshot.generation, state.generation);
+    if (activeCount >= state.maxConcurrent) {
+      snapshot.saturatedLaneCount = (snapshot.saturatedLaneCount ?? 0) + 1;
+      snapshot.blockedBy = "lane";
+    }
+  }
+  return snapshot;
+}
+
 export function getCommandLaneDiagnostics(): {
   lanes: CommandLaneSnapshot[];
   dynamic: DynamicCommandLaneSummary | null;
 } {
   const lanes = [...STATIC_COMMAND_LANES]
     .toSorted()
-    .map((lane) =>
-      lane === CommandLane.Background ? getBackgroundWorkSnapshot() : getCommandLaneSnapshot(lane),
-    )
+    .map((lane) => {
+      if (lane === CommandLane.Background) {
+        return getBackgroundWorkSnapshot();
+      }
+      if (lane === CommandLane.Subagent) {
+        return getSubagentLaneSnapshot();
+      }
+      return getCommandLaneSnapshot(lane);
+    })
     // Disabled lanes disappear only once their outstanding work has cleared.
     .filter((lane) => lane.maxConcurrent > 0 || lane.activeCount > 0 || lane.queuedCount > 0);
   const dynamic: DynamicCommandLaneSummary = {
@@ -36,7 +66,11 @@ export function getCommandLaneDiagnostics(): {
     queuedLaneCount: 0,
   };
   for (const totals of listCommandLaneTotals()) {
-    if (STATIC_COMMAND_LANE_SET.has(totals.lane) || isBackgroundWorkLane(totals.lane)) {
+    if (
+      STATIC_COMMAND_LANE_SET.has(totals.lane) ||
+      isBackgroundWorkLane(totals.lane) ||
+      totals.lane.startsWith(SUBAGENT_LANE_PREFIX)
+    ) {
       continue;
     }
     dynamic.laneCount += 1;

@@ -4,6 +4,8 @@ import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plug
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
+import { isPathInside } from "../../../infra/path-guards.js";
+import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
@@ -52,6 +54,7 @@ export async function inspectPluginMigrationAvailability(params: {
 }): Promise<PluginMigrationAvailability> {
   const artifactPreserving = isArtifactPreservingStateRead();
   const env = artifactPreserving ? cloneEnvWithPlatformSemantics(params.env) : params.env;
+  const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const inspect = () =>
     withPluginCache(createPluginCache(), async () => {
       const metadata =
@@ -130,15 +133,25 @@ export async function inspectPluginMigrationAvailability(params: {
                 isPayloadMissing(env, context.records[pluginId]?.installPath)) ||
               context.installedPluginIdsWithRepairablePackages.has(pluginId) ||
               context.configuredPluginIdsWithStaleDescriptors.has(pluginId);
+            // A private rehearsal copy is already bound to an explicit local payload. The
+            // updating parent does not own an install record for that copy, so waiting for
+            // package convergence would hide its Doctor contract from the canary. Ordinary
+            // config paths stay deferred because their source may be stale during an update.
+            const availableWithoutPackageConvergence =
+              bundled ||
+              (plugin?.origin === "config" &&
+                rehearsalRoot !== undefined &&
+                isPathInside(rehearsalRoot, plugin.rootDir) &&
+                !unavailable);
             if (
-              (bundled || (!params.deferInstallation && !unavailable)) &&
+              (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) &&
               plugin &&
               statelessCandidates.has(pluginId) &&
               isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg })
             ) {
               statelessPluginIds.push(pluginId);
             }
-            if (bundled || (!params.deferInstallation && !unavailable)) {
+            if (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) {
               return [];
             }
             return [

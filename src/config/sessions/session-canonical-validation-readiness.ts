@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -31,12 +32,16 @@ const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
 const CONTENTION_BACKOFF_MS = [0, 25, 100, 250] as const;
 const log = createSubsystemLogger("sessions/canonical-validation");
+// Share only active runtime drains; native close/reopen creates a different owner.
+const runtimeDrains = new WeakMap<DatabaseSync, Promise<void>>();
 
 /** Certify dirty persisted rows before startup maintenance reads their full entries. */
 export async function certifySessionCanonicalValidationPending(
   options: OpenClawAgentDatabaseOptions,
   withWorker = withSqliteReclamationWorker,
+  assertCurrentOwner?: () => void,
 ): Promise<void> {
+  assertCurrentOwner?.();
   const sourceEnv = options.env ?? process.env;
   const pathname = resolveOpenClawAgentSqlitePath(options);
   if (isIncognitoOpenClawAgentSqlitePath(pathname, options)) {
@@ -68,20 +73,24 @@ export async function certifySessionCanonicalValidationPending(
     return await withSqliteMutationWorkerLifetime(
       databaseOptions,
       async ({ assertCurrent: assertReadinessCurrent }) => {
-        try {
+        const shareRuntimeDrain =
+          withWorker === withSqliteReclamationWorker && assertCurrentOwner === undefined;
+        const drain = async () => {
           let contendedBatches = 0;
           let validation = getOpenClawAgentDatabaseValidation(database);
           while (true) {
+            assertCurrentOwner?.();
             assertReadinessCurrent();
             claim.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate }) =>
+              async ({ assertCurrent, commitGate, signal }) =>
                 await withWorker(
                   databaseOptions,
                   claim,
                   async (worker) => {
                     const assertCommitAllowed = () => {
+                      assertCurrentOwner?.();
                       assertReadinessCurrent();
                       assertCurrent();
                       worker.assertCurrent(databaseOptions, claim);
@@ -116,17 +125,21 @@ export async function certifySessionCanonicalValidationPending(
                               "session.canonical-validation.certify",
                               { reclamationAdmission },
                               "worker",
+                              signal,
                             ),
                         }),
                     );
                   },
                   () => {
+                    assertCurrentOwner?.();
                     assertReadinessCurrent();
                     assertCurrent();
                     claim.assertCurrent();
                   },
+                  signal,
                 ),
             );
+            assertCurrentOwner?.();
             assertReadinessCurrent();
             claim.assertCurrent();
             const currentValidation = getOpenClawAgentDatabaseValidation(database);
@@ -157,7 +170,35 @@ export async function certifySessionCanonicalValidationPending(
             }
             // The next batch rejoins both existing FIFOs behind already queued work.
           }
+        };
+        let completion: Promise<void> | undefined;
+        let ownsDrain = false;
+        try {
+          assertCurrentOwner?.();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          completion = shareRuntimeDrain ? runtimeDrains.get(database.db) : undefined;
+          ownsDrain = completion === undefined;
+          if (!completion) {
+            completion = drain();
+            if (shareRuntimeDrain) {
+              runtimeDrains.set(database.db, completion);
+            }
+          }
+          await completion;
+          assertCurrentOwner?.();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          if (
+            !isOpenClawAgentDatabasePathCurrent(database) ||
+            !hasOpenClawAgentCanonicalValidation(database)
+          ) {
+            throw new Error("SQLite session reclamation database owner is no longer current");
+          }
         } finally {
+          if (ownsDrain && runtimeDrains.get(database.db) === completion) {
+            runtimeDrains.delete(database.db);
+          }
           claim.release();
         }
       },

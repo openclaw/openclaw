@@ -123,7 +123,7 @@ export type SqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; generation: SqliteFileGeneration; terminal: true }
   | { status: "healthy"; generation: SqliteFileGeneration };
 
-type SqliteCheckPragma = "integrity_check";
+type SqliteCheckPragma = "integrity_check" | "quick_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
@@ -172,8 +172,9 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
+  check: SqliteCheckPragma = "integrity_check",
 ): SqliteIntegrityChecks {
-  const integrityCheck = runSqliteCheck(database, databaseLabel, "integrity_check");
+  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
   return { integrityCheck };
 }
@@ -320,7 +321,9 @@ function runSqliteCheck(
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw createSqliteIntegrityError(
+    `SQLite ${pragma} failed for ${databaseLabel}: ${details}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
+  );
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {

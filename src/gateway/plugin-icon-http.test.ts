@@ -2,7 +2,7 @@
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -10,7 +10,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +23,11 @@ const mocks = vi.hoisted(() => ({
   resolveCatalogIconUrl: vi.fn(),
   resolveIconSource: vi.fn(),
   resolveActivityIconSource: vi.fn(),
+  fetchPluginIconUrls: vi.fn(),
+}));
+
+vi.mock("../infra/clawhub-plugin-icons.js", () => ({
+  fetchClawHubPluginIconUrls: (...args: unknown[]) => mocks.fetchPluginIconUrls(...args),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -40,7 +47,7 @@ vi.mock("../media/image-ops.js", () => ({
 }));
 
 vi.mock("../plugins/management-service.js", () => ({
-  resolveManagedPluginIconSource: (...args: unknown[]) => mocks.resolveIconSource(...args),
+  resolveManagedPluginIconSources: (...args: unknown[]) => mocks.resolveIconSource(...args),
   resolveManagedPluginActivityIconSource: (...args: unknown[]) =>
     mocks.resolveActivityIconSource(...args),
   resolveManagedSetupCatalogIconUrl: (...args: unknown[]) => mocks.resolveCatalogIconUrl(...args),
@@ -109,6 +116,7 @@ const INVALID_ICON_ROUTES = [
 
 let port = 0;
 let server: ReturnType<typeof createServer>;
+let authorityCurrent = true;
 const testConfig = {};
 let configForRequest = () => testConfig;
 
@@ -117,12 +125,14 @@ beforeAll(async () => {
     void handlePluginIconHttpRequest(req, res, {
       auth: { mode: "token", token: "test-token", allowTailscale: false },
       config: configForRequest(),
-    }).then((handled) => {
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("unhandled");
-      }
-    });
+    })
+      .then((handled) => {
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("unhandled");
+        }
+      })
+      .catch(() => finishFailedGatewayHttpResponse(res));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -142,6 +152,8 @@ afterAll(async () => {
 beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
+  mocks.fetchPluginIconUrls.mockReset();
+  mocks.fetchPluginIconUrls.mockResolvedValue([]);
   writeFileSync(localIconPath, PNG_BYTES);
   writeFileSync(activityIconPath, ACTIVITY_SVG);
   mocks.resolveActivityIconSource.mockReset();
@@ -151,16 +163,22 @@ beforeEach(() => {
     rootPath: iconFixtureDir,
   });
   configForRequest = () => testConfig;
+  authorityCurrent = true;
   mocks.authorize.mockReset();
-  mocks.authorize.mockResolvedValue({
-    authMethod: "token",
-    operatorScopes: ["operator.admin", "operator.read"],
-  });
-  mocks.resolveIconSource.mockResolvedValue({
-    kind: "file",
-    path: localIconPath,
-    rootPath: iconFixtureDir,
-  });
+  mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) =>
+    bindHttpResponseAuthority(
+      { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
+      res,
+      () => authorityCurrent,
+    ),
+  );
+  mocks.resolveIconSource.mockResolvedValue([
+    {
+      kind: "file",
+      path: localIconPath,
+      rootPath: iconFixtureDir,
+    },
+  ]);
   mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);
   mocks.readImageMetadata.mockReturnValue({ width: 1, height: 1 });
   mocks.encodeImage.mockResolvedValue({ data: NORMALIZED_PNG_BYTES });
@@ -187,6 +205,31 @@ function request(
 }
 
 describe("Control UI plugin and catalog icon routes", () => {
+  it.each(ALL_ICON_ROUTES)(
+    "rejects revoked authority while a $label icon is being normalized",
+    async ({ pathname }) => {
+      const encoding = createDeferredCore();
+      const release = createDeferredCore();
+      mocks.encodeImage.mockImplementationOnce(async () => {
+        encoding.resolve();
+        await release.promise;
+        return { data: NORMALIZED_PNG_BYTES };
+      });
+
+      const pending = request(pathname);
+      await encoding.promise;
+      authorityCurrent = false;
+      release.resolve();
+
+      const response = await pending;
+      expect(response.status).toBe(401);
+      expect(response.headers.get("etag")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: { message: "Unauthorized", type: "unauthorized" },
+      });
+    },
+  );
+
   it("keeps link favicon fetching off when explicitly disabled", async () => {
     configForRequest = () => ({
       gateway: { controlUi: { automaticallyFetchFavicons: false } },
@@ -453,7 +496,7 @@ describe("Control UI plugin and catalog icon routes", () => {
   );
 
   it("does not use arbitrary remote URL parameters when no package icon exists", async () => {
-    mocks.resolveIconSource.mockResolvedValueOnce(undefined);
+    mocks.resolveIconSource.mockResolvedValueOnce([]);
     const response = await request(
       "/__openclaw__/plugin-icon/firecrawl?url=http%3A%2F%2F127.0.0.1%2Fsecret",
     );
@@ -468,11 +511,13 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("serves a portable package icon without making a remote request", async () => {
-    mocks.resolveIconSource.mockResolvedValueOnce({
-      kind: "file",
-      path: localIconPath,
-      rootPath: iconFixtureDir,
-    });
+    mocks.resolveIconSource.mockResolvedValueOnce([
+      {
+        kind: "file",
+        path: localIconPath,
+        rootPath: iconFixtureDir,
+      },
+    ]);
 
     const response = await request("/__openclaw__/plugin-icon/local-plugin");
 
@@ -529,6 +574,56 @@ describe("Control UI plugin and catalog icon routes", () => {
     }
   });
 
+  it.each(["package", "publisher", "missing"])(
+    "tries local, remote package, then publisher images and caches the successful %s result",
+    async (outcome) => {
+      writeFileSync(localIconPath, "invalid local image");
+      const source = {
+        kind: "clawhub",
+        baseUrl: "https://clawhub.ai",
+        packageName: "@acme/calendar",
+      };
+      mocks.resolveIconSource.mockResolvedValue([
+        { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
+        source,
+      ]);
+      const packageUrl = "https://cdn.example.test/package.png";
+      const publisherUrl = "https://cdn.example.test/publisher.png";
+      mocks.fetchPluginIconUrls.mockResolvedValue([packageUrl, publisherUrl]);
+      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
+        if (outcome === "missing" || (outcome === "publisher" && url === packageUrl)) {
+          throw new Error("Image unavailable");
+        }
+        return { buffer: PNG_BYTES, contentType: "image/png" };
+      });
+      const response = await request("/__openclaw__/plugin-icon/calendar");
+      expect(response.status).toBe(outcome === "missing" ? 404 : 200);
+      expect(mocks.fetchPluginIconUrls).toHaveBeenCalledExactlyOnceWith({
+        ...source,
+        skipAuth: true,
+        timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+      });
+      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
+        outcome === "package" ? [packageUrl] : [packageUrl, publisherUrl],
+      );
+      if (outcome !== "missing") {
+        const cached = await request("/__openclaw__/plugin-icon/calendar", { method: "HEAD" });
+        expect(cached.status).toBe(200);
+        expect(cached.headers.get("etag")).toBe(response.headers.get("etag"));
+        expect(mocks.fetchPluginIconUrls).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("does not read remote metadata when the local package icon succeeds", async () => {
+    mocks.resolveIconSource.mockResolvedValue([
+      { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
+      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/calendar" },
+    ]);
+    expect((await request("/__openclaw__/plugin-icon/calendar")).status).toBe(200);
+    expect(mocks.fetchPluginIconUrls).not.toHaveBeenCalled();
+  });
+
   it("rejects a package icon redirected outside its package after discovery", async () => {
     const fixtureRoot = tempDirs.make("openclaw-plugin-icon-swap-");
     const packageRoot = path.join(fixtureRoot, "package");
@@ -542,11 +637,13 @@ describe("Control UI plugin and catalog icon routes", () => {
     writeFileSync(path.join(outsidePath, "icon.png"), PNG_BYTES);
     renameSync(assetsPath, displacedAssetsPath);
     symlinkSync(outsidePath, assetsPath, "dir");
-    mocks.resolveIconSource.mockResolvedValueOnce({
-      kind: "file",
-      path: iconPath,
-      rootPath: packageRoot,
-    });
+    mocks.resolveIconSource.mockResolvedValueOnce([
+      {
+        kind: "file",
+        path: iconPath,
+        rootPath: packageRoot,
+      },
+    ]);
 
     const response = await request("/__openclaw__/plugin-icon/swapped-package");
 
@@ -560,11 +657,13 @@ describe("Control UI plugin and catalog icon routes", () => {
       const fixtureRoot = tempDirs.make("openclaw-plugin-icon-fifo-");
       const iconPath = path.join(fixtureRoot, "icon.png");
       execFileSync("mkfifo", [iconPath]);
-      mocks.resolveIconSource.mockResolvedValueOnce({
-        kind: "file",
-        path: iconPath,
-        rootPath: fixtureRoot,
-      });
+      mocks.resolveIconSource.mockResolvedValueOnce([
+        {
+          kind: "file",
+          path: iconPath,
+          rootPath: fixtureRoot,
+        },
+      ]);
       const delayedWriter = setTimeout(() => writeFileSync(iconPath, PNG_BYTES), 250);
       const startedAt = performance.now();
 
@@ -659,7 +758,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     "returns a bodyless 404 for an unavailable $label icon HEAD",
     async ({ label, pathname }) => {
       if (label === "plugin") {
-        mocks.resolveIconSource.mockResolvedValueOnce(undefined);
+        mocks.resolveIconSource.mockResolvedValueOnce([]);
       } else {
         mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
       }
@@ -711,7 +810,7 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("returns not found when plugin metadata is absent or catalog image validation fails", async () => {
-    mocks.resolveIconSource.mockResolvedValueOnce(undefined);
+    mocks.resolveIconSource.mockResolvedValueOnce([]);
     const missing = await request("/__openclaw__/plugin-icon/missing");
     expect(missing.status).toBe(404);
 

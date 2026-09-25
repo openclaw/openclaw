@@ -9,6 +9,7 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
@@ -350,7 +351,7 @@ export type CronJobState = Omit<
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
   pacedNextRunAtMs?: number;
-  /** Exact recurring slot retained across an out-of-band manual force run. */
+  /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
@@ -422,12 +423,28 @@ export type CronJob = CronJobBase<
 };
 
 /** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
-export type CronToolsAllowProvenance = {
-  version: 1;
-  source: "final-executable-surface";
-  /** Store-private creator origin; missing legacy facts normalize to unknown. */
-  callerOrigin?: CronScheduledToolCallerOrigin;
-};
+export type CronToolsAllowProvenance =
+  | {
+      version: 1;
+      source: "final-executable-surface";
+      /** Store-private creator origin; missing legacy facts normalize to unknown. */
+      callerOrigin?: CronScheduledToolCallerOrigin;
+      channelRequester?: CronAuthenticatedChannelRequester;
+    }
+  | ({
+      version: 1;
+      source: "authenticated-requester";
+    } & (
+      | {
+          /** Authenticated creator origin captured independently of the tool surface. */
+          callerOrigin: CronScheduledToolCallerOrigin;
+          channelRequester?: CronAuthenticatedChannelRequester;
+        }
+      | {
+          callerOrigin?: never;
+          channelRequester: CronAuthenticatedChannelRequester;
+        }
+    ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {

@@ -12,6 +12,51 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 
+type SseEvent = { event?: string; data: string };
+
+export function parseSseEvents(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
+  const lines = text.split("\n");
+  let currentEvent: string | undefined;
+  let currentData: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event: ")) {
+      currentEvent = line.slice("event: ".length);
+    } else if (line.startsWith("data: ")) {
+      currentData.push(line.slice("data: ".length));
+    } else if (line.trim() === "" && currentData.length > 0) {
+      events.push({ event: currentEvent, data: currentData.join("\n") });
+      currentEvent = undefined;
+      currentData = [];
+    }
+  }
+
+  return events;
+}
+
+export function collectSseEventTypes(events: readonly SseEvent[]): string[] {
+  const eventTypes: string[] = [];
+  for (const event of events) {
+    if (event.event) {
+      eventTypes.push(event.event);
+    }
+  }
+  return eventTypes;
+}
+
+export function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
+  const event = events.find((candidate) => candidate.event === eventName);
+  if (!event) {
+    throw new Error(`expected SSE event ${eventName}`);
+  }
+  return event;
+}
+
+export function parseSseData(event: SseEvent): unknown {
+  return JSON.parse(event.data) as unknown;
+}
+
 export function parseSseDataLines(text: string): string[] {
   return text
     .split("\n")
@@ -112,6 +157,8 @@ export function assistantSnapshotCases(leading: AssistantSnapshotCase): Assistan
 type IncompatibleReplacementCase = {
   name: string;
   replacementText: string;
+  itemId?: string;
+  recoveryItemId?: string;
   previousText?: string;
   replaceable?: boolean;
   recoveryText?: string;
@@ -158,6 +205,20 @@ export const incompatibleReplacementCases: IncompatibleReplacementCase[] = [
     replacementText: "Replacement",
     replaceable: true,
     terminalEcho: true,
+  },
+  {
+    name: "cleared on the same item before recovery reuses its ID",
+    itemId: "failed-answer",
+    replacementText: "",
+    recoveryItemId: "failed-answer",
+    recoveryText: "recovered answer",
+  },
+  {
+    name: "cleared on the same item before a distinct recovery item",
+    itemId: "failed-answer",
+    replacementText: "",
+    recoveryItemId: "recovery-answer",
+    recoveryText: "recovered answer",
   },
 ];
 
@@ -299,6 +360,8 @@ export function emitIncompatibleAssistantReplacement(
   const {
     previousText = "draft answer",
     replacementText,
+    itemId,
+    recoveryItemId,
     replaceable,
     recoveryText,
     terminalEcho,
@@ -312,7 +375,7 @@ export function emitIncompatibleAssistantReplacement(
     data: {
       text: previousText,
       delta: previousText,
-      ...(replaceable ? { itemId: "answer-1" } : {}),
+      ...(itemId ? { itemId } : replaceable ? { itemId: "answer-1" } : {}),
     },
   });
   emitAgentEvent({
@@ -322,14 +385,23 @@ export function emitIncompatibleAssistantReplacement(
       text: replacementText,
       ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
       replace: true,
-      ...(replaceable ? { itemId: "answer-2", replaceable: true } : { phase: "commentary" }),
+      ...(itemId
+        ? { itemId, delta: "" }
+        : replaceable
+          ? { itemId: "answer-2", replaceable: true }
+          : { phase: "commentary" }),
     },
   });
   if (recoveryText !== undefined) {
     emitAgentEvent({
       runId,
       stream: "assistant",
-      data: { text: recoveryText, delta: "", replace: true },
+      data: {
+        text: recoveryText,
+        ...(recoveryItemId
+          ? { itemId: recoveryItemId, delta: recoveryText }
+          : { delta: "", replace: true }),
+      },
     });
   }
   if (terminalEcho) {

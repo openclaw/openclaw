@@ -197,6 +197,10 @@ local proof.
     sure `npm pack` includes that `dist/` output. TypeScript source entries are
     only for source checkouts and local development paths.
 
+    Plugin builds can use TypeScript 7. OpenClaw loads the emitted JavaScript;
+    local TypeScript source entries use OpenClaw's runtime transformer and do
+    not require the plugin to install the TypeScript compiler.
+
     Then pack the plugin and install the tarball with `npm-pack:`:
 
     ```bash
@@ -382,8 +386,12 @@ Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,
 `exec.approvals.*`, `operator.admin.*`, `wizard.*`, and `update.*` stay reserved
 and resolve to `operator.admin`. The
-`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for plugin HTTP
-routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for authenticated plugin HTTP routes and registered RPC
+handlers that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+Nested RPC dispatch retains the original authenticated client, live authority
+check, and request-owned cancellation signal. It still checks the target method's
+required scopes and rechecks caller authority at the mutation commit boundary;
+the contract never supplies a synthetic client or additional scopes.
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 

@@ -70,8 +70,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -170,6 +172,7 @@ internal fun SidebarCollapsibleHeader(
         .heightIn(min = 44.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
+        .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }
         .padding(horizontal = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -243,7 +246,9 @@ internal fun SidebarNavigationRow(
   pinned: Boolean? = null,
   palette: SidebarPalette,
   onClick: () -> Unit,
-  onMove: (Int) -> Unit,
+  canMoveUp: Boolean,
+  canMoveDown: Boolean,
+  onMove: (Int) -> Boolean,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
   val thresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
@@ -252,6 +257,8 @@ internal fun SidebarNavigationRow(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   val pinStateDescription =
     pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
+  val moveUpLabel = nativeString("Move up")
+  val moveDownLabel = nativeString("Move down")
   var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
   var dragging by remember(destination) { mutableStateOf(false) }
   var dragGeneration by remember(destination) { mutableLongStateOf(0L) }
@@ -313,6 +320,11 @@ internal fun SidebarNavigationRow(
           .heightIn(min = 48.dp)
           .semantics {
             if (pinStateDescription != null) stateDescription = pinStateDescription
+            customActions =
+              buildList {
+                if (canMoveUp) add(CustomAccessibilityAction(moveUpLabel) { currentOnMove(-1) })
+                if (canMoveDown) add(CustomAccessibilityAction(moveDownLabel) { currentOnMove(1) })
+              }
           }.pointerInput(destination, thresholdPx) {
             detectSidebarRowDrag(
               rowHost = rowHost,

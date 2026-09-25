@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements text runtime behavior.
 export {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,

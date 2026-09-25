@@ -1,6 +1,7 @@
 // Owns core preparation and sync/async orchestration for config validation.
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -16,16 +17,15 @@ import { validateConfigObjectRaw } from "./validation-core.js";
 import {
   validatePreparedConfigWithPlugins,
   type ValidateConfigWithPluginsParams,
-  type ValidateConfigWithPluginsResult,
 } from "./validation-plugin-rules.js";
+import type { PreparedPluginSchemaValidations } from "./validation-prepared.js";
+import type {
+  PreparedConfigValidationPluginMetadata,
+  ValidateConfigWithPluginsResult,
+} from "./validation.types.js";
 
 export { validateConfigObject, validateConfigObjectRaw } from "./validation-core.js";
 export { collectUnsupportedSecretRefPolicyIssues } from "./validation-issues.js";
-
-export type PreparedConfigValidationPluginMetadata = {
-  manifestRegistry: PluginManifestRegistry;
-  installedPluginRecordIds: ReadonlySet<string>;
-};
 
 export type ValidateConfigWithPluginsAsyncParams = Omit<
   ValidateConfigWithPluginsParams,
@@ -47,6 +47,22 @@ export async function validateConfigObjectWithPluginsAsync(
   raw: unknown,
   params: ValidateConfigWithPluginsAsyncParams,
 ): Promise<ValidateConfigWithPluginsResult> {
+  return validateConfigObjectWithPluginsAsyncInternal(raw, params, false);
+}
+
+/** Explicit validation prepares source facts without changing ordinary snapshot reads. */
+export async function validateConfigObjectWithStrictFactsAsync(
+  raw: unknown,
+  params: ValidateConfigWithPluginsAsyncParams,
+): Promise<ValidateConfigWithPluginsResult> {
+  return validateConfigObjectWithPluginsAsyncInternal(raw, params, true);
+}
+
+async function validateConfigObjectWithPluginsAsyncInternal(
+  raw: unknown,
+  params: ValidateConfigWithPluginsAsyncParams,
+  prepareStrictValidation: boolean,
+): Promise<ValidateConfigWithPluginsResult> {
   const { loadPluginMetadataSnapshotAsync, ...validationParams } = params;
   const prepared = prepareConfigObjectWithPlugins(raw, validationParams);
   if (!prepared.ok) {
@@ -62,18 +78,38 @@ export async function validateConfigObjectWithPluginsAsync(
       prepared.migrated,
       cloneConfigWithResolutionFacts(prepared.migrated),
     ),
-    parsedConfig: inheritLegacyDefaultAgentId(
-      prepared.parsedConfig,
-      cloneConfigWithResolutionFacts(prepared.parsedConfig),
-    ),
+    parsedConfig: prepared.parsedConfig,
   };
   const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
-  return finishConfigObjectWithPlugins(
+  const strictConfig = prepareStrictValidation
+    ? inheritLegacyDefaultAgentId(
+        pending.parsedConfig,
+        cloneConfigWithResolutionFacts(pending.parsedConfig),
+      )
+    : undefined;
+  const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
+    ? new Map()
+    : undefined;
+  const preparedParams = { ...validationParams, pluginMetadataSnapshot: metadata };
+  const result = finishConfigObjectWithPlugins(
     pending,
-    { ...validationParams, pluginMetadataSnapshot: metadata },
+    preparedParams,
     true,
     metadata.installedPluginRecordIds,
+    schemaValidations,
   );
+  if (!result.ok || !strictConfig) {
+    return result;
+  }
+  const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
+    ...preparedParams,
+    applyDefaults: false,
+    pluginValidation: "full",
+    semanticValidation: "strict",
+    installedPluginRecordIds: metadata.installedPluginRecordIds,
+    schemaValidations,
+  });
+  return { ...result, strictIssues: strict.ok ? [] : strict.issues };
 }
 
 export function validateConfigObjectRawWithPlugins(
@@ -121,8 +157,13 @@ function prepareConfigObjectWithPlugins(
   if (!base.ok) {
     return { ok: false, result: { ok: false, issues: base.issues, warnings: [] } };
   }
-  // Preserve the migration sidecar across Zod's fresh object before metadata discovery.
-  const parsedConfig = inheritLegacyDefaultAgentId(migrated, base.config);
+  // Validate before cloning so malformed deep values return schema errors. Zod
+  // retains nested z.unknown() references; isolate them before runtime path expansion
+  // and restore the non-enumerable roster projection that structuredClone omits.
+  const parsedConfig = inheritLegacyDefaultAgentId(
+    migrated,
+    attachAgentListProjection(cloneConfigWithResolutionFacts(base.config)),
+  );
   return { ok: true, migrated, parsedConfig };
 }
 
@@ -131,12 +172,14 @@ function finishConfigObjectWithPlugins(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
+  schemaValidations?: PreparedPluginSchemaValidations,
 ): ValidateConfigWithPluginsResult {
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
+    schemaValidations,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
     onManifestRegistryResolved: (registry) => {

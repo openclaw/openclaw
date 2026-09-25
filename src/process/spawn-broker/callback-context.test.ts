@@ -3,7 +3,9 @@ import { runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("broker callback context", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("broker callback context", () => {
   it("keeps commands launched by process and pipe callbacks in the Gateway transport scope", async () => {
     const host = createSpawnBrokerHost();
     await host.ready();

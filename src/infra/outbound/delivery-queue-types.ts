@@ -1,4 +1,4 @@
-// Type-only outbound delivery queue contracts shared by storage and failure lifecycle owners.
+// Outbound delivery queue contracts shared by storage and failure lifecycle owners.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
@@ -6,9 +6,13 @@ import type {
   OutboundReplyFacts,
   RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "../delivery-queue-sqlite.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -19,6 +23,20 @@ import type { OutboundSessionContext } from "./session-context.js";
 
 export type QueuedRenderedMessageBatchPlan = RenderedMessageBatchPlan;
 
+export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
+  return (
+    (typeof entry.completionRetention === "object" ||
+      entry.completionRetention === "permanent" ||
+      entry.requiresProducerClaim === true) &&
+    (entry.recoveryState === "producer_claimed" ||
+      ((entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.requiresProducerClaim === true)) &&
+    typeof entry.availableAt === "number" &&
+    entry.availableAt > now
+  );
+}
+
 export type QueuedReplyPayloadSendingHook = {
   kind: ReplyDispatchKind;
   channel?: string;
@@ -28,6 +46,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
+  sessionGeneration?: SessionDeliveryGeneration;
   channel: string;
   to: string;
   accountId?: string;

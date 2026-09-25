@@ -7,6 +7,11 @@ import {
 } from "../infra/node-commands.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  resolveSessionMethodScope,
+  type SessionOperatorScope,
+} from "../shared/session-method-scopes-base.js";
 import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-method-scopes.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
@@ -22,7 +27,6 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -35,7 +39,6 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -76,11 +79,6 @@ export function isApprovalMethod(method: string): boolean {
 /** Returns true when a method is reserved for node-role clients instead of operators. */
 export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
-}
-
-/** Resolves the required static operator scope for a gateway method, if one exists. */
-function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
-  return resolveScopedMethod(method);
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -210,9 +208,7 @@ function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
 ): OperatorScope | undefined {
-  return requiredScopes.find(
-    (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-  );
+  return requiredScopes.find((scope) => !operatorScopeSatisfied(scope, scopes));
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */
@@ -223,7 +219,7 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
-  const requiredScope = resolveRequiredOperatorScopeForMethod(method);
+  const requiredScope = resolveScopedMethod(method);
   if (requiredScope) {
     return [requiredScope];
   }
@@ -231,12 +227,53 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   return [];
 }
 
+/** Projects requested scopes through the original grant and this call's exact scope policy. */
+export function projectOperatorScopesForMethod(params: {
+  method: string;
+  requestParams: unknown;
+  requestedScopes: readonly string[];
+  allowedScopes: readonly string[];
+  requiredScope?: OperatorScope;
+  sessionScope?: SessionOperatorScope;
+}): string[] {
+  const requiredScopes = params.requiredScope
+    ? [params.requiredScope]
+    : resolveLeastPrivilegeOperatorScopesForMethod(params.method, params.requestParams);
+  const sessionScope =
+    params.sessionScope ?? resolveSessionMethodScope(params.method, params.requestParams);
+  return params.requestedScopes.flatMap((requestedScope) => {
+    if (
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: [requestedScope],
+        allowedScopes: params.allowedScopes,
+      })
+    ) {
+      return [requestedScope];
+    }
+    // Only the method's required scope may use its narrow alternative. Unrelated
+    // requested permissions and params-sensitive admin calls cannot borrow it.
+    if (!isOperatorScope(requestedScope) || !requiredScopes.includes(requestedScope)) {
+      return [];
+    }
+    const authorization = authorizeOperatorScopesForRequiredScope(
+      requestedScope,
+      params.allowedScopes,
+      sessionScope,
+      params.method,
+    );
+    return authorization.allowed && authorization.sessionScope ? [authorization.sessionScope] : [];
+  });
+}
+
 /** Checks whether a presented operator scope set authorizes a gateway method call. */
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
   params?: unknown,
-): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
+):
+  | { allowed: true; sessionScope?: SessionOperatorScope }
+  | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
   }
@@ -261,34 +298,44 @@ export function authorizeOperatorScopesForMethod(
       resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params),
       scopes,
     );
-    return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    return missingScope
+      ? authorizeOperatorScopesForRequiredScope(
+          missingScope,
+          scopes,
+          resolveSessionMethodScope(method, params),
+          method,
+        )
+      : { allowed: true };
   }
-  const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
-  return authorizeOperatorScopesForRequiredScope(requiredScope, scopes);
+  const requiredScope = resolveScopedMethod(method) ?? ADMIN_SCOPE;
+  return authorizeOperatorScopesForRequiredScope(
+    requiredScope,
+    scopes,
+    resolveSessionMethodScope(method, params),
+    method,
+  );
 }
 
 /** Checks a method registry's already-resolved static scope against presented operator scopes. */
 export function authorizeOperatorScopesForRequiredScope(
   requiredScope: OperatorScope,
   scopes: readonly string[],
-): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
-  if (scopes.includes(ADMIN_SCOPE)) {
+  sessionScope?: SessionOperatorScope,
+  method?: string,
+):
+  | { allowed: true; sessionScope?: SessionOperatorScope }
+  | { allowed: false; missingScope: OperatorScope } {
+  if (operatorScopeSatisfied(requiredScope, scopes)) {
     return { allowed: true };
   }
-  if (requiredScope === READ_SCOPE) {
-    if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
-      return { allowed: true };
-    }
-    return { allowed: false, missingScope: READ_SCOPE };
-  }
-  if (requiredScope === TALK_SCOPE) {
-    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
-      return { allowed: true };
-    }
-    return { allowed: false, missingScope: TALK_SCOPE };
-  }
-  if (scopes.includes(requiredScope)) {
-    return { allowed: true };
+  if (
+    ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
+      ((requiredScope === WRITE_SCOPE ||
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        sessionScope === "operator.sessions.write")) &&
+    operatorScopeSatisfied(sessionScope, scopes)
+  ) {
+    return { allowed: true, sessionScope };
   }
   return { allowed: false, missingScope: requiredScope };
 }
@@ -301,8 +348,5 @@ export function isGatewayMethodClassified(method: string): boolean {
   if (isDynamicOperatorGatewayMethod(method)) {
     return true;
   }
-  return (
-    isCoreGatewayMethodClassified(method) ||
-    resolveRequiredOperatorScopeForMethod(method) !== undefined
-  );
+  return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

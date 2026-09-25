@@ -16,7 +16,9 @@ import {
   consumeCronCreatorAuthorityGrant,
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
+  getCronManagementCallerOrigin,
   mintCronCreatorAuthorityGrant,
+  resolveCronCreatorAuthorityGrantProvenance,
   revokeCronCreatorAuthorityRunScope,
   withCronManagementGrant,
 } from "./cron-creator-authority-grant.js";
@@ -95,6 +97,32 @@ describe("cron creator authority grants", () => {
       "Configured MCP cron authority is no longer active",
     );
     revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("carries direct-local origin without claiming channel requester authority", () => {
+    const local = createCronCreatorAuthorityRunScope("run-local", { kind: "local" });
+    const grant = mintCronCreatorAuthorityGrant(
+      local,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+
+    expect(resolveCronCreatorAuthorityGrantProvenance(grant, local.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerOrigin: { kind: "local" },
+    });
+
+    const external = createCronCreatorAuthorityRunScope("run-external", {
+      kind: "external",
+      channel: "discord",
+    });
+    expect(() =>
+      mintCronCreatorAuthorityGrant(external, undefined, undefined, undefined, "requester"),
+    ).toThrow("requires authenticated creator facts");
+    revokeCronCreatorAuthorityRunScope(local);
+    revokeCronCreatorAuthorityRunScope(external);
   });
 
   it("rejects a runId mismatch without consuming the exact grant", () => {
@@ -182,12 +210,15 @@ describe("cron management authority grants", () => {
     await withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
       retained = getCronManagementAuthority(fixture.identity);
       expect(retained).toBeTypeOf("function");
+      expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
       expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
+      expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
       retained!();
       await Promise.resolve();
       retained!();
     });
     expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
+    expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
     expect(retained).not.toThrow();
     revokeCronCreatorAuthorityRunScope(fixture.scope);
     expect(retained).toThrow(denied);

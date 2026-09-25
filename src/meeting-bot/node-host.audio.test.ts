@@ -33,7 +33,7 @@ const AUDIO_START_PARAMS = {
 } as const;
 
 type TestStdin = EventEmitter & {
-  accept: () => void;
+  accept: (error?: Error) => void;
   write: ReturnType<typeof vi.fn>;
 };
 
@@ -50,9 +50,9 @@ function createStdin(writeResult: boolean): TestStdin {
     }
     return writeResult;
   });
-  stdin.accept = () => {
+  stdin.accept = (error) => {
     for (const callback of callbacks.splice(0)) {
-      callback();
+      callback(error);
     }
   };
   return stdin;
@@ -300,6 +300,16 @@ describe("meeting node host audio output", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+  });
+
+  it("retains update ownership between RPCs and through child stream cleanup", async () => {
+    const bridge = await startAudioBridge({ inputAutoClose: false });
+    expect(bridge.host.hasActiveWork()).toBe(true);
+
+    await invokeBridge(bridge, "stop");
+    expect(bridge.host.hasActiveWork()).toBe(true);
+    bridge.inputProcess.emit("close", null, "SIGTERM");
+    expect(bridge.host.hasActiveWork()).toBe(false);
   });
 
   it("copies retained input buffers", async () => {
@@ -591,7 +601,7 @@ describe("meeting node host audio output", () => {
   });
 
   it("terminates output when input process construction throws", async () => {
-    const outputProcess = createProcess({ stdin: createStdin(true) });
+    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
     const spawnError = new Error("input spawn failed");
     childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
       throw spawnError;
@@ -602,6 +612,9 @@ describe("meeting node host audio output", () => {
       spawnError,
     );
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(host.hasActiveWork()).toBe(true);
+    outputProcess.emit("close", null, "SIGTERM");
+    expect(host.hasActiveWork()).toBe(false);
   });
 
   it("deletes a hidden audio session after browser launch fails", async () => {
@@ -685,6 +698,23 @@ describe("meeting node host audio output", () => {
     await invokeBridge(bridge, "stop");
   });
 
+  it("stops the current bridge when its output callback fails", async () => {
+    const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
+    try {
+      const pushing = invokeBridge(bridge, "pushAudio", {
+        base64: Buffer.from([1, 2, 3]).toString("base64"),
+        outputGeneration: 0,
+      });
+      const rejected = expect(pushing).rejects.toThrow(`bridge is not open: ${bridge.bridgeId}`);
+      bridge.outputStdin.accept(new Error("output write failed"));
+      await rejected;
+      expect(bridge.outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(bridge.inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      await invokeBridge(bridge, "stop");
+    }
+  });
+
   it("waits for output acceptance and rejects stale generations after clear", async () => {
     const replacementStdin = createStdin(true);
     const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
@@ -718,6 +748,15 @@ describe("meeting node host audio output", () => {
     });
     expect(stalePush).toMatchObject({ ok: true, stale: true });
     expect(replacementStdin.write).not.toHaveBeenCalled();
+
+    bridge.outputStdin.accept(new Error("retired output write failed"));
+    await expect(
+      invokeBridge(bridge, "pushAudio", {
+        base64: Buffer.from([7, 8, 9]).toString("base64"),
+        outputGeneration: 1,
+      }),
+    ).resolves.toEqual({ bridgeId, ok: true });
+    expect(replacementStdin.write).toHaveBeenCalledOnce();
 
     await invokeBridge(bridge, "stop");
   });

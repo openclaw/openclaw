@@ -16,6 +16,7 @@ import type {
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import {
   parseAllowedApprovalPoliciesFromCodexRequirements,
   parseAllowedApprovalsReviewersFromCodexRequirements,
@@ -98,21 +99,21 @@ function resolveNetworkProxyPermissionProfileName(
     return explicitProfileName;
   }
   const suffix = createHash("sha256")
-    .update(stableStringifyJson({ version: 1, profile }))
+    .update(stringifyCodexPolicy({ version: 1, profile }))
     .digest("hex")
     .slice(0, 16);
   return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 
 function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
-  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+  return createHash("sha256").update(stringifyCodexPolicy(configPatch)).digest("hex");
 }
 
-function normalizeNetworkProxyPermissionMap<TPermission extends string>(
-  value: Record<string, TPermission> | undefined,
-): Record<string, TPermission> | undefined {
+function normalizeNetworkProxyPermissionMap(
+  value: Record<string, "allow" | "deny" | "none"> | undefined,
+): Record<string, "allow" | "deny"> | undefined {
   const entries = Object.entries(value ?? {})
-    .map(([key, permission]) => [key.trim(), permission] as const)
+    .map(([key, permission]) => [key.trim(), permission === "none" ? "deny" : permission] as const)
     .filter(([key]) => key.length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
@@ -121,19 +122,6 @@ function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>)
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
   );
-}
-
-function stableStringifyJson(value: JsonValue): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 /** Explicit MCP prompting must bypass Codex's unconditional Never-policy approval. */
@@ -198,10 +186,6 @@ export function withMcpElicitationsApprovalPolicy(
 
 export function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" || value === "unix" ? value : "stdio";
-}
-
-export function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
-  return readNonEmptyString(value);
 }
 
 export function inferCodexAppServerConnectionClass(params: {

@@ -7,7 +7,11 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import { ServiceDefinitionInspectionError } from "./service-inspection-error.js";
+import {
+  ServiceDefinitionInspectionError,
+  ServiceOwnershipRefusalError,
+  findServiceOwnershipRefusal,
+} from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -32,6 +36,18 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
+
+export function assertSystemdServiceAccount(user: string) {
+  const account = os.userInfo();
+  if (
+    user !== account.username &&
+    user !== String(account.uid) &&
+    !(user === "" && account.uid === 0)
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-account-refused");
+  }
+  return account;
+}
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -217,17 +233,20 @@ async function readSystemdManagerCommand(
       }
       inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
     }
-    const account = systemScope ? os.userInfo() : undefined;
+    if (systemScope && typeof user !== "string") {
+      throw unavailable();
+    }
+    const account =
+      systemScope && typeof user === "string"
+        ? opts?.requireEffective
+          ? assertSystemdServiceAccount(user)
+          : os.userInfo()
+        : undefined;
     const sameAccount =
       account &&
       (user === account.username ||
         user === String(account.uid) ||
         (user === "" && account.uid === 0));
-    if (systemScope && (typeof user !== "string" || (opts?.requireEffective && !sameAccount))) {
-      throw new Error(
-        "System systemd Gateway runs as another account; run Doctor as the service's User= account.",
-      );
-    }
 
     await binding?.verify();
     const managedDefinition =
@@ -269,7 +288,7 @@ async function readSystemdDropInOverrides(
   dropInPaths: string[],
   managedUnsetEnvironment: string[],
   env: GatewayServiceEnv,
-): Promise<GatewayServiceManagedOverrides | undefined> {
+): Promise<GatewayServiceManagedOverrides> {
   const inlineEnvironmentKeys = new Set<string>();
   const fileEnvironmentKeys = new Set<string>();
   const unsetEnvironmentKeys = new Set<string>();
@@ -365,7 +384,9 @@ async function readSystemdDropInOverrides(
       };
     }
   }
-  return Object.keys(overrides).length ? overrides : undefined;
+  // A known-empty set preserves the authored definition without mistaking native
+  // defaults (such as a user service's home cwd) for operator-owned overrides.
+  return overrides;
 }
 
 export async function readSystemdServiceExecStart(
@@ -452,7 +473,7 @@ export async function readSystemdServiceExecStart(
         return command;
       })
       .catch((error: unknown) => {
-        if (opts?.requireEffective) {
+        if (opts?.requireEffective || findServiceOwnershipRefusal(error)) {
           throw error;
         }
         opts?.onCommandInspection?.({ kind: "unavailable", error });
@@ -469,7 +490,7 @@ export async function readSystemdServiceExecStart(
     };
   } catch (error) {
     options?.onCommandInspection?.({ kind: "unavailable", error });
-    if (options?.requireEffective) {
+    if (options?.requireEffective || findServiceOwnershipRefusal(error)) {
       throw error;
     }
     return null;

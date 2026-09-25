@@ -29,6 +29,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  isCronSessionKey,
   isIncognitoSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
@@ -105,7 +106,7 @@ export type SessionActivitySummaryService = {
 
 export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
-  onChanged: (target: ActivitySummaryTarget) => void;
+  onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
   prepareModel?: typeof defaultPrepareModel;
   completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
@@ -127,7 +128,8 @@ export function createSessionActivitySummaries(deps: {
       agentId: target.agentId,
     }),
   });
-  const read = (target: ActivitySummaryTarget) => loadSessionEntryReadOnly(scope(target));
+  const read = (target: ActivitySummaryTarget) =>
+    loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
@@ -165,6 +167,7 @@ export function createSessionActivitySummaries(deps: {
   const admit = (target: ActivitySummaryTarget): Tracked | undefined => {
     if (
       disposed ||
+      isCronSessionKey(target.key) ||
       isSubagentSessionKey(target.key) ||
       isIncognitoSessionKey(target.key) ||
       !modelRef(target)
@@ -594,6 +597,9 @@ export function createSessionActivitySummaries(deps: {
   return {
     ensure(requested) {
       const target = eventTarget(requested.key, requested.agentId)!;
+      if (isCronSessionKey(target.key)) {
+        return { state: "unavailable" };
+      }
       const state = request(target, true);
       const projected = projectSessionActivitySummary({
         ...target,

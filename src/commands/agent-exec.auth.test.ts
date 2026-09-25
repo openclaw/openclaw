@@ -13,11 +13,14 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import * as sqliteRead from "../agents/auth-profiles/sqlite-read.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
+import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentExecCommand } from "./agent-exec.js";
@@ -38,6 +41,50 @@ afterEach(() => {
 });
 
 describe("agent exec stored auth", () => {
+  it("does not start a canceled agent after shared auth preparation settles", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+      const started = createDeferredCore();
+      const pendingRows = createDeferredCore<AuthProfileRowRead>();
+      const emptyRows: AuthProfileRowRead = {
+        store: { status: "readable", raw: { version: 1, profiles: {} } },
+        state: { status: "missing", reason: "row" },
+        cacheable: true,
+      };
+      let temporaryStateDir = "";
+      vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockImplementation(() => {
+        temporaryStateDir = process.env.OPENCLAW_STATE_DIR!;
+        started.resolve();
+        return pendingRows.promise;
+      });
+      const controller = new AbortController();
+      const runAgent = vi.fn(async () => successResult());
+      const executing = agentExecCommand("inspect", {}, createTestRuntime(), {
+        abortSignal: controller.signal,
+        runAgent,
+      });
+      try {
+        await Promise.race([
+          started.promise,
+          executing.then(() => {
+            throw new Error("Agent exec completed before shared auth preparation");
+          }),
+        ]);
+        controller.abort(new Error("fixture operator canceled preparation"));
+        pendingRows.resolve(emptyRows);
+        const result = await executing;
+        expect(result.exitCode).toBe(1);
+        expect(result.envelope.error?.message).toContain("fixture operator canceled preparation");
+        expect(runAgent).not.toHaveBeenCalled();
+        await expect(fs.stat(temporaryStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        pendingRows.resolve(emptyRows);
+        await executing;
+      }
+    });
+  });
+
   it("skips external Codex CLI credentials under --auth-env-only", async () => {
     const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
     await fs.writeFile(

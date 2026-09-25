@@ -2,15 +2,19 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
 import { execa, type Options } from "execa";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runCommandWithTimeout } from "../exec.js";
 import { BrokerChild } from "./child.js";
+import { runWithSpawnBroker } from "./context.js";
 import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("broker execa parity", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
@@ -64,6 +68,71 @@ describe.skipIf(process.platform === "win32")("broker execa parity", () => {
       cancel: true,
     },
   ];
+
+  it.each([0, 23])(
+    "preserves admitted input closure through the broker (exit=%s)",
+    async (exitCode) => {
+      const beforeInput = vi.fn();
+      const result = await runWithSpawnBroker(host, () =>
+        runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            `require('node:fs').closeSync(0);process.stderr.write('stdin closed\\n');process.exitCode=${exitCode};`,
+          ],
+          { input: "x".repeat(8 * 1024 * 1024), beforeInput, timeoutMs: 3_000 },
+        ),
+      );
+      expect(result).toMatchObject({
+        code: exitCode,
+        stderr: "stdin closed\n",
+        termination: "exit",
+      });
+      expect(beforeInput).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["EPIPE", "EIO"])(
+    "preserves transferred stdin error classification (%s)",
+    async (code) => {
+      const outcomes: unknown[] = [];
+      for (const broker of [false, true]) {
+        const command = start(
+          "const keepAlive=setInterval(()=>{},1000);process.on('SIGUSR2',()=>{clearInterval(keepAlive);process.stderr.write('finished\\n');process.exitCode=23});process.stdin.resume();process.stdout.write('ready');",
+          { stdin: "pipe", reject: false, timeout: 3_000, stripFinalNewline: false },
+          broker,
+        );
+        try {
+          if (command.nodeChildProcess instanceof BrokerChild) {
+            await command.nodeChildProcess.ready();
+          }
+          await new Promise<void>((resolve) => {
+            command.stdout!.once("data", () => resolve());
+          });
+          const input = command.stdin!;
+          const closed = new Promise<void>((resolve) => {
+            input.once("close", () => resolve());
+          });
+          input.destroy(Object.assign(new Error("synthetic stdin failure"), { code }));
+          await closed;
+          // The pipe acknowledgement precedes this signal on the broker's private channel.
+          command.kill("SIGUSR2");
+          const result = await command;
+          outcomes.push({
+            code: result.code,
+            exitCode: result.exitCode,
+            originalMessage: result.originalMessage,
+            stderr: result.stderr,
+          });
+        } finally {
+          command.kill("SIGKILL");
+          await command.catch(() => {});
+        }
+      }
+      expect(outcomes[1]).toEqual(outcomes[0]);
+      expect(outcomes[0]).toMatchObject({ code: code === "EIO" ? "EIO" : undefined, exitCode: 23 });
+    },
+  );
 
   it.each(cases)("preserves buffered $name results and errors", async (fixture) => {
     const outcomes: unknown[] = [];

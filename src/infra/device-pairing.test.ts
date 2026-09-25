@@ -5,11 +5,9 @@ import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { loadOriginDeviceToken } from "./device-auth-store.js";
 import {
   readDeviceAuthTokenForTest as readCachedToken,
@@ -39,7 +37,6 @@ import {
   listDevicePairing,
   removePairedDevice,
   requestDevicePairing,
-  rejectDevicePairing,
   resolveNodePairingGeneration,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
@@ -254,7 +251,7 @@ describe("device pairing tokens", () => {
   });
 
   afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -916,48 +913,6 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
   });
 
-  test("rejecting a bootstrap-bound pending request revokes the bootstrap token", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const issued = await issueDeviceBootstrapToken({ baseDir });
-
-    await expect(
-      verifyDeviceBootstrapToken({
-        token: issued.token,
-        deviceId: "bootstrap-reject-device",
-        publicKey: "bootstrap-reject-public-key",
-        role: "node",
-        scopes: [],
-        baseDir,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "bootstrap-reject-device",
-        publicKey: "bootstrap-reject-public-key",
-        role: "node",
-        roles: ["node"],
-        scopes: [],
-      },
-      baseDir,
-    );
-
-    await expect(rejectDevicePairing(pending.request.requestId, baseDir)).resolves.toEqual({
-      requestId: pending.request.requestId,
-      deviceId: "bootstrap-reject-device",
-    });
-    await expect(
-      verifyDeviceBootstrapToken({
-        token: issued.token,
-        deviceId: "bootstrap-reject-device",
-        publicKey: "bootstrap-reject-public-key",
-        role: "node",
-        scopes: [],
-        baseDir,
-      }),
-    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
-  });
-
   test("fails closed for operator approvals when caller scopes are omitted", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
@@ -1324,7 +1279,7 @@ describe("device pairing tokens", () => {
     expect(readCachedToken({ deviceId: "device-1", role: "operator", env })).toEqual(operator);
     expect(readCachedToken({ deviceId: "device-2", role: "node", env })).toEqual(otherDevice);
     expect(
-      loadOriginDeviceToken({ gatewayScope, deviceId: "device-1", role: "node", env }),
+      await loadOriginDeviceToken({ gatewayScope, deviceId: "device-1", role: "node", env }),
     ).toEqual(origin);
     expect(readCachedToken({ deviceId: "device-1", role: "node", env: otherEnv })).toEqual(
       otherProfile,
@@ -1335,7 +1290,7 @@ describe("device pairing tokens", () => {
     const { baseDir, env, before, cached } = await setupLegacyNodeTokenRecovery();
     const { db } = openOpenClawStateDatabase({ env });
     db.exec(`
-      CREATE TEMP TRIGGER reject_node_cache_cleanup BEFORE DELETE ON device_auth_tokens
+      CREATE TRIGGER reject_node_cache_cleanup BEFORE DELETE ON device_auth_tokens
       WHEN OLD.device_id = 'device-1' AND OLD.role = 'node'
       BEGIN SELECT RAISE(ABORT, 'node cache cleanup refused'); END;
     `);

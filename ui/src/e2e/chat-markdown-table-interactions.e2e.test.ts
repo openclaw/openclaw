@@ -12,6 +12,8 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { readResponsiveTableGeometry } from "./chat-markdown-table-layout.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -44,6 +46,275 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    const rows = Array.from(
+      { length: 24 },
+      (_, index) =>
+        `| A detailed failure description with enough context to explain the affected workflow, item ${index + 1} | Ready |`,
+    ).join("\n");
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `The surrounding explanation stays at the normal reading width.\n\n| Failure description | Recorded implementation status |\n| --- | --- |\n${rows}
+
+| A | B | C | D |
+| --- | --- | --- | --- |
+| 1 | 2 | 3 | 4 |
+
+| A | B | C | D | E | F | G | H |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+
+| Service | Owner | Region | Status | Version | Deployment | Incidents | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |`,
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: { id: "wrapping-table", seq: 1 },
+        },
+      ],
+    });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const message = page.locator('[data-entry-id="wrapping-table"]');
+      const shell = message.locator(".markdown-table").first();
+      const compact = message.locator(".markdown-table__viewport");
+      const expand = shell.getByRole("button", { name: "Expand table" });
+      await shell.waitFor({ state: "visible" });
+      for (const width of [1920, 1440, 1280, 760, 390, 932]) {
+        const desktop = width > 932;
+        await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
+        await page.locator(".chat-thread").evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await expect
+          .poll(() =>
+            shell.evaluate((element) => {
+              const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+              const pane = element.closest<HTMLElement>(".chat-thread")!;
+              const column = pane.querySelector<HTMLElement>(".chat-thread-inner")!;
+              return (
+                viewport.scrollWidth <= viewport.clientWidth + 1 &&
+                getComputedStyle(pane).getPropertyValue("--chat-transcript-column-width").trim() ===
+                  `${column.clientWidth}px`
+              );
+            }),
+          )
+          .toBe(true);
+        expect(
+          await compact.evaluateAll((elements) =>
+            elements.slice(1, 3).every((element) => element.scrollWidth <= element.clientWidth + 1),
+          ),
+        ).toBe(true);
+        const geometry = await shell.evaluate(readResponsiveTableGeometry);
+        expect(geometry.withinPane).toBe(true);
+        expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
+        expect(geometry.topAligned).toBe(true);
+        expect(geometry.headerPainted).toBe(true);
+        expect(geometry.actionAboveTable).toBe(true);
+        expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
+        if (desktop) {
+          expect(geometry.width).toBeCloseTo(geometry.prose, 0);
+          expect(
+            geometry.compactWidths.every((value) => Math.abs(value - geometry.prose) <= 1),
+          ).toBe(true);
+          expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
+          expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
+          expect(geometry.controlHeight).toBe(32);
+          expect(geometry.visibleExpandLabel).toBe(false);
+          expect(geometry.controlsGap).toBe(0);
+          expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
+          expect(geometry.prose).toBeLessThanOrEqual(768);
+        } else {
+          expect(geometry.controlHeight).toBe(40);
+          expect(geometry.visibleExpandLabel).toBe(true);
+          expect(geometry.controlsGap).toBe(4);
+          expect(geometry.denseOverflow).toBeGreaterThan(0);
+          if (width === 932) {
+            expect(geometry.width).toBeCloseTo(900, 0);
+          } else {
+            expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
+          }
+        }
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, `wrap-${width}.png`) });
+        }
+      }
+      await page.setViewportSize({ width: 1440, height: 800 });
+      await openChatSidePanelType(page, "Files");
+      await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
+      await expect
+        .poll(() =>
+          shell.evaluate((element) => {
+            const pane = element.closest(".chat-thread")!.getBoundingClientRect();
+            const bounds = element.getBoundingClientRect();
+            const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+            return (
+              bounds.left >= pane.left &&
+              bounds.right <= pane.right &&
+              viewport.scrollWidth <= viewport.clientWidth + 1
+            );
+          }),
+        )
+        .toBe(true);
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await expand.click();
+      const dialog = page.locator(".markdown-table-dialog");
+      await dialog.waitFor({ state: "visible" });
+      await dialog.evaluate((element) => {
+        element.scrollTop = 400;
+      });
+      const sticky = await dialog.evaluate((element) => {
+        const header = element.querySelector("thead")!;
+        const rect = header.getBoundingClientRect();
+        return {
+          scrolled: element.scrollTop,
+          pinned: Math.abs(rect.top - element.getBoundingClientRect().top) < 2,
+          painted: header.contains(document.elementFromPoint(rect.left + 4, rect.top + 4)),
+          background: getComputedStyle(header).backgroundColor,
+        };
+      });
+      expect(sticky.scrolled).toBeGreaterThan(100);
+      expect(sticky.pinned).toBe(true);
+      expect(sticky.painted).toBe(true);
+      expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => expand.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("contains content-sized tables after restoring a percentage reading width", async () => {
+    const overflowTable = [
+      `| ${Array.from({ length: 14 }, (_, index) => `Configuration${index + 1}`).join(" | ")} |`,
+      `| ${Array(14).fill("---").join(" | ")} |`,
+      `| ${Array(14).fill("Available").join(" | ")} |`,
+    ].join("\n");
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Keep this explanation at the saved reading width.
+
+| Failure | Recorded implementation author |
+| --- | --- |
+| Quiet mode displays reasoning and an unwanted exit message after a queued run is cancelled | Morgan, with Riley as coauthor on the follow-up repair |
+| A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |
+
+${overflowTable}`,
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: { id: "percentage-table", seq: 1 },
+        },
+      ],
+    });
+    try {
+      await page.goto(`${server.baseUrl}settings/appearance#settings-appearance-chat`);
+      const widthInput = page.locator("[data-settings-chat-message-width]");
+      await widthInput.fill("82%");
+      await widthInput.press("Tab");
+      await page.goto(`${server.baseUrl}chat`);
+      const tables = page.locator('[data-entry-id="percentage-table"] .markdown-table');
+      const shell = tables.first();
+      const overflow = tables.nth(1);
+      await shell.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat")
+            .evaluate((element) =>
+              getComputedStyle(element).getPropertyValue("--chat-thread-max-width").trim(),
+            ),
+        )
+        .toBe("82%");
+      const contained = () =>
+        tables.evaluateAll((elements) =>
+          elements.every((element) => {
+            const thread = element.closest<HTMLElement>(".chat-thread")!;
+            const pane = thread.getBoundingClientRect();
+            const column = thread.querySelector<HTMLElement>(".chat-thread-inner")!;
+            const bounds = element.getBoundingClientRect();
+            return (
+              bounds.left >= pane.left &&
+              bounds.right <= pane.right &&
+              getComputedStyle(thread).getPropertyValue("--chat-transcript-column-width").trim() ===
+                `${column.clientWidth}px`
+            );
+          }),
+        );
+      for (const width of [1440, 1920, 1280]) {
+        await page.setViewportSize({ width, height: 1000 });
+        for (const direction of ["ltr", "rtl"]) {
+          await page.evaluate((value) => {
+            document.documentElement.dir = value;
+          }, direction);
+          await expect.poll(contained).toBe(true);
+          const sizing = await overflow.evaluate((element) => {
+            const pane = element.closest(".chat-thread")!;
+            const bounds = element.getBoundingClientRect();
+            const paneBounds = pane.getBoundingClientRect();
+            const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+            return {
+              leadingGap: bounds.left - paneBounds.left,
+              trailingGap: paneBounds.right - bounds.right,
+              overflow: viewport.scrollWidth - viewport.clientWidth,
+              paneOverflow: pane.scrollWidth - pane.clientWidth,
+            };
+          });
+          // The 18px gutter plus 12px inset is independent of native scrollbar width.
+          expect(sizing.leadingGap).toBeGreaterThanOrEqual(29);
+          expect(sizing.trailingGap).toBeGreaterThanOrEqual(29);
+          expect(sizing.overflow).toBeGreaterThan(0);
+          expect(sizing.paneOverflow).toBeLessThanOrEqual(1);
+          expect(
+            await shell.evaluate(
+              (element) =>
+                element.getBoundingClientRect().width -
+                element.parentElement!.getBoundingClientRect().width,
+            ),
+          ).toBeLessThanOrEqual(1);
+        }
+      }
+      await page.evaluate(() => {
+        document.documentElement.dir = "ltr";
+      });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expect.poll(contained).toBe(true);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage.png") });
+      }
+      await openChatSidePanelType(page, "Files");
+      await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
+      await expect.poll(contained).toBe(true);
+      expect(
+        await shell
+          .locator(".markdown-table__viewport")
+          .evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeLessThanOrEqual(1);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage-files.png") });
+      }
+    } finally {
+      await context.close();
+    }
   });
 
   it.each(["chat", "assistant panel"])(
@@ -112,7 +383,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         await page.goto(`${server.baseUrl}chat`);
         if (surface === "assistant panel") {
           await page.locator(".sidebar-brand__search").click();
-          await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
+          await page
+            .locator("openclaw-command-palette")
+            .getByPlaceholder("Search or start a task…")
+            .fill("Ask OpenClaw");
           await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
         }
         const bubble = page.locator(
@@ -144,6 +418,15 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 
         await expand.focus();
         const inlineTable = shell.locator("table");
+        const noteWidth = await inlineTable
+          .locator("td")
+          .last()
+          .evaluate((cell) => cell.getBoundingClientRect().width);
+        const statusWidth = await inlineTable
+          .locator("td")
+          .nth(3)
+          .evaluate((cell) => cell.getBoundingClientRect().width);
+        expect(noteWidth).toBeGreaterThan(statusWidth * 2);
         const inlineHeader = inlineTable.locator("th").first();
         const inlineCell = inlineTable.locator("td").first();
         await expand.dblclick();
@@ -431,9 +714,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
           content: [
             {
               type: "text",
-              text: `| Service | Status | Reference |
-| --- | --- | --- |
-| Gateway | Healthy | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
+              text: `| Service | Owner | Region | Status | Version | Reference |
+| --- | --- | --- | --- | --- | --- |
+| Gateway | Platform | EU | Healthy | 1.0 | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
             },
           ],
           timestamp: 1,

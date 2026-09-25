@@ -1,4 +1,4 @@
-/** Keeps automatic auth profiles stable within sessions while rotating at lifecycle boundaries. */
+/** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,7 +8,7 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
-import { resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -20,13 +20,13 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
@@ -56,9 +56,18 @@ function profileAuthRequirement(params: {
   store: ReturnType<typeof ensureAuthProfileStore> | undefined;
   profileId: string;
 }): ProviderModelRouteAuthRequirement | undefined {
-  return resolveProviderModelRouteAuthRequirement(
-    params.store?.profiles[params.profileId]?.type ??
-      params.cfg.auth?.profiles?.[params.profileId]?.mode,
+  const credential = params.store?.profiles[params.profileId];
+  const configured = params.cfg.auth?.profiles?.[params.profileId];
+  const provider = credential?.provider ?? configured?.provider;
+  if (!provider) {
+    return undefined;
+  }
+  return (
+    resolveProviderModelAuthPolicy({
+      provider,
+      mode: credential?.type ?? configured?.mode,
+      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+    }).authRequirement ?? undefined
   );
 }
 
@@ -107,14 +116,17 @@ function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): voi
 }
 
 async function persistSessionAuthProfileOverrideState(params: {
+  agentId: string;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   state: SessionAuthProfileOverrideState;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
+  params.assertCommitAllowed?.();
   const updatedAt = Date.now();
   if (!storePath) {
     if (expectedSnapshot && !Object.hasOwn(sessionStore, sessionKey)) {
@@ -140,7 +152,7 @@ async function persistSessionAuthProfileOverrideState(params: {
   const persisted = await (
     await loadSessionAccessor()
   ).patchSessionEntryCore(
-    { storePath, sessionKey },
+    { agentId: params.agentId, storePath, sessionKey },
     (current) => {
       // Compare inside the canonical SQLite writer so a concurrent /model pin
       // cannot be erased by a stale automatic-selection snapshot.
@@ -155,7 +167,10 @@ async function persistSessionAuthProfileOverrideState(params: {
         updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
       };
     },
-    expectedSnapshot ? undefined : { fallbackEntry: sessionEntry },
+    {
+      ...(expectedSnapshot ? {} : { fallbackEntry: sessionEntry }),
+      assertCommitAllowed: params.assertCommitAllowed,
+    },
   );
   if (persisted) {
     if (expectedSnapshot) {
@@ -259,13 +274,16 @@ function isProfileGloballyInCooldown(
 
 /** Clears an auth-profile override from a session and persists it when possible. */
 export async function clearSessionAuthProfileOverride(params: {
+  agentId: string;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
 }) {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
+    agentId: params.agentId,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -275,6 +293,7 @@ export async function clearSessionAuthProfileOverride(params: {
       authProfileOverrideCompactionCount: undefined,
     },
     storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -282,17 +301,19 @@ async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
-  agentId?: string;
+  agentId: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
   requesterProfileId?: string;
 }): Promise<SessionAuthProfileOverrideResult> {
   const {
+    agentId,
     cfg,
     provider,
     agentDir,
@@ -367,12 +388,26 @@ async function resolveSessionAuthProfileOverride(params: {
     ) {
       return { profileId: currentProfileId, store };
     }
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    await clearSessionAuthProfileOverride({
+      agentId,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
     current = undefined;
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    await clearSessionAuthProfileOverride({
+      agentId,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
     current = undefined;
   }
 
@@ -394,6 +429,7 @@ async function resolveSessionAuthProfileOverride(params: {
     });
     if (linked) {
       await persistSessionAuthProfileOverrideState({
+        agentId,
         sessionEntry,
         sessionStore,
         sessionKey,
@@ -403,6 +439,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverrideCompactionCount: undefined,
         },
         storePath,
+        assertCommitAllowed: params.assertCommitAllowed,
       });
       return linked;
     }
@@ -410,7 +447,14 @@ async function resolveSessionAuthProfileOverride(params: {
 
   // Automatic pins must stay inside the currently configured rotation order.
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    await clearSessionAuthProfileOverride({
+      agentId,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
     current = undefined;
   }
 
@@ -422,6 +466,7 @@ async function resolveSessionAuthProfileOverride(params: {
     // An automatic pin must not trap later turns on an unavailable provider.
     if (current) {
       const latest = await persistSessionAuthProfileOverrideState({
+        agentId,
         sessionEntry,
         sessionStore,
         sessionKey,
@@ -431,6 +476,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverrideCompactionCount: undefined,
         },
         storePath,
+        assertCommitAllowed: params.assertCommitAllowed,
         expectedSnapshot: {
           sessionId: sessionEntry.sessionId,
           authProfileOverride: sessionEntry.authProfileOverride,
@@ -457,14 +503,13 @@ async function resolveSessionAuthProfileOverride(params: {
     isProfileInCooldown(store, profileId, undefined, sessionEntry.model);
   const currentUnavailable = current ? isProfileUnavailableForSessionModel(current) : false;
   const compactionCount = sessionEntry.compactionCount ?? 0;
-  const storedCompaction =
-    typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? sessionEntry.authProfileOverrideCompactionCount
-      : compactionCount;
+  // Compaction is a context-lifecycle event, not an auth-health transition.
+  // Keep the existing credential and avoid rewriting auth state solely because
+  // the compaction counter advanced.
   // A healthy automatic fallback yields when an explicit preference is eligible to retry,
   // preventing a metered backup from staying pinned. The real request proves recovery.
   const retryableHigherPriorityProfile =
-    source === "auto" && !currentUnavailable && compactionCount <= storedCompaction && current
+    source === "auto" && !currentUnavailable && current
       ? orderResolutions
           .filter((resolution) => resolution.hasExplicitOrder)
           .flatMap((resolution) => {
@@ -480,9 +525,7 @@ async function resolveSessionAuthProfileOverride(params: {
   const shouldRotateCurrent =
     Boolean(current) &&
     !isNewSession &&
-    (currentUnavailable ||
-      compactionCount > storedCompaction ||
-      retryableHigherPriorityProfile !== undefined);
+    (currentUnavailable || retryableHigherPriorityProfile !== undefined);
 
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
   const routeResolution =
@@ -503,6 +546,10 @@ async function resolveSessionAuthProfileOverride(params: {
               allowPluginNormalization: false,
             }),
             resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+            resolveProfileAuthFlow: (profileId) => {
+              const credential = store.profiles[profileId];
+              return credential?.type === "oauth" ? credential.authFlow : undefined;
+            },
           }),
         })
       : null;
@@ -539,11 +586,10 @@ async function resolveSessionAuthProfileOverride(params: {
     return { profileId: current, store };
   }
   const shouldPersist =
-    next !== sessionEntry.authProfileOverride ||
-    sessionEntry.authProfileOverrideSource !== "auto" ||
-    sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
+    next !== sessionEntry.authProfileOverride || sessionEntry.authProfileOverrideSource !== "auto";
   if (shouldPersist) {
     await persistSessionAuthProfileOverrideState({
+      agentId,
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -553,6 +599,7 @@ async function resolveSessionAuthProfileOverride(params: {
         authProfileOverrideCompactionCount: compactionCount,
       },
       storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
   }
 
@@ -570,7 +617,7 @@ export async function resolveSessionAuthSelection(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
-  agentId?: string;
+  agentId: string;
   configuredProfileId?: string;
   harnessRuntime?: string;
   agentDir: string;
@@ -578,6 +625,7 @@ export async function resolveSessionAuthSelection(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {
@@ -606,10 +654,9 @@ export async function resolveSessionAuthSelection(params: {
   // Person-linked pins carry user strength and outrank the agent's static @profile.
   const rotatedPinnedProfileId =
     rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfile = params.agentId
-    ? splitTrailingAuthProfile(resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "")
-        .profile
-    : undefined;
+  const configuredProfile = splitTrailingAuthProfile(
+    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
+  ).profile;
   const defaultModel = configuredProfile
     ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
     : undefined;

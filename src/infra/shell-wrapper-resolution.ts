@@ -86,7 +86,6 @@ const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...WINDOWS_CMD_WRAPPER_NAMES,
   ...POWERSHELL_WRAPPER_NAMES,
 ]);
-const LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -118,7 +117,7 @@ function resolveShellWrapperCandidate<TState>(params: {
   state: TState;
   onDispatchUnwrap?: (state: TState, wrappedArgv: string[]) => TState;
 }): ShellWrapperCandidate<TState> | null {
-  if (!isWithinDispatchClassificationDepth(params.depth)) {
+  if (params.depth > MAX_DISPATCH_WRAPPER_DEPTH) {
     return null;
   }
 
@@ -178,23 +177,15 @@ function resolveShellWrapperSpecAndArgvInternal(
   return { argv: candidate.argv, wrapper, payload };
 }
 
-function isWithinDispatchClassificationDepth(depth: number): boolean {
-  return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
-}
-
 /** Return true when an executable token names a supported shell wrapper. */
 export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
 }
 
-function isShellWrapperInvocationInternal(argv: string[], depth: number): boolean {
-  const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
-  return candidate ? isShellWrapperExecutable(candidate.token0) : false;
-}
-
 /** Return true when argv resolves to a shell wrapper invocation. */
 export function isShellWrapperInvocation(argv: string[]): boolean {
-  return isShellWrapperInvocationInternal(argv, 0);
+  const candidate = resolveShellWrapperCandidate({ argv, depth: 0, state: null });
+  return candidate ? isShellWrapperExecutable(candidate.token0) : false;
 }
 
 /** Detect implicit POSIX startup in the requested shell, including dispatch wrappers. */
@@ -249,11 +240,7 @@ export function unwrapKnownShellMultiplexerInvocation(
     return { kind: "blocked", wrapper };
   }
 
-  const unwrapped = argv.slice(appletIndex);
-  if (unwrapped.length === 0) {
-    return { kind: "blocked", wrapper };
-  }
-  return { kind: "unwrapped", wrapper, argv: unwrapped };
+  return { kind: "unwrapped", wrapper, argv: argv.slice(appletIndex) };
 }
 
 function extractPosixShellInlineCommand(argv: string[], baseExecutable: string): string | null {
@@ -377,10 +364,6 @@ function hasCmdUnreviewedStartupBeforeInlineCommand(argv: string[]): boolean {
   return true;
 }
 
-function extractPowerShellInlineCommand(argv: string[]): string | null {
-  return resolvePowerShellInlineCommandMatch(argv).command;
-}
-
 function extractInlineCommandByFlags(
   argv: string[],
   flags: ReadonlySet<string>,
@@ -400,17 +383,13 @@ function extractShellWrapperPayload(
     case "cmd":
       return extractCmdInlineCommand(argv);
     case "powershell":
-      return extractPowerShellInlineCommand(argv);
+      return resolvePowerShellInlineCommandMatch(argv).command;
   }
   throw new Error("Unsupported shell wrapper kind");
 }
 
-function isLegacyLoginInlineForm(argv: string[]): boolean {
-  return argv[1]?.trim() === "-lc";
-}
-
 function isLegacyShLoginInlineForm(argv: string[], baseExecutable: string): boolean {
-  return baseExecutable === "sh" && isLegacyLoginInlineForm(argv);
+  return baseExecutable === "sh" && argv[1]?.trim() === "-lc";
 }
 
 function formatShellWrapperArgv(argv: string[]): string {
@@ -442,18 +421,16 @@ function startupWrapperRequiresFullArgv(params: {
     }
     return hasNushellInteractiveStartupBeforeInlineCommand(params.argv);
   }
-  const inlineCommandFlags =
-    params.baseExecutable === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS;
   if (
-    LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL.has(params.baseExecutable) &&
-    hasPosixLoginStartupBeforeInlineCommand(params.argv, inlineCommandFlags)
+    POSIX_SHELL_WRAPPER_CANONICAL.has(params.baseExecutable) &&
+    hasPosixLoginStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS)
   ) {
     return (
       params.includeLegacyLoginInlineForm ||
       !isLegacyShLoginInlineForm(params.argv, params.baseExecutable)
     );
   }
-  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, inlineCommandFlags);
+  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS);
 }
 
 function hasNushellLoginStartupBeforeInlineCommand(argv: string[]): boolean {
@@ -500,15 +477,12 @@ function isNushellShortOption(arg: string, option: string): boolean {
   return arg.slice(1).includes(option);
 }
 
-function hasEnvManipulationBeforeShellWrapperInternal(
-  argv: string[],
-  depth: number,
-  envManipulationSeen: boolean,
-): boolean {
+/** Return true when dispatch wrappers set env before the shell wrapper. */
+export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
   const candidate = resolveShellWrapperCandidate({
     argv,
-    depth,
-    state: envManipulationSeen,
+    depth: 0,
+    state: false,
     onDispatchUnwrap: (state, wrappedArgv) => state || hasDispatchEnvManipulation(wrappedArgv),
   });
   if (!candidate) {
@@ -528,11 +502,6 @@ function hasEnvManipulationBeforeShellWrapperInternal(
     return false;
   }
   return candidate.state;
-}
-
-/** Return true when dispatch wrappers set env before the shell wrapper. */
-export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
-  return hasEnvManipulationBeforeShellWrapperInternal(argv, 0, false);
 }
 
 function extractShellWrapperCommandInternal(
@@ -577,14 +546,9 @@ function extractShellWrapperCommandInternal(
     return { isWrapper: true, command: null };
   }
 
-  const resolved = resolveShellWrapperSpecAndArgvInternal(candidate.argv, depth);
-  if (!resolved) {
-    return { isWrapper: false, command: null };
-  }
-
   return {
     isWrapper: true,
-    command: rawMatchesCanonicalArgv ? resolved.payload : (rawCommand ?? resolved.payload),
+    command: rawMatchesCanonicalArgv ? payload : (rawCommand ?? payload),
   };
 }
 

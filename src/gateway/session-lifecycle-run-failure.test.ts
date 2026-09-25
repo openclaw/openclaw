@@ -8,6 +8,7 @@ import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
@@ -46,6 +47,17 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
     startedAt: 1_000,
     status: "running",
     lifecycleRunId: runId,
+    goal: {
+      schemaVersion: 1,
+      id: "failure-goal",
+      objective: "Finish the requested work",
+      status: "active",
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    },
   });
   await replaceTranscriptEvents(target, [
     { type: "session", id: target.sessionId, version: CURRENT_SESSION_VERSION },
@@ -95,6 +107,13 @@ describe("durable pre-reply run failure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();
       await persistGatewaySessionLifecycleEvent({ ...target, event });
+      const pausedGoal = loadSessionEntry(target)?.goal;
+      expect(pausedGoal).toMatchObject({
+        id: "failure-goal",
+        status: "paused",
+        pausedAt: 2_000,
+        lastStatusNote: `Paused after an error. Resume to continue. ${error}`,
+      });
       expect(await reports()).toMatchObject([
         {
           type: "custom_message",
@@ -115,6 +134,7 @@ describe("durable pre-reply run failure", () => {
         },
       });
       expect(await reports()).toHaveLength(1);
+      expect(loadSessionEntry(target)?.goal).toEqual(pausedGoal);
     });
   });
 
@@ -211,7 +231,7 @@ describe("durable pre-reply run failure", () => {
           ...event,
           data: {
             ...event.data,
-            error: `Worker rejected token=${secret}\n${"detail ".repeat(150)}`,
+            error: `Worker rejected token=${secret}\n${"detail ".repeat(150)}token=${secret}: upload failed`,
           },
         },
       });
@@ -222,6 +242,45 @@ describe("durable pre-reply run failure", () => {
       const report = entries[0] as { details: { error: string } };
       expect(report.details.error.length).toBeLessThanOrEqual(512);
       expect(report.details.error).not.toContain("\n");
+      const lastRunError = loadSessionEntry(target)?.lastRunError;
+      expect(lastRunError).not.toContain(secret);
+      expect(lastRunError).not.toContain("abcdefghijklmnopqrstuvwxyz");
+      expect(lastRunError).toMatch(/^Worker rejected token=/);
+      expect(lastRunError).toMatch(/upload failed$/);
+      expect(lastRunError?.length).toBeLessThanOrEqual(160);
+      const goal = loadSessionEntry(target)?.goal;
+      expect(goal?.status).toBe("paused");
+      expect(goal?.lastStatusNote).toContain(lastRunError);
+      expect(goal?.lastStatusNote).not.toContain(secret);
+    });
+  });
+
+  it.each([
+    {
+      name: "nested workspace transfer failure",
+      prefix:
+        "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: operation=upload stage=capture: ",
+      context: "Cloud worker finished",
+    },
+    {
+      name: "Unicode diagnostic context",
+      prefix: `Worker: ${"🦞".repeat(200)}: `,
+      context: "Worker:",
+    },
+  ])("retains the terminal cause of a bounded $name", async ({ prefix, context }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed();
+      const cause = "Cloud workspace reconciliation exceeds the 25000 entry limit.";
+      await persistGatewaySessionLifecycleEvent({
+        ...target,
+        event: { ...event, data: { ...event.data, error: `${prefix}${cause}` } },
+      });
+      const failed = loadSessionEntry(target);
+      expect(failed?.status).toBe("failed");
+      expect(failed?.lastRunError).toContain(context);
+      expect(failed?.lastRunError).toContain(cause);
+      expect(failed?.lastRunError?.length).toBeLessThanOrEqual(160);
+      expect(failed?.lastRunError).not.toMatch(/[\uD800-\uDFFF]/u);
     });
   });
 

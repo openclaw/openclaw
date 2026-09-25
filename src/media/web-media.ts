@@ -52,6 +52,7 @@ import {
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   createImageProcessor,
+  isAnimatedWebpBuffer,
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
   type ImageMetadata,
@@ -927,24 +928,22 @@ export async function optimizeImageBufferForWebMedia(params: {
 }): Promise<WebMediaResult> {
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
-  if (params.contentType === "image/gif") {
+  const isAnimatedWebp = isAnimatedWebpBuffer(params.buffer);
+  let originalContentType = isAnimatedWebp ? "image/webp" : (params.contentType ?? null);
+  if (originalContentType === "image/gif" || isAnimatedWebp) {
     if (params.buffer.length > cap) {
-      throw new ImageOptimizationLimitError(formatCapLimit("GIF", cap, params.buffer.length), cap);
+      const format = isAnimatedWebp ? "Animated WebP" : "GIF";
+      throw new ImageOptimizationLimitError(formatCapLimit(format, cap, params.buffer.length), cap);
     }
     assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
-    return {
+  } else {
+    originalContentType = resolvePreservableOriginalImageContentType({
       buffer: params.buffer,
+      cap,
       contentType: params.contentType,
-      kind: "image",
-      fileName: params.fileName,
-    };
+      policy: params.imageCompression,
+    });
   }
-  const originalContentType = resolvePreservableOriginalImageContentType({
-    buffer: params.buffer,
-    cap,
-    contentType: params.contentType,
-    policy: params.imageCompression,
-  });
   if (originalContentType) {
     return {
       buffer: params.buffer,
@@ -1131,7 +1130,7 @@ async function loadWebMediaInternal(
       ? await resolveTrustedGeneratedHostReadHtml(mediaUrl)
       : undefined;
   if (hostReadDeclaredMime === "text/html" && !htmlTrust) {
-    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+    throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
 
   // Local path

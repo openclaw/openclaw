@@ -8,6 +8,7 @@ import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/chann
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -46,6 +47,18 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
+
+type GoogleChatTextSendContext = Pick<
+  ChannelMessageSendTextContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "accountId"
+  | "replyToId"
+  | "threadId"
+  | "assertDirectAdapterHandoff"
+  | "onPlatformSendDispatch"
+>;
 
 function createGoogleChatSendReceipt(params: {
   messageId?: string;
@@ -206,23 +219,13 @@ export const googlechatOutboundAdapter = {
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
-      const trimmed = normalizeOptionalString(to) ?? "";
-
-      if (trimmed) {
-        const normalized = normalizeGoogleChatTarget(trimmed);
-        if (!normalized) {
-          return {
+      const normalized = normalizeGoogleChatTarget(normalizeOptionalString(to));
+      return normalized
+        ? { ok: true as const, to: normalized }
+        : {
             ok: false as const,
             error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
           };
-        }
-        return { ok: true as const, to: normalized };
-      }
-
-      return {
-        ok: false as const,
-        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
-      };
     },
   },
   attachedResults: {
@@ -234,19 +237,18 @@ export const googlechatOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text: string;
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }: GoogleChatTextSendContext) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+        assertDirectAdapterHandoff,
+      });
       const thread =
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
@@ -255,6 +257,8 @@ export const googlechatOutboundAdapter = {
         space,
         text,
         thread,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const messageId = result?.messageName ?? "";
       return {

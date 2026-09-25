@@ -45,8 +45,3 @@ export function resolveSilentReplySettings(params: ResolveSilentReplyParams): {
     policy: resolveSilentReplyPolicyFromPolicies(context),
   };
 }
-
-/** Returns just the effective silent-reply policy for callers that do not need metadata. */
-export function resolveSilentReplyPolicy(params: ResolveSilentReplyParams): SilentReplyPolicy {
-  return resolveSilentReplySettings(params).policy;
-}

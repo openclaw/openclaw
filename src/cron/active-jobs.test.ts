@@ -84,6 +84,7 @@ describe("cron message action authority", () => {
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         agentId: "main",
         runId: "long-message-run",
+        sessionId: "persistent-message-session",
         sessionKey: "cron:long-message-read",
         jobId,
         toolsAllow: ["message"],
@@ -101,13 +102,19 @@ describe("cron message action authority", () => {
           agentId: "main",
           runId: "long-message-run",
           sessionKey: "cron:long-message-read",
-          sessionId: "long-message-run",
+          sessionId: "persistent-message-session",
         };
         const grant = expectDefined(
           resolveMessageActionTurnAuthorization(lookup)?.scheduled,
           "live scheduled grant",
         );
         expect(grant.assertCurrent).not.toThrow();
+        expect(
+          resolveMessageActionTurnAuthorization({ ...lookup, sessionId: lookup.runId }),
+        ).toBeUndefined();
+        expect(
+          resolveMessageActionTurnAuthorization({ ...lookup, runId: "another-invocation" }),
+        ).toBeUndefined();
         if (end === "closure") {
           owner.close();
           expect(resolveMessageActionTurnAuthorization(lookup)).toBeUndefined();

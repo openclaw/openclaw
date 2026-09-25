@@ -18,7 +18,6 @@ import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   hasCommittedOutboundDeliveryEvidence,
-  hasExplicitlyVisibleAgentPayload,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -160,7 +159,15 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   )
     ? rawPayloads.slice(0, 64).map((payload) => {
         const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
-        const visible = hasExplicitlyVisibleAgentPayload(payload);
+        const visible = hasVisibleAgentPayload(
+          { payloads: [payload] },
+          {
+            requireTerminalContent: true,
+            includeErrorPayloads: false,
+            includeReasoningPayloads: false,
+            includeSilentReplyPayloads: false,
+          },
+        );
         const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
         if (mediaUrls.length > 0) {
           evidence.mediaUrls = mediaUrls;

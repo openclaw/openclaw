@@ -9,12 +9,17 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
+  bindPreparedModelRuntimeAuth,
 } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
+import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const catalogMocks = vi.hoisted(() => ({
@@ -25,9 +30,6 @@ const catalogMocks = vi.hoisted(() => ({
   isCurrent: (): boolean => true,
 }));
 
-const { buildPreparedModelsProviderData, handleModelsCommand, resolveModelsCommandReply } =
-  await import("./commands-models.js");
-
 const staleCfg = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
 } as OpenClawConfig;
@@ -37,15 +39,17 @@ const replacementCfg = {
 } as OpenClawConfig;
 
 beforeEach(() => {
-  vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
-    (params) => {
+  vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+    async (params) => {
       if (!params?.config) {
         throw new Error("A catalog read must retain its config");
       }
       const preset = catalogMocks.getPreparedOwner(params);
       const modelCatalog = preset?.modelCatalog ?? catalogMocks.readSnapshot(params);
       if (!modelCatalog) {
-        return undefined;
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+        );
       }
       const owner: PreparedModelRuntimeSnapshot = {
         catalogOwner: {
@@ -66,6 +70,7 @@ beforeEach(() => {
         allowGatewaySubagentBinding: false,
         modelCatalog,
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
         inlineProviderModels: [],
         createStores() {
           throw new Error("Browsing must not start model execution");
@@ -73,8 +78,8 @@ beforeEach(() => {
         ...preset,
       };
       const retainedAuth = preset ? getPreparedModelRuntimeAuthStore(preset) : undefined;
-      setPreparedModelRuntimeAuthStore(owner, retainedAuth ?? catalogMocks.authStore);
-      return owner;
+      bindPreparedModelRuntimeAuth(owner, { store: retainedAuth ?? catalogMocks.authStore });
+      return preparedCatalog.materializePreparedModelCatalogOwner(owner);
     },
   );
 });
@@ -218,7 +223,7 @@ describe("/models browse catalog recovery", () => {
         }),
         isCurrent: () => true,
       };
-      setPreparedModelRuntimeAuthStore(preparedOwner, catalogMocks.authStore);
+      bindPreparedModelRuntimeAuth(preparedOwner, { store: catalogMocks.authStore });
       catalogMocks.getPreparedOwner.mockReturnValue(preparedOwner);
       catalogMocks.readSnapshot.mockImplementation(() => {
         throw new Error("Published browsing consulted pending acquisition");
@@ -363,8 +368,10 @@ describe("/models browse catalog recovery", () => {
   );
 
   it("returns visible not-ready guidance from the public models command", async () => {
-    vi.mocked(preparedCatalog.getPublishedPreparedModelCatalogOwnerSnapshot).mockReturnValueOnce(
-      undefined,
+    vi.mocked(preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot).mockRejectedValueOnce(
+      new PreparedModelRuntimeOwnerNotPublishedError(
+        "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+      ),
     );
     await expect(
       resolveModelsCommandReply({ cfg: staleCfg, commandBodyNormalized: "/models" }),

@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { splitNullBuffer } from "./git-path-inventory.js";
+import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import { requireGitBuffer } from "./git.js";
 import {
   hasSafeParentDirectories,
@@ -17,6 +19,7 @@ import {
   getRegistryWorktreeProvisionedChunk,
   insertRegistryWorktreeProvisionedChunk,
 } from "./registry.js";
+import type { ExactProvisionedSnapshot } from "./snapshot-exact-state-contract.js";
 import type { ProvisionedFileState } from "./types.js";
 
 async function copyProvisionedFile(params: {
@@ -173,18 +176,7 @@ async function readProvisionedMembership(
   const ignoredUntracked = new Set<string>();
   const currentTracked = new Set<string>();
   const trackedAtHead = new Set<string>();
-  let offset = 0;
-  while (offset < paths.length) {
-    const batch: string[] = [];
-    let bytes = 0;
-    while (
-      offset < paths.length &&
-      (batch.length === 0 || (batch.length < 128 && bytes < 16_384))
-    ) {
-      const entry = paths[offset++]!;
-      batch.push(entry);
-      bytes += Buffer.byteLength(entry) + 1;
-    }
+  for (const batch of gitPathspecBatches(paths)) {
     for (const [target, args] of [
       [ignoredUntracked, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]],
       [currentTracked, ["ls-files", "--cached", "-z"]],
@@ -209,7 +201,11 @@ export async function snapshotProvisionedFiles(
   worktreeId: string,
   worktreePath: string,
   provisionedPaths: readonly string[] | undefined,
-  options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
+  options: {
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    expected?: ExactProvisionedSnapshot;
+  } = {},
 ): Promise<ProvisionedFileState[]> {
   const commitGuard = () => {
     options.signal?.throwIfAborted();
@@ -218,6 +214,16 @@ export async function snapshotProvisionedFiles(
   const files = await inspectProvisionedFiles(worktreePath, provisionedPaths);
   if (files === undefined) {
     throw new Error("provisioned path ledger is unavailable");
+  }
+  const expected = options.expected
+    ? new Map(options.expected.files.map((file) => [file.path, file]))
+    : undefined;
+  if (
+    expected &&
+    (expected.size !== files.length ||
+      files.some((file) => !expected.has(file.path) || expected.get(file.path)?.mode !== file.mode))
+  ) {
+    throw new Error("provisioned exact-state membership or modes changed after capture");
   }
   if (files.every((file) => file.mode === null)) {
     commitGuard();
@@ -256,6 +262,18 @@ export async function snapshotProvisionedFiles(
       try {
         await validateDirectoryIdentities(parentIdentities);
         const before = await handle.stat();
+        const captured = expected?.get(file.path);
+        if (
+          captured &&
+          (captured.size !== before.size || captured.mode !== (before.mode & 0o7777))
+        ) {
+          throw new Error(
+            `provisioned exact-state size or mode changed after capture: ${file.path}`,
+          );
+        }
+        const digest = options.expected
+          ? createHash(options.expected.algorithm).update(`blob ${before.size}\0`)
+          : undefined;
         const buffer = Buffer.allocUnsafe(SNAPSHOT_CHUNK_BYTES);
         let chunkIndex = 0;
         let offset = 0;
@@ -269,6 +287,7 @@ export async function snapshotProvisionedFiles(
           if (bytesRead === 0) {
             throw new Error(`provisioned file changed while snapshotting: ${file.path}`);
           }
+          digest?.update(buffer.subarray(0, bytesRead));
           commitGuard();
           insertRegistryWorktreeProvisionedChunk(env, {
             worktreeId,
@@ -284,6 +303,9 @@ export async function snapshotProvisionedFiles(
         if (!sameFileState(before, after) || !sameFileState(before, current)) {
           throw new Error(`provisioned file changed while snapshotting: ${file.path}`);
         }
+        if (digest && digest.digest("hex") !== captured?.blob) {
+          throw new Error(`provisioned exact-state bytes changed after capture: ${file.path}`);
+        }
         states.push({ path: file.path, mode: before.mode & 0o7777, chunks: chunkIndex });
       } finally {
         await handle.close();
@@ -293,22 +315,6 @@ export async function snapshotProvisionedFiles(
   } catch (error) {
     clearRegistryWorktreeProvisionedChunks(env, worktreeId);
     throw error;
-  }
-}
-
-async function writeAll(
-  handle: FileHandle,
-  data: Uint8Array,
-  commitGuard?: () => void,
-): Promise<void> {
-  let offset = 0;
-  while (offset < data.byteLength) {
-    commitGuard?.();
-    const { bytesWritten } = await handle.write(data, offset, data.byteLength - offset);
-    if (bytesWritten === 0) {
-      throw new Error("provisioned snapshot write made no progress");
-    }
-    offset += bytesWritten;
   }
 }
 
@@ -347,7 +353,7 @@ export async function restoreProvisionedFiles(
     try {
       await validateDirectoryIdentities(parentIdentities);
       for (let chunkIndex = 0; chunkIndex < state.chunks; chunkIndex += 1) {
-        const chunk = getRegistryWorktreeProvisionedChunk(env, {
+        const chunk = await getRegistryWorktreeProvisionedChunk(env, {
           worktreeId,
           path: state.path,
           chunkIndex,
@@ -355,7 +361,8 @@ export async function restoreProvisionedFiles(
         if (!chunk) {
           throw new Error(`provisioned snapshot chunk missing: ${state.path}:${chunkIndex}`);
         }
-        await writeAll(handle, chunk, commitGuard);
+        commitGuard?.();
+        await writeFileWindowFully(handle, chunk, null, { assertBeforeMutation: commitGuard });
       }
       commitGuard?.();
       await handle.chmod(state.mode);

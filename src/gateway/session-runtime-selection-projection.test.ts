@@ -5,10 +5,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { projectChatSessionMetadata } from "./server-methods/chat-metadata-session-projection.js";
-import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionSnapshot,
-} from "./session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
@@ -133,7 +130,7 @@ describe("session runtime selection ownership projection", () => {
           }
           expect(row.thinkingLevel).toBe("high");
           expect(patched.resolved?.thinkingLevel).toBe("high");
-          expect(buildGatewaySessionEventFields({ sessionRow: row }).runtimeSelectionLocked).toBe(
+          expect(buildGatewaySessionSnapshot({ sessionRow: row }).runtimeSelectionLocked).toBe(
             locked,
           );
           const lifecycle = buildGatewaySessionSnapshot({
