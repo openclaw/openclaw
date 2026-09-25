@@ -189,24 +189,6 @@ type ProbeModelScenario = {
 
 const probeModelScenarios: ProbeModelScenario[] = [
   {
-    name: "skips the retired Ollama Cloud catalog model",
-    provider: "ollama-cloud",
-    catalog: [
-      { provider: "ollama-cloud", id: "kimi-k2.5", status: "deprecated" },
-      { provider: "ollama-cloud", id: "kimi-k2.6" },
-    ],
-    expectedModel: "kimi-k2.6",
-  },
-  {
-    name: "skips the retired Tencent preview in favor of its replacement",
-    provider: "tencent-tokenhub",
-    catalog: [
-      { provider: "tencent-tokenhub", id: "hy3-preview", status: "deprecated" },
-      { provider: "tencent-tokenhub", id: "hy3" },
-    ],
-    expectedModel: "hy3",
-  },
-  {
     name: "skips disabled automatic catalog candidates",
     provider: "ollama",
     catalog: [

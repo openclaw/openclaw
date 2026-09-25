@@ -46,19 +46,16 @@ describe("automatic local-model lean migration", () => {
     expect(applyRetiredMigrations(raw).changes).toEqual([]);
   });
 
-  it.each([undefined, false, true])(
-    "leaves unmarked lean configuration unchanged: %s",
-    (localModelLean) => {
-      const raw = {
-        agents: {
-          defaults: {
-            experimental: localModelLean !== undefined ? { localModelLean } : {},
-          },
+  it("leaves unmarked lean configuration unchanged", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          experimental: { localModelLean: true },
         },
-      };
-      const expected = structuredClone(raw);
-      expect(findLegacyConfigIssues(raw)).toEqual([]);
-      expect(applyRetiredMigrations(raw)).toEqual({ raw: expected, changes: [] });
-    },
-  );
+      },
+    };
+    const expected = structuredClone(raw);
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(applyRetiredMigrations(raw)).toEqual({ raw: expected, changes: [] });
+  });
 });

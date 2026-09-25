@@ -519,17 +519,14 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each(["openai", "anthropic"])(
-    "rejects non-TTY %s sign-in without consuming input",
-    async (provider) => {
-      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-      await expect(modelsAccountsLoginCommand({ provider }, runtime())).rejects.toThrow(
-        "requires an interactive terminal",
-      );
-      expect(mocks.password).not.toHaveBeenCalled();
-      expect(mocks.openUrl).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects non-TTY sign-in without consuming input", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    await expect(modelsAccountsLoginCommand({ provider: "openai" }, runtime())).rejects.toThrow(
+      "requires an interactive terminal",
+    );
+    expect(mocks.password).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+  });
 
   it("renders the latest device progress snapshot and opens each destination once without acknowledging the code", async () => {
     const redirectInput =

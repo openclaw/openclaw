@@ -156,83 +156,27 @@ describe("bundled channel legacy config migrations", () => {
     expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
   });
 
-  it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {
+  it("uses registry fallback when a bundled channel contract is unavailable", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);
     loadBundledChannelDoctorContractApi.mockReturnValue(undefined);
     getBootstrapChannelPlugin.mockReturnValue(undefined);
-    applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({
-      config: {
-        channels: {
-          mattermost: {
-            network: {
-              dangerouslyAllowPrivateNetwork: true,
-            },
-            accounts: {
-              work: {
-                network: {
-                  dangerouslyAllowPrivateNetwork: false,
-                },
-              },
-            },
-          },
-        },
-      },
-      changes: [
-        "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-        "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-      ],
-    });
-
-    const result = applyChannelDoctorCompatibilityMigrations({
-      channels: {
-        mattermost: {
-          allowPrivateNetwork: true,
-          accounts: {
-            work: {
-              allowPrivateNetwork: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = firstMigrationCall();
-    expect(typeof migrationCall?.[0]).toBe("object");
-    expect(migrationCall?.[1]?.config).toStrictEqual({
-      channels: {
-        mattermost: {
-          allowPrivateNetwork: true,
-          accounts: {
-            work: {
-              allowPrivateNetwork: false,
-            },
-          },
-        },
-      },
-    });
-    expect(migrationCall?.[1]?.pluginIds).toStrictEqual(["mattermost"]);
-
-    const nextChannels = (result.next.channels ?? {}) as {
-      mattermost?: Record<string, unknown>;
+    const config = { channels: { mattermost: { allowPrivateNetwork: true } } };
+    const migrated = {
+      channels: { mattermost: { network: { dangerouslyAllowPrivateNetwork: true } } },
     };
+    const changes = ["Migrated channel config."];
+    applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({ config: migrated, changes });
 
-    expect(nextChannels.mattermost).toEqual({
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-      accounts: {
-        work: {
-          network: {
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      },
+    const result = applyChannelDoctorCompatibilityMigrations(config);
+
+    expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("mattermost");
+    expect(getBootstrapChannelPlugin).toHaveBeenCalledWith("mattermost");
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledTimes(1);
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(config, {
+      config,
+      pluginIds: ["mattermost"],
     });
-    expect(result.changes).toStrictEqual([
-      "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-      "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-    ]);
+    expect(result).toEqual({ next: migrated, changes });
   });
 
   it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {

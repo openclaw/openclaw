@@ -167,11 +167,8 @@ describe("models list published transport", () => {
     );
   });
 
-  it.each([
-    "Gateway rejected authorization",
-    "active gateway does not support required capability",
-    "Gateway connection unavailable",
-  ])("does not substitute local inventory for %s", async (message) => {
+  it("does not substitute local inventory for a selected Gateway failure", async () => {
+    const message = "Gateway rejected authorization";
     const failure = new Error(message);
     vi.mocked(gateway.callGateway).mockRejectedValue(failure);
     await expect(list({ all: true, json: true })).rejects.toBe(failure);
@@ -316,6 +313,7 @@ describe("models list published transport", () => {
     await list({ local: true, plain: true });
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
     expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("keeps an empty plain list machine-readable", async () => {

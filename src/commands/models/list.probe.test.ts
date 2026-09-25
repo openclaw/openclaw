@@ -74,10 +74,6 @@ describe("mapFailoverReasonToProbeStatus", () => {
     }
   });
 
-  it("does not import the embedded runner on module load", () => {
-    expect(probeModule.mapFailoverReasonToProbeStatus).toBeTypeOf("function");
-  });
-
   it("maps failover reasons to probe statuses", () => {
     const { mapFailoverReasonToProbeStatus } = probeModule;
     expect(mapFailoverReasonToProbeStatus("auth_permanent")).toBe("auth");

@@ -59,9 +59,7 @@ describe("legacy config migrate validation", () => {
     expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
   });
 
-  let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
-
-  beforeAll(() => {
+  it("returns valid config when migrating profiled tool sections with an existing allowlist", () => {
     const raw = {
       tools: {
         profile: "messaging",
@@ -69,13 +67,9 @@ describe("legacy config migrate validation", () => {
         exec: { security: "allowlist" },
       },
     };
-    profileConfiguredToolAllowResult = migrateLegacyConfig(raw, {
+    const res = migrateLegacyConfig(raw, {
       sourceConfigBeforeMigrations: raw,
     });
-  });
-
-  it("returns valid config when migrating profiled tool sections with an existing allowlist", () => {
-    const res = profileConfiguredToolAllowResult;
 
     expect(res.partiallyValid).toBeUndefined();
     expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
