@@ -656,7 +656,8 @@ describe("fleet restore runtime", () => {
     const config = JSON.parse(
       await fs.readFile(path.join(record.dataDir, "openclaw.json"), "utf8"),
     ) as { gateway?: { controlUi?: { allowedOrigins?: string[] } } };
-    expect(config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19100");
+    expect(config.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    expect(containers.run.mock.calls[0]?.[0].hostPort).toBe(19100);
     expect(containers.run.mock.calls[0]?.[0].environment.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
     expect(containers.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(expectedCache);
     expect(containers.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual(keys);
