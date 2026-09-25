@@ -58,3 +58,29 @@ export function shouldUseLmstudioSyntheticAuth(
     !hasLmstudioAuthorizationHeader(providerConfig?.headers)
   );
 }
+
+export function resolvePersistedLmstudioApiKey(params: {
+  currentApiKey: ModelProviderConfig["apiKey"] | undefined;
+  explicitAuth: ModelProviderConfig["auth"] | undefined;
+  fallbackApiKey: ModelProviderConfig["apiKey"] | undefined;
+  preferFallbackApiKey?: boolean;
+  hasModels: boolean;
+  hasAuthorizationHeader?: boolean;
+}): ModelProviderConfig["apiKey"] | undefined {
+  if (params.explicitAuth === "api-key") {
+    if (params.preferFallbackApiKey && params.fallbackApiKey !== undefined) {
+      return params.fallbackApiKey;
+    }
+    if (resolveLmstudioProviderAuthMode(params.currentApiKey)) {
+      return params.currentApiKey;
+    }
+    return params.fallbackApiKey;
+  }
+  return shouldUseLmstudioApiKeyPlaceholder({
+    hasModels: params.hasModels,
+    resolvedApiKey: params.currentApiKey,
+    hasAuthorizationHeader: params.hasAuthorizationHeader,
+  })
+    ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
+    : undefined;
+}

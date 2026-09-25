@@ -507,7 +507,9 @@ describe("opencode-go provider plugin", () => {
         } as never),
       ).resolves.toMatchObject({
         provider: { apiKey: "configured-opencode-key" },
+        outcomes: [],
       });
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }

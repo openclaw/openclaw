@@ -37,6 +37,21 @@ describe("huggingface plugin", () => {
     ).toMatchObject(bundledProvider);
   });
 
+  it("keeps marker-only fallback models separate from live discovery", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const provider = registerProvider();
+    const result = await provider?.catalog?.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "HF_TOKEN", discoveryApiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(result).toMatchObject({ provider: { ...bundledProvider, apiKey: "HF_TOKEN" } });
+    expect(result?.outcomes).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "no key is configured", config: {}, apiKey: undefined },
     {

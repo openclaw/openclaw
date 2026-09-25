@@ -79,6 +79,7 @@ export default defineSingleProviderPluginEntry({
               : {}),
             apiKey,
           },
+          outcomes: [],
         };
       },
     },

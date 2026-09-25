@@ -14,6 +14,7 @@ import {
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
+  ProviderCatalogResult,
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
@@ -93,23 +94,25 @@ export function defineSelfHostedOpenAICompatibleProvider(
           order: "late",
           run: async (ctx) => {
             const setup = await loadProviderSetup();
-            return await setup.discoverOpenAICompatibleSelfHostedProvider({
-              ctx,
-              providerId: options.id,
-              buildProvider: async (params) => {
-                const baseUrl = (params?.baseUrl?.trim() || options.defaultBaseUrl).replace(
-                  /\/+$/,
-                  "",
-                );
-                const models = await setup.discoverOpenAICompatibleLocalModels({
-                  baseUrl,
-                  apiKey: params?.apiKey,
-                  label: options.label,
-                  discoverRuntimeContext: false,
-                });
-                return { baseUrl, api: "openai-completions", models };
-              },
-            });
+            const result: ProviderCatalogResult =
+              await setup.discoverOpenAICompatibleSelfHostedProvider({
+                ctx,
+                providerId: options.id,
+                buildProvider: async (params) => {
+                  const baseUrl = (params?.baseUrl?.trim() || options.defaultBaseUrl).replace(
+                    /\/+$/,
+                    "",
+                  );
+                  const models = await setup.discoverOpenAICompatibleLocalModels({
+                    baseUrl,
+                    apiKey: params?.apiKey,
+                    label: options.label,
+                    discoverRuntimeContext: false,
+                  });
+                  return { baseUrl, api: "openai-completions", models };
+                },
+              });
+            return result ? { ...result, outcomes: [] } : result;
           },
         },
         wizard: {

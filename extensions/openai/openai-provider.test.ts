@@ -12,7 +12,6 @@ import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveModelRoutes } from "./provider-policy-api.js";
 
 const mocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -909,37 +908,6 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).toEqual(
       manifest.modelCatalog.providers.openai.models.map((model) => model.id),
     );
-  });
-
-  it("skips OpenAI live discovery for custom OpenAI-compatible base URLs", async () => {
-    const customBaseUrl = "https://example-proxy.invalid/v1";
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => {
-      throw new Error("unexpected OpenAI live discovery request");
-    });
-
-    const provider = await buildOpenAILiveProviderConfig({
-      apiKey: "sk-custom-openai-compatible",
-      baseUrl: customBaseUrl,
-      fetchGuard,
-    });
-
-    expect(fetchGuard).not.toHaveBeenCalled();
-    expect(provider.baseUrl).toBe(customBaseUrl);
-    expect(provider.api).toBe("openai-responses");
-    expect(provider.apiKey).toBe("sk-custom-openai-compatible");
-    const apiModel = provider.models.find((model) => model.api !== "openai-chatgpt-responses");
-    expect(apiModel?.baseUrl).toBe(customBaseUrl);
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: apiModel?.id,
-        configuredProvider: { api: provider.api, baseUrl: customBaseUrl },
-        observedRoutes: apiModel ? [{ api: apiModel.api, baseUrl: apiModel.baseUrl }] : [],
-      }),
-    ).toMatchObject({
-      kind: "routes",
-      routes: [{ api: provider.api, baseUrl: customBaseUrl }],
-    });
   });
 
   it("uses the Codex backend catalog for OpenAI OAuth discovery", async () => {

@@ -260,6 +260,7 @@ describe("Apple Foundation Models setup", () => {
     };
     expect(await provider.catalog?.run(context)).toMatchObject({
       provider: { models: [{ id: "system", contextWindow: 8_192 }] },
+      outcomes: [],
     });
     expect(native.probe).not.toHaveBeenCalled();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");

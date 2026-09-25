@@ -172,7 +172,7 @@ export async function runProviderCatalog(params: {
   if (!hook) {
     return undefined;
   }
-  const result = await hook.run({
+  let result = await hook.run({
     config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
@@ -184,7 +184,14 @@ export async function runProviderCatalog(params: {
   if (params.isActive?.() === false) {
     return undefined;
   }
-  for (const outcome of copyProviderCatalogOutcomes(result)) {
+  let outcomes = copyProviderCatalogOutcomes(result);
+  if (outcomes === undefined && result) {
+    const providers = normalizePluginDiscoveryResult({ provider: params.provider, result });
+    outcomes = Object.keys(providers).map((provider) => ({ provider, status: "ready" }));
+    // Keep the accepted projection so callers never evaluate plugin getters twice.
+    result = { providers, outcomes };
+  }
+  for (const outcome of outcomes ?? []) {
     if (
       params.providerIds !== undefined &&
       !params.providerIds.some(

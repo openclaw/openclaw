@@ -1088,7 +1088,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           );
           return {
             providers: { [PROVIDER_ID]: catalog.provider },
-            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+            outcomes: catalog.outcome ? [catalog.outcome] : [],
           };
         }
         return null;

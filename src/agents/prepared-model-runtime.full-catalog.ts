@@ -354,14 +354,8 @@ export function prepareModelCatalogPublication(
       );
       if (
         discoveryOrigins.some((origin) => origin.provider === provider) ||
-        (!previousOrigins?.length &&
-          ![...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])].some(
-            (entry) => !entry.nativeRuntime && normalizeProvider(entry.provider) === provider,
-          )) ||
-        (!previousOrigins?.length &&
-          previous?.providerOutcomes?.some(
-            (candidate) => normalizeProvider(candidate.provider) === provider,
-          )) ||
+        // Configured startup rows are not a discovered account inventory.
+        !previousOrigins?.length ||
         !previousAuth ||
         !previousAuth.credentials ||
         !auth.credentials ||
