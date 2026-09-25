@@ -315,6 +315,65 @@ describe("gateway host desktop source", () => {
     expect(managed.acquireComputer).not.toHaveBeenCalled();
   });
 
+  it("binds managed audio to screen preauthentication without starting capture or returning the VNC secret", async () => {
+    vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+    const managed = fakeManagedDesktop();
+    const start = vi.fn(async () => {
+      throw new Error("capture must wait for user input");
+    });
+    const acquire = managed.managed.acquire.bind(managed.managed);
+    managed.managed.acquire = async () => ({
+      ...(await acquire()),
+      resolveAudio: () => ({ start }),
+    });
+    const registry = createDesktopSessionRegistry();
+    cleanups.push(() => registry.stopAll());
+    const service = createHostDesktopService({
+      getConfig: () => ({ enabled: true, managed: true }),
+      registry,
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    const requester = { connId: "managed-audio-viewer", isCurrent: () => true };
+    const observed = await service.observe({ control: true, requester });
+    expect(observed.audio).toMatchObject({ encoding: "pcm-s16le", sampleRate: 48000, channels: 2 });
+    expect(observed.audio?.wsPath).toMatch(/^\/desktop\/audio\?token=/u);
+    expect(observed.preauthenticated).toBe(true);
+    expect(observed.vncPassword).toBeUndefined();
+    expect(start).not.toHaveBeenCalled();
+    expect(await releaseDesktopObserverToken(observed.wsPath, requester)).toBe(true);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "native stderr /private/audio/path synthetic-secret"])(
+    "projects only a fixed setup code for actual managed failure (%s)",
+    async (reason) => {
+      vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+      const managed = fakeManagedDesktop();
+      const acquire = managed.managed.acquire.bind(managed.managed);
+      managed.managed.acquire = async () => ({
+        ...(await acquire()),
+        audioUnavailableReason: reason,
+      });
+      const registry = createDesktopSessionRegistry();
+      cleanups.push(() => registry.stopAll());
+      const service = createHostDesktopService({
+        getConfig: () => ({ enabled: true, managed: true }),
+        registry,
+        platform: "linux",
+        managedDesktop: managed.managed,
+      });
+      const requester = { connId: "setup-diagnostic-viewer", isCurrent: () => true };
+      const observed = await service.observe({ control: false, requester });
+      expect(observed.audio).toBeUndefined();
+      expect(observed.audioUnavailableReason).toBe(reason ? "setup-unavailable" : undefined);
+      expect(JSON.stringify(observed)).not.toMatch(
+        /native stderr|private\/audio|synthetic-secret/u,
+      );
+      await releaseDesktopObserverToken(observed.wsPath, requester);
+    },
+  );
+
   it("starts managed mode only on Linux after the default port is unreachable", async () => {
     const managed = fakeManagedDesktop();
     const source = createHostDesktopSource({

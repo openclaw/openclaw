@@ -1,6 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { WebSocket } from "ws";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import {
+  listDevicePairing as listFixtureDevicePairing,
+  rejectDevicePairing,
+  removePairedDevice,
+} from "../infra/device-pairing.js";
 import {
   createOperatorIdentityFixture,
   REMOTE_BOOTSTRAP_HEADERS,
@@ -9,13 +15,64 @@ import {
 import {
   connectReq,
   ConnectErrorDetailCodes,
-  openWs,
+  openWs as openAuthWs,
   restoreGatewayToken,
   rpcReq,
+  testState,
 } from "./server.auth.test-helpers.js";
 import { connectWatchNode, readJson } from "./watch-node-http.test-helpers.js";
 
 export function registerControlUiMobileBootstrapSuite(): void {
+  let gateway: Awaited<ReturnType<typeof startProxiedControlUiServer>> | undefined;
+  let port: number;
+  const clientSockets = new Set<WebSocket>();
+  const openWs = async (...args: Parameters<typeof openAuthWs>): Promise<WebSocket> => {
+    const socket = await openAuthWs(...args);
+    clientSockets.add(socket);
+    return socket;
+  };
+  const closeClientSockets = async () => {
+    await Promise.all(
+      [...clientSockets].map(async (socket) => {
+        if (socket.readyState === WebSocket.CLOSED) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          socket.once("close", () => resolve());
+          socket.close();
+        });
+      }),
+    );
+    clientSockets.clear();
+  };
+
+  beforeAll(async () => {
+    gateway = await startProxiedControlUiServer("secret");
+    port = gateway.port;
+  });
+  beforeEach(async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    // Preserve fresh pairing state while the real Gateway and its workers stay prepared.
+    const pairing = await listFixtureDevicePairing();
+    for (const pending of pairing.pending) {
+      await rejectDevicePairing(pending.requestId);
+    }
+    for (const paired of pairing.paired) {
+      await removePairedDevice(paired.deviceId);
+    }
+  });
+  afterEach(closeClientSockets);
+  afterAll(async () => {
+    if (gateway) {
+      try {
+        await gateway.server.close();
+      } finally {
+        restoreGatewayToken(gateway.prevToken);
+      }
+    }
+  });
+
   const FULL_OPERATOR_SCOPES = [
     "operator.admin",
     "operator.approvals",
@@ -43,7 +100,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const identityFixture =
       params.identityFixture ?? (await createOperatorIdentityFixture(params.identityPrefix));
     const { identityPath, identity } = identityFixture;
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     try {
       const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       try {
@@ -65,8 +121,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         wsBootstrap.close();
       }
     } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
+      await closeClientSockets();
     }
   };
   const embeddedVoiceClient = {
@@ -126,7 +181,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
       const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
         await import("../shared/device-bootstrap-profile.js");
       const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-      const { server, port, prevToken } = await startProxiedControlUiServer("secret");
       const { identityPath, identity } = await createOperatorIdentityFixture(
         "openclaw-bootstrap-voice-node-",
       );
@@ -269,8 +323,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         for (const socket of sockets) {
           socket.close();
         }
-        await server.close();
-        restoreGatewayToken(prevToken);
+        await closeClientSockets();
       }
     },
   );
@@ -289,7 +342,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
     const { getPairedDevice, requestDevicePairing } = await import("../infra/device-pairing.js");
     const { decodePairingSetupCode } = await import("../pairing/setup-code.js");
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-watch-voice-existing-operator-",
     );
@@ -386,8 +438,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       for (const socket of sockets) {
         socket.close();
       }
-      await server.close();
-      restoreGatewayToken(prevToken);
+      await closeClientSockets();
     }
   });
 
@@ -399,7 +450,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
       await import("../shared/device-bootstrap-profile.js");
     const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-",
@@ -549,8 +599,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         }),
       ).resolves.toEqual({ ok: true });
     } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
+      await closeClientSockets();
     }
   });
 

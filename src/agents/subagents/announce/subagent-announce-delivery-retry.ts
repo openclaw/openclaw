@@ -11,7 +11,7 @@ import {
 } from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -20,17 +20,6 @@ export class SourceOwnerChangedError extends Error {
     super("subagent source lifecycle changed before completion delivery");
     this.name = "SourceOwnerChangedError";
   }
-}
-
-export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "source_owner_changed",
-    error: "subagent source lifecycle changed before completion delivery",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
@@ -136,6 +125,7 @@ function isPermanentNonWriterAnnounceError(error: unknown): boolean {
     error,
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
+      isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
       (!isWriterClaimReboundAnnounceError(candidate) &&
         PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
           pattern.test(summarizeDeliveryError(candidate)),

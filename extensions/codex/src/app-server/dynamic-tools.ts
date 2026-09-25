@@ -260,6 +260,7 @@ export function createCodexDynamicToolBridge(params: {
   };
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
+  functionToolsOnly?: boolean;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
@@ -360,6 +361,7 @@ export function createCodexDynamicToolBridge(params: {
       entries: registeredSpecTools,
       loading: params.loading ?? "searchable",
       directToolNames,
+      functionToolsOnly: params.functionToolsOnly,
     });
   const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
@@ -377,6 +379,7 @@ export function createCodexDynamicToolBridge(params: {
           entries: availableTools,
           loading: params.loading ?? "searchable",
           directToolNames,
+          functionToolsOnly: params.functionToolsOnly,
         }),
     specs,
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,

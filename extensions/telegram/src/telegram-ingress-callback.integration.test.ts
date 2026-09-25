@@ -142,7 +142,7 @@ it.each(["none", "middleware", "handler"] as const)(
         channels: { telegram: { apiRoot, dmPolicy: "open", allowFrom: ["*"] } },
         session: { store: path.join(stateDir, "sessions.json") },
       };
-      const bot = createTelegramBot({
+      const bot = await createTelegramBot({
         token: "123456:loopback-token",
         botInfo: telegramBotInfoForTest,
         config: cfg,

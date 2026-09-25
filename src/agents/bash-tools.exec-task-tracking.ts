@@ -1,8 +1,9 @@
 // Projects detached exec processes into the durable task ledger used by clients.
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  backgroundCommandTaskContent,
+  backgroundCommandTaskSummary,
+} from "../tasks/background-command-task-content.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import type { DetachedTaskTerminalState } from "../tasks/detached-task-runtime-contract.js";
 import { prepareRunningTaskRun } from "../tasks/detached-task-runtime.js";
@@ -39,16 +40,7 @@ export function createBackgroundExecTask(params: {
     return null;
   };
   try {
-    // Redact the complete command before compacting it so truncated secrets cannot escape masking.
-    const command = stripAnsi(redactToolPayloadText(params.command))
-      .replace(/\p{Cc}/gu, (control) => ("\r\n\t".includes(control) ? control : ""))
-      .trim();
-    const label =
-      truncateWithMarker(command.replace(/\s+/gu, " "), 120, {
-        marker: "…",
-        reserve: 1,
-        trimEnd: true,
-      }) || "CLI command";
+    const content = backgroundCommandTaskContent(params.command);
     const prepared = prepareRunningTaskRun(
       {
         runtime: "cli",
@@ -60,8 +52,7 @@ export function createBackgroundExecTask(params: {
         agentId: params.agentId,
         requesterAgentId: params.agentId,
         runId,
-        label,
-        task: command || label,
+        ...content,
         notifyPolicy: "silent",
         deliveryStatus: "not_applicable",
         startedAt: params.startedAt,
@@ -134,12 +125,7 @@ export function finalizeBackgroundExecTask(params: {
       status,
       endedAt,
       lastEventAt: endedAt,
-      terminalSummary:
-        status === "succeeded"
-          ? "Command completed"
-          : status === "failed"
-            ? "Command failed"
-            : "Command stopped",
+      terminalSummary: backgroundCommandTaskSummary(status),
       ...(status === "succeeded" ? { clearError: true } : { error: execTaskError(params.outcome) }),
       detail: {
         exitCode: params.outcome.exitCode,

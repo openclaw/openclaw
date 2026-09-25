@@ -207,6 +207,7 @@ describe("conversation registry", () => {
         afterCurrentWrite!.firstSeenAt,
         afterCurrentWrite!.lastSeenAt,
       );
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
 
     expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({

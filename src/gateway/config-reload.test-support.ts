@@ -1,6 +1,7 @@
 import chokidar from "chokidar";
-import { expect, vi, type TestContext } from "vitest";
+import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -8,6 +9,7 @@ import type {
 } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
@@ -20,6 +22,33 @@ let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
 export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
+}
+
+export function captureNextPluginLifecycleLease() {
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  let completion: ReturnType<typeof withLease> | undefined;
+  const spy = vi
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+    .mockImplementationOnce((options, run) => {
+      completion = withLease(options, run);
+      return completion;
+    });
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
+  return async () => {
+    assert.isDefined(completion);
+    await completion;
+  };
+}
+
+export function createRecoveryRestartMock() {
+  const emitted = createDeferred();
+  const requestRecoveryRestart = vi.fn(() => {
+    emitted.resolve();
+    return { status: "emitted" as const };
+  });
+  return { requestRecoveryRestart, restartEmitted: emitted.promise };
 }
 
 export function startGatewayConfigReloader(

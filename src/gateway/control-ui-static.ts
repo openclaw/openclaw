@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import {
   resolveHttpContentEncodings,
@@ -59,6 +60,8 @@ type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-accepta
 
 const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
+const compressBrotli = promisify(brotliCompress);
+const compressGzip = promisify(gzip);
 
 export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEncodingSelection {
   return (
@@ -195,28 +198,9 @@ export function respondHeadForControlUiFile(
 }
 
 function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const callback = (error: Error | null, compressed: Buffer) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(compressed);
-    };
-    if (encoding === "br") {
-      brotliCompress(
-        body,
-        {
-          params: {
-            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
-          },
-        },
-        callback,
-      );
-      return;
-    }
-    gzip(body, { level: 6 }, callback);
-  });
+  return encoding === "br"
+    ? compressBrotli(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+    : compressGzip(body, { level: 6 });
 }
 
 export async function serveControlUiAsset(

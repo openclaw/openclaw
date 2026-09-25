@@ -29,7 +29,9 @@ export type SubagentLifecycleOptions = {
     matches?: (entry: SubagentRunRecord) => boolean,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
+  /** Synchronous permission/revocation commits retain their native contract. */
   resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
+  resolveSubagentTaskAsync(entry: SubagentRunRecord): Promise<DetachedTaskFindResult>;
   shouldEmitEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;

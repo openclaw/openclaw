@@ -159,19 +159,22 @@ async function runCommandPreflightMaintenance(
     },
   });
   followupRun.prompt = prepared.body;
-  return memory.runSessionCompactionIfNeeded({
-    pendingUserEntryId: preflightAdmission?.entryId,
+  const maintenanceParams = {
     cfg: prepared.cfg,
     followupRun,
     promptForEstimate: prepared.body,
     defaultModel: modelSelection.defaultModel,
-    sessionEntry,
     sessionStore: prepared.sessionStore,
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
     isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
+  };
+  return memory.runSessionCompactionIfNeeded({
+    ...maintenanceParams,
+    pendingUserEntryId: preflightAdmission?.entryId,
+    sessionEntry,
     authorize: () => {
       assertActive();
       return true;
@@ -180,19 +183,10 @@ async function runCommandPreflightMaintenance(
     onCompactionCommitted: (accepted) => params.onCommittedSessionId(accepted.sessionId),
     beforeCompaction: async (entry) => {
       const flushed = await memory.runMemoryFlushIfNeeded({
+        ...maintenanceParams,
         preflightAdmission,
-        cfg: prepared.cfg,
-        followupRun,
-        promptForEstimate: prepared.body,
-        defaultModel: modelSelection.defaultModel,
         resolvedVerboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
         sessionEntry: entry,
-        sessionStore: prepared.sessionStore,
-        sessionKey: prepared.sessionKey,
-        runtimePolicySessionKey: prepared.sessionKey,
-        storePath: prepared.storePath,
-        isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
-        abortSignal: opts.abortSignal,
       });
       assertActive();
       return flushed.sessionEntry;

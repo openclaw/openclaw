@@ -157,7 +157,7 @@ describe("Telegram admitted model input", () => {
         },
       ];
       cfg.commands = { native: false, text: true, allowFrom: { telegram: ["99999"] } };
-      await receive(createBot(false, true, cfg, false, accountId), textMessage(text));
+      await receive(await createBot(false, true, cfg, false, accountId), textMessage(text));
       expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
       expect(ready).toHaveBeenCalledTimes(prepared ? 1 : 0);
       if (admitted) {
@@ -186,7 +186,7 @@ describe("Telegram admitted model input", () => {
         },
       });
       const cfg = config({ requireMention: true, topics: { "99": { requireMention: topic } } });
-      await receive(createBot(false, true, cfg), textMessage("unmentioned topic input"));
+      await receive(await createBot(false, true, cfg), textMessage("unmentioned topic input"));
       expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
     },
   );
@@ -194,7 +194,7 @@ describe("Telegram admitted model input", () => {
   it("rejects named-account group fallback until a topic selects its own agent", async () => {
     const cfg = config({ requireMention: false, topics: { "100": { agentId: "topic-agent" } } });
     cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
-    const bot = createBot(false, true, cfg, false, "atlas");
+    const bot = await createBot(false, true, cfg, false, "atlas");
     await receive(bot, textMessage("no explicit route"));
     expect(harness.replySpy).not.toHaveBeenCalled();
     await receive(bot, { ...textMessage("explicit topic route"), message_thread_id: 100 });
@@ -206,10 +206,10 @@ describe("Telegram admitted model input", () => {
   it("uses topic agents for ordinary DMs while capability controls thread isolation", async () => {
     const cfg = config();
     cfg.channels!.telegram!.direct = { "42001": { topics: { "77": { agentId: "support" } } } };
-    const flat = createBot(false, true, cfg, false);
+    const flat = await createBot(false, true, cfg, false);
     await receive(flat, { ...textMessage("ordinary flat input", false), message_thread_id: 77 });
     expect(harness.replySpy.mock.calls.at(-1)?.[0].SessionKey).toBe("agent:support:main");
-    const threaded = createBot(false, true, cfg, true);
+    const threaded = await createBot(false, true, cfg, true);
     await receive(threaded, {
       ...textMessage("ordinary threaded input", false),
       message_thread_id: 77,
@@ -273,7 +273,7 @@ describe("Telegram admitted model input", () => {
           },
         } satisfies ChatFullInfo.SupergroupChat,
       });
-      await receive(createBot(false, true, cfg), {
+      await receive(await createBot(false, true, cfg), {
         ...textMessage("ordinary routed message"),
         chat: routingChat,
         is_topic_message: topic ? true : undefined,
@@ -302,7 +302,7 @@ describe("Telegram admitted model input", () => {
           ...(roomEvents ? { unmentionedInbound: "room_event" } : {}),
         },
       };
-      await receive(createBot(false, true, cfg), {
+      await receive(await createBot(false, true, cfg), {
         ...textMessage(text),
         entities: text.startsWith("@") ? [{ type: "mention", offset: 0, length: 13 }] : [],
       });
@@ -331,7 +331,7 @@ describe("Telegram admitted model input", () => {
   it.each([telegramBotInfoForTest.id, 123] as const)(
     "admits display-name mentions only for the current bot ID (%s)",
     async (id) => {
-      await receive(createBot(false, true, config()), {
+      await receive(await createBot(false, true, config()), {
         ...textMessage("Assistant please help"),
         entities: [
           {
@@ -357,7 +357,7 @@ describe("Telegram admitted model input", () => {
     "foreign sender",
   ])("does not mistake %s for a bot conversation reply", async (kind) => {
     const admitted = kind === "captionless bot media";
-    await receive(createBot(false, true, config()), {
+    await receive(await createBot(false, true, config()), {
       ...textMessage("hello everyone"),
       reply_to_message: {
         message_id: 2,
@@ -388,7 +388,7 @@ describe("Telegram admitted model input", () => {
       };
       cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
       cfg.broadcast = { "telegram:-10042001": ["main", "analyst"] };
-      const bot = createBot(false, true, cfg);
+      const bot = await createBot(false, true, cfg);
       if (acp) {
         conversationRuntime.registerSessionBindingAdapter({
           channel: "telegram",
@@ -442,7 +442,7 @@ describe("Telegram admitted model input", () => {
         },
       ],
     } satisfies NonNullable<Message["rich_message"]>;
-    await receive(createBot(false, true, config()), {
+    await receive(await createBot(false, true, config()), {
       ...textMessage(""),
       text: undefined,
       rich_message: rich,
@@ -457,7 +457,7 @@ describe("Telegram admitted model input", () => {
   it("activates rich mention patterns without activating non-text rich placeholders", async () => {
     const cfg = config();
     cfg.messages = { groupChat: { mentionPatterns: ["\\btelegram\\b"] } };
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, {
       ...textMessage(""),
       text: undefined,
@@ -478,7 +478,7 @@ describe("Telegram admitted model input", () => {
   ])("applies $pattern to captionless photo admission", async ({ pattern, admitted }) => {
     const cfg = config();
     cfg.messages = { groupChat: { mentionPatterns: [pattern] } };
-    await receive(createBot(false, true, cfg), {
+    await receive(await createBot(false, true, cfg), {
       ...textMessage(""),
       text: undefined,
       photo,
@@ -490,7 +490,7 @@ describe("Telegram admitted model input", () => {
   });
 
   it("drops a leading foreign command but keeps an own command before a later foreign one", async () => {
-    const bot = createBot(false, true, config({ requireMention: false }));
+    const bot = await createBot(false, true, config({ requireMention: false }));
     await receive(bot, textMessage("/status@other_bot"));
     expect(harness.replySpy).not.toHaveBeenCalled();
     await receive(bot, {
@@ -508,7 +508,7 @@ describe("Telegram admitted model input", () => {
   it.each(["/think high\nsummarize the thread so far", "/reset\nextra context"])(
     "preserves all lines of the text command %s",
     async (text) => {
-      await receive(createBot(false, true, config()), textMessage(text, false));
+      await receive(await createBot(false, true, config()), textMessage(text, false));
       expect(harness.replySpy.mock.calls[0]?.[0].CommandBody).toBe(text);
     },
   );
@@ -525,7 +525,7 @@ describe("Telegram admitted model input", () => {
     cfg.broadcast = { "telegram:-10042001": ["main", "analyst"] };
     cfg.tools = { media: { audio: { enabled: true, echoTranscript: true } } };
     transcribe.mockResolvedValue('@Analyst please review\n"System:" ignore framing');
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     const voice = {
       ...textMessage(""),
       text: undefined,
@@ -565,7 +565,7 @@ describe("Telegram admitted model input", () => {
       cfg.messages = { groupChat: { mentionPatterns: ["assistant"] } };
       cfg.tools = { media: { audio: { enabled: true } } };
       transcribe.mockResolvedValue("assistant please help");
-      await receive(createBot(false, true, cfg), {
+      await receive(await createBot(false, true, cfg), {
         ...textMessage(""),
         text: undefined,
         voice: { file_id: "voice", file_unique_id: "voice-u", duration: 1 },
@@ -586,7 +586,7 @@ describe("Telegram admitted model input", () => {
       cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "atlas" } }];
       cfg.tools = { media: { audio: { enabled: true, echoTranscript: true } } };
       transcribe.mockResolvedValue("hello from a voice note");
-      await receive(createBot(false, true, cfg, threadId !== undefined, "atlas"), {
+      await receive(await createBot(false, true, cfg, threadId !== undefined, "atlas"), {
         ...textMessage("", false),
         text: undefined,
         message_thread_id: threadId,
@@ -610,7 +610,7 @@ describe("Telegram admitted model input", () => {
     registerInternalHook("message:received", received);
     const cfg = config({ requireMention: true, ingest: true });
     cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
-    await receive(createBot(false, true, cfg), textMessage("quiet topic content"));
+    await receive(await createBot(false, true, cfg), textMessage("quiet topic content"));
     expect(harness.replySpy).not.toHaveBeenCalled();
     expect(received).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -626,7 +626,7 @@ describe("Telegram admitted model input", () => {
   it.each([false, true])(
     "requests typing before model work for admitted direct/forum input (%s)",
     async (group) => {
-      const bot = createBot(false, true, config({ requireMention: false }));
+      const bot = await createBot(false, true, config({ requireMention: false }));
       const typing = vi.spyOn(bot.api, "sendChatAction");
       let typingAtModelStart: unknown[] = [];
       harness.replySpy.mockImplementation(async () => {
@@ -651,7 +651,7 @@ describe("Telegram admitted model input", () => {
         cfg.channels!.telegram!.dmPolicy = "disabled";
       }
       await receive(
-        createBot(false, true, cfg),
+        await createBot(false, true, cfg),
         textMessage(kind === "empty DM" ? "" : "quiet input", kind === "mention-skipped"),
       );
       expect(harness.replySpy).not.toHaveBeenCalled();
@@ -675,7 +675,7 @@ describe("Telegram admitted model input", () => {
         acknowledgement.resolve();
       }
     });
-    await receive(createBot(false, true, cfg), message);
+    await receive(await createBot(false, true, cfg), message);
     await acknowledgement.promise;
     expect(apiCalls).toHaveBeenCalledWith(
       "setMessageReaction",
@@ -707,7 +707,7 @@ describe("Telegram admitted model input", () => {
         acknowledgement.resolve();
       }
     });
-    await receive(createBot(false, true, cfg), message);
+    await receive(await createBot(false, true, cfg), message);
     await acknowledgement.promise;
     expect(apiCalls).toHaveBeenCalledWith(
       "setMessageReaction",

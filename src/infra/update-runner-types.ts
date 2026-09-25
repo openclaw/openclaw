@@ -1,53 +1,17 @@
 import type { z } from "zod";
 import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
-import type { UpdateRecoveryStep } from "../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
-import type { UpdateDoctorLintFinding } from "./update-doctor-lint-schema.js";
-import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
+import type { GitRuntimeArtifactIdentity } from "./update-git-runtime.js";
 import type { GlobalInstallManager } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import type { UpdateRollbackOutcome, UpdateRunRecordSchema } from "./update-run-schema.js";
-import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
-
-type UpdateStepAdvisory =
-  | PackageUpdateStepAdvisory
-  | { kind: "candidate-runtime-unavailable" | "recoverable-maintenance"; message: string };
-
-export type UpdateStepResult = {
-  /** Stable public identifier; released recovery keys retain their persisted spelling. */
-  name: string;
-  command: string;
-  cwd: string;
-  durationMs: number;
-  exitCode: number | null;
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  outputLimitExceeded?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: UpdateStepAdvisory;
-  /** Complete owner-classified warnings when one step reports several outcomes. */
-  warnings?: string[];
-  /** Owner-selected informational messages, retained separately from warnings and raw output. */
-  diagnostics?: string[];
-  /** Suggested operator actions, distinct from executed update steps. */
-  recoverySteps?: readonly UpdateRecoveryStep[];
-  failureFacts?: UpdateFailureFact[];
-  doctorLintFindings?: UpdateDoctorLintFinding[];
-  configChanges?: UpdateDoctorConfigChange[];
-  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
-  snapshotCapacity?: UpdateSnapshotCapacity;
-};
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export type UpdateRunResult = {
   localOverrides?: LocalPackageOverridesResult;
@@ -58,6 +22,7 @@ export type UpdateRunResult = {
   reason?: string;
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
+  gitRuntime?: GitRuntimeArtifactIdentity;
   before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
@@ -164,6 +129,8 @@ export type UpdateRunnerOptions = {
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
+  /** The finalizer owns retained source/runtime rollback after successful activation. */
+  onTransaction?: (transaction: PackageUpdateTransaction) => void;
 } & (
   | {
       /** CLI-owned activation Doctor retains its config writer and requester authority. */

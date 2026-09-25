@@ -341,8 +341,8 @@ export async function withQuestionSessionAccess<T>(
   operation: { assertCurrent: () => void; includeMembers?: boolean },
 ): Promise<T> {
   operation.assertCurrent();
-  const source = captureGatewayOperatorRunAuthority(options);
   const producer = resolveGatewayOperatorRoleActor(options.client);
+  const source = await captureGatewayOperatorRunAuthority(options);
   const profileId =
     usesOwnRunQuestionAccess(options.client) && options.client?.internal?.operatorRunAuthority
       ? source?.authority.profileId

@@ -34,7 +34,6 @@ import {
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   resolveGenerateAction,
-  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -378,7 +377,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           explicitModelConfig,
         }) => {
           const providers = acquired?.providers ?? preparedProviders;
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
 
           const filename = readToolStringParam(args, "filename");
           const size = readToolStringParam(args, "size");

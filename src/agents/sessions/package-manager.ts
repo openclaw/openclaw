@@ -100,13 +100,6 @@ function resourcePrecedenceRank(m: PathMetadata): number {
   return scopeBase + (m.source === "local" ? 0 : 1);
 }
 
-interface PackageFilter {
-  extensions?: string[];
-  skills?: string[];
-  prompts?: string[];
-  themes?: string[];
-}
-
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 type TopLevelAutoResourceType = Extract<ResourceType, "prompts" | "themes">;
 type ResourceState = { metadata: PathMetadata; enabled: boolean };
@@ -138,13 +131,7 @@ function getAgentResourceTempDir(agentDir: string): string {
 }
 
 function isPattern(s: string): boolean {
-  return (
-    s.startsWith("!") ||
-    s.startsWith("+") ||
-    s.startsWith("-") ||
-    s.includes("*") ||
-    s.includes("?")
-  );
+  return isOverridePattern(s) || hasGlobPattern(s);
 }
 
 function isOverridePattern(s: string): boolean {
@@ -286,10 +273,6 @@ function collectSkillEntries(
   return entries;
 }
 
-function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode): string[] {
-  return collectSkillEntries(dir, mode);
-}
-
 function findGitRepoRoot(startDir: string): string | null {
   let dir = resolve(startDir);
   while (true) {
@@ -419,7 +402,7 @@ function collectResourceFiles(dir: string, resourceType: ResourceType): string[]
 
 const AUTO_RESOURCE_COLLECTORS = {
   extensions: collectAutoExtensionEntries,
-  skills: (dir: string) => collectAutoSkillEntries(dir, "openclaw"),
+  skills: (dir: string) => collectSkillEntries(dir, "openclaw"),
   prompts: (dir: string) => collectTopLevelAutoResourceEntries(dir, "prompts"),
   themes: (dir: string) => collectTopLevelAutoResourceEntries(dir, "themes"),
 } satisfies Record<ResourceType, (dir: string) => string[]>;
@@ -539,7 +522,7 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
   return new Set(result);
 }
 
-function getPackageFilter(pkg: PackageSource): PackageFilter | undefined {
+function getPackageFilter(pkg: PackageSource): ResourceManifest | undefined {
   if (typeof pkg === "string") {
     return undefined;
   }
@@ -773,7 +756,7 @@ export class DefaultPackageManager implements PackageManager {
    * For git packages, uses normalized host/path to ensure SSH and HTTPS URLs
    * for the same repository are treated as identical.
    */
-  private getPackageIdentity(source: string, scope?: SourceScope): string {
+  private getPackageIdentity(source: string, scope: SourceScope): string {
     const parsed = this.parseSource(source);
     if (parsed.type === "npm") {
       return `npm:${parsed.name}`;
@@ -782,11 +765,7 @@ export class DefaultPackageManager implements PackageManager {
       // Use host/path for identity to normalize SSH and HTTPS
       return `git:${parsed.host}/${parsed.path}`;
     }
-    if (scope) {
-      const baseDir = this.getBaseDirForScope(scope);
-      return `local:${this.resolvePathFromBase(parsed.path, baseDir)}`;
-    }
-    return `local:${this.resolvePath(parsed.path)}`;
+    return `local:${this.resolvePathFromBase(parsed.path, this.getBaseDirForScope(scope))}`;
   }
 
   /**
@@ -796,24 +775,16 @@ export class DefaultPackageManager implements PackageManager {
   private dedupePackages(
     packages: Array<{ pkg: PackageSource; scope: SourceScope }>,
   ): Array<{ pkg: PackageSource; scope: SourceScope }> {
-    const seen = new Map<string, { pkg: PackageSource; scope: SourceScope }>();
-
-    for (const entry of packages) {
+    const seen = new Set<string>();
+    return packages.filter((entry) => {
       const sourceStr = typeof entry.pkg === "string" ? entry.pkg : entry.pkg.source;
       const identity = this.getPackageIdentity(sourceStr, entry.scope);
-
-      const existing = seen.get(identity);
-      if (!existing) {
-        seen.set(identity, entry);
-      } else if (entry.scope === "project" && existing.scope === "user") {
-        // Project wins over user
-        seen.set(identity, entry);
+      if (seen.has(identity)) {
+        return false;
       }
-      // If existing is project and new is global, keep existing (project)
-      // If both are same scope, keep first one
-    }
-
-    return Array.from(seen.values());
+      seen.add(identity);
+      return true;
+    });
   }
 
   private parseNpmSpec(spec: string): { name: string; version?: string } {
@@ -864,20 +835,6 @@ export class DefaultPackageManager implements PackageManager {
     return this.cwd;
   }
 
-  private resolvePath(input: string): string {
-    const trimmed = input.trim();
-    if (trimmed === "~") {
-      return getHomeDir();
-    }
-    if (trimmed.startsWith("~/")) {
-      return join(getHomeDir(), trimmed.slice(2));
-    }
-    if (trimmed.startsWith("~")) {
-      return join(getHomeDir(), trimmed.slice(1));
-    }
-    return resolve(this.cwd, trimmed);
-  }
-
   private resolvePathFromBase(input: string, baseDir: string): string {
     const trimmed = input.trim();
     if (trimmed === "~") {
@@ -895,7 +852,7 @@ export class DefaultPackageManager implements PackageManager {
   private collectPackageResources(
     packageRoot: string,
     accumulator: ResourceAccumulator,
-    filter: PackageFilter | undefined,
+    filter: ResourceManifest | undefined,
     metadata: PathMetadata,
   ): boolean {
     const manifest = readResourceManifestFile(join(packageRoot, "package.json"));
@@ -1112,7 +1069,7 @@ export class DefaultPackageManager implements PackageManager {
           const agentsBaseDir = dirname(skillsDir);
           addResources(
             "skills",
-            collectAutoSkillEntries(skillsDir, "agents"),
+            collectSkillEntries(skillsDir, "agents"),
             { ...metadata, baseDir: agentsBaseDir },
             agentsBaseDir,
           );

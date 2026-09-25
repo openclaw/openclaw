@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../../infra/fs-safe-defaults.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

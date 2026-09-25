@@ -138,6 +138,7 @@ export function renderChatPaneComposerControls(params: {
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
   onModelSetup: () => void;
+  onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
   composerControls: NonNullable<ChatProps["composerControls"]>;
@@ -154,6 +155,7 @@ export function renderChatPaneComposerControls(params: {
     permissionAccess,
     canSelectFull,
     onModelSetup,
+    onProviderSettings,
     onModelAccounts,
   } = params;
   const sessionKey = state.sessionKey;
@@ -296,6 +298,7 @@ export function renderChatPaneComposerControls(params: {
           stream: state.chatStream,
           onRequestUpdate: () => state.requestUpdate?.(),
           onModelSetup,
+          onProviderSettings,
           onFastModeSelect: (next, targetSessionKey) =>
             effortAccess.allowed && canPatch({ fastMode: null }, targetSessionKey)
               ? switchChatFastMode(state, next, targetSessionKey)

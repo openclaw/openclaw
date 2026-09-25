@@ -8,7 +8,8 @@ import {
   resolveUiSelectedSessionAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { readChatQueueForScope, updateQueuedMessagesForSession } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
 registerChatProviderReviewEnglish();
@@ -62,5 +63,5 @@ export function holdProviderReviewQueuedInputs(
         sendError: t("chat.providerReview.queuedInputHeld"),
       }),
     }));
-  return updates.length === 0 || updateQueuedMessagesForSession(host, updates);
+  return updates.length === 0 || chatOutboxOwner(host).update(host, updates) !== null;
 }

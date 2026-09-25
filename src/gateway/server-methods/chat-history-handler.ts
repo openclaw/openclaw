@@ -219,7 +219,7 @@ export async function handleChatHistoryRequest({
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
-        ? readChatPendingInputs(
+        ? await readChatPendingInputs(
             {
               agentId: sessionAgentId,
               sessionKey: canonicalKey,
@@ -231,6 +231,7 @@ export async function handleChatHistoryRequest({
               limit: max,
               maxChars: effectiveMaxChars,
               queuedTurns: context.chatQueuedTurns,
+              cronStorePath: context.cronStorePath,
             },
           )
         : { items: [], total: 0 };

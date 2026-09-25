@@ -2,7 +2,7 @@
 import { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isVerbose, isYes } from "../globals.js";
+import { isYes } from "../globals.js";
 import { toErrorObject } from "../infra/errors.js";
 
 /** Signals that an interactive prompt lost stdin before a complete answer arrived. */
@@ -39,9 +39,6 @@ function questionUntilClose(rl: ReadlineInterface, question: string): Promise<st
 
 /** Prompts for yes/no input, honoring global `--yes` before opening stdin. */
 export async function promptYesNo(question: string, defaultYes = false): Promise<boolean> {
-  if (isVerbose() && isYes()) {
-    return true;
-  }
   if (isYes()) {
     return true;
   }
