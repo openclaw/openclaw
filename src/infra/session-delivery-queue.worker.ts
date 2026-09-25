@@ -42,6 +42,16 @@ export function executeSessionDeliveryCommand(
     getDeliveryQueueEntryOwnersInDatabase(database, [SESSION_DELIVERY_QUEUE_NAME], id).get(
       SESSION_DELIVERY_QUEUE_NAME,
     )?.status;
+  const rethrowUnlessTerminal = (id: string, status: "completed" | "failed", error: unknown) => {
+    try {
+      if (readStatus(id) === status) {
+        return;
+      }
+    } catch {
+      // Unconfirmed durable state must preserve the original transition failure.
+    }
+    throw error;
+  };
   const update = (id: string, transform: (entry: QueuedSessionDelivery) => QueuedSessionDelivery) =>
     updateDeliveryQueueEntryInDatabase(database, SESSION_DELIVERY_QUEUE_NAME, id, (entry) =>
       // SAFETY: Only the session namespace reaches this payload transform.
@@ -133,14 +143,7 @@ export function executeSessionDeliveryCommand(
         }
         throw new Error(`Session delivery ${id} is no longer pending`);
       } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
+        return rethrowUnlessTerminal(id, "completed", error);
       }
     }
     case "sessionDelivery.complete": {
@@ -148,14 +151,7 @@ export function executeSessionDeliveryCommand(
       try {
         completeDeliveryQueueEntryInDatabase(database, SESSION_DELIVERY_QUEUE_NAME, id);
       } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
+        return rethrowUnlessTerminal(id, "completed", error);
       }
       return;
     }
@@ -209,14 +205,7 @@ export function executeSessionDeliveryCommand(
           throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);
         }
       } catch (error) {
-        try {
-          if (readStatus(id) === "failed") {
-            return;
-          }
-        } catch {
-          // Preserve the original transition failure when durable state is unreadable.
-        }
-        throw error;
+        return rethrowUnlessTerminal(id, "failed", error);
       }
     }
   }
