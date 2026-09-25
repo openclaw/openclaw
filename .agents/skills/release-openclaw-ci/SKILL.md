@@ -49,7 +49,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
-  to reserved capacity with unchanged labels. Configure eligible runners and repo
+  and the Release Publish parent plus its publish children to reserved capacity
+  with unchanged labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.

@@ -13,6 +13,13 @@ const dedicated = [
   "openclaw-npm-preflight",
   "docker-release-prepare",
   "openclaw-cross-os-release-checks-reusable",
+  "openclaw-release-publish",
+  "openclaw-npm-release",
+  "plugin-npm-release",
+  "plugin-clawhub-release",
+  "plugin-clawhub-new",
+  "plugin-clawhub-postpublish",
+  "authorized-beta-focused-validation",
 ];
 const shared = [
   "install-smoke-reusable",
@@ -23,6 +30,8 @@ const shared = [
   "qa-profile-evidence",
   "qa-live-transports-convex",
   "npm-telegram-beta-e2e",
+  "docker-release",
+  "vercel-container-registry-publish",
 ];
 const mixed = ["ci", "openclaw-performance"];
 type Job = { "runs-on"?: string; uses?: string; with?: Record<string, string> };
@@ -106,6 +115,12 @@ describe("release runner reservation", () => {
   });
 
   it("retains the public Linux and native default labels", () => {
+    expect(
+      evaluateWorkflowRunner(
+        Object.values(workflows.get("openclaw-release-publish")!.jobs)[0]?.["runs-on"],
+        context,
+      ),
+    ).toBe("ubuntu-latest");
     expect(
       evaluateWorkflowRunner(
         workflows.get("full-release-validation")?.jobs.resolve_target?.["runs-on"],
