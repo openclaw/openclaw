@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import type { ChatAttachment, ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+  ChatReplyTarget,
+} from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -63,6 +68,7 @@ export type QueuedChatSendOptions = {
   previousDraft?: string;
   previousMentions?: ChatQueueItem["mentions"];
   previousReplyTarget?: ChatReplyTarget | null;
+  previousGoalDraftMode?: ChatGoalDraftMode | null;
   restoreAttachments?: boolean;
   restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */
