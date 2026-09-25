@@ -4504,7 +4504,11 @@ function createCompactNodeTestShardBundles(
         })
       );
     };
-    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
+    const bins = packNodeTestGroups(
+      anchorGroups,
+      canShareCompactJob,
+      options.runnerBackend === "github",
+    );
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));
