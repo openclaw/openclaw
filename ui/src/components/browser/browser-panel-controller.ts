@@ -36,8 +36,6 @@ import { BrowserPanelViewportController } from "./browser-panel-viewport-control
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const ACTION_REFRESH_DELAY_MS = 350;
-
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
@@ -273,11 +271,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
-          if (current() && this.activeTargetId) {
-            void this.refreshView(this.activeTargetId, epoch);
-          }
-        });
+        this.snapshot.scheduleRefresh(epoch, current);
       }
       return current();
     } catch (error) {
