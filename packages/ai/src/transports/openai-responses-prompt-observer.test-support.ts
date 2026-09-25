@@ -1,10 +1,28 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "./openai-responses-contracts.js";
+
+export function createModel<TApi extends Api = "openai-responses">(
+  overrides: Partial<Model<TApi>> = {},
+): Model<TApi> {
+  return {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    ...overrides,
+  } as Model<TApi>;
+}
 
 export const SDK_FULL_HISTORY_PREFIX = "full history before compaction";
 export const SDK_REASONING_CIPHERTEXT = "opaque-sdk-reasoning";

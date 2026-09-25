@@ -16,6 +16,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import {
   completedSdkResponse,
+  createModel,
   createCompactionContext,
   createOrphanedToolOutputCompactionContext,
   SDK_FULL_HISTORY_PREFIX,
@@ -60,24 +61,6 @@ import {
 } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-
-function createModel<TApi extends Api = "openai-responses">(
-  overrides: Partial<Model<TApi>> = {},
-): Model<TApi> {
-  return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    ...overrides,
-  } as Model<TApi>;
-}
 
 function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
   return {
