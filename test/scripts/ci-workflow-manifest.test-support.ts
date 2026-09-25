@@ -34,6 +34,7 @@ export function runCiManifestFixture(options: {
   bunUiTestRuntime?: boolean | "requires-ftl-flag";
   startupCorpusCoverage?: boolean;
   startupCorpusSelection?: boolean;
+  releaseFastLaneSelection?: boolean;
   changedPlannerSource?: string | null;
   changedPlannerDependencies?: string[];
   dockerSeedPlannerSource?: string;
@@ -318,8 +319,14 @@ export function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
         options.changedPlannerSource ??
           `
-          export const createChangedNodeTestShards = (changedPaths) =>
-            changedPaths.includes("src/focused.ts") ||
+          export const createChangedNodeTestShards = (changedPaths, options = {}) => {
+            console.log("changed-node-plan-options:" + JSON.stringify(options));
+            if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
+              options.onFallback("stub fallback");
+              return null;
+            }
+            return changedPaths.includes("src/focused.ts") ||
+            changedPaths.includes("scripts/openclaw-release-ready.mjs") ||
             changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts")
               ? [{
                   checkName: "changed-node-plan",
@@ -329,9 +336,12 @@ export function runCiManifestFixture(options: {
                   shardName: "changed-node-plan",
                   targets: changedPaths.includes("src/focused.ts")
                     ? ["src/focused.test.ts"]
-                    : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
+                    : changedPaths.includes("scripts/openclaw-release-ready.mjs")
+                      ? ["test/scripts/openclaw-release-ready.test.ts"]
+                      : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
                 }]
               : null;
+          };
           export const createChangedExtensionFallbackShards = (changedPaths) =>
             changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))
               ? changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
@@ -364,6 +374,12 @@ export function runCiManifestFixture(options: {
             changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
         `,
         "utf8",
+      );
+    }
+    if (options.releaseFastLaneSelection) {
+      appendFileSync(
+        path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
+        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};\n`,
       );
     }
     if (options.bundledPlanner) {
@@ -567,6 +583,7 @@ export function runCiManifestFixture(options: {
           (options.eventName ?? "workflow_dispatch") === "workflow_dispatch"
             ? "true"
             : "false",
+        OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: "false",
         OPENCLAW_CI_RELEASE_GATE: String(options.releaseGate ?? false),
         OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
           options.releaseCandidateCompatibility === true ? "true" : "false",
