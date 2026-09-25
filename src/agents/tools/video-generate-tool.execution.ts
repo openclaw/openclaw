@@ -328,62 +328,69 @@ export async function executeVideoGenerationJob(params: {
     ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
 
+  const executionResult = buildMediaGenerateToolExecutionResult({
+    result,
+    attachments,
+    mediaUrls: allMediaUrls,
+    lines,
+    taskHandle: params.taskHandle,
+    warning,
+    details: {
+      ...buildMediaReferenceDetails({
+        entries: params.loadedReferenceImages,
+        singleKey: "image",
+        pluralKey: "images",
+        getResolvedInput: (entry) => entry.resolvedInput,
+      }),
+      ...buildMediaReferenceDetails({
+        entries: params.loadedReferenceVideos,
+        singleKey: "video",
+        pluralKey: "videos",
+        getResolvedInput: (entry) => entry.resolvedInput,
+        singleRewriteKey: "videoRewrittenFrom",
+      }),
+      ...(normalizedSize ||
+      (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
+        ? { size: normalizedSize ?? params.size }
+        : {}),
+      ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
+        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
+        : {}),
+      ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
+        ? { resolution: normalizedResolution ?? params.resolution }
+        : {}),
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationSeconds: normalizedDurationSeconds }
+        : {}),
+      ...(typeof requestedDurationSeconds === "number" &&
+      typeof normalizedDurationSeconds === "number" &&
+      requestedDurationSeconds !== normalizedDurationSeconds
+        ? { requestedDurationSeconds }
+        : {}),
+      ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
+        ? { supportedDurationSeconds }
+        : {}),
+      ...(!ignoredOverrideKeys.has("audio") && typeof params.audio === "boolean"
+        ? { audio: params.audio }
+        : {}),
+      ...(!ignoredOverrideKeys.has("watermark") && typeof params.watermark === "boolean"
+        ? { watermark: params.watermark }
+        : {}),
+      ...(params.filename ? { filename: params.filename } : {}),
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    },
+  });
   return {
-    ...buildMediaGenerateToolExecutionResult({
-      result,
-      attachments,
-      mediaUrls: allMediaUrls,
-      lines,
-      taskHandle: params.taskHandle,
-      warning,
-      details: {
-        ...buildMediaReferenceDetails({
-          entries: params.loadedReferenceImages,
-          singleKey: "image",
-          pluralKey: "images",
-          getResolvedInput: (entry) => entry.resolvedInput,
-        }),
-        ...buildMediaReferenceDetails({
-          entries: params.loadedReferenceVideos,
-          singleKey: "video",
-          pluralKey: "videos",
-          getResolvedInput: (entry) => entry.resolvedInput,
-          singleRewriteKey: "videoRewrittenFrom",
-        }),
-        ...(normalizedSize ||
-        (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
-          ? { size: normalizedSize ?? params.size }
-          : {}),
-        ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
-          ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
-          : {}),
-        ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
-          ? { resolution: normalizedResolution ?? params.resolution }
-          : {}),
-        ...(typeof normalizedDurationSeconds === "number"
-          ? { durationSeconds: normalizedDurationSeconds }
-          : {}),
-        ...(typeof requestedDurationSeconds === "number" &&
-        typeof normalizedDurationSeconds === "number" &&
-        requestedDurationSeconds !== normalizedDurationSeconds
-          ? { requestedDurationSeconds }
-          : {}),
-        ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
-          ? { supportedDurationSeconds }
-          : {}),
-        ...(!ignoredOverrideKeys.has("audio") && typeof params.audio === "boolean"
-          ? { audio: params.audio }
-          : {}),
-        ...(!ignoredOverrideKeys.has("watermark") && typeof params.watermark === "boolean"
-          ? { watermark: params.watermark }
-          : {}),
-        ...(params.filename ? { filename: params.filename } : {}),
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      },
-    }),
+    provider: executionResult.provider,
+    model: executionResult.model,
     urlOnlyUrls: deliveredVideos.flatMap((video) =>
       video.kind === "url" ? [video.media.url] : [],
     ),
+    count: executionResult.count,
     mediaUrls: allMediaUrls,
+    attachments,
+    contentText: executionResult.contentText,
+    wakeResult: executionResult.wakeResult,
+    details: executionResult.details,
   };
 }

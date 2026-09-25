@@ -39,10 +39,13 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
     params.lateBindRuntimeConfig === true
       ? (getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
-  const configuredProvider = config?.tools?.web?.[params.kind]?.provider;
-  const providerSelectionId =
-    (runtimeMetadata?.selectedProvider ?? runtimeMetadata?.providerConfigured) ||
-    (typeof configuredProvider === "string" ? configuredProvider.trim().toLowerCase() : "");
+  let providerSelectionId =
+    (runtimeMetadata?.selectedProvider ?? runtimeMetadata?.providerConfigured) || "";
+  if (!providerSelectionId) {
+    const configuredProvider = config?.tools?.web?.[params.kind]?.provider;
+    providerSelectionId =
+      typeof configuredProvider === "string" ? configuredProvider.trim().toLowerCase() : "";
+  }
   return {
     config,
     // Search uses the live registry; only fetch routes bundled selections by manifest ownership.

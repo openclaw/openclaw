@@ -34,9 +34,8 @@ export function projectScheduledMessageActionPartialResult(params: {
   if (params.action === "send" || params.action === "poll") {
     return {
       ...(params.action === "send"
-        ? { kind: "send" as const, action: "send" as const }
-        : { kind: "poll" as const, action: "poll" as const }),
-      channel,
+        ? { kind: "send" as const, channel, action: "send" as const }
+        : { kind: "poll" as const, channel, action: "poll" as const }),
       to: target,
       handledBy: "plugin",
       payload: partialDelivery,

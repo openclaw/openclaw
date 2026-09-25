@@ -1486,10 +1486,10 @@ src/agents/agent-bundle-mcp-manager-api.ts	2
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	7
+src/agents/agent-bundle-mcp-runtime.ts	5
 src/agents/agent-command-restart-recovery.ts	3
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	14
+src/agents/agent-hooks/compaction-safeguard.ts	13
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
@@ -1722,7 +1722,7 @@ src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
 src/agents/mcp-transport-config.ts	5
 src/agents/mcp-transport.ts	2
-src/agents/mcp-ui-resource.ts	4
+src/agents/mcp-ui-resource.ts	2
 src/agents/media-generation-task-status-shared.ts	1
 src/agents/memory-write-provenance.ts	1
 src/agents/minimax-vlm.ts	1
@@ -1873,7 +1873,6 @@ src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
-src/agents/tools/pdf-tool.ts	1
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
