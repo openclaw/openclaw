@@ -19,13 +19,10 @@ import {
   getOwedHarnessCompletionTask,
   readAdmittedHarnessCompletionInput,
 } from "../../tasks/agent-harness-completion-recovery.js";
-import {
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../embedded-agent-runner/active-run-projections.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import type { MainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
+import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
@@ -53,10 +50,8 @@ import {
 import {
   type ExhaustedRestartRecoveryTarget,
   type ExpectedRestartRecoveryTarget,
-  hasCurrentProcessOwner,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
-  normalizeStringSet,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
@@ -199,16 +194,7 @@ export async function recoverStore(params: {
     result.skipped++;
     return true;
   };
-  const providedActiveSessionIds =
-    params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
-  const providedActiveSessionKeys =
-    params.activeSessionKeys === undefined
-      ? undefined
-      : normalizeStringSet(params.activeSessionKeys);
-  const resolveActiveSessionIds = () =>
-    providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
-  const resolveActiveSessionKeys = () =>
-    providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
   let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
     if (params.expectedTarget) {
@@ -265,14 +251,7 @@ export async function recoverStore(params: {
     const target = { agentId, sessionKey, storePath: params.storePath };
     const dispatchSessionKey =
       params.expectedTarget?.canonicalSessionKey ?? dispatchTarget.sessionKey;
-    if (
-      hasCurrentProcessOwner({
-        activeSessionIds: resolveActiveSessionIds(),
-        activeSessionKeys: resolveActiveSessionKeys(),
-        entry,
-        sessionKey,
-      })
-    ) {
+    if (hasCurrentProcessOwner(entry, sessionKey)) {
       result.skipped++;
       continue;
     }
@@ -313,7 +292,12 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (recoveryView.status === "exhausted") {
+    if (
+      recoveryView.status === "exhausted" ||
+      (!params.observationOnly &&
+        requiresRestartRecoveryMessageActionAuthority(entry) &&
+        !hasRestartRecoveryMessageActionAuthority(entry))
+    ) {
       if (stopped()) {
         return result;
       }
@@ -323,7 +307,10 @@ export async function recoverStore(params: {
         entry,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
-        reason: recoveryView.reason,
+        reason:
+          recoveryView.status === "exhausted"
+            ? recoveryView.reason
+            : "message-tool-only recovery authority is unavailable",
       });
       if (tombstone === "notice_failed") {
         result.failed++;
@@ -363,28 +350,6 @@ export async function recoverStore(params: {
         }
       }
     };
-    if (
-      requiresRestartRecoveryMessageActionAuthority(entry) &&
-      !hasRestartRecoveryMessageActionAuthority(entry)
-    ) {
-      if (stopped()) {
-        return result;
-      }
-      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
-        ...target,
-        cfg: params.cfg,
-        entry,
-        gatewayRuntime: params.gatewayRuntime,
-        observation: recoveryView.observation,
-        reason: "message-tool-only recovery authority is unavailable",
-      });
-      if (tombstone === "notice_failed") {
-        result.failed++;
-      } else {
-        result.skipped++;
-      }
-      continue;
-    }
 
     const expectedRecoverySourceRunId = normalizeOptionalString(
       entry.restartRecoveryDeliverySourceRunId,

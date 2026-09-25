@@ -31,6 +31,7 @@ let callbackError: string | undefined;
 let identityNonce: string | undefined;
 let callbackClientIds: string[];
 let identitySubject: string;
+let identityEmail: string | undefined;
 
 beforeAll(async () => {
   keys = await generateKeyPair("RS256");
@@ -38,7 +39,10 @@ beforeAll(async () => {
 });
 
 async function identityToken() {
-  return new SignJWT({ nonce: identityNonce ?? authorization.searchParams.get("nonce") })
+  return new SignJWT({
+    nonce: identityNonce ?? authorization.searchParams.get("nonce"),
+    email: identityEmail,
+  })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(TOKEN_SHARING_ISSUER)
     .setAudience(idTokenAudience)
@@ -120,6 +124,7 @@ beforeEach(() => {
   callbackResponse = undefined;
   callbackClientIds = [];
   identitySubject = "user-1";
+  identityEmail = undefined;
   request.mockImplementation(async (params) => {
     params.beforeRequest?.();
     const body = params.url.endsWith("jwks.json")
@@ -304,6 +309,7 @@ describe("ChatGPT token-sharing authorization", () => {
   });
 
   it("uses public PKCE/resource parameters, verifies identity, and returns a distinct renewable profile", async () => {
+    identityEmail = "owner@example.test";
     const result = await loginTokenSharing(context());
     const exchange = request.mock.calls.find(([params]) => params.init?.method === "POST")![0];
     const form = exchange.init.body as URLSearchParams;
@@ -333,6 +339,7 @@ describe("ChatGPT token-sharing authorization", () => {
       issuer: TOKEN_SHARING_ISSUER,
       authFlow: TOKEN_SHARING_AUTH_FLOW,
       displayName: "Sign in with ChatGPT",
+      email: "owner@example.test",
       grantedScope: grantScope,
     });
     expect(result.profiles[0]?.credential).toHaveProperty(
@@ -418,6 +425,7 @@ describe("ChatGPT token-sharing authorization", () => {
   ])(
     "refreshes with the original client/resource, refresh token $replacement, and granted scope $scope",
     async ({ replacement, scope }) => {
+      identityEmail = "owner@example.test";
       const login = await loginTokenSharing(context());
       const credential = login.profiles[0]!.credential;
       if (credential.type !== "oauth") {
@@ -434,7 +442,8 @@ describe("ChatGPT token-sharing authorization", () => {
         }),
         release: async () => undefined,
       });
-      const refreshed = await refreshTokenSharingCredential(credential);
+      // Existing SIWC profiles may retain the verified token without its email metadata.
+      const refreshed = await refreshTokenSharingCredential({ ...credential, email: undefined });
       expect(Object.fromEntries(request.mock.calls[0]![0].init.body)).toEqual({
         grant_type: "refresh_token",
         client_id: clientId,
@@ -447,9 +456,26 @@ describe("ChatGPT token-sharing authorization", () => {
         authFlow: scope === undefined ? TOKEN_SHARING_AUTH_FLOW : IDENTITY_AUTH_FLOW,
         grantedScope: scope ?? grantScope,
         idToken: credential.idToken,
+        email: "owner@example.test",
         accountId: credential.accountId,
         authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
       });
+    },
+  );
+
+  it.each(["updated@example.test", undefined])(
+    "uses the renewed ID token's email %s without changing the account binding",
+    async (email) => {
+      identityEmail = "owner@example.test";
+      const login = await loginTokenSharing(context());
+      const credential = login.profiles[0]!.credential;
+      if (credential.type !== "oauth") {
+        throw new Error("Expected OAuth");
+      }
+      identityEmail = email;
+      const refreshed = await refreshTokenSharingCredential(credential);
+      expect(refreshed.email).toBe(email);
+      expect(refreshed.accountId).toBe(credential.accountId);
     },
   );
 

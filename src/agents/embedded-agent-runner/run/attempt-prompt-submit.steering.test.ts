@@ -59,7 +59,7 @@ async function prepareSteering() {
     sessionKey: childSessionKey,
     defaultSessionId: "kept-child-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: childRunId,
     childSessionKey,
     requesterSessionKey,

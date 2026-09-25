@@ -3,7 +3,6 @@
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -24,7 +23,7 @@ import {
 } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
-useChatAbortRegistryFixture();
+const fixture = useChatAbortRegistryFixture();
 const abortSession = sessionAbortHandlers["sessions.abort"];
 if (!abortSession) {
   throw new Error("sessions.abort handler is not registered");
@@ -84,7 +83,7 @@ it.each([
       maxConcurrent: 1,
       onStartFailure: () => true,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "queued-save-warning",
       childSessionKey: scope.sessionKey,
       requesterSessionKey: "agent:main:main",
@@ -96,7 +95,7 @@ it.each([
       queued: true,
       expectsCompletionMessage: false,
     });
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
   }
   const respond = vi.fn();
   const context = createChatAbortContext({

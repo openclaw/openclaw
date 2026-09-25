@@ -329,6 +329,83 @@ describe("OAuth refresh peer settlement", () => {
     }
   });
 
+  it.each([
+    {
+      name: "the same normalized Copilot tenant",
+      ownerEnterpriseUrl: "https://TENANT-A.GHE.COM/copilot/",
+      peerEnterpriseUrl: "tenant-a.ghe.com",
+      retired: true,
+    },
+    {
+      name: "a different Copilot tenant",
+      ownerEnterpriseUrl: "https://tenant-a.ghe.com/copilot/",
+      peerEnterpriseUrl: "https://tenant-b.ghe.com/",
+      retired: false,
+    },
+  ])(
+    "settles an identity-less peer only for $name",
+    async ({ ownerEnterpriseUrl, peerEnterpriseUrl, retired }) => {
+      const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+      let tempRoot = "";
+
+      try {
+        tempRoot = await createOAuthTestTempRoot("openclaw-oauth-copilot-tenant-settlement-");
+        await createOAuthMainAgentDir(tempRoot);
+        const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+        await fs.mkdir(peerAgentDir, { recursive: true });
+        const profileId = "github-copilot:default";
+        const provider = "github-copilot";
+        const ownerOriginal = createExpiredOauthStore({ profileId, provider }).profiles[profileId];
+        if (ownerOriginal?.type !== "oauth") {
+          throw new Error("expected owner OAuth credential");
+        }
+        ownerOriginal.enterpriseUrl = ownerEnterpriseUrl;
+        const peerOriginal = { ...ownerOriginal, enterpriseUrl: peerEnterpriseUrl };
+        const fence = createOAuthRefreshFence({ profileId, credential: ownerOriginal });
+        const replacement = {
+          ...ownerOriginal,
+          access: "rotated-owner-access",
+          refresh: "rotated-owner-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        };
+        saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, peerAgentDir);
+        const persistedFence = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
+        if (persistedFence?.type !== "oauth") {
+          throw new Error("expected persisted OAuth fence");
+        }
+
+        settleOAuthRefreshPeerClaims({
+          profileId,
+          fence: persistedFence,
+          claims: [
+            {
+              candidate: {
+                agentId: "peer-a",
+                agentDir: peerAgentDir,
+                databasePath: resolveAuthProfileDatabasePath(peerAgentDir),
+                env: process.env,
+              },
+              original: peerOriginal,
+            },
+          ],
+          authoritativeSharedCredential: replacement,
+          replacement,
+        });
+
+        const settled = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
+        if (retired) {
+          expect(settled).toBeUndefined();
+        } else {
+          expect(settled?.type === "oauth" && isOAuthRefreshFence(settled)).toBe(true);
+          expect(settled?.type === "oauth" && isPendingOAuthRefreshFence(settled)).toBe(false);
+        }
+      } finally {
+        envSnapshot.restore();
+        await removeOAuthTestTempRoot(tempRoot);
+      }
+    },
+  );
+
   it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     let tempRoot = "";

@@ -1615,6 +1615,9 @@ export const en: TranslationMap & {
     autoSavePaused: "Autosave paused after reconnect",
     saveNow: "Save",
     autoSaveFailed: "Save failed",
+    autoSaveRejected: "Settings not applied",
+    autoSaveRejectedHint: "Current settings are unchanged.",
+    rejectionDetails: "Show reason",
     recoveryNotRestored:
       "Settings could not be restored. Your draft is kept. Check {path} before saving again.",
     recoveryUnknown:
