@@ -173,6 +173,7 @@ export type LifecycleArtifactCleanupPlan = {
   entries: SessionEntryRemovalPlan[];
 };
 export type ProjectedLifecycleMutation = {
+  archiveRecovery?: { pending: boolean; databaseIdentity: string };
   deletePlans: SessionStateDeletePlan[];
   removals: Array<{
     archiveTranscript: boolean;

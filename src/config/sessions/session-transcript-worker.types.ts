@@ -320,7 +320,7 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list";
+  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -332,6 +332,7 @@ export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
+  pendingArchives?: boolean;
   databaseIdentity?: {
     identity: string;
     incarnation: string;
@@ -403,6 +404,12 @@ export type SessionBranchSummaryWorkerInput = {
   request: SessionBranchSummaryReadRequest;
 };
 
+type SessionPendingArchivesWorkerInput = {
+  kind: "session-pending-archives";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+};
+
 export type SessionArchivePruningWorkerInput = {
   kind: "session-archive-pruning";
   database: { agentId: string; path: string };
@@ -421,6 +428,7 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
 export type SessionHistoryWorkerInput =
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
+  | SessionPendingArchivesWorkerInput
   | SessionColdMetadataWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
@@ -459,6 +467,7 @@ export type SessionHistoryWorkerPreparedInput = {
 }[SessionHistoryDatabaseWorkerInput["kind"]];
 
 export type SessionTranscriptWorkerValues = {
+  "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "historical-eviction-candidates": {
     kind: "historical-eviction-candidates";
     sessionIds: string[];
@@ -522,6 +531,10 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     };
 
 export type SessionHistoryWorkerDatabase = {
+  readPendingArchives: (
+    input: Omit<SessionPendingArchivesWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   findTranscriptEvent: (
     request: SessionTranscriptMatchWorkerInput["request"],
   ) => Promise<{ event: TranscriptEvent } | undefined>;

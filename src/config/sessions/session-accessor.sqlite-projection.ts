@@ -367,10 +367,17 @@ export async function applySessionEntryLifecycleMutation(params: {
     let beforeCount = 0;
     const removedSessionKeys: string[] = [];
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    let pendingArchives = true;
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
       params.beforeCommitInTransaction?.();
       assertSourceCurrent?.();
+      if (
+        projected.archiveRecovery?.databaseIdentity ===
+        readOpenClawAgentDatabaseIdentity(transactionDb).identity
+      ) {
+        pendingArchives = projected.archiveRecovery.pending;
+      }
       if (params.onLifecycleCommitted) {
         deferOpenClawAgentPostCommitPublication(transactionDb, params.onLifecycleCommitted);
       }
@@ -539,12 +546,16 @@ export async function applySessionEntryLifecycleMutation(params: {
       // Fresh upserts do not own unrelated archive recovery. Removal retries and
       // Doctor transfers still publish when this commit produced no new archive.
       publishArchives:
-        params.skipMaintenance !== true ||
+        archivedTranscripts.length > 0 ||
         params.allowCanonicalRepair === true ||
         params.afterUpsertsInTransaction !== undefined ||
         removals.length > 0 ||
-        projected.upsertedEntries.length === 0 ||
-        projected.upsertedEntries.some(({ expectedEntry }) => expectedEntry !== undefined),
+        ((pendingArchives ||
+          params.withCommit !== undefined ||
+          projected.upsertedEntries.some(({ resetBoundary }) => resetBoundary !== undefined)) &&
+          (params.skipMaintenance !== true ||
+            projected.upsertedEntries.length === 0 ||
+            projected.upsertedEntries.some(({ expectedEntry }) => expectedEntry !== undefined))),
     };
   }
 
