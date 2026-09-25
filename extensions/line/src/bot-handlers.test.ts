@@ -1,9 +1,12 @@
 // Line tests cover bot handlers plugin behavior.
 import type { webhook } from "@line/bot-sdk";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setLineRuntime } from "./runtime.js";
 import type { LineAccountConfig } from "./types.js";
+import { createTestMessageEvent } from "./webhook-spool.test-support.js";
 
 type MessageEvent = webhook.MessageEvent;
 
@@ -247,36 +250,12 @@ function createReplayMessageEvent(params: {
   webhookEventId: string;
   isRedelivery: boolean;
 }) {
-  return {
-    type: "message",
+  return createTestMessageEvent({
     message: { id: params.messageId, type: "text", text: "hello", quoteToken: "quote-token" },
-    replyToken: "reply-token",
-    timestamp: Date.now(),
     source: { type: "group", groupId: params.groupId, userId: params.userId },
-    mode: "active",
     webhookEventId: params.webhookEventId,
-    deliveryContext: { isRedelivery: params.isRedelivery },
-  } as MessageEvent;
-}
-
-function createTestMessageEvent(params: {
-  message: MessageEvent["message"];
-  source: MessageEvent["source"];
-  webhookEventId: string;
-  timestamp?: number;
-  replyToken?: string;
-  isRedelivery?: boolean;
-}) {
-  return {
-    type: "message",
-    message: params.message,
-    replyToken: params.replyToken ?? "reply-token",
-    timestamp: params.timestamp ?? Date.now(),
-    source: params.source,
-    mode: "active",
-    webhookEventId: params.webhookEventId,
-    deliveryContext: { isRedelivery: params.isRedelivery ?? false },
-  } as MessageEvent;
+    isRedelivery: params.isRedelivery,
+  });
 }
 
 function createLineWebhookTestContext(params: {
@@ -386,6 +365,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
+    setLineRuntime(createPluginRuntimeMock());
     pairingDeliveryMocks.invokePairingReply = false;
     pairingDeliveryMocks.pushMessageLine.mockReset().mockImplementation(async () => {
       throw new Error("pushMessageLine should not be called from bot-handlers tests");

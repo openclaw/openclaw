@@ -75,35 +75,61 @@ describe("on-demand prepared worker admission", () => {
 
   it("admits HEAD without a session, authorizes setup, and starts background preparation", async () => {
     const f = await fixture();
+    await f.service.ready();
     support.getDevelopmentProfile().readyWorkers = 0;
-    const result = await f.service.prepare(f.request);
-    const record = support.testState.store.get(result.environmentId)!;
-    expect(result).toEqual({
-      environmentId: record.environmentId,
-      preparationKey: record.preparation!.key,
-      reused: false,
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const provision = expectDefined(f.provision.getMockImplementation(), "provider implementation");
+    f.provision.mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return await provision(...args);
     });
-    expect(record).toMatchObject({
-      profileId: "development",
-      attachedSessionIds: [],
-      profileSnapshot: {
-        executionMode: "worker-turn",
-        project: {
-          root: f.projectPath,
-          baseCommit: await requireGit(f.projectPath, ["rev-parse", "HEAD"]),
+    try {
+      const result = await f.service.prepare(f.request);
+      // Provider entry follows the committed provisioning transition; hold it during reads.
+      await entered.promise;
+      const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
+      const record = support.testState.store.get(result.environmentId)!;
+      expect(result).toEqual({
+        environmentId: record.environmentId,
+        preparationKey: record.preparation!.key,
+        reused: false,
+      });
+      expect(record).toMatchObject({
+        profileId: "development",
+        attachedSessionIds: [],
+        profileSnapshot: {
+          executionMode: "worker-turn",
+          project: {
+            root: f.projectPath,
+            baseCommit,
+          },
         },
-      },
-      preparation: { purpose: "build", demandAtMs: 1_000, expiresAtMs: 11_000, consumedAtMs: null },
-    });
-    expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
-      /^[a-f0-9]{40}$/u,
-    );
-    await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
-    expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
-    expect(f.service.list()[0]?.preparation).toMatchObject({
-      purpose: "build",
-      key: result.preparationKey,
-    });
+        preparation: {
+          purpose: "build",
+          demandAtMs: 1_000,
+          expiresAtMs: 11_000,
+          consumedAtMs: null,
+        },
+      });
+      expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
+        /^[a-f0-9]{40}$/u,
+      );
+      expect(f.provision).toHaveBeenCalledOnce();
+      expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
+      expect(f.service.list()[0]?.preparation).toEqual({
+        purpose: "build",
+        key: result.preparationKey,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+        consumedAtMs: null,
+        project: { label: "project", baseCommit },
+      });
+    } finally {
+      release.resolve();
+      await f.service.stop();
+    }
   });
 
   it.each(["build", "reserve"] as const)(
@@ -117,7 +143,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         setupAuthorized: true,
       });
-      const existing = support.testState.store.createIntent({
+      const existing = await support.testState.store.createIntent({
         environmentId: "existing-prepared",
         provisionOperationId: "existing-operation",
         providerId: intent.providerId,
@@ -204,7 +230,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           setupAuthorized: true,
         });
-        ({ environmentId } = support.testState.store.createIntent({
+        ({ environmentId } = await support.testState.store.createIntent({
           environmentId: "automatic-reserve",
           provisionOperationId: "automatic-reserve-operation",
           providerId: intent.providerId,
@@ -223,8 +249,12 @@ describe("on-demand prepared worker admission", () => {
       if (purpose === "expired reserve") {
         support.testState.nowMs = 11_001;
       }
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       const destroyed = f.service.destroyUnattached(environmentId);
       try {
+        await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );
@@ -262,12 +292,12 @@ describe("on-demand prepared worker admission", () => {
       context.getGatewayMethodRegistry = () =>
         createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(environmentsHandlers));
       const client = createOperatorClient({
-        profileId: "preparation-operator",
+        profileName: "preparation-operator",
         scopes: ["operator.admin"],
       });
       const controller = new AbortController();
       const source = expectDefined(
-        captureGatewayOperatorRunAuthority({
+        await captureGatewayOperatorRunAuthority({
           client,
           context,
           sourceAuthority: {

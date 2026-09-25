@@ -48,7 +48,46 @@ describe("Claude project directory watch", () => {
   );
 
   it("reports dirty children for transcript writes and new project directories", async () => {
-    await promises.mkdir(path.join(root, "existing"));
+    if (process.platform === "darwin") {
+      // Let FSEvents observe the new fixture directory through its existing parent
+      // before asking a new stream to watch that directory's descendants.
+      const reported = new Set<string>();
+      const parentWatch = fs.watch(
+        path.dirname(root),
+        { recursive: true, persistent: false },
+        (_event, name) => {
+          if (name) {
+            reported.add(name);
+          }
+        },
+      );
+      try {
+        // fs.watch returns before its FSEvents stream is live. Keep emitting a
+        // fixture-only probe until the parent actually observes it before
+        // creating the child directory used by the product watcher.
+        const probe = path.join(root, ".watch-ready");
+        await vi.waitFor(
+          async () => {
+            await promises.appendFile(probe, ".");
+            expect(reported).toContain(`${path.basename(root)}/.watch-ready`);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
+        await promises.mkdir(path.join(root, "existing"));
+        const childProbe = path.join(root, ".watch-child-ready");
+        await vi.waitFor(
+          async () => {
+            await promises.appendFile(childProbe, ".");
+            expect(reported).toContain(`${path.basename(root)}/.watch-child-ready`);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
+      } finally {
+        parentWatch.close();
+      }
+    } else {
+      await promises.mkdir(path.join(root, "existing"));
+    }
     watch = createDirtyDirectoryWatch(root);
     watch.observeChildDirectories(["existing"]);
     await armed(watch);

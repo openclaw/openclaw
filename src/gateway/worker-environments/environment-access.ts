@@ -1,12 +1,10 @@
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
-import {
-  StaleWorkerBuildError,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -154,8 +152,27 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       inState(record, "ready", "idle", "attached") &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
+    const preparedProject = record.preparation
+      ? readWorkerProjectSnapshot(record.profileSnapshot.project)
+      : undefined;
+    const projectLabel = preparedProject
+      ? "source" in preparedProject
+        ? normalizeCloudRepo(preparedProject.source.url)
+        : preparedProject.label
+      : undefined;
     return {
       ...record,
+      ...(record.preparation && preparedProject
+        ? {
+            preparation: {
+              ...record.preparation,
+              project: {
+                ...(projectLabel ? { label: projectLabel } : {}),
+                baseCommit: preparedProject.baseCommit,
+              },
+            },
+          }
+        : {}),
       ...((record.state === "failed" || record.state === "orphaned") && record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
@@ -286,7 +303,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         record.ownerEpoch === request.ownerEpoch &&
         record.lastError &&
-        !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+        !sameWorkerBuild(record.bootstrapReceipt, currentBundle)
       ) {
         throw new WorkerRuntimeRefreshPendingError(boundedError(record.lastError));
       }
@@ -298,7 +315,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
-      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+      if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
       const nodeDeviceId = record.nodeDeviceId;
@@ -520,6 +537,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!startup || launchEpoch === undefined) {
       throw serviceError("launcher_failure", "Worker desktop app launcher failed to start");
     }
+    const assertLaunchOwner = async () => {
+      const { record } = requireLaunchable();
+      if (record.ownerEpoch !== launchEpoch) {
+        throw serviceError("invalid_state", "Worker desktop app launch owner changed");
+      }
+    };
     try {
       await startup;
     } catch (error) {
@@ -536,37 +559,19 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       // A teardown aborts the SSH child before mutating the durable row. Wait for the
       // environment lock, then report the authoritative lifecycle state instead of a launch error.
-      await withLock(request.environmentId, async () => {
-        const { record } = requireLaunchable();
-        if (record.ownerEpoch !== launchEpoch) {
-          throw serviceError("invalid_state", "Worker desktop app launch owner changed");
-        }
-      });
+      await withLock(request.environmentId, assertLaunchOwner);
       throw serviceError(
         "launcher_failure",
         `worker desktop ${request.app} launcher failed; verify the app is installed and retry`,
       );
     }
-    await withLock(request.environmentId, async () => {
-      const { record } = requireLaunchable();
-      if (record.ownerEpoch !== launchEpoch) {
-        throw serviceError("invalid_state", "Worker desktop app launch owner changed");
-      }
-    });
+    await withLock(request.environmentId, assertLaunchOwner);
     return { app: request.app, status: "ready" };
-  };
-
-  const stopTunnelOwners = async (stops: Array<Promise<void> | undefined>): Promise<void> => {
-    const results = await Promise.allSettled(stops.filter((stop) => stop !== undefined));
-    const failure = results.find((result) => result.status === "rejected");
-    if (failure) {
-      throw failure.reason;
-    }
   };
 
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () =>
-      stopTunnelOwners([
+      joinWorkerTunnelStops([
         tunnels?.stop(environmentId, ownerEpoch),
         nodeTunnels?.stop(environmentId, ownerEpoch),
         nodeDesktop?.stop(environmentId, ownerEpoch),
@@ -589,7 +594,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!enabled) {
       desktopPolicy.abort();
       // The registry also owns host and paired-node desktops; stop only worker sources.
-      await stopTunnelOwners([
+      await joinWorkerTunnelStops([
         ...store.list().map((record) => tunnels?.desktop.stop(record.environmentId)),
         nodeDesktop?.stopAll(),
       ]);
@@ -610,7 +615,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     resolveSshIdentity,
     startTunnel,
     stopAllTunnels: () =>
-      stopTunnelOwners([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
+      joinWorkerTunnelStops([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
     stopTunnel,
   };
 }

@@ -39,6 +39,27 @@ class ChatImageCodecTest {
   }
 
   @Test
+  fun locallyAdmittedLargeJpegUsesItsOwnBoundedPreviewPolicy() {
+    val raw = syntheticLargeChatPhotoBase64()
+    assertTrue(raw.length > CHAT_IMAGE_MAX_BASE64_CHARS)
+    assertTrue(decodedBase64ByteCount(raw) < CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES)
+    assertNull(decodeBase64Bitmap(raw))
+    val preview = requireNotNull(decodeBase64Bitmap(raw, source = Base64ImageSource.Composer))
+    assertEquals(1024, preview.width)
+    assertEquals(768, preview.height)
+    // A cached local preview must not relax incoming inline or Markdown admission.
+    assertNull(decodeBase64Bitmap(raw))
+    assertNull(parseDataImageDestination("data:image/jpeg;base64,$raw"))
+  }
+
+  @Test
+  fun locallyAdmittedPreviewStillRejectsBytesBeyondTheComposerLimit() {
+    val maxChars = (((CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES + 2) / 3) * 4).toInt()
+    assertNull(decodeBase64Bitmap("A".repeat(maxChars + 1), source = Base64ImageSource.Composer))
+    assertNull(decodeBase64Bitmap("YQ==", source = Base64ImageSource.Composer))
+  }
+
+  @Test
   fun computeInSampleSizeCapsLongestEdge() {
     assertEquals(4, computeInSampleSize(width = 4032, height = 3024, maxDimension = 1600))
     assertEquals(1, computeInSampleSize(width = 800, height = 600, maxDimension = 1600))

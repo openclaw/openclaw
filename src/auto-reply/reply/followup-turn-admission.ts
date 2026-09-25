@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
@@ -139,12 +139,9 @@ export async function admitFollowupTurn(params: {
     initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
-  const resolveRunSessionFile = (source: FollowupRun["run"], sessionId: string) =>
+  const resolveRunSessionFile = (source: FollowupRun["run"]) =>
     resolveAdmittedRunSessionFile({
-      agentId: source.agentId,
-      sessionId,
       sessionKey: replySessionKey,
-      storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
@@ -184,7 +181,7 @@ export async function admitFollowupTurn(params: {
       run = {
         ...run,
         sessionId: operation.sessionId,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
+        sessionFile: resolveRunSessionFile(run),
         cliSessionBindingFacts: undefined,
         autoFallbackPrimaryProbe: undefined,
         modelSelectionLocked: false,
@@ -243,7 +240,7 @@ export async function admitFollowupTurn(params: {
     if (activeEntry?.sessionId === operation.sessionId) {
       run = {
         ...run,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
+        sessionFile: resolveRunSessionFile(run),
         modelSelectionLocked: activeEntry.modelSelectionLocked === true,
         ...(lifecycleRevisionChanged
           ? {
@@ -335,7 +332,7 @@ export async function admitFollowupTurn(params: {
           run: {
             ...turn.queued.run,
             sessionId: entry.sessionId,
-            sessionFile: resolveRunSessionFile(turn.queued.run, entry.sessionId),
+            sessionFile: resolveRunSessionFile(turn.queued.run),
             cliSessionBindingFacts: undefined,
             autoFallbackPrimaryProbe: undefined,
             modelSelectionLocked: entry.modelSelectionLocked === true,

@@ -107,9 +107,7 @@ async function writeTrustedProxyBrowserAuthConfig(password?: string) {
     gateway: {
       auth,
       trustedProxies: ["127.0.0.1"],
-      controlUi: {
-        allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
-      },
+      publicOrigin: ALLOWED_BROWSER_ORIGIN,
     },
   });
 }
@@ -252,7 +250,7 @@ describe("gateway auth browser hardening", () => {
   });
 
   test.each([undefined, REDACTED_SENTINEL])(
-    "accepts trusted-proxy browser connects with optional password %s",
+    "accepts trusted-proxy browser connects from publicOrigin with optional password %s",
     async (password) => {
       await withTrustedProxyBrowserWs(
         ALLOWED_BROWSER_ORIGIN,

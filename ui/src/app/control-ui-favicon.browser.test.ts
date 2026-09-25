@@ -13,6 +13,7 @@ import {
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 
 let faviconSvg: string;
 beforeAll(async () => {
@@ -26,6 +27,8 @@ describe("favicon presentation ownership", () => {
   let previousStyle: string | null;
   let previousTheme: string | undefined;
   let previousThemeMode: string | undefined;
+  let previousThemeMascot: string | undefined;
+  let previousBranding: ReturnType<typeof currentThemeBranding>;
   let svgIcon: HTMLLinkElement;
   let pngIcon: HTMLLinkElement;
   let originals: [[string, string], [string, string]];
@@ -37,8 +40,12 @@ describe("favicon presentation ownership", () => {
     previousStyle = document.documentElement.getAttribute("style");
     previousTheme = document.documentElement.dataset.theme;
     previousThemeMode = document.documentElement.dataset.themeMode;
+    previousThemeMascot = document.documentElement.dataset.themeMascot;
+    previousBranding = currentThemeBranding();
     document.documentElement.dataset.theme = "dark";
     document.documentElement.dataset.themeMode = "dark";
+    setCurrentThemeBranding({ mascot: "claw", critters: [] });
+    document.documentElement.dataset.themeMascot = "claw";
     for (const [name, value] of [
       ["--warn", "rgb(210, 150, 60)"],
       ["--accent", "rgb(80, 120, 160)"],
@@ -68,6 +75,8 @@ describe("favicon presentation ownership", () => {
   });
 
   afterEach(() => {
+    setCurrentThemeBranding({ mascot: "claw", critters: [] });
+    document.documentElement.dataset.themeMascot = "claw";
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
     svgIcon.remove();
@@ -89,6 +98,12 @@ describe("favicon presentation ownership", () => {
     } else {
       document.documentElement.dataset.themeMode = previousThemeMode;
     }
+    if (previousThemeMascot === undefined) {
+      delete document.documentElement.dataset.themeMascot;
+    } else {
+      document.documentElement.dataset.themeMascot = previousThemeMascot;
+    }
+    setCurrentThemeBranding(previousBranding);
     vi.restoreAllMocks();
   });
 
@@ -147,6 +162,23 @@ describe("favicon presentation ownership", () => {
       vi.waitFor(() =>
         expect(svgDocument().documentElement.lastElementChild?.getAttribute("fill")).toBe(color),
       );
+    const changePresentation = async (change: () => void) => {
+      const changed = createDeferred();
+      const observer = new MutationObserver(() => changed.resolve());
+      observer.observe(svgIcon, { attributes: true, attributeFilter: ["href"] });
+      try {
+        change();
+        await changed.promise;
+      } finally {
+        observer.disconnect();
+      }
+    };
+    const themeStyle = document.createElement("style");
+    themeStyle.textContent = `
+      :root { --primary: rgb(180, 20, 40); --primary-foreground: rgb(250, 250, 250); }
+      :root[data-theme="favicon-neutral"] { --primary: rgb(190, 30, 50); --primary-foreground: rgb(240, 240, 240); }
+    `;
+    document.head.append(themeStyle);
     try {
       await sessions.refresh({ agentId: "main", force: true });
       const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -188,6 +220,34 @@ describe("favicon presentation ownership", () => {
         expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull(),
       );
       await expectDot("rgb(20, 100, 180)");
+      await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "none", critters: [] });
+        document.documentElement.dataset.themeMascot = "none";
+      });
+      expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(180, 20, 40)");
+      expect(svgDocument().querySelector("path")?.getAttribute("stroke")).toBe(
+        "rgb(250, 250, 250)",
+      );
+      expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).toBeNull();
+      expect(svgDocument().documentElement.lastElementChild?.getAttribute("fill")).toBe(
+        "rgb(20, 100, 180)",
+      );
+      await changePresentation(() => {
+        document.documentElement.dataset.theme = "favicon-neutral";
+      });
+      expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(190, 30, 50)");
+      expect(svgDocument().querySelector("path")?.getAttribute("stroke")).toBe(
+        "rgb(240, 240, 240)",
+      );
+      await changePresentation(() => {
+        document.documentElement.style.setProperty("--primary", "rgb(160, 40, 60)");
+      });
+      expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(160, 40, 60)");
+      await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "claw", critters: [] });
+        document.documentElement.dataset.themeMascot = "claw";
+      });
+      expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
       applyControlUiPresentation({ environment: null });
       await vi.waitFor(() =>
         expect(svgDocument().querySelectorAll("animate, animateTransform").length).toBeGreaterThan(
@@ -197,6 +257,18 @@ describe("favicon presentation ownership", () => {
       await expectDot("rgb(20, 100, 180)");
       publishRow({ status: "failed", hasActiveRun: false, activeRunIds: [] });
       expectOriginals();
+      await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "none", critters: [] });
+        document.documentElement.dataset.themeMascot = "none";
+      });
+      expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(190, 30, 50)");
+      expect(svgDocument().querySelector("circle")).toBeNull();
+      expect(pngIcon.href).toBe(svgIcon.href);
+      await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "claw", critters: [] });
+        document.documentElement.dataset.themeMascot = "claw";
+      });
+      expectOriginals();
     } finally {
       disconnect?.();
       stopNotifications();
@@ -204,6 +276,7 @@ describe("favicon presentation ownership", () => {
       sessions.dispose();
       selection.dispose();
       shell.remove();
+      themeStyle.remove();
     }
   });
 

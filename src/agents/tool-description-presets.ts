@@ -83,7 +83,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
 export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools.",
+    "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -145,7 +145,7 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task; omit `visible` or set it false, and report results through the parent.",
+    "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
     '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',
     visibilityLine,

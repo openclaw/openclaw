@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -41,7 +42,6 @@ import type {
   InternalSessionEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
@@ -58,11 +58,13 @@ export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-  projectSessionDeliveryFields,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../utils/delivery-context.read.js";
+export {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -431,26 +433,22 @@ export function listSessionEntries(
 }
 
 /** Reads transcript events for a live SQLite-backed session identity. */
-export function loadTranscriptEventsSync(params: {
+export const loadTranscriptEventsSync: (params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): SessionStoreTranscriptEvent[] {
-  return loadAccessorTranscriptEventsSync(params);
-}
+}) => SessionStoreTranscriptEvent[] = loadAccessorTranscriptEventsSync;
 
 /** Reads transcript freshness and byte size without materializing event rows. */
-export function readTranscriptStatsSync(params: {
+export const readTranscriptStatsSync: (params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): { eventCount: number; maxSeq: number; sizeBytes: number } {
-  return readAccessorTranscriptStatsSync(params);
-}
+}) => { eventCount: number; maxSeq: number; sizeBytes: number } = readAccessorTranscriptStatsSync;
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
 export function resolveTranscriptSessionKeyBySessionId(params: {

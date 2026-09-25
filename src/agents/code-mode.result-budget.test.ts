@@ -138,8 +138,8 @@ async function dispatch(
   }
 }
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 
@@ -419,7 +419,7 @@ describe("fresh producer results through persistence and model guards", () => {
         expect(final.terminate).toBe(true);
         for (const result of [first, final]) {
           const rendered = text(result);
-          expect(rendered).toContain("SECURITY NOTICE");
+          expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
           expect(rendered).not.toContain("\n[truncated]");
           const body = rendered
             .split("\n---\n")[1]

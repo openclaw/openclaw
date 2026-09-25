@@ -138,6 +138,8 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Host-issued capability for the exact findings acknowledged by the current operator. */
+  providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Channel-owned participant name encoding for source replies sent through message actions. */
   groupThreadReplyFormatter?: (
     text: string,

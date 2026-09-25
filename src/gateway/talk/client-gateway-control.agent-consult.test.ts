@@ -9,8 +9,6 @@ import {
   testing as embeddedRunsTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
   authorizeClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
@@ -21,29 +19,9 @@ import {
   resetClientVoiceConfirmationStateForTest,
 } from "../../talk/client-voice-confirmation.test-support.js";
 
-type ConsultParams = Parameters<
-  typeof import("../../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
->[0];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-const mocks = vi.hoisted(() => ({
-  close: vi.fn(),
-  consultRealtimeVoiceAgent: vi.fn(),
-  createOperationalRunInstanceRef: vi.fn((runId: string) => ({
-    instanceId: `instance:${runId}`,
-    runId,
-  })),
-  prepareAgentRunAdmission: vi.fn(),
-  runEmbeddedAgentCore: vi.fn(),
-  controlRealtimeVoiceAgentRun: vi.fn(),
-}));
+const { config, coreParams, deferred, mocks } = await vi.hoisted(
+  () => import("./client-gateway-control.agent-consult.test-support.js"),
+);
 
 vi.mock("../../agents/admitted-run-context.js", () => ({
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
@@ -63,26 +41,11 @@ vi.mock("../../talk/agent-run-control.js", async (importOriginal) => ({
 
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
+import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
 import {
   resolveTalkAgentConsultAuthority,
   type TalkAgentConsultAuthority,
 } from "./client-gateway-control.js";
-
-const config = {} as OpenClawConfig;
-const coreParams = {
-  config,
-  prompt: "check",
-  runId: "run-talk",
-  sessionId: "session-talk",
-  sessionTarget: {
-    agentId: "researcher",
-    sessionId: "session-talk",
-    sessionKey: "agent:researcher:talk",
-    storePath: "/tmp/sessions",
-  },
-  timeoutMs: 1,
-  workspaceDir: "/tmp/workspace",
-} as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
 
 function createRunner(
   registerRun = vi.fn(),
@@ -996,6 +959,31 @@ describe("Talk client agent consult admission", () => {
     );
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+  });
+
+  it("returns the current server challenge instead of a model's superseded confirmation id", async () => {
+    let currentChallenge = "";
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      for (const message of ["first blocked action", "last blocked action"]) {
+        const challenge = checkClientVoiceToolConfirmationPolicy({
+          agentId: "researcher",
+          voiceSessionId: "voice-session",
+          runId: "run-talk",
+          toolName: "message",
+          toolParams: { action: "send", message },
+        });
+        if (challenge.allowed) {
+          throw new Error("expected a blocked action");
+        }
+        currentChallenge = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)![1]!;
+      }
+      return { text: "VOICE_CONFIRMATION_REQUIRED:stale-model-id Say yes, send the message." };
+    });
+    const result = await createRunner().runArgs({ question: "check" });
+    expect(result.text).toContain(`VOICE_CONFIRMATION_REQUIRED:${currentChallenge}`);
+    expect(result.text).toContain('Say "yes"');
+    expect(result.text).not.toContain("stale-model-id");
   });
 
   it("continues the admitted run when close invalidates confirmation before registration", async () => {

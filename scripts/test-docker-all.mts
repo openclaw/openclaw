@@ -4,15 +4,17 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_E2E_BARE_IMAGE,
   DEFAULT_E2E_FUNCTIONAL_IMAGE,
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_PARALLELISM,
   DEFAULT_PROFILE,
   DEFAULT_RESOURCE_LIMITS,
@@ -651,8 +653,10 @@ async function writeTimingStore(timingStore: TimingStore, results: LaneResult[])
       updatedAt: new Date().toISOString(),
     };
   }
-  await mkdir(path.dirname(timingStore.file), { recursive: true });
-  await fs.promises.writeFile(timingStore.file, `${JSON.stringify(next, null, 2)}\n`);
+  await mkdir(path.dirname(timingStore.file), { recursive: true }).catch(recordPublicationFailure);
+  await fs.promises
+    .writeFile(timingStore.file, `${JSON.stringify(next, null, 2)}\n`)
+    .catch(recordPublicationFailure);
   timingStore.lanes = next.lanes;
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
@@ -672,13 +676,8 @@ function githubRunSummary(env: NodeJS.ProcessEnv) {
   };
 }
 
-export async function writeRunSummary(
-  logDir: string,
-  summary: RunSummary,
-  env: NodeJS.ProcessEnv = process.env,
-) {
-  const file = path.join(logDir, "summary.json");
-  const payload = {
+function runSummaryPayload(summary: RunSummary, env: NodeJS.ProcessEnv) {
+  return {
     ...summary,
     // Summary reruns do not carry failure-index commands, so preserve this exact package intent.
     allowUnreleasedChangelog:
@@ -688,12 +687,91 @@ export async function writeRunSummary(
     github: githubRunSummary(env),
     version: 1,
   };
-  await fs.promises.writeFile(file, `${JSON.stringify(payload, null, 2)}\n`);
-  await writeFailureIndex(logDir, payload, env);
+}
+
+export async function writeRunSummary(
+  logDir: string,
+  summary: RunSummary,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const file = path.join(logDir, "summary.json");
+  const payload = runSummaryPayload(summary, env);
+  // Keep raw evidence even when the required failure index cannot be published.
+  await fs.promises
+    .writeFile(file, `${JSON.stringify(payload, null, 2)}\n`)
+    .catch(recordPublicationFailure);
+  await writeFailureIndex(logDir, payload, env).catch(recordPublicationFailure);
   console.log(`==> Docker run summary: ${file}`);
 }
 
-async function writeFailureIndex(logDir: string, summary: RunSummary, env: NodeJS.ProcessEnv) {
+async function commitJoinedSummary(
+  logDir: string,
+  summary: () => RunSummary,
+  env: NodeJS.ProcessEnv,
+) {
+  const temporary = path.join(logDir, `.summary-${randomUUID()}.tmp`);
+  const payload = { ...runSummaryPayload(summary(), env), cleanup: { joined: true } };
+  let owned = false;
+  let failure: { error: unknown } | undefined;
+  try {
+    const handle = await open(temporary, "wx");
+    owned = true;
+    const errors: unknown[] = [];
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`).catch((error: unknown) => {
+      errors.push(error);
+    });
+    await handle.close().catch((error: unknown) => {
+      errors.push(error);
+    });
+    if (errors.length > 0) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "Docker summary staging failed", { cause: errors[0] });
+    }
+    await activeChildrenShutdownPromise;
+    if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
+      // Include every handled signal before promotion without yielding between the
+      // final verdict and rename. Later signals affect exit, not the committed report.
+      const latest = runSummaryPayload(summary(), env);
+      fs.writeFileSync(
+        path.join(logDir, "failures.json"),
+        `${JSON.stringify(failureIndexPayload(latest, env), null, 2)}\n`,
+      );
+      if (latest.status !== payload.status) {
+        fs.writeFileSync(
+          temporary,
+          `${JSON.stringify({ ...latest, cleanup: { joined: true } }, null, 2)}\n`,
+        );
+      }
+      fs.renameSync(temporary, path.join(logDir, "summary.json"));
+      owned = false;
+    }
+  } catch (error) {
+    requiredPublicationFailed = true;
+    failure = { error };
+  }
+  if (owned) {
+    try {
+      await fs.promises.rm(temporary, { force: true });
+    } catch (cleanupError) {
+      requiredPublicationFailed = true;
+      failure = {
+        error: failure
+          ? new AggregateError(
+              [failure.error, cleanupError],
+              "Docker summary staging cleanup failed",
+              { cause: failure.error },
+            )
+          : cleanupError,
+      };
+    }
+  }
+  if (failure) {
+    throw failure.error;
+  }
+}
+
+function failureIndexPayload(summary: RunSummary, env: NodeJS.ProcessEnv) {
   const ref =
     summary.github?.selectedSha ||
     env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ||
@@ -721,7 +799,7 @@ async function writeFailureIndex(logDir: string, summary: RunSummary, env: NodeJ
     targetable: failure.targetable,
     timedOut: failure.timedOut,
   }));
-  const failureIndex = {
+  return {
     combinedGhWorkflowCommand:
       workflowRerunFailures.length > 0
         ? githubWorkflowRerunCommand(
@@ -737,13 +815,15 @@ async function writeFailureIndex(logDir: string, summary: RunSummary, env: NodeJ
     packageArtifactName: env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
     runUrl: summary.github?.runUrl,
-    status: summary.status,
     version: 1,
     workflow: env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW,
   };
+}
+
+async function writeFailureIndex(logDir: string, summary: RunSummary, env: NodeJS.ProcessEnv) {
   await fs.promises.writeFile(
     path.join(logDir, "failures.json"),
-    `${JSON.stringify(failureIndex, null, 2)}\n`,
+    `${JSON.stringify(failureIndexPayload(summary, env), null, 2)}\n`,
   );
 }
 
@@ -889,6 +969,32 @@ export function runShellCommand({
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let killAt: number | undefined;
     const stream = logFile ? fs.createWriteStream(logFile, { flags: "a" }) : undefined;
+    const logErrors: unknown[] = [];
+    const recordLogError = (error: unknown) => {
+      requiredPublicationFailed = true;
+      if (!logErrors.includes(error)) {
+        logErrors.push(error);
+      }
+      // Failed required output closes admission now; command ownership still joins the log.
+      void (activeChildrenShutdownPromise ?? shutdownActiveChildren("SIGTERM", 1)).catch(
+        () => undefined,
+      );
+    };
+    stream?.on("error", recordLogError);
+    // error:false waits for the native fs close callback even after a write
+    // failure. Observe rejection now; an open error can precede child exit.
+    const logSettled = stream
+      ? finished(stream, { error: false, cleanup: true }).catch(recordLogError)
+      : undefined;
+    const writeLog = (chunk: string | Uint8Array) => {
+      if (stream && !stream.destroyed && !stream.errored) {
+        stream.write(chunk, (error) => {
+          if (error) {
+            recordLogError(error);
+          }
+        });
+      }
+    };
     let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
     // Exit can precede stdio/group drain; later signals cannot rewrite its origin.
     child.once("exit", () => {
@@ -902,7 +1008,7 @@ export function runShellCommand({
       timedOut = true;
       noOutputTimedOut = options.noOutput === true;
       if (stream) {
-        stream.write(`\n==> [${label}] ${message}; sending SIGTERM\n`);
+        writeLog(`\n==> [${label}] ${message}; sending SIGTERM\n`);
       } else {
         console.error(`==> [${label}] ${message}; sending SIGTERM`);
       }
@@ -932,14 +1038,14 @@ export function runShellCommand({
     timeoutTimer?.unref?.();
 
     if (stream) {
-      stream.write(`==> [${label}] command: ${command}\n`);
-      stream.write(`==> [${label}] started: ${utcStamp()}\n`);
+      writeLog(`==> [${label}] command: ${command}\n`);
+      writeLog(`==> [${label}] started: ${utcStamp()}\n`);
     }
     if (pipeOutput && child.stdout && child.stderr) {
       const writeOutput = (target: NodeJS.WriteStream, chunk: Uint8Array) => {
         resetNoOutputTimer();
         if (stream) {
-          stream.write(chunk);
+          writeLog(chunk);
         } else {
           target.write(chunk);
         }
@@ -957,29 +1063,39 @@ export function runShellCommand({
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
-      const finish = (error?: unknown) => {
+      const finish = async (error?: unknown) => {
         if (killTimer) {
           clearTimeout(killTimer);
         }
         killAt = undefined;
+        // Process custody ends at the group join, independently of pending log I/O.
+        if (error === undefined) {
+          activeChildren.delete(child);
+        }
         const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
         if (stream) {
-          stream.write(
+          writeLog(
             `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
               noOutputTimedOut ? " noOutputTimedOut=true" : ""
             }\n`,
           );
-          stream.end();
+          if (!stream.destroyed) {
+            stream.end();
+          }
         }
-        if (error !== undefined) {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error("Docker lane cleanup failed", { cause: error }),
-          );
-          return;
+        await logSettled;
+        if (stream?.errored) {
+          recordLogError(stream.errored);
         }
-        activeChildren.delete(child);
+        stream?.removeListener("error", recordLogError);
+        const errors = [...new Set([...(error === undefined ? [] : [error]), ...logErrors])];
+        if (errors.length > 0) {
+          throw errors.length === 1
+            ? errors[0]
+            : new AggregateError(errors, "Docker command cleanup and log publication failed", {
+                cause: errors[0],
+              });
+        }
         resolve({
           signal,
           status: exitCode,
@@ -993,7 +1109,9 @@ export function runShellCommand({
         killAt,
         resolvedTimeoutKillGraceMs,
         timedOut ? undefined : "SIGTERM",
-      ).then(() => finish(), finish);
+      )
+        .then(() => finish(), finish)
+        .catch(reject);
     });
   });
 }
@@ -1149,21 +1267,7 @@ export async function runCleanupSmokePhase(
     });
   } catch (error) {
     if (!failure) {
-      const status = 1;
-      const message = error instanceof Error ? error.message : String(error);
-      await fs.promises.writeFile(
-        logFile,
-        [
-          `==> [${CLEANUP_SMOKE_NAME}] command: ${command}`,
-          `==> [${CLEANUP_SMOKE_NAME}] status: ${status}`,
-          `==> [${CLEANUP_SMOKE_NAME}] error: ${message}`,
-        ].join("\n"),
-      );
-      failure = cleanupSmokeResult(baseEnv, logFile, command, startedAtMs, {
-        noOutputTimedOut: false,
-        status,
-        timedOut: false,
-      });
+      throw error;
     }
   }
   return failure;
@@ -1355,11 +1459,15 @@ async function prepareDockerCandidate(
       registry,
     };
   }
-  await mkdir(path.dirname(manifestPath), { recursive: true });
-  fs.writeFileSync(
-    manifestPath,
-    `${JSON.stringify({ schema: "openclaw.qa-docker-candidate/v1", schemaVersion: 1, sourceSha, candidate }, null, 2)}\n`,
-  );
+  await mkdir(path.dirname(manifestPath), { recursive: true }).catch(recordPublicationFailure);
+  try {
+    fs.writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ schema: "openclaw.qa-docker-candidate/v1", schemaVersion: 1, sourceSha, candidate }, null, 2)}\n`,
+    );
+  } catch (error) {
+    recordPublicationFailure(error);
+  }
 }
 
 function e2eImageForLane(poolLane: DockerE2eLane, baseEnv: NodeJS.ProcessEnv) {
@@ -1420,50 +1528,34 @@ async function runLane(
   const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
-  await fs.promises.writeFile(
-    logFile,
-    [
-      `==> [${name}] cli tools dir: ${env.OPENCLAW_DOCKER_CLI_TOOLS_DIR}`,
-      `==> [${name}] cache dir: ${env.OPENCLAW_DOCKER_CACHE_HOME_DIR}`,
-      `==> [${name}] timeout: ${timeoutMs}ms`,
-      `==> [${name}] no output timeout: ${noOutputTimeoutMs ?? 0}ms`,
-      `==> [${name}] retries: ${lane.retries ?? 0}`,
-      `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
-      `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
-      `==> [${name}] trusted harness: ${HARNESS_ROOT_DIR}`,
-      `==> [${name}] candidate source: ${ROOT_DIR}`,
-      "",
-    ].join("\n"),
-  );
+  await fs.promises
+    .writeFile(
+      logFile,
+      [
+        `==> [${name}] cli tools dir: ${env.OPENCLAW_DOCKER_CLI_TOOLS_DIR}`,
+        `==> [${name}] cache dir: ${env.OPENCLAW_DOCKER_CACHE_HOME_DIR}`,
+        `==> [${name}] timeout: ${timeoutMs}ms`,
+        `==> [${name}] no output timeout: ${noOutputTimeoutMs ?? 0}ms`,
+        `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
+        `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
+        `==> [${name}] trusted harness: ${HARNESS_ROOT_DIR}`,
+        `==> [${name}] candidate source: ${ROOT_DIR}`,
+        "",
+      ].join("\n"),
+    )
+    .catch(recordPublicationFailure);
   console.log(`==> [${name}] start`);
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
-  let result: ShellCommandResult;
-  const attempts: ReturnType<typeof laneAttempt>[] = [];
-  const maxAttempts = 1 + Math.max(0, lane.retries ?? 0);
-  for (let attempt = 1; ; attempt += 1) {
-    const attemptStartedAt = Date.now();
-    if (attempt > 1) {
-      await fs.promises.appendFile(logFile, `\n==> [${name}] retry attempt ${attempt}\n`);
-      console.log(`==> [${name}] retry ${attempt}/${maxAttempts}`);
-    }
-    result = await runShellCommand({
-      command,
-      env,
-      label: name,
-      logFile,
-      timeoutMs,
-      noOutputTimeoutMs,
-    });
-    attempts.push(laneAttempt(attempt, attemptStartedAt, result));
-    if (activeChildrenShutdownPromise || result.status === 0 || attempt >= maxAttempts) {
-      break;
-    }
-    // An exhausted lane deadline alone does not diagnose a transient failure.
-    if (!(await laneLogMatchesRetryPattern(logFile, lane.retryPatterns))) {
-      break;
-    }
-  }
+  const result = await runShellCommand({
+    command,
+    env,
+    label: name,
+    logFile,
+    timeoutMs,
+    noOutputTimeoutMs,
+  });
+  const attempts = [laneAttempt(1, startedAt, result)];
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   if (result.status === 0) {
     console.log(`==> [${name}] pass ${elapsedSeconds}s`);
@@ -1665,8 +1757,16 @@ async function runLanePool(
     await (activeChildrenShutdownPromise ?? shutdownActiveChildren("SIGTERM", 1)).catch(
       () => undefined,
     );
-    await Promise.allSettled(running.values());
-    throw primaryError;
+    // Keep the first observed failure first without dropping independent drain failures.
+    const errors = [primaryError];
+    for (const result of await Promise.allSettled(running.values())) {
+      if (result.status === "rejected" && !errors.includes(result.reason)) {
+        errors.push(result.reason);
+      }
+    }
+    throw errors.length === 1
+      ? primaryError
+      : new AggregateError(errors, "Docker lane pool failed", { cause: primaryError });
   } finally {
     cancelLaneStartWait?.();
     if (statusTimer) {
@@ -1695,14 +1795,6 @@ export async function tailFile(file: string, lines: number, maxBytes = LOG_TAIL_
   return tail.trimEnd();
 }
 
-async function laneLogMatchesRetryPattern(logFile: string, patterns: RegExp[]) {
-  if (!patterns || patterns.length === 0) {
-    return false;
-  }
-  const tail = await tailFile(logFile, 160);
-  return patterns.some((pattern) => pattern.test(tail));
-}
-
 async function printFailureSummary(failures: LaneResult[], tailLines: number) {
   console.error(`ERROR: ${failures.length} Docker lane(s) failed.`);
   for (const failure of failures) {
@@ -1722,7 +1814,14 @@ let shutdownChildren: ChildProcess[] = [];
 let cancelLaneStartWait: (() => void) | undefined;
 // A later signal may join cleanup, but cannot replace an observed ordinary failure.
 let schedulerFailed = false;
+let requiredPublicationFailed = false;
+let finalizeRunSummary: (() => Promise<void>) | undefined;
 const schedulerShutdownError = new Error("Docker scheduler interrupted");
+
+function recordPublicationFailure(error: unknown): never {
+  requiredPublicationFailed = true;
+  throw error;
+}
 
 function throwIfSchedulerStopping(result?: Pick<ShellCommandResult, "status" | "cancelled">) {
   if (activeChildrenShutdownPromise && (!result || result.cancelled || result.status === 0)) {
@@ -1820,6 +1919,10 @@ function recordShellCleanupFailure(error: unknown, child: ChildProcess) {
         processTreeState: "indeterminate",
       });
   cleanupFailures.push(failure);
+  // Fatal cleanup cannot leave admission open while the command joins pending log I/O.
+  void (activeChildrenShutdownPromise ?? shutdownActiveChildren("SIGTERM", 1)).catch(
+    () => undefined,
+  );
   return failure;
 }
 
@@ -1860,22 +1963,43 @@ function shutdownActiveChildren(signal: ShutdownSignal, exitCode: number) {
       throw new AggregateError(cleanupFailures, "Docker process cleanup failed");
     }
     // 130/143 acknowledge joined signal cleanup, never merely receipt of a signal.
-    const result = schedulerFailed ? 1 : exitCode;
-    process.exitCode = result;
-    return result;
-  });
-  void activeChildrenShutdownPromise.catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = CLEANUP_FAILURE_EXIT_CODE;
+    return schedulerFailed ? 1 : exitCode;
   });
   return activeChildrenShutdownPromise;
 }
 
+function setSchedulerExitCode(exitCode?: number) {
+  process.exitCode =
+    cleanupFailures.length > 0
+      ? CLEANUP_FAILURE_EXIT_CODE
+      : schedulerFailed || requiredPublicationFailed
+        ? 1
+        : (exitCode ?? process.exitCode);
+}
+
+let signalDisposition: Promise<void> | undefined;
+function handleShutdownSignal(signal: ShutdownSignal, exitCode: number) {
+  const shutdown = shutdownActiveChildren(signal, exitCode);
+  // Every signal may escalate cleanup, but only an actual signal owns process
+  // disposition for imported helpers. Caught command failures belong to callers.
+  signalDisposition ??= shutdown.then(
+    (result) => {
+      setSchedulerExitCode(result);
+    },
+    (error: unknown) => {
+      if (!IS_MAIN) {
+        console.error(error);
+      }
+      setSchedulerExitCode(CLEANUP_FAILURE_EXIT_CODE);
+    },
+  );
+}
+
 process.on("SIGINT", () => {
-  void shutdownActiveChildren("SIGINT", 130);
+  handleShutdownSignal("SIGINT", 130);
 });
 process.on("SIGTERM", () => {
-  void shutdownActiveChildren("SIGTERM", 143);
+  handleShutdownSignal("SIGTERM", 143);
 });
 
 async function main() {
@@ -1945,11 +2069,6 @@ async function main() {
     throw new Error("OPENCLAW_DOCKER_ALL_LANES must include at least one lane name");
   }
   const liveMode = parseLiveMode(process.env.OPENCLAW_DOCKER_ALL_LIVE_MODE);
-  const liveRetries = parseNonNegativeInt(
-    process.env.OPENCLAW_DOCKER_ALL_LIVE_RETRIES,
-    DEFAULT_LIVE_RETRIES,
-    "OPENCLAW_DOCKER_ALL_LIVE_RETRIES",
-  );
   const timingsFile = path.resolve(
     process.env.OPENCLAW_DOCKER_ALL_TIMINGS_FILE || DEFAULT_TIMINGS_FILE,
   );
@@ -1974,7 +2093,12 @@ async function main() {
   });
   baseEnv.OPENCLAW_DOCKER_E2E_IMAGE =
     process.env.OPENCLAW_DOCKER_E2E_IMAGE || baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE;
-  const writeSummary = (summary: RunSummary) => writeRunSummary(logDir, summary, baseEnv);
+  let summaryAttempted = false;
+  const writeSummary = (summary: RunSummary) => {
+    summaryAttempted = true;
+    // Only final atomic promotion may publish a passing verdict.
+    return writeRunSummary(logDir, { ...summary, status: "failed", runId }, baseEnv);
+  };
   appendExtension(baseEnv, "matrix");
   appendExtension(baseEnv, "acpx");
   appendExtension(baseEnv, "codex");
@@ -1984,7 +2108,6 @@ async function main() {
     resolveDockerE2ePlan({
       includeOpenWebUI,
       liveMode,
-      liveRetries,
       orderLanes,
       planReleaseAll: planJson && planReleaseAll,
       profile,
@@ -2035,12 +2158,48 @@ async function main() {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     return;
   }
+  const failures: LaneResult[] = [];
+  const allResults: LaneResult[] = [];
+  const summarySnapshot = (status: "failed" | "passed"): RunSummary => ({
+    chunk: releaseChunk || undefined,
+    failures,
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    images: {
+      bare: baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE,
+      functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
+    },
+    lanes: allResults,
+    omittedUnsupportedLanes,
+    phases,
+    profile,
+    runId,
+    selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
+    startedAt: runStartedAt,
+    status,
+  });
+  if (!dryRun || cliOptions.prepareOnly) {
+    finalizeRunSummary = async () => {
+      const summary = () =>
+        summarySnapshot(
+          schedulerFailed || activeChildrenShutdownPromise || failures.length > 0
+            ? "failed"
+            : "passed",
+        );
+      if (!summaryAttempted) {
+        await mkdir(logDir, { recursive: true }).catch(recordPublicationFailure);
+        await writeSummary(summary());
+      }
+      if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
+        await commitJoinedSummary(logDir, summary, baseEnv);
+      }
+    };
+  }
   if (cliOptions.prepareOnly) {
     await prepareDockerCandidate(plan, logDir, path.resolve(cliOptions.prepareOnly));
     return;
   }
 
-  await mkdir(logDir, { recursive: true });
+  await mkdir(logDir, { recursive: true }).catch(recordPublicationFailure);
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Profile: ${profile}${releaseChunk ? ` chunk=${releaseChunk}` : ""}`);
   if (profile === RELEASE_PATH_PROFILE) {
@@ -2050,7 +2209,6 @@ async function main() {
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
   console.log(`==> Live mode: ${liveMode}`);
-  console.log(`==> Live retries: ${liveRetries}`);
   console.log(`==> Lane start stagger: ${laneStartStaggerMs}ms`);
   console.log(`==> Status interval: ${statusIntervalMs}ms`);
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
@@ -2106,7 +2264,9 @@ async function main() {
       startedAt: runStartedAt,
       status: "passed",
     });
-    console.log("==> Docker test suite passed: no selected lane is supported by the frozen target");
+    console.log(
+      "==> No selected Docker lane is supported by the frozen target; finalizing run summary",
+    );
     return;
   }
 
@@ -2193,25 +2353,7 @@ async function main() {
     statusIntervalMs,
     timeoutMs: laneTimeoutMs,
   } satisfies LanePoolOptions;
-  const failures: LaneResult[] = [];
-  const allResults: LaneResult[] = [];
-  const writeLaneSummary = (status: "failed" | "passed") =>
-    writeSummary({
-      chunk: releaseChunk || undefined,
-      failures,
-      image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
-      images: {
-        bare: baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE,
-        functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
-      },
-      lanes: allResults,
-      omittedUnsupportedLanes,
-      phases,
-      profile,
-      selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
-      startedAt: runStartedAt,
-      status,
-    });
+  const writeLaneSummary = (status: "failed" | "passed") => writeSummary(summarySnapshot(status));
   async function runPool(
     poolLanes: DockerE2eLane[],
     poolParallelism: number,
@@ -2291,10 +2433,36 @@ async function main() {
     return;
   }
   await writeLaneSummary("passed");
-  console.log("==> Docker test suite passed");
+  console.log("==> Docker lane execution passed; finalizing run summary");
 }
 
 if (IS_MAIN) {
+  const failures: unknown[] = [];
+  const reported = new Set<object>();
+  const reportFailure = (error: unknown) => {
+    if (error && typeof error === "object") {
+      if (reported.has(error)) {
+        return;
+      }
+      reported.add(error);
+    }
+    console.error(coerceErrorMessage(error));
+    // Aggregate members preserve command order; causes may point back into
+    // that graph. Distinct errors with identical messages must remain visible.
+    if (error instanceof AggregateError) {
+      for (const member of error.errors) {
+        reportFailure(member);
+      }
+    }
+    if (error && typeof error === "object") {
+      if ("cause" in error) {
+        reportFailure(error.cause);
+      }
+      if ("error" in error) {
+        reportFailure(error.error);
+      }
+    }
+  };
   try {
     await main();
   } catch (error) {
@@ -2303,18 +2471,26 @@ if (IS_MAIN) {
       cleanupFailures.push(error);
     }
     if (error !== schedulerShutdownError) {
-      console.error(error instanceof Error ? error.message : String(error));
+      failures.push(error);
     }
   } finally {
     // Main may finish as soon as a lane leader exits. Retain the scheduler until
     // its separately detached lane groups have actually stopped.
-    const shutdownExitCode = await activeChildrenShutdownPromise?.catch(() => 1);
+    const shutdownExitCode = await activeChildrenShutdownPromise?.catch((error: unknown) => {
+      failures.push(error);
+      return 1;
+    });
+    // Diagnostic work precedes the summary's final affirmative publication.
+    for (const error of failures) {
+      reportFailure(error);
+    }
+    try {
+      await finalizeRunSummary?.();
+    } catch (error) {
+      schedulerFailed = true;
+      reportFailure(error);
+    }
     // Successful cleanup cannot erase an unrelated publication/preparation failure.
-    process.exitCode =
-      cleanupFailures.length > 0
-        ? CLEANUP_FAILURE_EXIT_CODE
-        : schedulerFailed
-          ? 1
-          : (shutdownExitCode ?? process.exitCode);
+    setSchedulerExitCode(shutdownExitCode);
   }
 }

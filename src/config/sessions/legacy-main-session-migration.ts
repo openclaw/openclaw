@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -9,7 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -88,23 +89,8 @@ function addPhysicalStore(stores: PhysicalStore[], candidate: PhysicalStore): vo
 }
 
 function resolveMissingPhysicalPath(pathname: string): string {
-  let current = path.resolve(pathname);
-  const suffix: string[] = [];
-  while (true) {
-    try {
-      return path.join(fs.realpathSync.native(current), ...suffix);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return path.resolve(current, ...suffix);
-      }
-      suffix.unshift(path.basename(current));
-      current = parent;
-    }
-  }
+  const prefix = resolvePathPrefixSync(path.resolve(pathname));
+  return path.join(prefix.existingPath, ...prefix.unresolvedSegments);
 }
 
 function resolvePhysicalPathIdentity(pathname: string): string {

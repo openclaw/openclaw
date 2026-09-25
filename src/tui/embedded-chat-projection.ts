@@ -1,4 +1,23 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
+
+const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
+  success: undefined,
+  timeout: "error",
+  cancellation: "aborted",
+  failure: "error",
+} as const;
+
+export function resolveTerminalChatState(outcome: AgentRunTerminalOutcome) {
+  return TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+}
+
+export function assistantChatMessage(text: string) {
+  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
+}
 
 export function payloadText(parts: unknown): string {
   if (!Array.isArray(parts)) {

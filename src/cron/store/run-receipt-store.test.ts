@@ -1,10 +1,15 @@
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
+import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
@@ -27,9 +32,13 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import { update } from "../service/ops-mutations.js";
 import {
   assertServiceCronRunReceiptCurrent,
+  cronRunReceiptPersistHooks,
   markServiceCronJobActive,
 } from "../service/run-receipts.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "../service/run-recovery.js";
+import {
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "../service/run-recovery.test-support.js";
 import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
@@ -46,16 +55,67 @@ import {
   listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "./run-receipt-store.js";
 import {
   isCronRunTriggerStateRetiredInDatabase,
   retireCronRunTriggerStateInDatabase,
 } from "./run-receipt-trigger-state.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
+
+it.each(["implicit", "supplied"] as const)(
+  "checks receipt availability with the %s transaction without spawning or opening another database",
+  async (source) => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("transaction-availability");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const handle = claim(storePath, job, 1);
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      isAgentAvailable: (agentId, database) => {
+        if (source === "supplied") {
+          expect(database?.isTransaction).toBe(true);
+        }
+        return !isAgentDeletionBlocked(agentId, {}, source === "supplied" ? database : undefined);
+      },
+    });
+    const hooks = cronRunReceiptPersistHooks({ state, handle });
+    const spawn = vi.spyOn(childProcess, "spawnSync");
+    syncBuiltinESMExports();
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    let connections = 0;
+    const start = performance.now();
+    for (let index = 0; index < 3; index += 1) {
+      runOpenClawStateWriteTransaction(({ db }) => {
+        const before = open.mock.calls.length;
+        hooks.beforeWrite?.(db);
+        connections += open.mock.calls.length - before;
+      });
+    }
+    console.info(
+      JSON.stringify({
+        receiptGuards: 3,
+        source,
+        elapsedMs: performance.now() - start,
+        spawns: spawn.mock.calls.length,
+        connections,
+      }),
+    );
+    expect(spawn.mock.calls.length).toBe(0);
+    expect(connections).toBe(0);
+  },
+);
 
 function makeJob(id: string, agentId = "alpha"): CronJob {
   return {
@@ -692,18 +752,18 @@ describe("cron run receipt store", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
-    const proposal = await proposeCronRunRecovery(state, job.id, undefined, startedAtMs);
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "live" });
+    const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAtMs);
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
 
     foreign.startTimeProbe.mockImplementation((pid) =>
       pid === foreign.handle.ownerPid ? null : foreign.getStartTime(pid),
     );
     vi.setSystemTime(startedAtMs + 2 * 60 * 60_000);
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "live" });
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
     expect(() => claim(storePath, job, Date.now())).toThrow(CronRunReceiptConflictError);
     vi.setSystemTime(Date.now() + 1);
 
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "repaired" });
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "repaired" });
     const recovered = (await loadCronStore(storePath)).jobs[0]!;
     expect(recovered.state).toMatchObject({ lastRunStatus: "error" });
     expect(recovered.state.runningAtMs).toBeUndefined();

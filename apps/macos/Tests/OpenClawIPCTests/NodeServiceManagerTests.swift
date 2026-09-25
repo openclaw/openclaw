@@ -7,10 +7,10 @@ import Testing
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
         try await TestIsolation.withIsolatedState(
-            env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path],
+            launchAgentHomeDirectory: root,
             defaults: ["openclaw.gatewayProjectRootPath": nil])
         {
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == root
                 .standardizedFileURL)
             CommandResolver.setProjectRoot(root.path)
             let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
@@ -46,8 +46,8 @@ import Testing
     func `unreadable node service refuses CLI lifecycle work`(_ contents: String) async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
-        try await TestIsolation.withEnvValues(["HOME": root.path, "CFFIXED_USER_HOME": root.path]) {
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root) {
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == root
                 .standardizedFileURL)
             let plist = root.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
             try FileManager.default.createDirectory(
@@ -93,9 +93,8 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
 
         try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: root,
             env: [
-                "HOME": root.path,
-                "CFFIXED_USER_HOME": root.path,
                 "OPENCLAW_NODE_SERVICE_TEST_ROOT": root.path,
                 "OPENCLAW_NODE_SERVICE_DELAYED_ACTION": previousAction,
             ],
@@ -158,7 +157,8 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
 
         try await TestIsolation.withIsolatedState(
-            env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path, "OPENCLAW_NODE_SERVICE_TEST_CASE": scenario],
+            launchAgentHomeDirectory: root,
+            env: ["OPENCLAW_NODE_SERVICE_TEST_CASE": scenario],
             defaults: ["openclaw.gatewayProjectRootPath": nil])
         {
             CommandResolver.setProjectRoot(root.path)
@@ -244,7 +244,7 @@ import Testing
     }
 
     private func installServiceFixture(home: URL, executable: URL) throws {
-        try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == home.standardizedFileURL)
+        try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == home.standardizedFileURL)
         let plist = home.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
         try FileManager.default.createDirectory(
             at: plist.deletingLastPathComponent(),

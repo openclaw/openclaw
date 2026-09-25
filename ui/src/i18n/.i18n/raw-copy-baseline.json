@@ -367,20 +367,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
-      "text": "R"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
-      "text": "W"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
@@ -616,6 +602,13 @@
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/search/search-results.ts",
+      "text": "snippet"
     },
     {
       "count": 1,

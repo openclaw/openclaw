@@ -5,7 +5,7 @@ import {
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -51,22 +51,32 @@ export async function handleChatStartupRequest(
     );
     return;
   }
-  const resolution = resolveSessionKeyFromResolveParams({
-    projection,
-    client: opts.client,
-    p: { shortId, slugHint, agentId, allowMissing: true },
-  });
-  if (!resolution.ok) {
-    opts.respond(false, undefined, resolution.error);
-    return;
-  }
-  if ("missing" in resolution || "ambiguous" in resolution) {
-    opts.respond(true, {
-      resolution: {
-        ok: false,
-        ...("ambiguous" in resolution ? { candidates: resolution.candidates } : {}),
-      },
-    });
+  const resolution = await withPreparedSessionResolve(
+    {
+      projection,
+      client: opts.client,
+      p: { shortId, slugHint, agentId, allowMissing: true },
+      isCurrent: () => getSessionRowProjection(opts.context) === projection,
+    },
+    (resolved) => {
+      opts.sessionMutationAuthorization?.assertCurrent();
+      if (!resolved.ok) {
+        opts.respond(false, undefined, resolved.error);
+        return undefined;
+      }
+      if ("missing" in resolved || "ambiguous" in resolved) {
+        opts.respond(true, {
+          resolution: {
+            ok: false,
+            ...("ambiguous" in resolved ? { candidates: resolved.candidates } : {}),
+          },
+        });
+        return undefined;
+      }
+      return resolved;
+    },
+  );
+  if (!resolution) {
     return;
   }
   await handleHistory({

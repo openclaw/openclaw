@@ -305,13 +305,13 @@ function finishOwnedRow(
   params: Omit<Parameters<NodeWorkerLaunchKernel["finish"]>[0], "launchId" | "planHash" | "nowMs">,
   nowMs: number,
   expected?: NodeWorkerSupervisorIdentity,
-): boolean {
+): NodeWorkerLaunchRow | undefined {
   if (
     isNodeWorkerTerminalState(current.state) ||
     !rowHasSupervisor(current, params.supervisor) ||
     !rowHasWorker(current, params.worker)
   ) {
-    return false;
+    return undefined;
   }
   const completedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
   let update = query(database)
@@ -342,8 +342,12 @@ function finishOwnedRow(
         .where("worker_pid", "=", params.worker.pid)
         .where("worker_start_time", "=", params.worker.startTime)
     : update.where("worker_pid", "is", null).where("worker_start_time", "is", null);
-  executeSqliteQuerySync(database, update);
-  return true;
+  const updated = executeSqliteQueryTakeFirstSync(
+    database,
+    update.returning(["state", "result_json", "error_text", "completed_at_ms", "updated_at_ms"]),
+  );
+  // Settlement changes only these launch fields; companion metadata shares this transaction.
+  return updated ? { ...current, ...updated } : undefined;
 }
 
 /** Connection-bound launch journal; every operation retains its original write transaction. */
@@ -609,8 +613,8 @@ export class NodeWorkerLaunchKernel {
         nowMs,
         params.expected,
       );
-      const settled = updated ? readRow(database, params.expected.launchId) : current;
-      if (!settled || !rowMatchesImmutableIdentity(settled, params.expected)) {
+      const settled = updated ?? current;
+      if (!rowMatchesImmutableIdentity(settled, params.expected)) {
         return undefined;
       }
       const receipt = nodeWorkerLaunchReceiptFromRow(settled);
@@ -717,9 +721,7 @@ export class NodeWorkerLaunchKernel {
     return this.write("node-worker-launch.finish", (database) => {
       const current = requireMatchingRow(database, params.launchId, params.planHash);
       const updated = finishOwnedRow(database, current, params, nowMs);
-      const receipt = nodeWorkerLaunchReceiptFromRow(
-        updated ? requireMatchingRow(database, params.launchId, params.planHash) : current,
-      );
+      const receipt = nodeWorkerLaunchReceiptFromRow(updated ?? current);
       settleNodeWorkerActiveTurns(database, receipt);
       return receipt;
     });

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 365261,
-  "reason": "Approved #153178 rebase measurement with frozen Pako 3.0.2: 365172 B rounds up to 365261 B (356.7 KiB), above the previous 364954 B baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 365837 B enforcement limit.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 370756,
+  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
+  "updatedAt": "2026-09-22"
 }

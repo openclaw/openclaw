@@ -3,14 +3,15 @@
 import { html, nothing, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
   createAsyncQuestionPresentation,
   createAsyncQuestionPanelProps,
   renderAsyncQuestionSummary,
   readAsyncQuestions,
-  type AsyncQuestionDraft,
 } from "./chat-async-question.ts";
+import type { AsyncQuestionDraft } from "./chat-async-question.types.ts";
 import "./chat-question-card.ts";
 
 const container = document.createElement("div");
@@ -171,7 +172,7 @@ it("does not credit a late earlier-run terminal to a newer user turn for an unow
   expect(present(messages).pending).toHaveLength(0);
 });
 
-it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", () => {
+it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", async () => {
   const old = {
     ...question("old"),
     phase: undefined,
@@ -212,7 +213,7 @@ it("retires the unowned mirrored prompt only after its canonical restart recover
       (entry) => entry.itemId,
     ),
   ).toEqual(["fresh"]);
-  archived.reopen("old");
+  await archived.reopen("old");
   expect(present(completed, state).pending).toHaveLength(1);
   expect(present([...completed, terminal("next-run")], state).pending).toHaveLength(0);
   expect(present([...messages.slice(0, -1), recovered]).pending).toHaveLength(1);
@@ -323,7 +324,11 @@ it.each(["answered", "failed"] as const)(
       expect(container.querySelector(".chat-question-panel__advance")).not.toBeNull(),
     );
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
-    expect(submit).toHaveBeenCalledExactlyOnceWith("> Which audience?\n\nEngineers");
+    expect(submit).toHaveBeenCalledExactlyOnceWith(
+      "> Which audience?\n\nEngineers",
+      "question-1",
+      undefined,
+    );
 
     render(nothing, container);
     draw();
@@ -473,20 +478,119 @@ it("restores every answer in a multi-question submission with UTF-8-bounded quot
   ).toHaveLength(1);
 });
 
-it("leaves an answer with ambiguous embedded question headings pending", () => {
-  const promptMessage = {
-    role: "assistant",
-    openclawAsyncDelivery: {
-      itemId: "ambiguous-multiline",
-      questions: [{ title: "First?" }, { title: "Second?" }],
+it.each([
+  { replyToId: undefined, edited: false, confirmed: false },
+  { replyToId: "question-source", edited: false, confirmed: true },
+  { replyToId: "unrelated-source", edited: false, confirmed: false },
+  { replyToId: "question-source", edited: true, confirmed: true },
+])(
+  "confirms unparsed saved answers only by their canonical reply: %j",
+  ({ replyToId, edited, confirmed }) => {
+    const promptMessage = {
+      role: "assistant",
+      __openclaw: { id: "question-source", seq: 1 },
+      openclawAsyncDelivery: {
+        itemId: "ambiguous-multiline",
+        questions: [{ title: "First?" }, { title: "Second?" }],
+      },
+    };
+    const answer = {
+      ...historicalAnswer,
+      __openclaw: { id: "saved-answer", seq: 2, replyToId },
+      content: edited
+        ? "Edited in the outbox: use my earlier details."
+        : "> First?\n\nQuote this:\n\n> Second?\n\nStill the first answer\n\n> Second?\n\nThe second answer",
+    };
+    for (const epoch of [1, 2]) {
+      const presentation = historyPresentation([promptMessage, answer], epoch);
+      expect(presentation.pending).toHaveLength(confirmed ? 0 : 1);
+      render(
+        renderAsyncQuestionSummary(promptMessage.openclawAsyncDelivery, presentation),
+        container,
+      );
+      expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
+      if (confirmed) {
+        expect(container.textContent).toContain(answer.content);
+        expect(container.textContent).not.toContain("Awaiting delivery confirmation");
+      }
+    }
+  },
+);
+
+it("projects answer delivery from the outbox, retries its payload, and waits for canonical confirmation", () => {
+  const state: Parameters<typeof createAsyncQuestionPresentation>[0] = presentationState();
+  const retry = vi.fn();
+  const queue: ChatQueueItem[] = [
+    {
+      id: "answer-row",
+      asyncQuestionItemId: "question-1",
+      text: "> Which audience?\n\nEveryone",
+      createdAt: 1,
+      sendState: "waiting-idle",
     },
+  ];
+  const messages: unknown[] = [historicalQuestion("question-1")];
+  const props = {
+    sessionKey: "agent:main:main",
+    messages,
+    queue,
+    onAsyncQuestionSubmit: state.transcriptRenderContext.onAsyncQuestionSubmit,
+    onQueueRetry: retry,
   };
-  const answer = {
-    ...historicalAnswer,
-    content:
-      "> First?\n\nQuote this:\n\n> Second?\n\nStill the first answer\n\n> Second?\n\nThe second answer",
+  const draw = () => {
+    const presentation = createAsyncQuestionPresentation(state, props);
+    render(renderAsyncQuestionSummary(readAsyncQuestions(messages[0])!, presentation), container);
+    return presentation;
   };
-  expect(historyPresentation([promptMessage, answer]).pending).toHaveLength(1);
+  const pending = draw();
+  const admitted = queue[0]!;
+  queue.length = 0;
+  expect(draw().pending).toEqual([]);
+  expect(container.textContent).toContain("Awaiting delivery confirmation");
+  expect(container.textContent).not.toContain("Answer sent");
+  queue.push(admitted);
+  state.asyncQuestionDrafts.set("question-1", {
+    status: "submitted",
+    answers: new Map([["0", { selected: new Set(), freeText: "A newer draft" }]]),
+  });
+  expect(pending.pending).toEqual([]);
+  draw();
+  expect(container.textContent).toContain("Answer queued");
+  expect(container.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
+  queue[0] = { ...queue[0]!, sendState: "failed", sendError: "Synthetic rejection" };
+  const failed = draw();
+  expect(failed.historyKey).not.toBe(pending.historyKey);
+  expect(container.textContent).toContain("Everyone");
+  expect(container.textContent).not.toContain("A newer draft");
+  expect(container.textContent).toContain("Answer not sent");
+  expect(container.textContent).toContain("Synthetic rejection");
+  container.querySelector<HTMLButtonElement>("button")!.click();
+  expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
+  expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+  queue[0] = { ...queue[0]!, sendState: "unconfirmed" };
+  draw();
+  expect(container.textContent).toContain("Delivery unconfirmed");
+  const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
+  state.asyncQuestionScope = "another-context";
+  retainedRetry.click();
+  expect(retry).toHaveBeenCalledTimes(1);
+  state.asyncQuestionScope = failed.scope;
+  queue[0] = { ...queue[0]!, sendState: "waiting-reconnect" };
+  draw();
+  expect(container.textContent).toContain("Waiting for reconnect");
+  expect(container.querySelector("button")).toBeNull();
+  queue[0] = { ...queue[0]!, sendState: "sending" };
+  draw();
+  expect(container.textContent).toContain("Sending answer");
+  queue.length = 0;
+  draw();
+  expect(container.textContent).toContain("Awaiting delivery confirmation");
+  expect(container.textContent).not.toContain("Answer sent");
+  messages.push(historicalAnswer);
+  draw();
+  expect(container.textContent).toContain("Answer sent");
+  expect(container.textContent).toContain("Everyone");
+  expect(container.textContent).not.toContain("A newer draft");
 });
 
 it.each(["old", "new"])(
@@ -532,3 +636,18 @@ it("does not use quoted text to override a canonical reply to an unrelated messa
   };
   expect(historyPresentation([promptMessage, answer]).pending).toHaveLength(1);
 });
+
+it.each([
+  { source: { __openclaw: { id: "canonical-source", seq: 1 } }, expected: "canonical-source" },
+  { source: { id: "generated-ui-id", __openclaw: { seq: 1 } }, expected: undefined },
+  { source: { __openclaw: { id: "unsequenced-source" } }, expected: undefined },
+  {
+    source: { __openclaw: { id: "imported-source", seq: 1, importedFrom: "cli" } },
+    expected: undefined,
+  },
+])(
+  "only routes question replies to canonical source identity: $expected",
+  ({ source, expected }) => {
+    expect(readAsyncQuestions({ ...question(), ...source })?.sourceMessageId).toBe(expected);
+  },
+);

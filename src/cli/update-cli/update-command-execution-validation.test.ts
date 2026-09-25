@@ -2,7 +2,7 @@
 import "./update-command-execution.test-support.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import http, { Agent, createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,7 +18,8 @@ import {
   updateRunStepsFromResultStep,
   updateRunWarningMessages,
 } from "../../infra/update-run-step.js";
-import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -33,6 +34,68 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update validation", () => {
+  it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      [false, true].map((changed) => ({ kind, changed })),
+    ),
+  )(
+    "checks admitted configuration before $kind rehearsal (changed=$changed)",
+    async ({ kind, changed }) => {
+      const { revalidateUpdateDatabaseContext } = await vi.importActual<
+        typeof import("./update-command-managed-context.js")
+      >("./update-command-managed-context.js");
+      let current = schemaContext("default");
+      mocks.captureSchemaContext.mockImplementation(async () => current);
+      mocks.captureManagedPreflight.mockImplementation(async () => current);
+      mocks.revalidateSchemaContext.mockImplementation(revalidateUpdateDatabaseContext);
+      vi.spyOn(configFile, "readConfigFileSnapshot").mockImplementation(
+        async () => current.configSnapshot,
+      );
+      const runStagedUpdate = async ({
+        inspectGitTarget,
+        validateCandidate,
+      }: {
+        inspectGitTarget?: (target: {
+          schemaVersions: { state: number; agent: number };
+        }) => Promise<void>;
+        validateCandidate: (root: string) => Promise<unknown>;
+      }) => {
+        await inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
+        // Staging/building is outside the admission window and can take minutes.
+        if (changed) {
+          const config = { gateway: { port: 19002 } };
+          current = {
+            ...current,
+            config,
+            configSnapshot: {
+              ...current.configSnapshot,
+              raw: JSON.stringify(config),
+              sourceConfig: config,
+              config,
+            },
+          };
+        }
+        await validateCandidate("/candidate");
+        return successfulUpdate;
+      };
+      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
+      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
+
+      const execution = await executeMutableUpdate(executionParams(kind));
+
+      expect(execution?.result.status).toBe(changed ? "error" : "ok");
+      expect(mocks.validateCanary).toHaveBeenCalledTimes(changed ? 0 : 1);
+      expect(mocks.serviceStopped).toBe(false);
+      expect(execution?.mutationStarted).toBe(false);
+      if (changed) {
+        expect(execution?.result.reason).toBe("database-schema-preflight");
+        expect(execution?.failure?.detail).toContain(
+          "configuration changed during database admission",
+        );
+      }
+    },
+  );
+
   it.each(["package", "git"] as const)(
     "continues the %s update with the recorded readiness warning instead of inference repair",
     async (kind) => {
@@ -57,8 +120,8 @@ describe("mutable update validation", () => {
           logTail: [message],
         };
       });
-      const repair = await import("./update-command-repair.js");
-      const runRepair = vi.spyOn(repair, "runUpdateCommandRepair");
+      const repair = await import("../../infra/update-repair-agent.js");
+      const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
       const accepted = vi.fn();
       const runStagedUpdate = async ({
         validateCandidate,
@@ -158,6 +221,9 @@ describe("mutable update validation", () => {
         let readyObservedAtMs: number | undefined;
         let stoppedAtMs: number | undefined;
         let replaceExecutor: (() => void) | undefined;
+        // Keep the real loopback probe off Node's ambient proxy-aware global agent.
+        const globalAgent = http.globalAgent;
+        const agent = new Agent();
         const server = createServer((request, response) => {
           const ready = elapsedMs >= readyAtMs;
           if (request.url === "/readyz" && ready) {
@@ -173,6 +239,7 @@ describe("mutable update validation", () => {
           throw new Error("Missing synthetic Gateway listener");
         }
         try {
+          http.globalAgent = agent;
           await fs.mkdir(path.join(serviceRoot, "dist"));
           await fs.writeFile(
             path.join(serviceRoot, "package.json"),
@@ -375,6 +442,8 @@ describe("mutable update validation", () => {
             }
           }
         } finally {
+          http.globalAgent = globalAgent;
+          agent.destroy();
           server.closeAllConnections();
           const closed = once(server, "close");
           server.close();
@@ -407,12 +476,6 @@ describe("mutable update validation", () => {
           failureFacts: [fact],
         },
       ],
-    });
-    const repair = await import("./update-command-repair.js");
-    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
-      status: "unavailable",
-      attempts: [],
-      finalValidation: { ok: false, score: 0, summary: fact.message },
     });
     mocks.runGitUpdate.mockImplementation(
       async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {

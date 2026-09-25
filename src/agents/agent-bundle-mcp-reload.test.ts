@@ -19,11 +19,16 @@ import {
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const startAuthorization = vi.hoisted(() => vi.fn(async () => ({ status: "authorized" })));
-const readAuthorization = vi.hoisted(() => vi.fn(async () => ({ state: "unauthenticated" })));
+const readAuthorization = vi.hoisted(() =>
+  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
+    identities.map(() => ({ state: "unauthenticated" })),
+  ),
+);
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: readAuthorization,
+  readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
@@ -40,7 +45,11 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   cleanupTempDirs(tempDirs);
   startAuthorization.mockClear();
-  readAuthorization.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  readAuthorization
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
 });
 
 async function fixture(now?: () => number) {

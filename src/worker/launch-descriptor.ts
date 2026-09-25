@@ -41,6 +41,7 @@ import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { isWorkerDesktopArgs, isWorkerDesktopString } from "../shared/worker-desktop-descriptor.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
 import {
   isWorkerToolName,
@@ -149,7 +150,8 @@ const BrowserLaunchSchema = workerProtocolObject({
       url.hash === ""
     );
   }),
-  launcherPath: AbsoluteHostPath,
+  launcherPath: AbsoluteHostPath.refine(isWorkerDesktopString),
+  launcherArgs: z.custom<string[]>(isWorkerDesktopArgs).optional(),
 });
 const ComputerLaunchSchema = workerProtocolObject({
   nodeId: Identifier,

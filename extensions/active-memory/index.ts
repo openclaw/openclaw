@@ -1,6 +1,7 @@
 import { getActiveMemoryEscalationProvider } from "openclaw/plugin-sdk/active-memory-escalation-runtime";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getMemoryCapabilityRegistration } from "openclaw/plugin-sdk/memory-host-core";
 import {
   normalizePluginsConfig,
@@ -10,12 +11,8 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import {
   applyCliRuntimeRecallTimeoutDefault,
   hasDeprecatedModelFallbackPolicy,
-  isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemoryConfig,
-  resetActiveMemoryConfigForTests,
-  setMinimumTimeoutMsForTests,
-  setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import {
   ACTIVE_MEMORY_ESCALATION_PROVIDER_TIMEOUT_MS,
@@ -24,13 +21,7 @@ import {
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import {
-  buildCacheKey,
-  buildCircuitBreakerKey,
   forgetActiveRecallRun,
-  getCachedResult,
-  isCircuitBreakerOpen,
-  resetActiveRecallStateForTests,
-  setCachedResult,
   toSingleLineErrorMessage,
   toSingleLineLogValue,
 } from "./recall-state.js";
@@ -49,7 +40,6 @@ import {
   lacksAdminToMutateActiveMemoryGlobal,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
-  shouldRememberAcrossConversations,
   shouldSkipActiveMemoryForHarnessSession,
   updateActiveMemoryGlobalEnabledInConfig,
 } from "./session-policy.js";
@@ -58,20 +48,8 @@ import {
   resolveCanonicalSessionKeyFromSessionId,
   resolveStatusUpdateAgentId,
 } from "./session.js";
-import {
-  readPartialAssistantText,
-  resetActiveMemoryTranscriptForTests,
-  setTimeoutPartialDataGraceMsForTests,
-} from "./transcript-result.js";
-import {
-  createActiveMemoryHookDeadline,
-  hasUsableMemoryResultInSessionRecord,
-} from "./transcript.js";
-import {
-  forgetTriggerRecallRun,
-  resetTriggerRecallRunsForTests,
-  resolveTriggerRecall,
-} from "./trigger-recall.js";
+import { createActiveMemoryHookDeadline } from "./transcript.js";
+import { forgetTriggerRecallRun, resolveTriggerRecall } from "./trigger-recall.js";
 import {
   ACTIVE_MEMORY_STATUS_PREFIX,
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
@@ -155,6 +133,11 @@ export default definePluginEntry({
           if (enabled !== undefined) {
             await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              writeOptions: {
+                assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                  ? undefined
+                  : ctx.assertOwnerCurrent,
+              },
               mutate: (draft) => {
                 const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, enabled);
                 Object.assign(draft, nextConfig);
@@ -179,7 +162,7 @@ export default definePluginEntry({
         const liveConfig = readCurrentConfig();
         const commandRecallEnabled =
           isEnabledForAgent(config, commandAgentId) ||
-          (config.enabled && shouldRememberAcrossConversations(liveConfig, commandAgentId));
+          (config.enabled && resolveRememberAcrossConversations(liveConfig, commandAgentId));
         if (!commandRecallEnabled) {
           return { text: "Active Memory: off for this session." };
         }
@@ -444,7 +427,7 @@ export default definePluginEntry({
             const productRecallRequested = Boolean(
               invocationConfig.enabled &&
               resolvedSessionKey &&
-              shouldRememberAcrossConversations(liveConfig, effectiveAgentId) &&
+              resolveRememberAcrossConversations(liveConfig, effectiveAgentId) &&
               isPrivateRecallDestination(destinationContext) &&
               chatIdAllowed,
             );
@@ -604,26 +587,3 @@ export default definePluginEntry({
     });
   },
 });
-
-const testing = {
-  buildCacheKey,
-  buildCircuitBreakerKey,
-  getCachedResult,
-  hasUsableMemoryResultInSessionRecord,
-  isCircuitBreakerOpen,
-  isMissingRegisteredMemoryToolsError,
-  normalizePluginConfig,
-  readPartialAssistantText,
-  resetActiveRecallCacheForTests() {
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
-  },
-  setMinimumTimeoutMsForTests,
-  setSetupGraceTimeoutMsForTests,
-  setTimeoutPartialDataGraceMsForTests,
-  setCachedResult,
-};
-
-export { testing };

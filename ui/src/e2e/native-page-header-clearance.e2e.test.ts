@@ -1,4 +1,4 @@
-// Every non-chat page header is one toolbar row: title (or hub tabs) centered
+// Toolbar page headers keep their title (or hub tabs) centered
 // like a window title, actions at the trailing edge. Native macOS hosts put the
 // traffic lights and hosted titlebar buttons in that row once the sidebar
 // collapses, so the row must share their centerline instead of sliding under.
@@ -7,6 +7,10 @@ import type { BrowserContext, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  discoveryCategories,
+  discoveryResult,
+} from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
@@ -38,6 +42,7 @@ suite.define(() => {
     route: string,
     install?: (page: Page) => Promise<void>,
     ready = ".content .content-header .page-title",
+    gatewayOptions?: Parameters<typeof installMockGateway>[1],
   ): Promise<Page> {
     context = await suite.browser.newContext({
       locale: "en-US",
@@ -46,7 +51,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await install?.(page);
-    await installMockGateway(page);
+    await installMockGateway(page, gatewayOptions);
     await page.goto(`${suite.server.baseUrl}${route}`);
     await page.locator(ready).first().waitFor({ state: "attached" });
     return page;
@@ -127,6 +132,49 @@ suite.define(() => {
     const tabsBox = (await tabs.boundingBox())!;
     expect(tabsBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
   });
+
+  it.each(["ltr", "rtl"] as const)(
+    "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
+    async (direction) => {
+      const page = await openPage("plugins", installNativeWebChrome, ".plugins-hub-header", {
+        methodResponses: {
+          "plugins.catalog.browse": discoveryResult,
+          "plugins.catalog.categories": discoveryCategories,
+        },
+      });
+      await page.evaluate((dir) => {
+        document.documentElement.dir = dir;
+      }, direction);
+      const toolbar = await collapseNative(page);
+      const header = page.locator(".plugins-hub-header");
+      const title = header.locator(".page-title");
+      await expect
+        .poll(async () => (await title.boundingBox())?.y ?? -1)
+        .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      // Both elements move together while the sidebar collapses; separate browser
+      // reads can compare different animation frames and report false misalignment.
+      const { titleBox, introBox, tabsBox } = await header.evaluate((element) => ({
+        titleBox: element.querySelector(".page-title")!.getBoundingClientRect().toJSON(),
+        introBox: element
+          .querySelector(".hub-page-header__title")!
+          .getBoundingClientRect()
+          .toJSON(),
+        tabsBox: element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect().toJSON(),
+      }));
+      expect(titleBox.height).toBeGreaterThan(1);
+      expect(titleBox.width).toBeGreaterThan(1);
+      expect(tabsBox.y).toBeGreaterThanOrEqual(introBox.bottom);
+      const titleStart = direction === "rtl" ? titleBox.right : titleBox.left;
+      const tabsStart = direction === "rtl" ? tabsBox.right : tabsBox.left;
+      expect(Math.abs(titleStart - tabsStart)).toBeLessThanOrEqual(1);
+      if (proofDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, `native-web-collapsed-stacked-header-${direction}.png`),
+        });
+      }
+    },
+  );
 
   it("keeps RTL page actions clear of the fixed left controls", async () => {
     // Arabic and Persian set the document direction (i18n/lib/translate.ts);

@@ -28,7 +28,7 @@ import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
 import { bindCronRunReceiptExecution } from "../store/run-receipt-execution-binding.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,

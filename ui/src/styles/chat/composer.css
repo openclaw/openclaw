@@ -307,6 +307,7 @@
 .agent-chat__capability-menu-item {
   --wa-color-text-normal: var(--text);
 
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
@@ -947,6 +948,14 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
+.chat-talk-input-picker__notice {
+  padding: 0;
+  opacity: 1;
+  color: inherit;
+  line-height: inherit;
+  cursor: default;
+}
+
 .chat-talk-input-picker__empty {
   padding: 4px 8px 8px;
   color: var(--muted);
@@ -965,22 +974,28 @@
   padding-top: 8px;
 }
 
-.chat-talk-input-picker__capabilities {
-  display: grid;
-  gap: 6px;
-  margin-top: 5px;
-  padding: 8px 9px 3px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-}
-
 .chat-talk-input-picker__capability {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 5px;
+  padding: 8px 9px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__capability + .chat-talk-input-picker__capability {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 3px;
+}
+
+.chat-talk-input-picker__capability[disabled] {
+  opacity: 1;
+  cursor: default;
 }
 
 .chat-talk-input-picker__capability-copy {
@@ -1042,6 +1057,10 @@
   color: var(--text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__preference::part(checkmark) {
+  display: none;
 }
 
 .chat-send-btn--hold-enabled {
@@ -2088,7 +2107,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 9px;
+  padding: 0 0 9px;
 }
 
 .chat-controls__permission-learn-more {
@@ -2215,6 +2234,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.25;
 }
 
+.chat-controls__permission-option--selected .chat-controls__permission-option-description {
+  color: var(--text);
+}
+
 .chat-controls__model-search-wrap {
   display: flex;
   align-items: center;
@@ -2328,7 +2351,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: inherit;
   min-width: 0;
   min-height: 32px;
-  flex: 1;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
   padding: 6px 0;
   border: 0;
   background: transparent;
@@ -2382,6 +2406,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {
@@ -2835,11 +2869,70 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   margin: 0;
   padding: 0;
+  border-radius: var(--radius-full);
   background: transparent;
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="max"], [data-effort-boost="ultra"]) {
+  --reasoning-track-background: transparent;
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent) 60%, white);
+  border-radius: var(--radius-full);
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 0%,
+    var(--accent) 25%,
+    var(--reasoning-boost-highlight) 50%,
+    var(--accent) 75%,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 100%
+  );
+  background-position: 50% 50%;
+  background-size: 220% 100%;
+}
+
+.chat-controls__reasoning-range[data-effort-boost="max"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="ultra"]) {
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent-2) 70%, white);
+}
+
+.chat-controls__reasoning-range[data-effort-boost="ultra"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 75%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 48%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+@keyframes chat-effort-flow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__reasoning-slider:has(
+    [data-effort-boost="max"]:not(:disabled),
+    [data-effort-boost="ultra"]:not(:disabled)
+  ) {
+    animation: chat-effort-flow 6s ease-in-out infinite alternate;
+  }
+
+  .chat-controls__reasoning-slider:has([data-effort-boost="ultra"]:not(:disabled)) {
+    animation-duration: 4s;
+  }
 }
 
 .chat-controls__reasoning-range:disabled {
   cursor: not-allowed;
+}
+
+.chat-controls__reasoning-slider:has(.chat-controls__reasoning-range:disabled) {
   opacity: 0.5;
 }
 
@@ -2851,10 +2944,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
-    color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+  background: var(
+    --reasoning-track-background,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
+      color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+    )
   );
 }
 
@@ -2885,13 +2981,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 7%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-progress {
   height: 24px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 18%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-thumb {

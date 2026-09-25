@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -67,11 +68,7 @@ import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
 } from "../../agents/workspace-state-store.js";
-import {
-  DEFAULT_IDENTITY_FILENAME,
-  ensureAgentWorkspace,
-  isWorkspaceSetupCompleted,
-} from "../../agents/workspace.js";
+import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
 import {
@@ -103,36 +100,10 @@ import {
   updateAgentConfigEntry,
   validateAgentModelSelectionUpdate,
 } from "./agents-config-mutations.js";
-import { createAgentFileHandlers } from "./agents-files.js";
+import { agentFileHandlers } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const agentsHandlerDeps = {
-  root,
-  isWorkspaceSetupCompleted,
-};
-const agentFileHandlers = createAgentFileHandlers(agentsHandlerDeps);
-
-export const testing = {
-  setDepsForTests(
-    overrides: Partial<{
-      root: typeof root;
-      isWorkspaceSetupCompleted: typeof isWorkspaceSetupCompleted;
-    }>,
-  ) {
-    if (overrides.isWorkspaceSetupCompleted) {
-      agentsHandlerDeps.isWorkspaceSetupCompleted = overrides.isWorkspaceSetupCompleted;
-    }
-    if (overrides.root) {
-      agentsHandlerDeps.root = overrides.root;
-    }
-  },
-  resetDepsForTests() {
-    agentsHandlerDeps.root = root;
-    agentsHandlerDeps.isWorkspaceSetupCompleted = isWorkspaceSetupCompleted;
-  },
-};
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
@@ -180,7 +151,7 @@ function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigin
 
 async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   const parentPath = cleanupPath.parentPath;
-  const parentRoot = await agentsHandlerDeps.root(parentPath, {
+  const parentRoot = await root(parentPath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
@@ -278,39 +249,15 @@ type AgentDeleteCleanupPath = {
 };
 
 async function resolveAgentDeleteCleanupTarget(pathname: string): Promise<string> {
-  let candidate = path.resolve(pathname);
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await fs.realpath(candidate), ...missingSuffix);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      let candidateStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
-      try {
-        candidateStat = await fs.lstat(candidate);
-      } catch (statError) {
-        if (!isMissingPathError(statError)) {
-          throw statError;
-        }
-      }
-      if (candidateStat?.isSymbolicLink()) {
-        const linkTarget = await fs.readlink(candidate);
-        const resolvedLinkTarget = await resolveAgentDeleteCleanupTarget(
-          path.isAbsolute(linkTarget)
-            ? linkTarget
-            : path.resolve(path.dirname(candidate), linkTarget),
-        );
-        return path.resolve(resolvedLinkTarget, ...missingSuffix);
-      }
-      const parent = path.dirname(candidate);
-      if (parent === candidate) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(candidate));
-      candidate = parent;
+  const candidate = path.resolve(pathname);
+  try {
+    return await fs.realpath(candidate);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
     }
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(candidate);
+    return path.resolve(existingPath, ...unresolvedSegments);
   }
 }
 
@@ -531,7 +478,7 @@ async function writeWorkspaceFileOrRespond(params: {
   }
   await fs.mkdir(params.workspaceDir, { recursive: true });
   try {
-    const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+    const workspaceRoot = await root(params.workspaceDir);
     await workspaceRoot.write(params.name, params.content, { encoding: "utf8" });
   } catch (err) {
     if (err instanceof FsSafeError) {
@@ -562,7 +509,7 @@ async function readWorkspaceFileContent(
       }
       return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
     }
-    const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+    const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
       nonBlockingRead: true,
@@ -923,45 +870,44 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 );
               }
             }
-            await context.cron.removeAgentJobsTransactional(
-              agentId,
-              async () =>
-                await withAgentExecApprovalsRemoved(agentId, async () => {
-                  deletion.assertCurrent();
-                  if (!rosterCommitted) {
+            await context.cron.removeAgentJobsTransactional(agentId, () =>
+              withAgentExecApprovalsRemoved(agentId, async () => {
+                deletion.assertCurrent();
+                if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({
+                      agentId,
+                      allowConfigSizeDrop: true,
+                      assertCurrent: deletion.assertCurrent,
+                    });
+                  } catch (error) {
                     try {
-                      committed = await deleteAgentConfigEntry({
-                        agentId,
-                        assertCurrent: deletion.assertCurrent,
-                      });
-                    } catch (error) {
-                      try {
-                        const persisted = await readConfigFileSnapshotForWrite();
-                        if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
-                          rosterCommitted = true;
-                          throw new AgentDeletionCommitUncertainError(error);
-                        }
-                      } catch (readError) {
-                        if (readError instanceof AgentDeletionCommitUncertainError) {
-                          throw readError;
-                        }
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
+                        rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
-                      throw error;
-                    }
-                    if (!committed.result) {
-                      rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
-                      const missingResultError = new Error(
-                        "agent delete config mutation did not return its target",
-                      );
-                      if (rosterCommitted) {
-                        throw new AgentDeletionCommitUncertainError(missingResultError);
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
                       }
-                      throw missingResultError;
+                      throw new AgentDeletionCommitUncertainError(error);
                     }
-                    rosterCommitted = true;
+                    throw error;
                   }
-                }),
+                  if (!committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
+                }
+              }),
             );
             deletion.assertCurrent();
           } catch (error) {

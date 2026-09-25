@@ -55,11 +55,16 @@ vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) =>
   ...(await importOriginal<typeof import("./session-accessor.sqlite-worker-request.js")>()),
   withSqliteMutationWorkerLifetime: async <T>(
     _options: unknown,
-    run: (request: { assertCurrent: () => void; commitGate: SharedArrayBuffer }) => Promise<T>,
+    run: (request: {
+      assertCurrent: () => void;
+      commitGate: SharedArrayBuffer;
+      signal: AbortSignal;
+    }) => Promise<T>,
   ) =>
     await run({
       assertCurrent: () => {},
       commitGate: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+      signal: new AbortController().signal,
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
@@ -68,12 +73,11 @@ vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal
     _gate: SharedArrayBuffer,
     _database: unknown,
     assertCurrent: () => void,
-    run: (authorize: () => unknown[]) => Promise<T>,
+    run: (authorize: () => void) => Promise<T>,
   ) =>
     await run(() => {
       assertCurrent();
       storage.committed = true;
-      return [];
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
@@ -85,11 +89,12 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
       _claim: unknown,
       run: (worker: Pick<WorkerOwner, "assertCurrent" | "run">) => Promise<T>,
       assertCurrent: () => void,
+      signal?: AbortSignal,
     ) =>
       await runInArchiveFifo(async () => {
         assertCurrent();
         return await run({ assertCurrent, run: storage.run });
-      }),
+      }, signal),
   };
 });
 

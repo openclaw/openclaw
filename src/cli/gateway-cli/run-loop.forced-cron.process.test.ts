@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -35,7 +35,7 @@ it.skipIf(process.platform === "win32").each([
   { signal: "SIGTERM", mode: "force" },
   { signal: "SIGUSR2", mode: "timeout" },
 ] as const)(
-  "cancels active cron work and joins cleanup before $signal $mode restart",
+  "settles admitted cron work before $signal $mode restart",
   async ({ signal, mode }) => {
     const root = tempDirs.make("openclaw-forced-cron-");
     const home = path.join(root, "home");
@@ -56,23 +56,42 @@ it.skipIf(process.platform === "win32").each([
     children.set(child, closed);
     void closed.catch(() => {});
     let output = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
+    const changes = new EventEmitter();
+    const recordOutput = (chunk: Buffer) => {
       output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    const waitForOutput = (text: string, timeout = 5_000) =>
-      vi.waitFor(
-        () => {
-          expect(output).toContain(text);
-        },
-        { timeout, interval: 25 },
-      );
+      changes.emit("output");
+    };
+    child.stdout?.on("data", recordOutput);
+    child.stderr?.on("data", recordOutput);
+    const waitForOutput = async (text: string, timeout = 5_000) => {
+      let inspect: () => void = () => {};
+      try {
+        await withTestTimeout(
+          new Promise<void>((resolve) => {
+            inspect = () => {
+              if (output.includes(text)) {
+                resolve();
+              }
+            };
+            changes.on("output", inspect);
+            inspect();
+          }),
+          timeout,
+          `Missing ${text}: ${output}`,
+        );
+      } finally {
+        changes.off("output", inspect);
+      }
+    };
     await waitForOutput("process proof: ready:1", 45_000);
     expect(child.kill(signal)).toBe(true);
-    await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
-    await waitForOutput("process proof: close-entered");
+    if (mode === "timeout") {
+      await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
+      await waitForOutput("process proof: close-entered");
+    } else {
+      await waitForOutput("draining active work before");
+      expect(output).not.toContain("process proof: close-entered");
+    }
     child.send("inspect");
     await waitForOutput("process proof: held:starts=1:pending=true");
     expect(fs.existsSync(path.join(root, "cleanup.txt"))).toBe(false);

@@ -28,10 +28,16 @@ function inferAudioAttachmentMime(attachment: DiscordAudioAttachment): string | 
   if (contentType?.startsWith("audio/")) {
     return contentType;
   }
-  if (
-    typeof attachment.duration_secs === "number" ||
-    typeof normalizeOptionalString(attachment.waveform) === "string"
-  ) {
+  // A waveform is the definitive native Discord voice-note marker and wins even
+  // against a conflicting MIME. Discord now sends duration_secs on ordinary
+  // video/image attachments, so a bare duration only implies audio when the
+  // declared type is not a definitive visual one.
+  if (typeof normalizeOptionalString(attachment.waveform) === "string") {
+    return "audio/ogg";
+  }
+  const definitiveVisual =
+    contentType?.startsWith("video/") === true || contentType?.startsWith("image/") === true;
+  if (!definitiveVisual && typeof attachment.duration_secs === "number") {
     return "audio/ogg";
   }
   const ext = getFileExtension(attachment.filename ?? attachment.url);

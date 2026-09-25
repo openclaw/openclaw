@@ -29,12 +29,12 @@ import {
 import {
   assertSqliteSourceReadAllowed,
   withSqliteSourceHandleAsync,
+  withSqliteSourceHandle,
 } from "./sqlite-source-handle.js";
+import { readSqliteSourceContentVersionInProcess } from "./sqlite-source-revision.js";
 import {
   assertStateDatabaseSourceReadContext,
   hasStateDatabaseSourceExclusion,
-  prepareStateDatabaseCanonicalMutation,
-  prepareStateDatabaseMutationSnapshot,
 } from "./state-database-coordinator.js";
 
 // Keep parent launch orchestration out of the native snapshot child's import graph.
@@ -45,17 +45,6 @@ export async function prepareSqliteReadOnlyLocation(
   const signal = resolveSqliteInspectionSignal(options.signal);
   try {
     signal?.throwIfAborted();
-    const ownedSnapshot = prepareStateDatabaseMutationSnapshot(pathname, signal);
-    if (ownedSnapshot) {
-      const prepared = await ownedSnapshot;
-      try {
-        signal?.throwIfAborted();
-        return prepared;
-      } catch (error) {
-        await prepared.cleanupAsync();
-        throw error;
-      }
-    }
     if (hasStateDatabaseSourceExclusion(pathname)) {
       const prepared = options.preserveSourceArtifacts
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
@@ -88,10 +77,7 @@ export function prepareSqliteReadOnlyLocationAsync(
   pathname: string,
   options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
 ): Promise<AsyncPreparedSqliteReadOnlyLocation> {
-  if (
-    prepareStateDatabaseCanonicalMutation(pathname) ||
-    hasStateDatabaseSourceExclusion(pathname)
-  ) {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
     throw new Error("SQLite source requires its existing snapshot owner");
   }
   return prepareWorkerSnapshot(
@@ -159,21 +145,13 @@ function prepareWorkerSnapshot(
 
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
-  options: { fallbackToOnlineBackupUnderLoad?: boolean } = {},
 ): PreparedSqliteReadOnlyLocation {
   if (hasStateDatabaseSourceExclusion(pathname)) {
     return prepareSqliteReadOnlyLocationSyncInProcess(pathname);
   }
   const stagingRoot = createSqliteSnapshotStagingDirectorySync();
   try {
-    return adoptPreparedLocation(
-      runSqliteReadOnlyWorkerSync(
-        pathname,
-        stagingRoot,
-        options.fallbackToOnlineBackupUnderLoad ? "sync-fallback" : "sync",
-      ),
-      stagingRoot,
-    );
+    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
   } catch (error) {
     if (!removeTempDirectory(stagingRoot)) {
       throw new SqliteSnapshotCleanupError(
@@ -229,4 +207,18 @@ export async function withSqliteSnapshotSource<T>(
   } finally {
     await prepared?.cleanupAsync();
   }
+}
+
+/** Fresh bytes without opening SQLite or making another durable private copy. */
+export function readSqliteSourceContentVersionSync(pathname: string): string | undefined {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
+    return readSqliteSourceContentVersionInProcess(pathname);
+  }
+  // Do not acquire file exclusion: the Gateway may already be starting. A shared
+  // source lease spans this read-only child's complete synchronous settlement.
+  // The child owns no SQLite connection, snapshots, or authority to publish effects.
+  return withSqliteSourceHandle(
+    pathname,
+    () => runSqliteReadOnlyWorkerSync(pathname, undefined, "content-version") || undefined,
+  );
 }

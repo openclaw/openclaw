@@ -61,7 +61,11 @@ import {
   resolveHeartbeatFlag,
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
-import { resolveBroadcastDelta } from "./server-chat-live-text.js";
+import {
+  mergeAgentTextPayload,
+  mergeChatTextPayload,
+  resolveBroadcastDelta,
+} from "./server-chat-live-text.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -74,6 +78,7 @@ import type {
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import {
   isRestartRecoveryLifecycleEvent,
   persistGatewaySessionLifecycleEvent,
@@ -319,25 +324,6 @@ type LivePayloadOptions = {
   liveText?: GatewayBroadcastOpts["liveText"];
 };
 
-function mergeAgentTextPayload(previous: unknown, next: unknown): AgentEventPayload {
-  // SAFETY: this callback only merges the same typed agent producer and stream/item key.
-  const payload = next as AgentEventPayload;
-  // SAFETY: the coalescing key prevents mixing agent payloads with other event shapes.
-  const delta = (previous as AgentEventPayload).data.delta;
-  const nextDelta = payload.data.delta;
-  return payload.stream !== "item" && typeof delta === "string" && typeof nextDelta === "string"
-    ? { ...payload, data: { ...payload.data, delta: `${delta}${nextDelta}` } }
-    : payload;
-}
-
-function mergeChatTextPayload(previous: unknown, next: unknown): ChatEvent {
-  type Delta = Extract<ChatEvent, { state: "delta" }>;
-  // SAFETY: only append deltas use this callback; replacements and terminal events flush it.
-  const payload = next as Delta;
-  // SAFETY: both values share the same chat-delta delivery key and buffering generation.
-  return { ...payload, deltaText: `${(previous as Delta).deltaText}${payload.deltaText}` };
-}
-
 function cancelPendingLiveTextFlush(run: ChatRunRecord, stream: LiveTextStream): void {
   const pending = run.pendingTextFlushes?.[stream];
   if (!pending) {
@@ -517,15 +503,24 @@ export function createAgentEventHandler({
     try {
       const { entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
       if (entry) {
+        const rowContext = getSessionRowProjection?.()?.readPreparedRowContext();
         result =
-          projectGatewaySessionRunState({ key: canonicalKey, entry, now: Date.now() })
-            .subagentOwner ||
+          (rowContext
+            ? projectGatewaySessionRunState({
+                key: canonicalKey,
+                entry,
+                now: Date.now(),
+                rowContext,
+              }).subagentOwner
+            : undefined) ||
           entry.spawnedBy ||
           null;
+        if (getSessionRowProjection && !rowContext) {
+          // Pending projection facts must not make this temporary fallback permanent.
+          return result;
+        }
       }
-    } catch {
-      // result stays null
-    }
+    } catch {}
     spawnedByCache.set(sessionKey, result);
     return result;
   };
@@ -828,23 +823,20 @@ export function createAgentEventHandler({
         void persistence
           .then(
             async () => {
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange();
+              await withPreparedSessionEventRow(
+                projection,
+                sessionKey,
+                sessionAgentId,
+                broadcastSessionChange,
+              );
             },
             async (err: unknown) => {
               logError(
                 `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
               );
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange(evt);
+              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, () =>
+                broadcastSessionChange(evt),
+              );
             },
           )
           .catch((error: unknown) => {
@@ -1890,18 +1882,10 @@ export function createAgentEventHandler({
             { dropIfSlow: true },
           );
         const projection = getSessionRowProjection?.();
-        if (projection) {
-          void (async () => {
-            do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
-            publish();
-          })().catch((error: unknown) =>
+        void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
+          (error: unknown) =>
             logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-          );
-        } else {
-          publish();
-        }
+        );
       }
     }
   };

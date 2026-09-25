@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
-import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const ROOT = resolveRepoRoot(import.meta.url);
@@ -16,6 +15,7 @@ const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
+const AUTHORING_INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
 export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
@@ -57,10 +57,6 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "tsx.mjs"),
     target: path.join(".openclaw-sync", "tsx.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
-    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
@@ -165,12 +161,6 @@ const GENERATED_LOCALES = [
     navFile: "fa-navigation.json",
     tmFile: "fa.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify rejected `fa` in navigation.languages when this override was
-    // added (2026-04-29). The `fa/` docs tree is still generated and published;
-    // only the navigation entry is withheld. Keep generated docs and
-    // translation memory so the locale stays available once the docs host
-    // accepts it. Re-test against the host before removing this flag.
-    navigation: false,
   },
   {
     language: "tr",
@@ -206,12 +196,6 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify rejected `th` in navigation.languages when this override was
-    // added (2026-04-29). The `th/` docs tree is still generated and published;
-    // only the navigation entry is withheld. Keep generated docs and
-    // translation memory so the locale stays available once the docs host
-    // accepts it. Re-test against the host before removing this flag.
-    navigation: false,
   },
   {
     language: "ru",
@@ -536,14 +520,10 @@ export function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(
-    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
-  );
+  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
-    composeLocaleNav(entry, englishNav),
-  );
+  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -588,26 +568,6 @@ export function reportOrphanLocaleDocs(targetDocsDir) {
   return orphaned;
 }
 
-function repairGeneratedLocaleDocs(targetDocsDir) {
-  let repaired = 0;
-  for (const locale of GENERATED_LOCALES) {
-    const localeDir = path.join(targetDocsDir, locale.dir);
-    for (const filePath of walkMarkdownFiles(localeDir)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const repairedRaw = repairMintlifyAccordionIndentation(raw);
-      if (repairedRaw === raw) {
-        continue;
-      }
-      fs.writeFileSync(filePath, repairedRaw);
-      repaired += 1;
-    }
-  }
-
-  if (repaired > 0) {
-    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
-  }
-}
-
 function pruneInternalDocs(targetDocsDir) {
   let pruned = 0;
   for (const relativeDir of INTERNAL_DOCS_DIRS) {
@@ -621,6 +581,14 @@ function pruneInternalDocs(targetDocsDir) {
 
   if (pruned > 0) {
     console.log(`Pruned ${pruned} internal-only docs director${pruned === 1 ? "y" : "ies"}.`);
+  }
+}
+
+function pruneAuthoringInstructions(targetDocsDir) {
+  // Root repository instructions are not public pages. Locale orphans remain
+  // translation-finalizer owned so their inbound links are repaired together.
+  for (const file of AUTHORING_INSTRUCTION_FILES) {
+    fs.rmSync(path.join(targetDocsDir, file), { force: true });
   }
 }
 
@@ -812,11 +780,13 @@ function syncDocsTree(targetRoot, options = {}) {
     "--exclude",
     ".i18n/README.md",
     ...INTERNAL_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
+    ...AUTHORING_INSTRUCTION_FILES.flatMap((file) => ["--exclude", `/${file}`]),
     ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  pruneAuthoringInstructions(targetDocsDir);
   writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
@@ -834,7 +804,6 @@ function syncDocsTree(targetRoot, options = {}) {
     sourceSha: options.clawhubSourceSha,
   });
   reportOrphanLocaleDocs(targetDocsDir);
-  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
 }

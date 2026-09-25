@@ -225,6 +225,61 @@ async function proveGitWorkerRuntime(home) {
   }
 }
 
+function proveBrowserSetupRuntime(home) {
+  const proofHome = path.join(home, "browser-setup");
+  const stateDir = path.join(proofHome, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(proofHome, "Library/Application Support/Google/Chrome"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  const config = JSON.stringify({
+    browser: { profiles: { chrome: { driver: "extension", cdpPort: 18999 } } },
+  });
+  fs.writeFileSync(configPath, config);
+  assert(
+    !fs.existsSync(path.join(packageRoot, "dist/entry.js")),
+    "Private runtime restored the full CLI",
+  );
+  for (const action of ["inspect", "install", "verify"]) {
+    const result = JSON.parse(
+      execFileSync(
+        node,
+        [
+          path.join(packageRoot, "dist/extensions/browser/setup-entry.js"),
+          "--action",
+          action,
+          "--wait-ms",
+          "1000",
+        ],
+        {
+          cwd: proofHome,
+          env: {
+            HOME: proofHome,
+            TMPDIR: proofHome,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_PROFILE: "mac-browser-proof",
+            OPENCLAW_NO_RESPAWN: "1",
+            PATH: `${path.dirname(node)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+          },
+          encoding: "utf8",
+          timeout: 60_000,
+        },
+      ),
+    );
+    assert.equal(result.action, action);
+    assert.equal(result.target.platform, "darwin");
+    assert.equal(result.target.kind, "local-host");
+    assert.equal(result.target.profile, "chrome");
+    assert.equal(result.target.relayPort, 18999);
+    assert.equal(result.installation.nativeHostRegistered, action !== "inspect");
+    assert.notEqual(result.connection.state, "connected");
+    assert.equal(fs.readFileSync(configPath, "utf8"), config, "Browser setup rewrote local config");
+  }
+}
+
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-proof-")));
 try {
   // Ready manifests do not load lazy native capabilities. Exercise their real
@@ -241,6 +296,9 @@ try {
       stdio: "inherit",
     },
   );
+  // Browser setup consumes native file operations; prove that prerequisite first.
+  // Its plugin-owned entry must survive pruning without reopening the sealed worker CLI.
+  proveBrowserSetupRuntime(home);
   const database = new DatabaseSync(":memory:", { allowExtension: true });
   try {
     require("sqlite-vec").load(database);

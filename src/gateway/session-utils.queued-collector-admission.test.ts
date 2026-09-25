@@ -1,4 +1,7 @@
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -22,8 +25,8 @@ import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "./server-plugins.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 
 const { parentKey, requestContext, operatorClient } = useQueuedCollectorFixture();
 
@@ -34,8 +37,26 @@ describe("queued collector native admission", () => {
       const context = requestContext();
       const entered = createDeferred();
       const dispatched = createDeferred();
+      const publicationEntered = createDeferred();
+      const releasePublication = createDeferred();
+      const publicationOrder: string[] = [];
       let nativeRunId: string | undefined;
       const agentResponse = vi.fn();
+      const projection = expectDefined(getSessionRowProjection(context), "session row projection");
+      const ensureMaterialized = projection.ensureMaterialized.bind(projection);
+      let materializationCount = 0;
+      const publicationGate = exact
+        ? undefined
+        : vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+            await ensureMaterialized();
+            materializationCount += 1;
+            if (materializationCount === 2) {
+              publicationOrder.push("publication entered");
+              publicationEntered.resolve();
+              await releasePublication.promise;
+              publicationOrder.push("publication released");
+            }
+          });
       const runtimeGate = vi
         .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
         .mockImplementation(async ({ abortSignal }) => {
@@ -82,6 +103,7 @@ describe("queued collector native admission", () => {
           } else if (method === "chat.abort") {
             await handleChatAbortRequest(request);
           } else if (method === "sessions.delete") {
+            publicationOrder.push("session delete");
             await expectDefined(
               sessionDeleteHandlers["sessions.delete"],
               "sessions.delete handler",
@@ -150,7 +172,7 @@ describe("queued collector native admission", () => {
         }
         expect(entry.execution.startedAt).toBeUndefined();
         const respond = vi.fn();
-        await sessionAbortHandlers["sessions.abort"]!({
+        const abort = sessionAbortHandlers["sessions.abort"]!({
           req: { type: "req", id: "stop-native-preaccept", method: "sessions.abort" },
           params: {
             key: entry.childSessionKey,
@@ -161,10 +183,16 @@ describe("queued collector native admission", () => {
           client: operatorClient(),
           isWebchatConnect: () => false,
         });
+        if (!exact) {
+          await publicationEntered.promise;
+          expect(publicationOrder).toEqual(["publication entered"]);
+          releasePublication.resolve();
+        }
+        await abort;
         await dispatched.promise;
         await vi.waitFor(() => expect(entry.collectorCompletion?.status).toBe("killed"));
         expect
-          .soft(respond.mock.calls[0]?.slice(0, 2))
+          .soft(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0]?.[2]))
           .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
         expect.soft(context.chatRunState.hasAbortMarker(entry.runId)).toBe(true);
         expect.soft(admission.abortStopReason).toBe("rpc");
@@ -175,6 +203,8 @@ describe("queued collector native admission", () => {
         await closeSwarmScheduler();
         expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeUndefined();
       } finally {
+        releasePublication.resolve();
+        publicationGate?.mockRestore();
         if (nativeRunId) {
           context.chatAbortControllers.get(nativeRunId)?.controller.abort();
           await dispatched.promise;

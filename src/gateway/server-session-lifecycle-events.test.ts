@@ -48,7 +48,15 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
       chatAbortControllers: new Map(),
     });
-    await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
+    await handler({
+      sessionKey: sessionRow.key,
+      agentId: "main",
+      reason,
+      ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
+        ? { scope: "runtime" as const }
+        : {}),
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
       reason,
       session: { key: sessionRow.key, sessionId: sessionRow.sessionId },
@@ -68,14 +76,24 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const query = { key: "agent:main:late-successor", agentId: "main" };
     const original = { ...query, entry: { sessionId: "original", lifecycleRevision: "first" } };
     let current = scenario.captured ? original : undefined;
+    let generation = 0;
     const snapshot = vi.fn(() => ({
       row: current ? { ...current.entry, key: query.key, kind: "direct" } : null,
     }));
     const projection = {
       state: { rowContext: { projectedAgentRuns: undefined } },
       capture: () => current,
-      ensureMaterialized: () => prepared.promise,
+      ensureMaterialized: async () => {},
+      withPreparedExactRows: (async (queries, consume) => {
+        queries({});
+        await prepared.promise;
+        return { kind: "complete", value: consume(projection) };
+      }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
+      observeGeneration: (() => {
+        const observed = generation;
+        return { isCurrent: () => generation === observed, dispose() {} };
+      }) satisfies SessionRowProjection["observeGeneration"],
       snapshot,
     } as unknown as SessionRowProjection;
     const broadcastToConnIds = vi.fn();
@@ -90,6 +108,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     }
     if (!scenario.captured) {
+      generation += 1;
       current = { ...query, entry: { sessionId: "successor", lifecycleRevision: "next" } };
     }
     prepared.resolve();

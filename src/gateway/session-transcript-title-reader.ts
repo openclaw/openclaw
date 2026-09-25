@@ -27,11 +27,7 @@ import {
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
-
-export type SessionTitleFields = {
-  firstUserMessage: string | null;
-  lastMessagePreview: string | null;
-};
+import type { SessionTitleFields } from "./session-utils.types.js";
 
 type SessionTitleReadOptions = { includeInterSession?: boolean; readOnly?: boolean };
 

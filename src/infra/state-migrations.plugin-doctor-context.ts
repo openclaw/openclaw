@@ -35,7 +35,10 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { readDeferredPluginSessionImport } from "./deferred-plugin-session-sources.js";
+import {
+  readDeferredPluginSessionImport,
+  resolveVerifiedSessionSource,
+} from "./deferred-plugin-session-sources.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
@@ -90,7 +93,17 @@ function hasUnimportedSessionIdentity(params: {
           },
           sqlitePath,
           env: params.env,
+          purpose: "canonical",
         });
+        if (receipt) {
+          const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
+          if (
+            !index ||
+            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
+          ) {
+            throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
+          }
+        }
         const parsed = readSessionStoreJson5(storePath);
         const after = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
         if (
@@ -195,8 +208,6 @@ function resolveDoctorSessionIdentityEvidence(params: {
     ) {
       return { ...request, state: "unknown" };
     }
-    // Raw sources remain authoritative until their canonical import was verified.
-    // Receipt conflicts propagate; they cannot authorize either deletion or fallback creation.
     const unimported =
       current.length === 0 &&
       hasUnimportedSessionIdentity({
@@ -366,6 +377,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   repairAuthority?: PluginDoctorRepairAuthority;
+  trustedForDurableStores?: boolean;
   channelIngress?: PluginDoctorChannelIngressAccessOptions;
 }): PluginDoctorStateMigrationContext {
   const { pluginId, env } = params;
@@ -409,6 +421,25 @@ export function createPluginDoctorStateMigrationContext(params: {
   };
   if (params.channelIngress) {
     context.channelIngressQueues = buildChannelIngressQueueAccess(params.channelIngress);
+  }
+  if (params.trustedForDurableStores) {
+    context.inspectCronJobs = async () => {
+      params.repairAuthority?.assertCurrent();
+      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      params.repairAuthority?.assertCurrent();
+      const inventory = await inspectCronJobsForDoctor(params);
+      params.repairAuthority?.assertCurrent();
+      return inventory;
+    };
+    if (params.repairAuthority) {
+      const authority = params.repairAuthority;
+      context.repairCronJobs = async (inventory, changes) => {
+        authority.assertCurrent();
+        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        authority.assertCurrent();
+        return repairCronJobsForDoctor(params, authority, inventory, changes);
+      };
+    }
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;

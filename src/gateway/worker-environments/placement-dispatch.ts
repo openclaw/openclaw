@@ -60,10 +60,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
   WorkerPlacementReclaimOptions &
   Pick<
     PlacementRecoveryDeps,
-    | "resolveWorkspace"
-    | "reportWorkspaceResultRecoveryFailure"
-    | "prepareAcceptedWorkspacePublication"
-    | "publishAcceptedWorkspace"
+    "resolveWorkspace" | "prepareAcceptedWorkspacePublication" | "publishAcceptedWorkspace"
   > & {
     environments: WorkerDispatchEnvironmentService &
       Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
@@ -249,7 +246,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
     } catch (error) {
       try {
-        if (placement && startup.retainInterruptedProvisioning(placement, error)) {
+        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
           throw error;
         }
         const current = placement ? placements.get(request.sessionId) : undefined;

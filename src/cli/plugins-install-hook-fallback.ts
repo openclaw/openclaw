@@ -34,6 +34,7 @@ import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
   createHookPackInstallLogger,
+  createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
 
@@ -106,6 +107,13 @@ async function installHookPack(
   params: InstallParams,
   expectedPackageKind?: "hook-only",
 ): Promise<InstallResult> {
+  if (params.request.enable === false) {
+    return {
+      ok: false,
+      error:
+        "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
+    };
+  }
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
@@ -242,14 +250,25 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     }
   }
   const install = async (installRequest: PluginsInstallParams): Promise<InstallResult> => {
+    const runtime = params.runtime ?? defaultRuntime;
+    const logWarning = options.logger?.warn ?? createPluginInstallLogger(runtime).warn;
+    const warnings = new Set<string>();
+    // Local installs stream warnings that also appear in the final result;
+    // Gateway installs only return them. Both routes share one terminal sink.
+    const warn = (message: string) => {
+      if (!warnings.has(message)) {
+        warnings.add(message);
+        logWarning(message);
+      }
+    };
     try {
       const result = await execute({
         ...options,
+        logger: { ...options.logger, warn },
         request: installRequest,
       });
-      const runtime = params.runtime ?? defaultRuntime;
       for (const warning of result.warnings ?? []) {
-        runtime.log(theme.warn(warning));
+        warn(warning);
       }
       runtime.log(
         installRequest.source === "local" && installRequest.link
@@ -317,7 +336,11 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     });
     if (fallback) {
       (params.runtime ?? defaultRuntime).log(theme.warn(fallback.warning));
-      return await install({ source: "bundled", pluginId: fallback.bundledSource.pluginId });
+      return await install({
+        source: "bundled",
+        pluginId: fallback.bundledSource.pluginId,
+        ...(request.enable === false ? { enable: false } : {}),
+      });
     }
   }
   const hook = await installHookPack(hookSource, params);

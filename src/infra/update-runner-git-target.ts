@@ -12,15 +12,13 @@ import { hasErrnoCode } from "./errno.js";
 import { gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import type {
-  CommandRunner,
-  RunStepOptions,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UNVERIFIED_GIT_CORRUPTION =
   /(?:in the commit graph file but not in the object database|probably due to repo corruption)/iu;
@@ -143,16 +141,16 @@ export async function withGitTargetInspectionRoot<T>(
     const shallow = normalizeGitPathForFilesystem(
       (await command(params.root, ["rev-parse", "--git-path", "shallow"])).trim(),
     );
-    const refs = await command(params.root, [
-      "for-each-ref",
-      "--format=update %(refname) %(objectname)",
-    ]);
+    const refs = await command(params.root, ["for-each-ref", "--format=%(objectname) %(refname)"]);
     // Git transports shallow clones instead of sharing their object store, which
     // cannot serve absent promised objects. Snapshot refs and the shallow boundary
     // privately, then let the original remotes hydrate only this inspection repo.
     await command(params.root, ["init", "--bare", "--template=", inspectionRoot], false, {
       ...(params.work ?? { timeoutMs: params.timeoutMs }),
-      env: { GIT_DEFAULT_HASH: head.length === 64 ? "sha256" : "sha1" },
+      env: {
+        GIT_DEFAULT_HASH: head.length === 64 ? "sha256" : "sha1",
+        GIT_DEFAULT_REF_FORMAT: "files",
+      },
     });
     await fs.writeFile(
       path.join(inspectionRoot, "objects", "info", "alternates"),
@@ -165,10 +163,47 @@ export async function withGitTargetInspectionRoot<T>(
           throw error;
         }
       });
-    await command(inspectionRoot, ["update-ref", "--stdin"], false, {
-      timeoutMs: params.timeoutMs,
-      input: refs,
-    });
+    const objectIds = new Set<string>();
+    const branchObjects = new Set<string>();
+    for (const ref of refs.trim().split("\n").filter(Boolean)) {
+      const separator = ref.indexOf(" ");
+      const oid = ref.slice(0, separator);
+      objectIds.add(oid);
+      if (ref.slice(separator + 1).startsWith("refs/heads/")) {
+        branchObjects.add(oid);
+      }
+    }
+    if (objectIds.size > 0) {
+      const ids = [...objectIds];
+      // ^{object} retains update-ref's native object parsing, including malformed
+      // commits. Probe privately so promised objects cannot hydrate the source.
+      const checked = await command(
+        inspectionRoot,
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        false,
+        {
+          timeoutMs: params.timeoutMs,
+          input: ids.map((oid) => `${oid}^{object}\n`).join(""),
+        },
+      );
+      const checkedObjects = checked.trimEnd().split("\n");
+      if (
+        checkedObjects.length !== ids.length ||
+        ids.some(
+          (oid, index) =>
+            !["commit", "tree", "blob", "tag"].some(
+              (type) =>
+                checkedObjects[index] === `${oid} ${type}` &&
+                (!branchObjects.has(oid) || type === "commit"),
+            ),
+        )
+      ) {
+        throw new Error("Git target inspection references an invalid object");
+      }
+    }
+    // One packed snapshot avoids a loose file and lock for every installed ref.
+    // Omit peeled/sorted headers: Git owns tag peeling and reference ordering.
+    await fs.writeFile(path.join(inspectionRoot, "packed-refs"), refs);
     await command(
       inspectionRoot,
       headRef ? ["symbolic-ref", "HEAD", headRef] : ["update-ref", "--no-deref", "HEAD", head],
@@ -279,16 +314,13 @@ export async function prepareGitMutation(params: {
   root: string;
   revision: string;
   timeoutMs: number;
-  beforeGitMutation?: UpdateRunnerOptions["beforeGitMutation"];
-}): Promise<{
-  allowGatewayServiceRepair?: boolean;
-  allowGatewayActivation?: boolean;
-}> {
+  beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
+}): Promise<void> {
   const target = await readGitTargetSchemaVersions(params);
   const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
     ? params.revision.toLowerCase()
     : undefined;
-  const preparation = await params.beforeGitMutation?.({
+  await params.beforeGitMutation({
     ...(sha ? { sha } : {}),
     ...(target.status === "ok"
       ? {
@@ -297,7 +329,6 @@ export async function prepareGitMutation(params: {
         }
       : { metadataUnreadable: target.reason }),
   });
-  return preparation ?? {};
 }
 
 export async function selectGitInspectionTarget(
@@ -364,25 +395,18 @@ function resolveReleaseTagRemote(
 export async function fetchGitUpdateTarget(params: {
   root: string;
   channel: UpdateChannel;
+  devTarget?: DevUpdateTarget;
   name: string;
   step: (name: string, argv: string[], cwd: string) => RunStepOptions;
   workStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
   steps: UpdateStepResult[];
-}): Promise<boolean> {
-  const { root, channel, name, step: targetStep, workStep, steps } = params;
-  const fetch = await runStep(
-    workStep(
-      name,
-      ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
-      root,
-    ),
-  );
-  if (fetch.exitCode !== 0 || channel === "dev") {
-    return fetch.exitCode === 0;
-  }
+}): Promise<{ ok: boolean; refreshedRemotes: string[] }> {
+  const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
+  const refreshedRemotes: string[] = [];
+  const result = (ok: boolean) => ({ ok, refreshedRemotes });
   const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
-    return false;
+    return result(false);
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
   const tracked = await runStep(
@@ -393,9 +417,90 @@ export async function fetchGitUpdateTarget(params: {
     ),
   );
   if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
-    return false;
+    return result(false);
   }
-  const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
+  const trackedRemote = (tracked.stdoutTail ?? "").trim();
+  const targetRef = devTarget?.mode === "tracked" ? devTarget.upstreamRef : devTarget?.ref;
+  const remoteRef =
+    devTarget?.mode === "tracked" ||
+    targetRef?.startsWith("refs/remotes/") ||
+    targetRef?.startsWith("origin/")
+      ? targetRef?.replace(/^refs\/remotes\//u, "")
+      : undefined;
+  const targetRemote = remoteRef
+    ? remotes
+        .toSorted((left, right) => right.length - left.length)
+        .find((candidate) => remoteRef.startsWith(`${candidate}/`))
+    : undefined;
+  const tagRemote = resolveReleaseTagRemote(remotes, trackedRemote);
+  // A configured tracking remote is authoritative even when its refs are cold.
+  // Unqualified explicit branches use origin; explicit tags resolve separately.
+  const authority =
+    channel !== "dev"
+      ? tagRemote
+      : devTarget
+        ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
+        : trackedRemote || undefined;
+  if (channel === "dev" && !devTarget && !authority) {
+    const main = await runStep(
+      targetStep(
+        "git-show-branch",
+        ["git", "-C", root, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
+        root,
+      ),
+    );
+    if (main.exitCode === 0) {
+      return result(true);
+    }
+  }
+  const fetchRemotes = authority
+    ? [authority]
+    : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
+      ? []
+      : targetRef && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(targetRef)
+        ? remotes.filter((candidate) => candidate === "origin")
+        : remotes;
+  for (const fetchRemote of fetchRemotes) {
+    if (fetchRemote === ".") {
+      continue;
+    }
+    const options = workStep(
+      authority ? name : `${name}:${fetchRemote}`,
+      ["git", "-C", root, "fetch", fetchRemote, "--prune", "--no-tags", "--no-prune-tags"],
+      root,
+    );
+    const fetch = await runStep({
+      ...options,
+      progress: { ...options.progress, onStepComplete: undefined },
+    });
+    const interrupted =
+      fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
+    const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
+    if (fetchedSuccessfully && !interrupted) {
+      refreshedRemotes.push(fetchRemote);
+      if (authority && remotes.some((candidate) => candidate !== authority)) {
+        fetch.warnings = [
+          `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+        ];
+      }
+    } else if (!authority && !interrupted) {
+      fetch.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
+      };
+    }
+    options.progress?.onStepComplete?.({
+      ...fetch,
+      index: options.stepIndex,
+      total: options.totalSteps,
+    });
+    if (interrupted || (!fetchedSuccessfully && authority)) {
+      return result(false);
+    }
+  }
+  if (channel === "dev") {
+    return result(true);
+  }
   if (!tagRemote) {
     steps.push({
       name: "git-release-remote",
@@ -406,7 +511,7 @@ export async function fetchGitUpdateTarget(params: {
       stderrTail:
         "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
     });
-    return false;
+    return result(false);
   }
   // Only the release authority may replace shared tag refs. Disable pruning
   // even when Git config enables it, so operator-only tags survive.
@@ -427,10 +532,10 @@ export async function fetchGitUpdateTarget(params: {
       root,
     ),
   );
-  return tags.exitCode === 0;
+  return result(tags.exitCode === 0 && !isFailedUpdateStep(tags));
 }
 
-export async function resolveChannelTag(
+async function resolveChannelTag(
   runCommand: CommandRunner,
   root: string,
   timeoutMs: number,

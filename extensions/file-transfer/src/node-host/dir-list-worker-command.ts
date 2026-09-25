@@ -1,4 +1,3 @@
-// File Transfer plugin module constructs the canonical directory-list worker.
 const DIR_LIST_WORKER = [
   'const fs=require("node:fs");',
   "const [directory,expected,device,inode,offsetText,maxText]=process.argv.slice(1);",

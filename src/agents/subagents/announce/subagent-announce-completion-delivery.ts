@@ -31,7 +31,6 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   SourceOwnerChangedError,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
@@ -39,7 +38,10 @@ import {
   sendSubagentAnnounceMessage,
   tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 
@@ -297,7 +299,7 @@ export async function deliverCompletionDirect(params: {
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents, params.contentKind);
@@ -346,14 +348,14 @@ export async function deliverCompletionDirect(params: {
           throw new SourceOwnerChangedError();
         }
       },
-      onDeliveryResult: () => {
+      onDeliveryResult: async () => {
         if (committedDelivery) {
           return;
         }
         // Platform identity is committed before transcript mirroring, which
         // may wait behind the requester's still-active SQLite writer.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-        params.onDeliveryResult?.(committedDelivery);
+        await params.onDeliveryResult?.(committedDelivery);
       },
       mirror: {
         sessionKey: params.requesterSessionKey,

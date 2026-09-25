@@ -36,9 +36,19 @@ import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
+import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function pluginReadError(error: unknown) {
+  return errorShape(
+    error instanceof ManagedPluginLifecycleError && error.kind === "invalid-request"
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
+}
 
 export const pluginsHandlers: GatewayRequestHandlers = {
   ...pluginCredentialHandlers,
@@ -49,6 +59,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (params.path !== undefined) {
+        try {
+          validatePluginSkillPath(params.path);
+        } catch {
+          throw new ManagedPluginLifecycleError("Invalid plugin skill bundle path.");
+        }
+      }
       if (params.source === "installed") {
         respond(
           true,
@@ -56,6 +73,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             config: context.getRuntimeConfig(),
             pluginId: params.pluginId,
             skillName: params.skillName,
+            path: params.path,
+            version: params.version,
           }),
           undefined,
         );
@@ -71,20 +90,12 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           packageName: identity.identity,
           version: params.version,
           skillName: params.skillName,
+          path: params.path,
         }),
         undefined,
       );
     } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          error instanceof ManagedPluginLifecycleError && error.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-        ),
-      );
+      respond(false, undefined, pluginReadError(error));
     }
   },
   "plugins.list": async ({ params, respond, context }) => {
@@ -155,17 +166,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (error) {
-      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
-      respond(
-        false,
-        undefined,
-        errorShape(
-          lifecycleError?.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-        ),
-      );
+      respond(false, undefined, pluginReadError(error));
     }
   },
   "plugins.search": async ({ params, respond }) => {
@@ -243,6 +244,14 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
       const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
+      const catalogOptions = {
+        local,
+        includeBundledOnly,
+        intent,
+        category: params.category,
+        query: params.query,
+        cursor: params.cursor,
+      };
       try {
         const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
         const remote: {
@@ -262,13 +271,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                 limit: params.pageSize ?? 20,
               });
         const items = joinClawHubPluginCatalog({
+          ...catalogOptions,
           remote: remote.items,
-          local,
-          includeBundledOnly,
-          intent,
-          category: params.category,
-          query: params.query,
-          cursor: params.cursor,
         });
         registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
         respond(
@@ -284,15 +288,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         respond(
           true,
           {
-            items: joinClawHubPluginCatalog({
-              remote: [],
-              local,
-              includeBundledOnly,
-              intent,
-              category: params.category,
-              query: params.query,
-              cursor: params.cursor,
-            }),
+            items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
             ...(params.cursor ? { nextCursor: params.cursor } : {}),
             remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
               includeBundledOnly

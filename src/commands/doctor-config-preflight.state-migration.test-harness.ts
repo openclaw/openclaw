@@ -1,7 +1,12 @@
-import { vi } from "vitest";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, expect, vi, type MockInstance } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import * as tempRoot from "../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
@@ -14,6 +19,22 @@ import {
   type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
+const handoffDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    handoffResolver?.mockRestore();
+    cleanup();
+  }),
+);
+let handoffResolver: MockInstance<typeof tempRoot.resolvePreferredOpenClawTmpDir> | undefined;
+beforeEach(() => {
+  const root = path.join(handoffDirs.make("openclaw-preflight-handoff-"), "private");
+  mkdirSync(root, { mode: 0o700 });
+  handoffResolver = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
+    path.join(root, "managed-update-handoffs.sqlite"),
+  );
+});
+
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult([], false)),
 );
@@ -24,11 +45,43 @@ const autoMigrateLegacyState = vi.hoisted(() =>
     }): Promise<StateMigrationResult> => makeStateMigrationResult(["imported"]),
   ),
 );
+const prepareLegacyStateDatabaseSchema = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/state-migrations.doctor.js").prepareLegacyStateDatabaseSchema>(
+    async () => ({
+      id: "state-schema",
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "conditional",
+      reversibility: "checkpoint-required",
+      outcome: "skipped",
+      changes: [],
+      warnings: [],
+    }),
+  ),
+);
+const prepareDoctorDatabasePreflight = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-database-preflight.js").prepareDoctorDatabasePreflight>(
+    async () => ({ incompatible: [], indeterminate: [] }),
+  ),
+);
+const doctorMaintenanceRelease = vi.hoisted(() => vi.fn(async () => {}));
+const beginDoctorMaintenance = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () => ({
+    signal: new AbortController().signal,
+    run: <T>(operation: () => T): T => operation(),
+    releaseState: vi.fn(async () => {}),
+    release: doctorMaintenanceRelease,
+    finish: vi.fn(async () => {}),
+  })),
+);
+const noteSessionTranscriptHealth = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-session-transcripts.js").noteSessionTranscriptHealth>(
+    async () => undefined,
+  ),
+);
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["plugin-imported"])),
-);
-const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["task-imported"])),
 );
 const migrateLegacyConfigMachineState = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
@@ -167,11 +220,15 @@ vi.mock("./doctor/shared/plugin-migration-availability.js", () => ({
 
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   autoMigrateLegacyState,
+  prepareLegacyStateDatabaseSchema,
 }));
+
+vi.mock("./doctor-database-preflight.js", () => ({ prepareDoctorDatabasePreflight }));
+vi.mock("./doctor-maintenance.js", () => ({ beginDoctorMaintenance }));
+vi.mock("./doctor-session-transcripts.js", () => ({ noteSessionTranscriptHealth }));
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
 }));
 
 vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
@@ -194,6 +251,25 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
   acquireStartupMigrationLeaseWithWait,
+  inspectStartupMigrationCheckpointWithLease: async (params: {
+    env: NodeJS.ProcessEnv;
+    stateMigrations: boolean;
+    startupMigrations: boolean;
+    forceLease: boolean;
+  }) => {
+    const status =
+      params.stateMigrations || params.startupMigrations
+        ? readMigrationCheckpointStatus()
+        : "stale";
+    const required =
+      params.forceLease ||
+      (params.stateMigrations && status === "stale") ||
+      (params.startupMigrations && status !== "startup-current");
+    return {
+      status,
+      lease: required ? await acquireStartupMigrationLeaseWithWait(params) : undefined,
+    };
+  },
   readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
@@ -242,8 +318,12 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 export const preflightStateMigrationMocks = {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
+  prepareLegacyStateDatabaseSchema,
+  prepareDoctorDatabasePreflight,
+  beginDoctorMaintenance,
+  doctorMaintenanceRelease,
+  noteSessionTranscriptHealth,
   autoMigrateLegacyPluginDoctorState,
-  autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
   readMigrationCheckpointStatus,
@@ -267,6 +347,11 @@ export const preflightStateMigrationMocks = {
 
 export function resetStateMigrationPreflightMocks(): void {
   vi.clearAllMocks();
+  prepareLegacyStateDatabaseSchema.mockReset();
+  prepareDoctorDatabasePreflight.mockReset();
+  beginDoctorMaintenance.mockReset();
+  doctorMaintenanceRelease.mockReset();
+  noteSessionTranscriptHealth.mockReset();
   pendingPluginMigrations.mockReset().mockReturnValue([]);
   inspectPluginMigrationAvailability.mockReset().mockResolvedValue({
     pending: [],
@@ -295,7 +380,6 @@ export function resetStateMigrationPreflightMocks(): void {
   autoMigrateLegacyPluginDoctorState.mockResolvedValue(
     makeStateMigrationResult(["plugin-imported"]),
   );
-  autoMigrateLegacyTaskStateSidecars.mockResolvedValue(makeStateMigrationResult(["task-imported"]));
   repairLegacyCronStoreWithoutPrompt.mockResolvedValue({
     changes: ["cron-imported"],
     warnings: [],

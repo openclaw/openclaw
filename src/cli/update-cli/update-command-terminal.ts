@@ -11,7 +11,8 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -20,7 +21,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
   failUpdateCommandRun,
@@ -67,8 +68,13 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 export async function prepareUnexpectedUpdateCommandFailure(
   error: unknown,
   opts: UpdateCommandOptions & { run: Run },
+  onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
-  const failure = { mode: "unknown" as const, durationMs: 0, failure: { cause: error } };
+  const failure = {
+    mode: "unknown" as const,
+    durationMs: 0,
+    failure: { cause: error },
+  };
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -96,7 +102,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
     );
   };
   if (!deferUpdateCommandTerminalResult(opts.run, publish)) {
-    await publish();
+    await publish(undefined, onPublishedRecord);
   }
   return new UpdateCommandFailure(result, 1, fact.message, { cause: error });
 }
@@ -311,13 +317,14 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   const step = { ...retained, stderrTail: retained.stderrTail };
-  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
-    step.stderrTail = [
-      step.stderrTail,
-      `Recovery transaction backup path: ${transaction.backupRoot}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  if (step.exitCode !== 0) {
+    const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
+    if (!step.advisory) {
+      step.warnings = [...(step.warnings ?? []), recoveryPath];
+    }
+    if (!step.stderrTail?.includes(transaction.backupRoot)) {
+      step.stderrTail = [step.stderrTail, recoveryPath].filter(Boolean).join("\n");
+    }
   }
   result.steps = [...result.steps, step];
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
@@ -402,12 +409,13 @@ async function publishPreMutationUpdateOutcome(
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
+  const nextAction = params.nextAction ?? params.message;
+  if (run && active && nextAction) {
     recordUpdateRunPhase(
       run.runId,
       active.phase,
       {
-        origin: { nextAction: params.message },
+        origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
       { env: run.env },
@@ -464,7 +472,7 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  await printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction });
   return result;
 }
 

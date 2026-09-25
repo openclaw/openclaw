@@ -45,7 +45,11 @@ async function restartFeishuDedup(): Promise<void> {
 }
 
 describe("Feishu claimable dedupe", () => {
-  it("prevents replay after a restart once a message is committed", async () => {
+  it("preserves committed marks but not pending claims across a restart", async () => {
+    await expect(
+      claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toMatchObject({ kind: "claimed" });
+    await restartFeishuDedup();
     await expect(
       finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe(true);

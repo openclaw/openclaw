@@ -2,6 +2,8 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
@@ -20,10 +22,7 @@ import {
   readFileDescriptorBounded,
 } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
-import { safeFileURLToPath } from "../infra/local-file-access.js";
-import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import {
   probePlaybackMediaFileDescriptor,
@@ -51,15 +50,17 @@ import {
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import {
+  buildAssistantMediaContentDisposition,
+  resolveAssistantMediaFilename,
+} from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -75,7 +76,11 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  applyControlUiSecurityHeaders,
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -111,6 +116,7 @@ import {
   applyHttpImageContentSecurityPolicy,
   sendHttpImageResponse,
 } from "./http-image-response.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -124,16 +130,12 @@ const loadAvatarThumbnail = createLazyRuntimeModule(
   () => import("./assistant-avatar-thumbnail.runtime.js"),
 );
 
-type ControlUiRequestOptions = {
+type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   basePath?: string;
   config?: OpenClawConfig;
   terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
-  auth?: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
 };
 
 export type ControlUiRootState =
@@ -198,19 +200,6 @@ function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): 
     avatarStatus: resolved.kind,
     avatarReason: resolved.kind === "none" ? resolved.reason : null,
   };
-}
-
-function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  // Browser Talk is owned by this same-origin Control UI document. Keep camera
-  // access here; the Gateway's default policy continues to deny it elsewhere.
-  res.setHeader(
-    "Permissions-Policy",
-    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
-  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -488,39 +477,36 @@ async function resolveAssistantMediaAvailability(
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    try {
-      const mediaKind = kindFromMime(mimeType);
-      const playbackProbe =
-        mediaKind === "audio" || mediaKind === "video"
-          ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
-          : null;
-      const playback =
-        mimeType && (mediaKind === "audio" || mediaKind === "video")
-          ? await resolvePlaybackModeForSource({
-              sourcePath: opened.realPath,
-              sourceStat: opened.stat,
-              mimeType,
-              kind: mediaKind,
-              probe: playbackProbe,
-            })
-          : undefined;
-      return {
-        available: true,
-        ...(mimeType ? { mimeType } : {}),
-        ...(playback ? { playback } : {}),
-        sizeBytes: opened.stat.size,
-        ...toMediaProbeResult(playbackProbe),
-        ...createAssistantMediaTicket({
-          source,
-          agentId,
-          session: policy.session,
-          reader: policy.reader,
-          ...(file ? { file } : {}),
-        }),
-      };
-    } finally {
-      await opened.handle.close().catch(() => {});
-    }
+    await using mediaOwner = opened;
+    const mediaKind = kindFromMime(mimeType);
+    const playbackProbe =
+      mediaKind === "audio" || mediaKind === "video"
+        ? await probePlaybackMediaFileDescriptor(mediaOwner.handle.fd, mediaKind)
+        : null;
+    const playback =
+      mimeType && (mediaKind === "audio" || mediaKind === "video")
+        ? await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType,
+            kind: mediaKind,
+            probe: playbackProbe,
+          })
+        : undefined;
+    return {
+      available: true,
+      ...(mimeType ? { mimeType } : {}),
+      ...(playback ? { playback } : {}),
+      sizeBytes: opened.stat.size,
+      ...toMediaProbeResult(playbackProbe),
+      ...createAssistantMediaTicket({
+        source,
+        agentId,
+        session: policy.session,
+        reader: policy.reader,
+        ...(file ? { file } : {}),
+      }),
+    };
   } catch (error) {
     return classifyAssistantMediaError(error);
   }
@@ -529,14 +515,10 @@ async function resolveAssistantMediaAvailability(
 export async function handleControlUiAssistantMediaRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts?: {
+  opts?: Partial<GatewayHttpRequestAuthOptions> & {
     basePath?: string;
     config?: OpenClawConfig;
     agentId?: string;
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -571,12 +553,10 @@ export async function handleControlUiAssistantMediaRequest(
   const requestAuth =
     isMetaRequest || !ticketCandidate
       ? await authorizeControlUiReadRequestOrReply({
+          ...opts,
           req,
           res,
-          auth: opts?.auth,
-          trustedProxies: opts?.trustedProxies,
-          allowRealIpFallback: opts?.allowRealIpFallback,
-          rateLimiter: opts?.rateLimiter,
+          cfg: opts?.cfg ?? opts?.config,
           allowQueryToken: !explicitAllow,
         })
       : undefined;
@@ -624,6 +604,7 @@ export async function handleControlUiAssistantMediaRequest(
     // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
     const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
     if (
+      requestAuth?.hasCurrentClientAuthority?.() === false ||
       !current ||
       current.session?.sessionKey !== policy.session?.sessionKey ||
       current.session?.agentId !== policy.session?.agentId ||
@@ -666,16 +647,17 @@ export async function handleControlUiAssistantMediaRequest(
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const media = await openAssistantMedia(source, policy, allowance);
-    const resolvedReference = media.reference;
-    const localPath = resolvedReference.path;
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
     let contentType = mime ?? "application/octet-stream";
     let filename =
-      resolvedReference.kind === "inbound"
-        ? extractOriginalFilename(localPath)
-        : path.basename(localPath);
+      media.reference.kind === "inbound"
+        ? resolveAssistantMediaFilename(
+            extractOriginalFilename(media.reference.path),
+            url.searchParams.get("filename"),
+          )
+        : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
     if (
       url.searchParams.get("playback") === "1" &&
@@ -735,13 +717,9 @@ export async function handleControlUiAssistantMediaRequest(
 export async function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
+  opts: Partial<GatewayHttpRequestAuthOptions> & {
     basePath?: string;
     config: OpenClawConfig;
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -767,18 +745,16 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
-  if (
-    !(await authorizeControlUiReadRequestOrReply({
-      req,
-      res,
-      auth: opts.auth,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
-    }))
-  ) {
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...opts,
+    req,
+    res,
+    cfg: opts.cfg ?? opts.config,
+  });
+  if (!requestAuth) {
     return true;
   }
+  requestAuth.assertCurrent();
 
   const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
   const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
@@ -802,23 +778,20 @@ export async function handleControlUiAvatarRequest(
       const source = projection.openedFile
         ? { file: projection.openedFile }
         : { dataUrl: identity.avatar };
-      try {
-        const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
-        // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
-        res.setHeader("vary", "Authorization, Cookie");
-        sendHttpImageResponse({
-          req,
-          res,
-          image,
-          filename: "avatar",
-          cacheControl:
-            url.searchParams.get("v") === gatewayAvatarImageRevision(source)
-              ? "private, max-age=31536000, immutable"
-              : "private, no-cache",
-        });
-      } catch {
-        respondControlUiNotFound(res);
-      }
+      const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+      requestAuth.assertCurrent();
+      // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
+      res.setHeader("vary", "Authorization, Cookie");
+      sendHttpImageResponse({
+        req,
+        res,
+        image,
+        filename: "avatar",
+        cacheControl:
+          url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+            ? "private, max-age=31536000, immutable"
+            : "private, no-cache",
+      });
       return true;
     }
 
@@ -827,23 +800,28 @@ export async function handleControlUiAvatarRequest(
       return true;
     }
 
-    try {
-      res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
-      res.setHeader("Cache-Control", "no-cache");
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        // The pinned descriptor exposes GET's exact byte count without reading the avatar.
-        res.setHeader("Content-Length", String(projection.openedFile.stat.size));
-        res.end();
-        return true;
-      }
-      const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
-      res.end(body);
-      return true;
-    } catch {
-      respondControlUiNotFound(res);
+    const body =
+      req.method === "HEAD"
+        ? undefined
+        : await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+    requestAuth.assertCurrent();
+    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+    res.setHeader("Cache-Control", "no-cache");
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
+      res.end();
       return true;
     }
+    res.end(body);
+    return true;
+  } catch {
+    if (!res.writableEnded && !res.destroyed) {
+      requestAuth.assertCurrent();
+      respondControlUiNotFound(res);
+    }
+    return true;
   } finally {
     if (projection.openedFile) {
       fs.closeSync(projection.openedFile.fd);
@@ -1055,21 +1033,19 @@ export async function handleControlUiHttpRequest(
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
-    if (
-      !(await authorizeControlUiReadRequestOrReply({
-        req,
-        res,
-        auth: opts?.auth,
-        trustedProxies: opts?.trustedProxies,
-        allowRealIpFallback: opts?.allowRealIpFallback,
-        rateLimiter: opts?.rateLimiter,
-        onPluginFrameGrants: (grants) => {
-          pluginFrameGrants = grants;
-        },
-      }))
-    ) {
+    const requestAuth = await authorizeControlUiReadRequestOrReply({
+      ...opts,
+      req,
+      res,
+      cfg: opts?.cfg ?? opts?.config,
+      onPluginFrameGrants: (grants) => {
+        pluginFrameGrants = grants;
+      },
+    });
+    if (!requestAuth) {
       return true;
     }
+    requestAuth.assertCurrent();
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1092,6 +1068,8 @@ export async function handleControlUiHttpRequest(
           })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
+    const devGitBranch = (await resolveDevInstallGitBranch()) ?? undefined;
+    requestAuth.assertCurrent();
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
@@ -1105,18 +1083,8 @@ export async function handleControlUiHttpRequest(
         config?.gateway?.controlUi?.root === undefined
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
-      devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      embedSandbox:
-        config?.gateway?.controlUi?.embedSandbox === "trusted"
-          ? "trusted"
-          : config?.gateway?.controlUi?.embedSandbox === "strict"
-            ? "strict"
-            : "scripts",
-      allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
-      seamColor: config?.ui?.seamColor,
-      environment: config?.gateway?.controlUi?.environment,
-      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
+      devGitBranch,
+      ...resolveControlUiBootstrapPresentation(config),
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",

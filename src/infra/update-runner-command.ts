@@ -3,14 +3,16 @@ import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
+import { createNpmFailureFacts } from "./update-npm-failure.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
   UpdateStepInfo,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export const MAX_LOG_CHARS = 8000;
 
@@ -73,23 +75,36 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
-  failureFacts ??=
-    result.code !== 0 || result.killed || result.termination === "timeout"
-      ? [
-          createUpdateFailureFact(
-            {
-              check: name,
-              code:
-                result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
-                (result.termination && result.termination !== "exit"
-                  ? result.termination
-                  : "command-failed"),
-              message: result.stderr,
-            },
-            env,
-          ),
-        ]
-      : undefined;
+  if (
+    !failureFacts &&
+    result.code !== 0 &&
+    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
+    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+      /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
+  ) {
+    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+  }
+  failureFacts ??= isFailedUpdateStep({
+    exitCode: result.code,
+    killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
+    termination: result.termination,
+  })
+    ? [
+        createUpdateFailureFact(
+          {
+            check: name,
+            code:
+              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              (result.termination && result.termination !== "exit"
+                ? result.termination
+                : "command-failed"),
+            message: result.stderr,
+          },
+          env,
+        ),
+      ]
+    : undefined;
 
   const completion: Omit<UpdateStepResult, "cwd"> = {
     name,
@@ -100,6 +115,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     stderrTail,
     signal: result.signal,
     killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
     termination: result.termination,
     ...(failureFacts ? { failureFacts } : {}),
   };

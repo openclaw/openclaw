@@ -11,7 +11,7 @@ import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
-  resolveApiKeyForProvider: vi.fn(),
+  resolveApiKeyForProvider: vi.fn().mockResolvedValue({ source: "test", mode: "api-key" }),
 }));
 
 const providerAuthMocks = vi.hoisted(() => ({
@@ -193,7 +193,9 @@ afterEach(() => {
     agentDir: "",
     profileIds: [],
   });
-  providerAuthRuntimeMocks.resolveApiKeyForProvider.mockReset();
+  providerAuthRuntimeMocks.resolveApiKeyForProvider
+    .mockReset()
+    .mockResolvedValue({ source: "test", mode: "api-key" });
 });
 
 describe("xai web search config resolution", () => {
@@ -620,18 +622,11 @@ describe("xai web search config resolution", () => {
     const tool = requireXaiWebSearchTool({
       config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
     });
-    const request = () => tool.execute({ query: "OpenClaw timeout" });
-
-    await expect(request()).rejects.toThrow("xAI web search timed out after 60s");
-
-    try {
-      await request();
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).name).toBe("Error");
-      expect((error as Error).cause).toBe(abort);
-      expect((error as Error & { code?: string }).code).toBe("ETIMEDOUT");
-    }
+    await expect(tool.execute({ query: "OpenClaw timeout" })).rejects.toMatchObject({
+      name: "Error",
+      cause: abort,
+      code: "ETIMEDOUT",
+    });
   });
 
   it("bounds remote xAI web-search answer text without truncating shared code execution", async () => {
@@ -789,6 +784,7 @@ describe("xai web search config resolution", () => {
 describe("xai provider models", () => {
   it("publishes only current selectable chat models newest first", () => {
     expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+      "grok-4.7",
       "grok-4.6",
       "grok-4.5",
       "grok-build-0.1",
@@ -796,6 +792,17 @@ describe("xai provider models", () => {
       "grok-4.20-0309-reasoning",
       "grok-4.20-0309-non-reasoning",
     ]);
+  });
+
+  it("publishes Grok 4.7 with its current metadata", () => {
+    expectCatalogEntry("grok-4.7", {
+      id: "grok-4.7",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 64_000,
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    });
   });
 
   it("publishes Grok 4.6 with its current metadata", () => {

@@ -95,6 +95,7 @@ public enum AuthProbeStatus: String, Codable, Sendable {
 }
 
 public enum ChatRunStartupPhase: String, Codable, Sendable {
+    case waitingForState = "waiting_for_state"
     case preparingWorkspace = "preparing_workspace"
     case namingWorktree = "naming_worktree"
     case creatingWorktree = "creating_worktree"
@@ -535,6 +536,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionid: String?
     public let sessionkey: String?
     public let expectedexistingsessionid: String?
+    public let expectedexistingsessionlifecyclerevision: AnyCodable?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
@@ -585,6 +587,7 @@ public struct AgentParams: Codable, Sendable {
         sessionid: String? = nil,
         sessionkey: String? = nil,
         expectedexistingsessionid: String? = nil,
+        expectedexistingsessionlifecyclerevision: AnyCodable? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
         attachments: [AnyCodable]? = nil,
@@ -634,6 +637,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.expectedexistingsessionid = expectedexistingsessionid
+        self.expectedexistingsessionlifecyclerevision = expectedexistingsessionlifecyclerevision
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
@@ -685,6 +689,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case expectedexistingsessionid = "expectedExistingSessionId"
+        case expectedexistingsessionlifecyclerevision = "expectedExistingSessionLifecycleRevision"
         case thinking
         case deliver
         case attachments
@@ -1054,17 +1059,20 @@ public struct AgentsFilesSetParams: Codable, Sendable {
     public let name: String
     public let content: String
     public let expectedhash: String?
+    public let expectedmissing: Bool?
 
     public init(
         agentid: String,
         name: String,
         content: String,
-        expectedhash: String? = nil)
+        expectedhash: String? = nil,
+        expectedmissing: Bool? = nil)
     {
         self.agentid = agentid
         self.name = name
         self.content = content
         self.expectedhash = expectedhash
+        self.expectedmissing = expectedmissing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1072,6 +1080,7 @@ public struct AgentsFilesSetParams: Codable, Sendable {
         case name
         case content
         case expectedhash = "expectedHash"
+        case expectedmissing = "expectedMissing"
     }
 }
 
@@ -1617,6 +1626,7 @@ public struct ArtifactsDownloadParams: Codable, Sendable {
     public let agentid: String?
     public let messagerole: String?
     public let artifactid: String
+    public let transport: String?
 
     public init(
         sessionkey: String? = nil,
@@ -1624,7 +1634,8 @@ public struct ArtifactsDownloadParams: Codable, Sendable {
         taskid: String? = nil,
         agentid: String? = nil,
         messagerole: String? = nil,
-        artifactid: String)
+        artifactid: String,
+        transport: String? = nil)
     {
         self.sessionkey = sessionkey
         self.runid = runid
@@ -1632,6 +1643,7 @@ public struct ArtifactsDownloadParams: Codable, Sendable {
         self.agentid = agentid
         self.messagerole = messagerole
         self.artifactid = artifactid
+        self.transport = transport
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1641,6 +1653,7 @@ public struct ArtifactsDownloadParams: Codable, Sendable {
         case agentid = "agentId"
         case messagerole = "messageRole"
         case artifactid = "artifactId"
+        case transport
     }
 }
 
@@ -6161,6 +6174,8 @@ public struct DesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let audio: [String: AnyCodable]?
+    public let audiounavailablereason: String?
     public let canresize: Bool?
     public let vncpassword: String?
     public let auth: String?
@@ -6171,6 +6186,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        audio: [String: AnyCodable]? = nil,
+        audiounavailablereason: String? = nil,
         canresize: Bool? = nil,
         vncpassword: String? = nil,
         auth: String? = nil,
@@ -6180,6 +6197,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.audio = audio
+        self.audiounavailablereason = audiounavailablereason
         self.canresize = canresize
         self.vncpassword = vncpassword
         self.auth = auth
@@ -6191,6 +6210,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case audio
+        case audiounavailablereason = "audioUnavailableReason"
         case canresize = "canResize"
         case vncpassword = "vncPassword"
         case auth
@@ -6952,34 +6973,47 @@ public struct EnvironmentsListParams: Codable, Sendable {
     public let runtimeid: String?
     public let projection: String?
     public let includedesktopsetup: Bool?
+    public let includeprepareddetails: Bool?
 
     public init(
         runtimeid: String? = nil,
         projection: String? = nil,
-        includedesktopsetup: Bool? = nil)
+        includedesktopsetup: Bool? = nil,
+        includeprepareddetails: Bool? = nil)
     {
         self.runtimeid = runtimeid
         self.projection = projection
         self.includedesktopsetup = includedesktopsetup
+        self.includeprepareddetails = includeprepareddetails
     }
 
     private enum CodingKeys: String, CodingKey {
         case runtimeid = "runtimeId"
         case projection
         case includedesktopsetup = "includeDesktopSetup"
+        case includeprepareddetails = "includePreparedDetails"
     }
 }
 
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
     public let profiles: [[String: AnyCodable]]?
+    public let preparedpool: [String: AnyCodable]?
 
     public init(
         environments: [EnvironmentSummary],
-        profiles: [[String: AnyCodable]]? = nil)
+        profiles: [[String: AnyCodable]]? = nil,
+        preparedpool: [String: AnyCodable]? = nil)
     {
         self.environments = environments
         self.profiles = profiles
+        self.preparedpool = preparedpool
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environments
+        case profiles
+        case preparedpool = "preparedPool"
     }
 }
 
@@ -7149,15 +7183,19 @@ public struct EnvironmentsSessionStatusParams: Codable, Sendable {
 
 public struct EnvironmentsStatusParams: Codable, Sendable {
     public let environmentid: String
+    public let includeprepareddetails: Bool?
 
     public init(
-        environmentid: String)
+        environmentid: String,
+        includeprepareddetails: Bool? = nil)
     {
         self.environmentid = environmentid
+        self.includeprepareddetails = includeprepareddetails
     }
 
     private enum CodingKeys: String, CodingKey {
         case environmentid = "environmentId"
+        case includeprepareddetails = "includePreparedDetails"
     }
 }
 
@@ -8197,6 +8235,8 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
 
 public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
     public let status: String
+    public let ownerid: String?
+    public let phase: AnyCodable?
     public let expiresatms: Int
     public let retryafterms: Int
     public let activecount: Int
@@ -8205,6 +8245,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
     public init(
         status: String,
+        ownerid: String? = nil,
+        phase: AnyCodable? = nil,
         expiresatms: Int,
         retryafterms: Int,
         activecount: Int,
@@ -8212,6 +8254,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
         writecustody: [[String: AnyCodable]]? = nil)
     {
         self.status = status
+        self.ownerid = ownerid
+        self.phase = phase
         self.expiresatms = expiresatms
         self.retryafterms = retryafterms
         self.activecount = activecount
@@ -8221,6 +8265,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case status
+        case ownerid = "ownerId"
+        case phase
         case expiresatms = "expiresAtMs"
         case retryafterms = "retryAfterMs"
         case activecount = "activeCount"
@@ -8231,35 +8277,43 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
 public struct GatewaySuspendStatusParams: Codable, Sendable {
     public let suspensionid: String
+    public let includelifecycle: Bool?
 
     public init(
-        suspensionid: String)
+        suspensionid: String,
+        includelifecycle: Bool? = nil)
     {
         self.suspensionid = suspensionid
+        self.includelifecycle = includelifecycle
     }
 
     private enum CodingKeys: String, CodingKey {
         case suspensionid = "suspensionId"
+        case includelifecycle = "includeLifecycle"
     }
 }
 
 public struct GatewaySuspendStatusReadyResult: Codable, Sendable {
     public let status: String
+    public let ownerid: String?
     public let expiresatms: Int
     public let writecustody: [[String: AnyCodable]]?
 
     public init(
         status: String,
+        ownerid: String? = nil,
         expiresatms: Int,
         writecustody: [[String: AnyCodable]]? = nil)
     {
         self.status = status
+        self.ownerid = ownerid
         self.expiresatms = expiresatms
         self.writecustody = writecustody
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
+        case ownerid = "ownerId"
         case expiresatms = "expiresAtMs"
         case writecustody = "writeCustody"
     }
@@ -9216,6 +9270,7 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let modelselectionpolicy: [String: AnyCodable]?
     public let decisionmodels: [[String: AnyCodable]]?
     public let defaultmodels: [String: AnyCodable]?
     public let refreshfailed: Bool?
@@ -9225,6 +9280,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     public init(
         models: [ModelChoice],
+        modelselectionpolicy: [String: AnyCodable]? = nil,
         decisionmodels: [[String: AnyCodable]]? = nil,
         defaultmodels: [String: AnyCodable]? = nil,
         refreshfailed: Bool? = nil,
@@ -9233,6 +9289,7 @@ public struct ModelsListResult: Codable, Sendable {
         provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.modelselectionpolicy = modelselectionpolicy
         self.decisionmodels = decisionmodels
         self.defaultmodels = defaultmodels
         self.refreshfailed = refreshfailed
@@ -9243,6 +9300,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case modelselectionpolicy = "modelSelectionPolicy"
         case decisionmodels = "decisionModels"
         case defaultmodels = "defaultModels"
         case refreshfailed = "refreshFailed"
@@ -9424,6 +9482,24 @@ public struct NodeHostStatsPayload: Codable, Sendable {
         case memoryfreebytes = "memoryFreeBytes"
         case disktotalbytes = "diskTotalBytes"
         case diskavailablebytes = "diskAvailableBytes"
+    }
+}
+
+public struct NodeInvokeCancelEvent: Codable, Sendable {
+    public let invokeid: String
+    public let nodeid: String
+
+    public init(
+        invokeid: String,
+        nodeid: String)
+    {
+        self.invokeid = invokeid
+        self.nodeid = nodeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case invokeid = "invokeId"
+        case nodeid = "nodeId"
     }
 }
 
@@ -10802,6 +10878,28 @@ public struct PluginInspectSource: Codable, Sendable {
     }
 }
 
+public struct PluginInstallActivity: Codable, Sendable {
+    public let activityid: String
+    public let stage: AnyCodable
+    public let status: AnyCodable
+
+    public init(
+        activityid: String,
+        stage: AnyCodable,
+        status: AnyCodable)
+    {
+        self.activityid = activityid
+        self.stage = stage
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case activityid = "activityId"
+        case stage
+        case status
+    }
+}
+
 public struct PluginInstallTrust: Codable, Sendable {
     public let disposition: AnyCodable
     public let reasons: [String]?
@@ -10879,17 +10977,20 @@ public struct PluginRuntimeApplication: Codable, Sendable {
     public let generation: Int
     public let pluginids: [String]
     public let sourcedigests: [String: AnyCodable]?
+    public let selectedentries: [String: AnyCodable]?
 
     public init(
         operationid: String,
         generation: Int,
         pluginids: [String],
-        sourcedigests: [String: AnyCodable]? = nil)
+        sourcedigests: [String: AnyCodable]? = nil,
+        selectedentries: [String: AnyCodable]? = nil)
     {
         self.operationid = operationid
         self.generation = generation
         self.pluginids = pluginids
         self.sourcedigests = sourcedigests
+        self.selectedentries = selectedentries
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10897,6 +10998,7 @@ public struct PluginRuntimeApplication: Codable, Sendable {
         case generation
         case pluginids = "pluginIds"
         case sourcedigests = "sourceDigests"
+        case selectedentries = "selectedEntries"
     }
 }
 
@@ -11245,6 +11347,32 @@ public struct PluginsInspectResult: Codable, Sendable {
         case grants
         case trust
         case catalog
+    }
+}
+
+public struct PluginsInstallProgressEvent: Codable, Sendable {
+    public let activityid: String
+    public let stage: AnyCodable
+    public let status: AnyCodable
+    public let requestid: String
+
+    public init(
+        activityid: String,
+        stage: AnyCodable,
+        status: AnyCodable,
+        requestid: String)
+    {
+        self.activityid = activityid
+        self.stage = stage
+        self.status = status
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case activityid = "activityId"
+        case stage
+        case status
+        case requestid = "requestId"
     }
 }
 
@@ -14914,6 +15042,122 @@ public struct SessionPerson: Codable, Sendable {
     }
 }
 
+public struct SessionPortalCloseParams: Codable, Sendable {
+    public let id: String
+    public let environmentid: String
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        id: String,
+        environmentid: String,
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.id = id
+        self.environmentid = environmentid
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case environmentid = "environmentId"
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionPortalListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let environmentid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        environmentid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.environmentid = environmentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case environmentid = "environmentId"
+    }
+}
+
+public struct SessionPortalOpenParams: Codable, Sendable {
+    public let environmentid: String
+    public let port: Int
+    public let title: String?
+    public let description: String?
+    public let path: String?
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        environmentid: String,
+        port: Int,
+        title: String? = nil,
+        description: String? = nil,
+        path: String? = nil,
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.environmentid = environmentid
+        self.port = port
+        self.title = title
+        self.description = description
+        self.path = path
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+        case port
+        case title
+        case description
+        case path
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionProviderReviewProjection: Codable, Sendable {
+    public let id: String
+    public let runid: String
+    public let explanation: String?
+    public let continuationmessage: String?
+    public let cancontinue: Bool
+
+    public init(
+        id: String,
+        runid: String,
+        explanation: String? = nil,
+        continuationmessage: String? = nil,
+        cancontinue: Bool)
+    {
+        self.id = id
+        self.runid = runid
+        self.explanation = explanation
+        self.continuationmessage = continuationmessage
+        self.cancontinue = cancontinue
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case runid = "runId"
+        case explanation
+        case continuationmessage = "continuationMessage"
+        case cancontinue = "canContinue"
+    }
+}
+
 public struct SessionPublicShare: Codable, Sendable {
     public let token: String
     public let createdat: Int
@@ -15020,6 +15264,7 @@ public struct SessionRow: Codable, Sendable {
     public let lastinteractionat: Double?
     public let status: AnyCodable?
     public let lastrunerror: String?
+    public let providerreview: SessionProviderReviewProjection?
     public let lastrunid: String?
     public let restartrecoverystatus: String?
     public let activeleafentryid: AnyCodable?
@@ -15112,6 +15357,7 @@ public struct SessionRow: Codable, Sendable {
         lastinteractionat: Double? = nil,
         status: AnyCodable? = nil,
         lastrunerror: String? = nil,
+        providerreview: SessionProviderReviewProjection? = nil,
         lastrunid: String? = nil,
         restartrecoverystatus: String? = nil,
         activeleafentryid: AnyCodable? = nil,
@@ -15203,6 +15449,7 @@ public struct SessionRow: Codable, Sendable {
         self.lastinteractionat = lastinteractionat
         self.status = status
         self.lastrunerror = lastrunerror
+        self.providerreview = providerreview
         self.lastrunid = lastrunid
         self.restartrecoverystatus = restartrecoverystatus
         self.activeleafentryid = activeleafentryid
@@ -15296,6 +15543,7 @@ public struct SessionRow: Codable, Sendable {
         case lastinteractionat = "lastInteractionAt"
         case status
         case lastrunerror = "lastRunError"
+        case providerreview = "providerReview"
         case lastrunid = "lastRunId"
         case restartrecoverystatus = "restartRecoveryStatus"
         case activeleafentryid = "activeLeafEntryId"
@@ -16249,21 +16497,25 @@ public struct SessionsCompanionAskParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let question: String
+    public let attachments: [[String: AnyCodable]]?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
-        question: String)
+        question: String,
+        attachments: [[String: AnyCodable]]? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.question = question
+        self.attachments = attachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case question
+        case attachments
     }
 }
 
@@ -17840,6 +18092,36 @@ public struct SessionsPreviewParams: Codable, Sendable {
         case keys
         case limit
         case maxchars = "maxChars"
+    }
+}
+
+public struct SessionsProviderReviewContinueParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let sessionid: String
+    public let reviewid: String
+    public let idempotencykey: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        sessionid: String,
+        reviewid: String,
+        idempotencykey: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.reviewid = reviewid
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case reviewid = "reviewId"
+        case idempotencykey = "idempotencyKey"
     }
 }
 
@@ -19854,6 +20136,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
 public struct SystemAgentChatResult: Codable, Sendable {
     public let sessionid: String
     public let reply: String
+    public let optionalwelcome: Bool?
     public let sensitive: Bool?
     public let wizardinputpending: Bool?
     public let action: AnyCodable
@@ -19868,6 +20151,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public init(
         sessionid: String,
         reply: String,
+        optionalwelcome: Bool? = nil,
         sensitive: Bool? = nil,
         wizardinputpending: Bool? = nil,
         action: AnyCodable,
@@ -19881,6 +20165,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     {
         self.sessionid = sessionid
         self.reply = reply
+        self.optionalwelcome = optionalwelcome
         self.sensitive = sensitive
         self.wizardinputpending = wizardinputpending
         self.action = action
@@ -19896,6 +20181,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case reply
+        case optionalwelcome = "optionalWelcome"
         case sensitive
         case wizardinputpending = "wizardInputPending"
         case action
@@ -22377,19 +22663,42 @@ public struct TerminalUploadResult: Codable, Sendable {
 public struct ThemeDefinition: Codable, Sendable {
     public let name: String
     public let description: String
+    public let mascot: AnyCodable?
+    public let workingphrases: [String]?
+    public let critters: [String]?
+    public let avatarhat: String?
     public let light: ThemePalette?
     public let dark: ThemePalette?
 
     public init(
         name: String,
         description: String,
+        mascot: AnyCodable? = nil,
+        workingphrases: [String]? = nil,
+        critters: [String]? = nil,
+        avatarhat: String? = nil,
         light: ThemePalette? = nil,
         dark: ThemePalette? = nil)
     {
         self.name = name
         self.description = description
+        self.mascot = mascot
+        self.workingphrases = workingphrases
+        self.critters = critters
+        self.avatarhat = avatarhat
         self.light = light
         self.dark = dark
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case mascot
+        case workingphrases = "workingPhrases"
+        case critters
+        case avatarhat = "avatarHat"
+        case light
+        case dark
     }
 }
 
@@ -22541,6 +22850,22 @@ public struct TickEvent: Codable, Sendable {
         ts: Int)
     {
         self.ts = ts
+    }
+}
+
+public struct ToolAccessDiagnostics: Codable, Sendable {
+    public let checked: AnyCodable
+    public let profiles: [[String: AnyCodable]]
+    public let tools: [[String: AnyCodable]]
+
+    public init(
+        checked: AnyCodable,
+        profiles: [[String: AnyCodable]],
+        tools: [[String: AnyCodable]])
+    {
+        self.checked = checked
+        self.profiles = profiles
+        self.tools = tools
     }
 }
 
@@ -22796,17 +23121,20 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     public let profile: String
     public let groups: [ToolsEffectiveGroup]
     public let notices: [ToolsEffectiveNotice]?
+    public let toolaccess: ToolAccessDiagnostics?
 
     public init(
         agentid: String,
         profile: String,
         groups: [ToolsEffectiveGroup],
-        notices: [ToolsEffectiveNotice]? = nil)
+        notices: [ToolsEffectiveNotice]? = nil,
+        toolaccess: ToolAccessDiagnostics? = nil)
     {
         self.agentid = agentid
         self.profile = profile
         self.groups = groups
         self.notices = notices
+        self.toolaccess = toolaccess
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -22814,6 +23142,7 @@ public struct ToolsEffectiveResult: Codable, Sendable {
         case profile
         case groups
         case notices
+        case toolaccess = "toolAccess"
     }
 }
 
@@ -23813,6 +24142,7 @@ public struct UpdateRunRecord: Codable, Sendable {
     public let phase: String
     public let status: String
     public let reason: AnyCodable
+    public let admission: [String: AnyCodable]?
     public let origin: [String: AnyCodable]
     public let target: [String: AnyCodable]
     public let before: [String: AnyCodable]
@@ -23832,6 +24162,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         phase: String,
         status: String,
         reason: AnyCodable,
+        admission: [String: AnyCodable]? = nil,
         origin: [String: AnyCodable],
         target: [String: AnyCodable],
         before: [String: AnyCodable],
@@ -23850,6 +24181,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         self.phase = phase
         self.status = status
         self.reason = reason
+        self.admission = admission
         self.origin = origin
         self.target = target
         self.before = before
@@ -23870,6 +24202,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         case phase
         case status
         case reason
+        case admission
         case origin
         case target
         case before
@@ -25008,6 +25341,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let state: WorkerEnvironmentState
     public let agems: Int
     public let idlems: Int?
+    public let destroyrequestedatms: Int?
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
     public let error: String?
@@ -25021,6 +25355,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         state: WorkerEnvironmentState,
         agems: Int,
         idlems: Int? = nil,
+        destroyrequestedatms: Int? = nil,
         attachedsessionids: [String],
         tunnelstatus: WorkerTunnelStatus,
         error: String? = nil,
@@ -25033,6 +25368,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.state = state
         self.agems = agems
         self.idlems = idlems
+        self.destroyrequestedatms = destroyrequestedatms
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
         self.error = error
@@ -25047,6 +25383,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case state
         case agems = "ageMs"
         case idlems = "idleMs"
+        case destroyrequestedatms = "destroyRequestedAtMs"
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
         case error
@@ -27567,6 +27904,49 @@ public enum DesktopSource: Codable, Sendable {
     }
 }
 
+public struct GatewayErrorDetailsTaskHistoryPreviewCapacity: Codable, Sendable {
+    public let code: String
+
+    public init()
+    {
+        self.code = "TASK_HISTORY_PREVIEW_CAPACITY"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["code"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for GatewayErrorDetailsTaskHistoryPreviewCapacity: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedCode = try container.decode(String.self, forKey: .code)
+        guard decodedCode == "TASK_HISTORY_PREVIEW_CAPACITY" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .code,
+                in: container,
+                debugDescription: "Expected code to equal TASK_HISTORY_PREVIEW_CAPACITY"
+            )
+        }
+        self.code = "TASK_HISTORY_PREVIEW_CAPACITY"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("TASK_HISTORY_PREVIEW_CAPACITY", forKey: .code)
+    }
+}
+
 public enum GatewayErrorDetails: Codable, Sendable {
     case cronJobNotFound(CronJobNotFoundErrorDetails)
     case missingScope(MissingScopeErrorDetails)
@@ -27581,6 +27961,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails)
     case sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails)
     case taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails)
+    case taskHistoryPreviewCapacity(GatewayErrorDetailsTaskHistoryPreviewCapacity)
 
     public init(code: String, missingscope: String, requiredscopes: [String]) {
         self = .missingScope(
@@ -27607,6 +27988,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .githubPublicationSelectionRejected(let value): value.code
         case .sessionWorkspaceRecoveryRequired(let value): value.code
         case .taskWorktreeSourceRequired(let value): value.code
+        case .taskHistoryPreviewCapacity(let value): value.code
         }
     }
 
@@ -27641,6 +28023,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "GITHUB_PUBLICATION_SELECTION_REJECTED": self = try .githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails(from: decoder))
         case "SESSION_WORKSPACE_RECOVERY_REQUIRED": self = try .sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails(from: decoder))
         case "TASK_WORKTREE_SOURCE_REQUIRED": self = try .taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails(from: decoder))
+        case "TASK_HISTORY_PREVIEW_CAPACITY": self = try .taskHistoryPreviewCapacity(GatewayErrorDetailsTaskHistoryPreviewCapacity(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -27665,6 +28048,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .githubPublicationSelectionRejected(let value): try value.encode(to: encoder)
         case .sessionWorkspaceRecoveryRequired(let value): try value.encode(to: encoder)
         case .taskWorktreeSourceRequired(let value): try value.encode(to: encoder)
+        case .taskHistoryPreviewCapacity(let value): try value.encode(to: encoder)
         }
     }
 }
@@ -27769,6 +28153,7 @@ public enum PluginCatalogInstallAction: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsClawhub: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -27779,6 +28164,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
     public let expectedintegrity: String?
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -27788,6 +28174,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         expectedintegrity: String? = nil
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -27799,6 +28186,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -27813,7 +28201,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "packageName", "version", "expectedPluginId", "expectedIntegrity"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "packageName", "version", "expectedPluginId", "expectedIntegrity"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -27823,6 +28211,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -27853,6 +28242,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -27874,6 +28264,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsOfficial: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -27883,6 +28274,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
     public let pin: Bool?
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -27891,6 +28283,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
         pin: Bool? = nil
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -27901,6 +28294,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -27914,7 +28308,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "pluginId", "version", "pin"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "pluginId", "version", "pin"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -27924,6 +28318,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -27963,6 +28358,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -27992,6 +28388,7 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsNpm: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28002,6 +28399,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
     public let expectedintegrity: String?
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -28011,6 +28409,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
         expectedintegrity: String? = nil
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28022,6 +28421,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28036,7 +28436,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "spec", "pin", "expectedPluginId", "expectedIntegrity"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "spec", "pin", "expectedPluginId", "expectedIntegrity"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28046,6 +28446,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28076,6 +28477,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -28097,6 +28499,7 @@ public struct PluginsInstallParamsNpm: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsGit: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28104,12 +28507,14 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
     public let spec: String
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
         spec: String
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28118,6 +28523,7 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28129,7 +28535,7 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "spec"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "spec"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28139,6 +28545,7 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28166,6 +28573,7 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -28184,6 +28592,7 @@ public struct PluginsInstallParamsGit: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsLocal: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28192,6 +28601,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
     public let link: Bool?
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -28199,6 +28609,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
         link: Bool? = nil
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28208,6 +28619,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28220,7 +28632,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "path", "link"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "path", "link"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28230,6 +28642,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28258,6 +28671,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -28277,6 +28691,7 @@ public struct PluginsInstallParamsLocal: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsNpmPack: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28284,12 +28699,14 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
     public let archivepath: String
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
         archivepath: String
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28298,6 +28715,7 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28309,7 +28727,7 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "archivePath"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "archivePath"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28319,6 +28737,7 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28346,6 +28765,7 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -28364,6 +28784,7 @@ public struct PluginsInstallParamsNpmPack: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsMarketplace: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28372,6 +28793,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
     public let plugin: String
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -28379,6 +28801,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
         plugin: String
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28388,6 +28811,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28400,7 +28824,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "marketplace", "plugin"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "marketplace", "plugin"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28410,6 +28834,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28438,6 +28863,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(
@@ -28457,6 +28883,7 @@ public struct PluginsInstallParamsMarketplace: Codable, Sendable {
 }
 
 public struct PluginsInstallParamsBundled: Codable, Sendable {
+    public let enable: Bool?
     public let mode: AnyCodable?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
@@ -28465,6 +28892,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
     public let spec: String?
 
     public init(
+        enable: Bool? = nil,
         mode: AnyCodable? = nil,
         acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil,
@@ -28472,6 +28900,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
         spec: String? = nil
     )
     {
+        self.enable = enable
         self.mode = mode
         self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
@@ -28481,6 +28910,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case enable
         case mode
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
@@ -28493,7 +28923,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "pluginId", "spec"]).contains($0) }
+            .filter { !Set(["enable", "mode", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities", "source", "pluginId", "spec"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -28503,6 +28933,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
             )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enable = try container.decodeIfPresent(Bool.self, forKey: .enable)
         self.mode = try container.decodeIfPresent(AnyCodable.self, forKey: .mode)
         let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
             ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
@@ -28531,6 +28962,7 @@ public struct PluginsInstallParamsBundled: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enable, forKey: .enable)
         try container.encodeIfPresent(mode, forKey: .mode)
         if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
             throw EncodingError.invalidValue(

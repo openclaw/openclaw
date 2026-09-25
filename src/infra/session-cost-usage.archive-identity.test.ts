@@ -43,7 +43,7 @@ import {
   resolveUsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
-import { decodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
+import { decodeUsageCostRollupEnvelope } from "./session-cost-usage-rollup-codec.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -662,7 +662,7 @@ describe("usage archive identity", () => {
       rows.find((row) => row.key === replacement.filePath),
       "replacement archive rollup",
     );
-    expect(decodeUsageCostRollup(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
+    expect(decodeUsageCostRollupEnvelope(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
       parsedOffset: Buffer.byteLength(serialize(manager)),
       observedSize: Buffer.byteLength(serialize(manager)),

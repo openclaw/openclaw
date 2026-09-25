@@ -123,8 +123,8 @@ export function registerNodeCli(program: Command) {
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
     .option("--json", "Output JSON", false)
-    .action((opts) => {
-      runNodeIdentityShow(opts);
+    .action(async (opts) => {
+      await runNodeIdentityShow(opts);
     });
 
   addNodeCommandOptions(

@@ -8,23 +8,27 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { tryReadDiskSpace } from "./disk-space.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
+  readUpdateCandidatePluginCodeLinks,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
+import {
   collectStateDatabasePaths,
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 import {
   UpdateSnapshotCapacityError,
   type UpdateSnapshotCapacity,
 } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 
@@ -113,9 +117,6 @@ export async function assessInitialUpdateSnapshotCapacity(
   params: InitialSnapshotParams,
 ): Promise<UpdateStepResult> {
   const started = Date.now();
-  const warnings = [
-    "Snapshot capacity estimate incomplete: plugin copies and registered external databases are measured after staging.",
-  ];
   const step = {
     name: "snapshot-space-preflight",
     command: "snapshot-space-preflight",
@@ -132,17 +133,17 @@ export async function assessInitialUpdateSnapshotCapacity(
           candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
       );
     const diagnostics = [
-      `Initial snapshot needs ${capacity.requiredBytes} bytes for ${capacity.sqliteBytes} known SQLite-family bytes and the existing snapshot scratch allowance.`,
+      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
+      `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
       ...capacity.candidates.map(
         (candidate) =>
-          `${candidate.kind} ${candidate.directory}: ${capacity.requiredBytes} bytes needed; ${candidate.availableBytes === null ? "free space unknown" : `${candidate.availableBytes} bytes free`}.`,
+          `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
       ),
       ...families.map(
         (family) =>
-          `SQLite family ${family.path}: ${family.bytes} bytes (database, WAL, SHM, and journal).`,
+          `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       ),
     ];
-    warnings.push(...diagnostics);
     if (refused) {
       return {
         ...step,
@@ -150,10 +151,9 @@ export async function assessInitialUpdateSnapshotCapacity(
         exitCode: 1,
         stderrTail: [
           "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
-          ...warnings,
+          ...diagnostics,
           "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
         ].join("\n"),
-        warnings,
         snapshotCapacity: capacity,
       };
     }
@@ -161,19 +161,16 @@ export async function assessInitialUpdateSnapshotCapacity(
       ...step,
       durationMs: Date.now() - started,
       exitCode: 0,
-      stdoutTail:
-        "Continuing with the initial snapshot estimate; the complete inventory is checked after staging.",
-      warnings,
+      diagnostics,
     };
   } catch {
-    warnings.push(
-      "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
-    );
     return {
       ...step,
       durationMs: Date.now() - started,
       exitCode: 0,
-      warnings,
+      warnings: [
+        "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
+      ],
     };
   }
 }
@@ -240,6 +237,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
 }): Promise<{
   stateDir: string;
   pluginPaths: Record<string, string>;
+  pluginCodeLinks: UpdateCandidatePluginCodeLink[];
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
 }> {
@@ -331,16 +329,20 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
+    const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
+    const { pluginPaths, pluginCodeLinks } = UpdateCandidateStateSnapshotSchema.parse(
       await run({
         mode: "snapshot",
-        pluginPlanPath: path.join(inventoryDirectory, inventory.pluginPlan),
+        pluginPlanPath,
         databaseInventory: [...inventory.databases.keys()],
       }),
     );
     return {
       stateDir: directory,
       pluginPaths,
+      pluginCodeLinks: pluginCodeLinks
+        ? await readUpdateCandidatePluginCodeLinks(pluginPlanPath, pluginCodeLinks)
+        : [],
       snapshotCapacity: { ...capacity, selection: { ...selectedRoot, directory } },
       cleanupDirectories: cleanupDirectories(),
     };

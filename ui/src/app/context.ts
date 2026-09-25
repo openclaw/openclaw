@@ -1,6 +1,7 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -13,6 +14,7 @@ import type {
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { LiveActivity } from "../pages/activity/live-activity.ts";
+import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
@@ -46,6 +48,7 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly branding: ThemeBranding;
   readonly catalog?: ThemeCatalogSnapshot;
   retryCatalog?: () => void;
   readonly settings: UiPreferences;
@@ -91,6 +94,8 @@ export type ApplicationChatAttachmentHandoff = {
       goalMode?: ChatGoalDraftMode | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
+      incognito?: boolean;
+      reviewPrivateDraft: typeof reviewPrivateComposerDraft;
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {

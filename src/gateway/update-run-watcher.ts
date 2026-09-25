@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   findActiveUpdateRun,
@@ -80,6 +81,7 @@ export function startUpdateRunWatcher(params: {
       }
       watched ??= { runId: run.runId };
       const terminal = run.status !== "running";
+      gatewayUpdateCampaign.reconcileRun(run);
       if (watched.revision !== run.updatedAtMs || terminal) {
         params.broadcast(GATEWAY_EVENT_UPDATE_RUN_CHANGED, {
           runId: run.runId,
@@ -133,15 +135,15 @@ export function startUpdateRunWatcher(params: {
     if (work.isClosing) {
       return;
     }
+    timer = undefined;
+    // Candidate verification must not delay terminal observations or schema publication.
+    // Other abandonment still waits for candidate verification.
+    scan(false);
     if (polling) {
       pollAgain = true;
       return;
     }
     polling = true;
-    timer = undefined;
-    // Capture fast terminal changes and expire legacy admissions synchronously.
-    // Other abandonment waits for candidate verification.
-    scan(false);
     void work
       .track(async () => {
         const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });

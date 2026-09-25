@@ -7,6 +7,8 @@ source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
 # Shell-local operation state, never inherited freshness from the environment.
 unset PR_MAIN_SHA
 PR_MAIN_SHA=""
+unset PR_GH_WRITER_LOGIN PR_GH_WRITER_CONTEXT PR_OBSERVATION PR_HEAD_OBSERVATION
+unset PR_REPOSITORY_URL PR_REPOSITORY_SELECTOR PR_REPOSITORY_HOST
 
 repo_root() {
   # The entrypoint freezes this identity before a linked wrapper can delete
@@ -31,7 +33,17 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  pr_gh_writer_login >/dev/null || return 1
+  local context login
+  # Keep credential selection in non-exported process memory; never record it in artifacts.
+  printf -v context '%s\037' "${OPENCLAW_GH_BIN:-}" "${GH_HOST:-}" "${GH_CONFIG_DIR:-}" \
+    "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" "${GH_ENTERPRISE_TOKEN:-}" "${GITHUB_ENTERPRISE_TOKEN:-}"
+  if [ -n "${PR_GH_WRITER_LOGIN:-}" ] && [ "${PR_GH_WRITER_CONTEXT:-}" = "$context" ]; then
+    return 0
+  fi
+  PR_GH_WRITER_LOGIN=""
+  login=$(pr_gh_writer_login) || return 1
+  PR_GH_WRITER_CONTEXT="$context"
+  PR_GH_WRITER_LOGIN="$login"
 }
 
 ensure_full_pr_worktree_checkout() {
@@ -260,16 +272,17 @@ fetch_pr_head() {
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 
-  local fields=headRefName,headRefOid,headRepository,headRepositoryOwner
   local before after observed_sha before_identity after_identity refspec fetched_sha
-  before=$(read_pr_view_json "$pr" "$fields") || return 1
+  before="${4:-}"
+  [ -n "$before" ] || before=$(read_pr_observation "$pr") || return 1
+  use_pr_observation "$pr" "$before" || return 1
   observed_sha=$(pr_view_string_field "$before" headRefOid "$pr") || return 1
   pr_view_string_field "$before" headRefName "$pr" >/dev/null || return 1
   if [ "$observed_sha" != "$expected_sha" ]; then
     echo "PR head changed before acquisition (expected $expected_sha, live $observed_sha). Re-run review-init." >&2
     return 1
   fi
-  before_identity=$(printf '%s\n' "$before" | jq -cS '{headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
+  before_identity=$(printf '%s\n' "$before" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   refspec="$expected_sha"
   [ -z "$destination" ] || refspec="+$expected_sha:$destination"
   # GitHub's pull/head projection can lag live PR metadata and the branch.
@@ -280,12 +293,14 @@ fetch_pr_head() {
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2
     return 1
   fi
-  after=$(read_pr_view_json "$pr" "$fields") || return 1
-  after_identity=$(printf '%s\n' "$after" | jq -cS '{headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
+  after=$(read_pr_observation "$pr") || return 1
+  after_identity=$(printf '%s\n' "$after" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   if [ "$after_identity" != "$before_identity" ]; then
     echo "PR head changed during acquisition for #$pr. Re-run review-init." >&2
     return 1
   fi
+  use_pr_observation "$pr" "$after" || return 1
+  PR_HEAD_OBSERVATION="$after"
 }
 
 refresh_main_snapshot() {
@@ -387,11 +402,34 @@ enter_worktree() {
   mkdir -p .local
 }
 
+verify_pr_metadata_identity() {
+  local pr="$1" before="$2" after="$3" before_identity after_identity head_before head_after
+  head_before=$(pr_view_string_field "$before" headRefOid "$pr") || return 1
+  head_after=$(pr_view_string_field "$after" headRefOid "$pr") || return 1
+  if [ "$head_before" != "$head_after" ]; then
+    echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
+    return 1
+  fi
+  local identity_filter='
+    select(.number == $pr and (.url | type == "string") and
+      all(.baseRefOid,.headRefOid; type == "string" and test("^[0-9a-f]{40}$")) and
+      all(.baseRefName,.headRefName; type == "string" and length > 0)) |
+    {number,url,baseRefOid,headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner}'
+  before_identity=$(printf '%s\n' "$before" | jq -ceS --argjson pr "$pr" "$identity_filter") || return 1
+  if ! after_identity=$(printf '%s\n' "$after" | jq -ceS --argjson pr "$pr" "$identity_filter") ||
+    [ "$before_identity" != "$after_identity" ]; then
+    echo "PR base/head or repository identity changed or became unavailable while collecting file metadata for #$pr. Retry review initialization." >&2
+    return 1
+  fi
+}
+
 pr_meta_json() {
   local pr="$1"
-  local metadata files expected_file_count actual_file_count head_before head_after head_after_json
-  local repo_json repo_nwo repo_url identity_filter identity_before identity_after
-  repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
+  local revalidate="${2:-true}"
+  local metadata files expected_file_count actual_file_count head_before head_after_json
+  local repo_json repo_nwo repo_url identity_filter identity_before
+  metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,body,labels,assignees,changedFiles,additions,deletions,files") || return 1
+  repo_json=$(printf '%s\n' "$metadata" | jq -c .baseRepository) || return 1
   if ! repo_nwo=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') ||
     ! repo_url=$(printf '%s\n' "$repo_json" | jq -er --arg repo "$repo_nwo" '.url | select(type == "string" and test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo))'); then
     echo "Invalid base repository identity for PR #$pr." >&2
@@ -404,7 +442,6 @@ pr_meta_json() {
     | select(all(.baseRefOid, .headRefOid; type == "string" and test("^[0-9a-f]{40}$")))
     | select(all(.baseRefName, .headRefName; type == "string" and length > 0))
     | {number,url,baseRefOid,headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner}'
-  metadata=$(GH_REPO="$repo_url" read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,files") || return 1
   head_before=$(pr_view_string_field "$metadata" "headRefOid" "$pr" "Retry review initialization.") || return 1
   if ! identity_before=$(printf '%s\n' "$metadata" | jq -ceS --argjson pr "$pr" --arg repo_url "$repo_url" "$identity_filter"); then
     echo "Invalid PR identity for #$pr: expected $repo_url/pull/$pr and complete base/head OIDs and refs." >&2
@@ -429,16 +466,9 @@ pr_meta_json() {
   fi
   files=$(printf '%s\n' "$metadata" | jq -c '.files') || return 1
 
-  head_after_json=$(GH_REPO="$repo_url" read_pr_view_json "$pr" "number,url,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner") || return 1
-  head_after=$(pr_view_string_field "$head_after_json" "headRefOid" "$pr" "Retry review initialization.") || return 1
-  if [ "$head_after" != "$head_before" ]; then
-    echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
-    return 1
-  fi
-  if ! identity_after=$(printf '%s\n' "$head_after_json" | jq -ceS --argjson pr "$pr" --arg repo_url "$repo_url" "$identity_filter") ||
-    [ "$identity_after" != "$identity_before" ]; then
-    echo "PR base/head or repository identity changed or became unavailable while collecting file metadata for #$pr. Retry review initialization." >&2
-    return 1
+  if [ "$revalidate" = true ]; then
+    head_after_json=$(GH_REPO="$repo_url" read_pr_observation "$pr") || return 1
+    verify_pr_metadata_identity "$pr" "$metadata" "$head_after_json" || return 1
   fi
 
   if ! actual_file_count=$(

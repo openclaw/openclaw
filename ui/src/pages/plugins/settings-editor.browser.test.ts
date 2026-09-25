@@ -1,8 +1,11 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { PluginSettingsEditor } from "./settings-editor.ts";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
+import "../../styles.css";
+import "../../styles/settings.css";
 
 const prefix = "plugins.entries.fixture.config";
 async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
@@ -57,6 +60,40 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
 }
 afterEach(() => document.body.replaceChildren());
 describe("grouped plugin settings", () => {
+  it("navigates authored sections without hiding settings and omits the rail for flat schemas", async () => {
+    const { editor, model } = await mount();
+    const links = [...editor.querySelectorAll<HTMLAnchorElement>(".plugin-editor__nav a")];
+    expect(links.map((link) => link.textContent?.trim())).toEqual([
+      "Data storage",
+      "Capture",
+      "Other",
+    ]);
+    const target = editor.querySelector<HTMLElement>(links[1]!.getAttribute("href")!)!;
+    const scroll = vi.spyOn(target, "scrollIntoView");
+    links[1]!.click();
+    expect(scroll).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(target);
+    expect(editor.querySelectorAll("[data-setting]")).toHaveLength(4);
+    expect(editor.querySelector("h1")).toBeNull();
+    editor.model = { ...model, configHints: {} };
+    await editor.updateComplete;
+    expect(editor.querySelector(".plugin-editor__nav")).toBeNull();
+  });
+  it("shows authored automatic numeric placeholders without persisting a made-up default", async () => {
+    const { editor, model } = await mount({
+      configHints: { [`${prefix}.timeout`]: { placeholder: "Automatic" } },
+      configSchema: {
+        type: "object",
+        properties: { timeout: { type: "integer", title: "Timeout" } },
+      },
+    });
+    const input = editor.querySelector<HTMLInputElement>('input[aria-label="Timeout"]')!;
+    expect(input.placeholder).toBe("Automatic");
+    expect(input.value).toBe("");
+    input.focus();
+    input.blur();
+    expect(model.onConfigPatch).not.toHaveBeenCalled();
+  });
   it("keeps a retired menu bound to the setting action that rendered it", async () => {
     const { editor, model } = await mount();
     const original = vi.fn();
@@ -395,14 +432,15 @@ describe("grouped editor field discovery", () => {
     });
     for (const name of ["Enabled", "Timeout", "Storage: Path"]) {
       const input = editor.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!;
-      const id = input.getAttribute("aria-describedby");
-      expect(id).toBeTruthy();
-      expect(document.getElementById(id!)?.textContent?.trim()).toBe(
-        input
-          .closest(".plugin-editor__row")
-          ?.querySelector(".plugin-editor__copy p")
-          ?.textContent?.trim(),
-      );
+      const ids = input.getAttribute("aria-describedby")?.trim().split(/\s+/u) ?? [];
+      const instructions = input
+        .closest(".plugin-editor__row")
+        ?.querySelector(".plugin-editor__copy p");
+      expect(instructions?.textContent?.trim()).toBeTruthy();
+      expect(ids).toContain(instructions?.id);
+      const descriptions = ids.map((id) => document.getElementById(id));
+      expect(descriptions).toContain(instructions);
+      expect(descriptions).not.toContain(null);
     }
   });
 
@@ -427,5 +465,67 @@ describe("grouped editor field discovery", () => {
     expect(editor.querySelector(".plugin-editor__empty")?.textContent).toContain(
       "No matching settings.",
     );
+  });
+});
+
+describe("plugin map layout", () => {
+  it.each([1728, 390])("keeps map labels, keys, and values usable at %s pixels", async (width) => {
+    await page.viewport(width, 913);
+    const { editor, model } = await mount({
+      configHints: {},
+      configValue: { plugins: { entries: { fixture: { config: { populated: { first: 15 } } } } } },
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          empty: {
+            type: "object",
+            title: "Empty overrides",
+            additionalProperties: { type: "number" },
+          },
+          populated: {
+            type: "object",
+            title: "Populated overrides",
+            additionalProperties: { type: "number" },
+          },
+        },
+      },
+    });
+    editor.style.width = width > 768 ? "880px" : "100%";
+    try {
+      expect(
+        [...editor.querySelectorAll(".plugin-editor__title")].map((title) =>
+          title.textContent?.trim(),
+        ),
+      ).toEqual(["Empty overrides", "Populated overrides"]);
+      expect(editor.querySelector(".cfg-map > .settings-row .settings-row__title")).toBeNull();
+      for (const add of editor.querySelectorAll<HTMLButtonElement>(
+        ".cfg-map > .settings-row button",
+      )) {
+        const bounds = add.getBoundingClientRect();
+        const mapBounds = add.closest(".cfg-map")!.getBoundingClientRect();
+        expect(bounds.width).toBeGreaterThan(60);
+        expect(bounds.height).toBeLessThan(48);
+        expect(bounds.right).toBeLessThanOrEqual(mapBounds.right);
+      }
+      const key = editor.querySelector<HTMLInputElement>('input[aria-label="Key: first"]')!;
+      expect(key.getBoundingClientRect().width).toBeGreaterThan(100);
+      const value = editor.querySelector<HTMLInputElement>(
+        '[data-setting="populated"] input[type="number"]',
+      )!;
+      expect(value.getBoundingClientRect().width).toBeGreaterThan(100);
+      expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
+      editor
+        .querySelector<HTMLButtonElement>(
+          '[data-setting="populated"] button[aria-label="Remove entry"]',
+        )!
+        .click();
+      expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(
+        ["plugins", "entries", "fixture", "config", "populated"],
+        {},
+      );
+    } finally {
+      await page.viewport(800, 600);
+    }
   });
 });

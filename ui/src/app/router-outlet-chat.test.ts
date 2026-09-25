@@ -19,6 +19,9 @@ import { pages as chatPages } from "../pages/chat/route.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
 
+// The fixture supplies its own page renderer; retain the registered route's ownership policy.
+vi.mock("../pages/chat/chat-page.ts", () => ({}));
+
 type RouteId = "chat" | "dashboard" | "home" | "settings";
 type TestContext = Record<string, never>;
 type OwnerMatch = Pick<RouteMatch<string, unknown, ChatRouteData>, "data" | "location">;

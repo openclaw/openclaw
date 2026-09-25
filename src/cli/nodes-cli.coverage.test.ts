@@ -47,8 +47,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   return { ok: true };
 });
 
-const randomIdempotencyKey = vi.fn(() => "rk_test");
-
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   return createCliRuntimeMock(vi);
@@ -58,7 +56,6 @@ const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
-  randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -104,7 +101,6 @@ describe("nodes-cli coverage", () => {
   beforeEach(() => {
     runtimeErrors.length = 0;
     callGateway.mockClear();
-    randomIdempotencyKey.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import {
   collectPackageDistInventory,
@@ -38,8 +40,7 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
-import { createUpdateFailureFact } from "./update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   FreeBsdPkgOwnershipError,
@@ -52,7 +53,7 @@ import {
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
 export type {
@@ -83,6 +84,7 @@ export async function swapStagedPackageInstall(
   const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
   const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
   const warnings: string[] = [];
+  let baselineError: Error | undefined;
   const step = (
     exitCode: number,
     stdoutTail: string | null,
@@ -99,11 +101,13 @@ export async function swapStagedPackageInstall(
     ...(exitCode !== 0
       ? {
           failureFacts: [
-            createUpdateFailureFact({
-              check: "package-swap",
-              code,
-              message: stderrTail ?? undefined,
-            }),
+            baselineError
+              ? { ...createUpdateErrorFact("package-swap", baselineError), code }
+              : createUpdateFailureFact({
+                  check: "package-swap",
+                  code,
+                  message: stderrTail ?? undefined,
+                }),
           ],
         }
       : {}),
@@ -312,6 +316,8 @@ export async function swapStagedPackageInstall(
       try {
         previousRoot = await baseline.rootEntry(targetSwapRoot);
       } catch (error) {
+        // Preserve the scan cause if the identity fallback also fails.
+        baselineError = new Error("Baseline package scan failed", { cause: error });
         if (!(error instanceof PackageIntegrityTimeoutError)) {
           throw error;
         }
@@ -327,6 +333,7 @@ export async function swapStagedPackageInstall(
           `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
         );
       }
+      baselineError = undefined;
       previousVersion =
         previousRoot?.kind === "directory"
           ? previousRoot.tree.version
@@ -694,6 +701,9 @@ export async function swapStagedPackageInstall(
       postVerifyStep,
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
@@ -703,7 +713,7 @@ export async function swapStagedPackageInstall(
         ? error
         : new PackageUpdateActivationError(error);
     }
-    const errors = [formatErrorMessage(error)];
+    const errors = [formatErrorMessage(baselineError ?? error)];
     if (!retained && !liveMutationStarted) {
       // Preparation can fail before a baseline exists. There is nothing to
       // restore; the caller independently verifies the untouched runtime.
@@ -722,11 +732,13 @@ export async function swapStagedPackageInstall(
         1,
         null,
         errors.join("\n"),
-        isErrno(error) && typeof error.code === "string"
-          ? error.code
-          : error instanceof Error
-            ? error.name
-            : "swap-failed",
+        baselineError
+          ? "baseline-scan-failed"
+          : isErrno(error) && typeof error.code === "string"
+            ? error.code
+            : error instanceof Error
+              ? error.name
+              : "swap-failed",
       ),
       postVerifyStep: null,
       packageRollbackVerified: retained ? false : packageRollbackVerified,

@@ -133,6 +133,9 @@ function createCommonChannelAccountShape<
   };
 }
 
+/** Canonical optional account contract shared by bundled messaging channels. */
+export const CommonChannelAccountSchema = z.object(createCommonChannelAccountShape({})).strict();
+
 type CommonChannelAccountShape = ReturnType<typeof createCommonChannelAccountShape>;
 type CommonChannelAccountField = keyof CommonChannelAccountShape;
 

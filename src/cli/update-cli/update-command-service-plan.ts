@@ -22,11 +22,16 @@ import {
   resolveManagedServiceNodeRunner,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
+import {
+  hasGatewayServiceDefinitionOverrides,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -72,13 +77,13 @@ export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
-    super(message, { cause });
+    super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
         code: inspectionReason ?? "service-ownership-unverified",
-        message,
+        message: this.message,
       }),
     ];
   }
@@ -91,7 +96,9 @@ export function assertGatewayServiceAdmissionUnchanged(
   const expectedVerdict = expectedService?.serviceUpdateVerdict;
   if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
     throw new GatewayServiceUpdateOwnershipError(
-      "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
+      serviceUpdateVerdict.kind === "unavailable"
+        ? "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
+        : "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
       undefined,
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
@@ -216,9 +223,13 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   }
   // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
   // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const { managedDefinition: _managedDefinition, managedOverrides, ...effectiveCommand } = command;
+  const {
+    managedDefinition: _managedDefinition,
+    managedOverrides: _managedOverrides,
+    ...effectiveCommand
+  } = command;
   const serialized = stableStringify(
-    managedOverrides && Object.keys(managedOverrides).length === 0 ? effectiveCommand : command,
+    hasGatewayServiceDefinitionOverrides(command) ? command : effectiveCommand,
   );
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
@@ -260,6 +271,21 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     : { kind: "unresolved", root, fingerprint };
 }
 
+/** Update ownership requires the effective loaded command and an admitted manager route. */
+export function readGatewayServiceStateForUpdate(
+  service: GatewayService,
+  env: NodeJS.ProcessEnv | undefined,
+  timeoutMs?: number,
+): Promise<GatewayServiceState> {
+  return readGatewayServiceState(service, {
+    env,
+    requireEffective: true,
+    requireLoadedCommand: true,
+    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    timeoutMs,
+  });
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
 export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
@@ -270,12 +296,7 @@ export async function readManagedGatewayServiceForUpdate(
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env);
       if (!state.command) {
         return null;
       }
@@ -616,8 +637,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     const canRebind =
       params.rebind !== false &&
       process.platform !== "win32" &&
-      !command?.managedOverrides &&
-      !command?.managedDefinition &&
+      !hasGatewayServiceDefinitionOverrides(command) &&
       inspected?.verdict.refreshDefinition === true;
     return {
       serviceUnitTarget,

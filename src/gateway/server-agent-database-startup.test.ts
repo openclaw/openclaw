@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -25,6 +26,7 @@ import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -34,7 +36,7 @@ import {
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
@@ -123,7 +125,7 @@ it.each([
   { outcome: "superseded", agentId: "worker" },
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
-  "serves healthy agents while $agentId follows its $outcome lifecycle",
+  "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
@@ -196,6 +198,7 @@ it.each([
       unregisterOpenClawAgentDatabase({ agentId, path: agentPath, env });
       closeOpenClawStateDatabaseForTest();
     }
+    const agentBytes = fs.readFileSync(agentPath);
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
@@ -223,12 +226,15 @@ it.each([
           try {
             const marker =
               outcome === "shutdown" ? enteredPath : pause!.preparationEnteredPaths[0]!;
-            const pid = Number(fs.readFileSync(marker, "utf8"));
-            try {
-              process.kill(pid, 0);
-              inspectionAliveAtBrokerClose = true;
-            } catch {
-              inspectionAliveAtBrokerClose = false;
+            // Failed preparation may never create its marker; preserve the primary error.
+            if (fs.existsSync(marker)) {
+              const pid = Number(fs.readFileSync(marker, "utf8"));
+              try {
+                process.kill(pid, 0);
+                inspectionAliveAtBrokerClose = true;
+              } catch {
+                inspectionAliveAtBrokerClose = false;
+              }
             }
           } finally {
             await close();
@@ -271,6 +277,7 @@ it.each([
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
+    let unadoptedPortClaim: TestPortClaim | undefined;
     try {
       if (outcome === "startup-failure") {
         const startupFailure = new Error("startup stopped before Gateway adoption");
@@ -286,7 +293,10 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
         return;
       }
-      const started = await withAgentDatabaseStartupAdmission(async () => {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      unadoptedPortClaim = portClaim;
+      const port = portClaim.port;
+      const startup = withAgentDatabaseStartupAdmission(async () => {
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
@@ -297,20 +307,38 @@ it.each([
             },
           });
         }
-        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        return {
-          port: portClaim.port,
-          server: await spawnBroker.runWithSpawnBroker(suppliedBroker, () =>
-            startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } }),
-          ),
-        };
+        return spawnBroker.runWithSpawnBroker(suppliedBroker, () => {
+          unadoptedPortClaim = undefined;
+          return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+        });
+      }).then((started) => {
+        server = started;
+        return started;
       });
-      server = started.server;
+      if (agentId === "main" && (outcome === "corrupt" || outcome === "physical-corrupt")) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AgentDatabaseAdmissionError",
+          refusal: { agentId, code: "agent-database-inspection-failed", paths: [agentPath] },
+        });
+        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
+        await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+        return;
+      }
+      server = await startup;
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
-      expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+      const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      if (agentId === "main" && paused) {
+        await expect(readiness.json()).resolves.toMatchObject({
+          ready: false,
+          failing: ["agent-database:main"],
+          agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
+        });
+      }
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
@@ -339,6 +367,16 @@ it.each([
         expect(healthyInput).toBeDefined();
         expect(healthyInput && getPreparedModelRuntimeSnapshot(healthyInput)).toBeDefined();
       }
+      const hostJournalRead = createDeferredCore();
+      let hostJournalReads = 0;
+      if (outcome === "recover") {
+        observeHostDataSql(env, (sql) => {
+          if (sql.includes("agent_deletion_journal")) {
+            hostJournalReads++;
+            hostJournalRead.resolve();
+          }
+        });
+      }
       if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPaths[0]!;
@@ -356,7 +394,10 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await preparationEntered.promise;
+        await Promise.race([
+          preparationEntered.promise,
+          hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+        ]);
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -381,11 +422,11 @@ it.each([
           { timeout: 10000 },
         );
         expect(
-          sessionTranscriptIndexNeedsReconcile(
-            openOpenClawAgentDatabase(scope).db,
-            scope.sessionId,
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),
+            scope,
           ),
-        ).toBe(false);
+        ).toEqual({ found: true, value: false });
         const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
           (entry) => entry.agentId === agentId,
         );
@@ -400,6 +441,8 @@ it.each([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
+        expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+        expect(hostJournalReads).toBe(0);
       } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
@@ -427,7 +470,11 @@ it.each([
       try {
         await server?.close();
       } finally {
-        await suppliedBroker?.close();
+        try {
+          await suppliedBroker?.close();
+        } finally {
+          await unadoptedPortClaim?.release();
+        }
       }
     }
   },
@@ -474,6 +521,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     server = started.server;
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);
@@ -502,6 +550,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     expect(readAgentDatabaseAdmissionRefusal("a", { env })).toMatchObject({
       code: "agent-database-inspection-pending",
     });
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     fs.writeFileSync(pause.releasePaths[0]!, "resume a");
     await vi.waitFor(
       () => expect(readAgentDatabaseAdmissionRefusal("a", { env })).toBeUndefined(),

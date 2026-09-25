@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   resolveAgentWorkspaceDir,
@@ -30,6 +29,10 @@ import {
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
 import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
+import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -56,11 +59,7 @@ import {
 } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
-import {
-  readSessionIngestionState,
-  SESSION_CORPUS_RELATIVE_DIR,
-  writeSessionIngestionState,
-} from "./session-ingestion.js";
+import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
 import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
@@ -386,7 +385,7 @@ async function forgetWorkspaceMemory(
       value: {
         ...value,
         content: scrubbed.content,
-        contentHash: createHash("sha256").update(scrubbed.content).digest("hex"),
+        contentHash: hashMemoryContent(scrubbed.content),
       },
     };
   });
@@ -548,12 +547,6 @@ async function forgetWorkspaceMemory(
           return false;
         }
         if (chunkIds.length > 0) {
-          if (indexPlan.ftsRows > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom("memory_index_chunks_fts").where("id", "in", chunkIds),
-            );
-          }
           if (indexPlan.hasVectorTable) {
             executeSqliteQuerySync(
               db,

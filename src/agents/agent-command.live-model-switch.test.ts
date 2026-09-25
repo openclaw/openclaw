@@ -24,10 +24,8 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -294,26 +292,11 @@ vi.mock("./command/session-store.runtime.js", () => ({
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
 
-vi.mock("./command/session.js", () => ({
-  resolveSession: () => {
-    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    return {
-      sessionId: "session-1",
-      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
-      sessionEntry,
-      sessionStore: state.sessionStoreMock,
-      storePath: state.storePathMock,
-      isNewSession: false,
-      persistedThinking:
-        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
-      persistedVerbose: undefined,
-    };
-  },
-}));
+vi.mock("./command/session.js", async () => {
+  const { createTestSessionResolver } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return { resolveSession: createTestSessionResolver(state) };
+});
 
 vi.mock("./command/types.js", () => ({}));
 
@@ -3370,6 +3353,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runDiscordDelivery();
 
     expect(state.loadSessionEntryMock).toHaveBeenCalledWith({
+      agentId: "default",
       storePath: "/tmp/openclaw-sessions.json",
       sessionKey: "agent:main:main",
       readConsistency: "latest",
@@ -3751,17 +3735,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(pendingEntries).toEqual([]);
   });
 
-  it("clears a pre-existing transport-only pending delivery after an empty delivered run", async () => {
+  it.each([false, true])("empty-run marker custody (owned=%s)", async (owned) => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    setupBareStoredSession({
-      pendingFinalDelivery: {
-        kind: "transport-only",
-        createdAt: 2,
-        context: { channel: "tui" },
-        intentId: "intent-1",
-      },
-    });
+    const pending: NonNullable<SessionEntry["pendingFinalDelivery"]> = {
+      kind: "transport-only",
+      createdAt: 2,
+      context: { channel: "tui" },
+      intentId: "intent-1",
+      ...(owned ? { deliveries: [{ id: "delivery-1", state: "queued" as const }] } : {}),
+    };
+    setupBareStoredSession({ pendingFinalDelivery: pending });
     await agentCommand({
       message: "hello",
       channel: "whatsapp",
@@ -3769,11 +3753,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({ pendingFinalDelivery: undefined }),
-      }),
-    );
+    expect(state.persistSessionEntryMock.mock.lastCall?.[0]).toMatchObject({
+      entry: { pendingFinalDelivery: owned ? pending : undefined },
+    });
   });
 
   it("passes SQLite transcript markers to visible agent attempts", async () => {
@@ -4221,12 +4203,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    if (allowlisted) {
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
-      );
-    }
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",

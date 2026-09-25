@@ -10,6 +10,7 @@ import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { filePreviewModalStyles } from "./file-preview-modal.styles.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { renderPanelLoadingSkeleton } from "./panel-loading-skeleton.ts";
 import "./modal-dialog.ts";
 
 registerFilePreviewEnglish();
@@ -33,12 +34,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property() emptyTitle = "";
   @property() emptySubtitle = "";
   @property() copyLabel = "";
-  @property({ type: Boolean }) showSearch = true;
-  @property({ type: Boolean }) showCopy = true;
-  @property({ type: Boolean }) folderTree = false;
-  @property({ type: Boolean }) renderMarkdown = false;
+  @property() layout: "files" | "document" = "files";
   @property({ attribute: false }) directories: string[] = [];
   @property({ type: Boolean }) loading = false;
+  @property({ type: Boolean }) fileLoading = false;
   @property() error = "";
   @property() notice = "";
   @query(".search") private searchInput?: HTMLInputElement;
@@ -61,7 +60,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       changed.has("activePath") ||
       changed.has("query") ||
       changed.has("files") ||
-      changed.has("showSearch");
+      changed.has("layout");
     if (!inputsChanged) {
       return;
     }
@@ -69,6 +68,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     this.derivedInputsReady = true;
     this.filteredFiles = this.filterFiles();
     const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
+    // A late sibling read replaces the inventory, not the document being read.
+    // Reset only when the displayed document or explicit view context changes.
+    this.resetScrollAfterUpdate ||=
+      changed.has("layout") ||
+      changed.has("query") ||
+      this.activeFile?.path !== nextActiveFile?.path ||
+      this.activeFile?.contents !== nextActiveFile?.contents ||
+      this.activeFile?.message !== nextActiveFile?.message;
     this.activeFile = nextActiveFile;
 
     const nextCodeSource = nextActiveFile?.contents;
@@ -76,8 +83,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       this.codeSource = nextCodeSource;
       this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
     }
-
-    this.resetScrollAfterUpdate = true;
   }
 
   override render() {
@@ -103,14 +108,34 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       >
         <div class="modal">
           <header class="head">
-            ${this.showSearch ? html`<span class="search-icon">⌕</span><input class="search" placeholder=${searchPlaceholder} .value=${this.query} @input=${this.handleQueryInput} />` : html`<h1 class="heading">${label}</h1>`}
-            <span class="state">${fileCount}</span>
+            ${
+              this.layout === "document"
+                ? html`<h1 class="heading">${label}</h1>
+                    <button
+                      class="close-button"
+                      type="button"
+                      aria-label=${t("common.close")}
+                      @click=${this.emitClose}
+                    >
+                      ${icons.x}
+                    </button>`
+                : html`<span class="search-icon">⌕</span
+                    ><input
+                      class="search"
+                      placeholder=${searchPlaceholder}
+                      .value=${this.query}
+                      @input=${this.handleQueryInput}
+                    /><span class="state">${fileCount}</span>`
+            }
           </header>
           ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : ""}
-          <div class="body ${this.folderTree ? "tree" : ""}" aria-busy=${this.loading}>
+          <div
+            class="body ${this.layout === "document" ? "tree" : ""}"
+            aria-busy=${this.loading || this.fileLoading}
+          >
             <aside class="list">
-              <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
-              ${filteredFiles.length === 0 ? html`<div class="empty-list">${this.loading ? t("common.loading") : t("filePreview.noMatches")}</div>` : this.folderTree ? this.renderFolder("") : filteredFiles.map((file) => this.renderItem(file))}
+              ${this.layout === "files" ? html`<div class="list-section">${listLabel} · ${filteredFiles.length}</div>` : ""}
+              ${this.loading && !this.error ? renderPanelLoadingSkeleton("file-list", t("common.loading"), true) : filteredFiles.length === 0 ? (this.error ? "" : html`<div class="empty-list">${t("filePreview.noMatches")}</div>`) : this.layout === "document" ? this.renderFolder("") : filteredFiles.map((file) => this.renderItem(file))}
             </aside>
             ${
               this.error
@@ -123,18 +148,30 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                       ${t("common.retry")}
                     </button>
                   </section>`
-                : activeFile
-                  ? this.renderFile(activeFile)
-                  : this.renderEmpty()
+                : this.loading || this.fileLoading
+                  ? html`<section class="detail">
+                      <div class="detail-body">
+                        ${renderPanelLoadingSkeleton("document", t("common.loading"), true)}
+                      </div>
+                    </section>`
+                  : activeFile
+                    ? this.renderFile(activeFile)
+                    : this.renderEmpty()
             }
           </div>
-          <footer class="foot">
-            <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
-            <span class="spacer"></span>
-            <button class="button" @click=${this.emitClose}>
-              ${t("common.close")} <span class="kbd">esc</span>
-            </button>
-          </footer>
+          ${
+            this.layout === "files"
+              ? html`<footer class="foot">
+                  <span class="foot-group"
+                    ><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span
+                  >
+                  <span class="spacer"></span>
+                  <button class="button" @click=${this.emitClose}>
+                    ${t("common.close")} <span class="kbd">esc</span>
+                  </button>
+                </footer>`
+              : ""
+          }
         </div>
       </openclaw-modal-dialog>
     `;
@@ -145,22 +182,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       class="item ${file.path === this.activeFile?.path ? "is-active" : ""}"
       data-path=${file.path}
       aria-current=${file.path === this.activeFile?.path ? "true" : "false"}
-      @pointerdown=${(event: Event) => {
-        if (this.showSearch) {
-          this.preventItemPointerFocus(event);
-        }
-      }}
-      @mousedown=${(event: Event) => {
-        if (this.showSearch) {
-          this.preventItemPointerFocus(event);
-        }
-      }}
+      @pointerdown=${this.preventItemPointerFocus}
+      @mousedown=${this.preventItemPointerFocus}
       @click=${() => this.emitSelect(file.path)}
     >
-      <span class="item-icon">${iconForFile(file.path)}</span
+      <span class="item-icon">${FILE_KIND_ICONS[fileKindForPath(file.path)]}</span
       ><span class="item-name" title=${file.path}
-        >${this.folderTree ? file.path.split("/").pop() : file.path}</span
-      ><span class="item-meta">${file.size}</span>
+        >${this.layout === "document" ? file.path.split("/").pop() : file.path}</span
+      >${this.layout === "files" ? html`<span class="item-meta">${file.size}</span>` : ""}
     </button>`;
   }
 
@@ -206,24 +235,28 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   private renderFile(file: FilePreviewModalFile) {
     return html`
       <section class="detail">
-        <div class="detail-head">
-          <div class="detail-title-row">
-            <h2 class="title">${file.path}</h2>
-            ${
-              this.showCopy && file.contents
-                ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
-                : ""
-            }
-          </div>
-          <div class="chips">
-            <span class="chip accent">${fileKind(file.path)}</span>
-            <span class="chip">${file.size}</span>
-            <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
-            ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
-          </div>
-        </div>
+        ${
+          this.layout === "files"
+            ? html`<div class="detail-head">
+                <div class="detail-title-row">
+                  <h2 class="title">${file.path}</h2>
+                  ${
+                    file.contents
+                      ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+                      : ""
+                  }
+                </div>
+                <div class="chips">
+                  <span class="chip accent">${fileKind(file.path)}</span>
+                  <span class="chip">${file.size}</span>
+                  <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
+                  ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
+                </div>
+              </div>`
+            : ""
+        }
         <div class="detail-body">
-          ${file.message ? html`<p role="status">${file.message}</p>` : this.renderMarkdown && /\.md$/iu.test(file.path) ? html`<article class="markdown" @click=${this.handleDocumentLink}>${unsafeHTML(toSanitizedMarkdownHtml(stripFrontmatterBlock(file.contents), { mode: "document", remoteImages: false, codeBlockChrome: this.showCopy ? "copy" : "none", fileLinks: false }))}</article>` : html`<div class="code-content">${this.codeChunks.map((chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`)}</div>`}
+          ${file.message ? html`<p role="status">${file.message}</p>` : this.layout === "document" && /\.md$/iu.test(file.path) ? html`<article class="markdown" @click=${this.handleDocumentLink}>${unsafeHTML(toSanitizedMarkdownHtml(stripFrontmatterBlock(file.contents), { mode: "document", remoteImages: false, codeBlockChrome: "none", fileLinks: false }))}</article>` : html`<div class="code-content">${this.codeChunks.map((chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`)}</div>`}
         </div>
       </section>
     `;
@@ -239,7 +272,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   }
 
   private filterFiles(): FilePreviewModalFile[] {
-    const normalizedQuery = this.showSearch ? this.query.trim().toLowerCase() : "";
+    const normalizedQuery = this.layout === "files" ? this.query.trim().toLowerCase() : "";
     if (!normalizedQuery) {
       return this.files;
     }
@@ -271,7 +304,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
       this.scrollActiveFileIntoView();
-      if (!this.showSearch && changed.has("activePath")) {
+      if (this.layout === "document" && changed.has("activePath")) {
         this.focusModal();
       }
     }
@@ -293,7 +326,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private preventItemPointerFocus = (event: Event) => {
-    event.preventDefault();
+    if (this.layout === "files") {
+      event.preventDefault();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -314,20 +349,23 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
   private focusModal() {
     const target =
-      this.searchInput ?? this.shadowRoot?.querySelector<HTMLElement>(".item.is-active, .button");
+      this.searchInput ??
+      this.shadowRoot?.querySelector<HTMLElement>(".item.is-active, .button") ??
+      this.shadowRoot?.querySelector<HTMLElement>(".close-button");
     target?.focus({ preventScroll: true });
   }
 
   private moveSelection(offset: number, event: KeyboardEvent) {
     event.preventDefault();
     event.stopPropagation();
-    const files = this.folderTree
-      ? [...(this.shadowRoot?.querySelectorAll<HTMLButtonElement>(".item") ?? [])]
-          .filter((button) => !button.closest("details:not([open])"))
-          .flatMap((button) =>
-            this.filteredFiles.filter((file) => file.path === button.dataset.path),
-          )
-      : this.filterFiles();
+    const files =
+      this.layout === "document"
+        ? [...(this.shadowRoot?.querySelectorAll<HTMLButtonElement>(".item") ?? [])]
+            .filter((button) => !button.closest("details:not([open])"))
+            .flatMap((button) =>
+              this.filteredFiles.filter((file) => file.path === button.dataset.path),
+            )
+        : this.filterFiles();
     if (files.length === 0) {
       return;
     }
@@ -361,7 +399,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         detail: path,
       }),
     );
-    if (this.showSearch) {
+    if (this.layout === "files") {
       this.focusModal();
     }
   }
@@ -417,10 +455,6 @@ const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
   shell: icons.terminal,
   skill: icons.pencilSparkles,
 };
-
-function iconForFile(path: string) {
-  return FILE_KIND_ICONS[fileKindForPath(path)];
-}
 
 declare global {
   interface HTMLElementTagNameMap {

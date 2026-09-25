@@ -26,7 +26,7 @@ import type {
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -371,6 +371,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
+                ...(!usage ? { computing: true } : {}),
                 hasContextWeight: Boolean(merged.contextWeight),
                 contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
               });

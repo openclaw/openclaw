@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -12,11 +12,6 @@ function expectEmptyLead(row: Element | null) {
   expect(lead).not.toBeNull();
   expect(lead?.childElementCount).toBe(0);
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
 
 describe("AppSidebar session indicators", () => {
   it("removes a session stripe when a changed event clears its color", async () => {
@@ -593,6 +588,7 @@ describe("AppSidebar session indicators", () => {
         expect.objectContaining({
           sessionKeys: expect.arrayContaining([keys.openPullRequest, keys.mergedPullRequest]),
         }),
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
     });
     gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {

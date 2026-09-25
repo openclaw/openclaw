@@ -51,7 +51,7 @@ import {
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
 // Status text helpers render runtime status summaries for CLI output.
 import {
   buildCodexSyntheticUsageAuth,
@@ -61,7 +61,7 @@ import {
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { readSessionFallbackModel } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
-import { createStatusModelAuthResolver } from "./status-model-auth.js";
+import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
@@ -353,7 +353,7 @@ export async function buildStatusReplyParts(
     readOnly: true,
   });
   // This lookup borrows existing facts; status never starts inventory discovery.
-  const resolveAuth = createStatusModelAuthResolver({
+  const resolveModel = createStatusModelResolver({
     cfg,
     agentId: statusAgentId,
     agentDir: statusAgentDir,
@@ -380,23 +380,27 @@ export async function buildStatusReplyParts(
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
-  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
-    ? params.modelAuthOverride
-    : await resolveAuth({
-        provider: selectedStatusProvider,
-        model: selectedLookupModel,
-        runtimeId: effectiveHarness,
-        acceptedProviderIds: selectedAuthProviders,
-      });
+  const selectedResolution = await resolveModel({
+    provider: selectedStatusProvider,
+    model: selectedLookupModel,
+    runtimeId: effectiveHarness,
+    acceptedProviderIds: selectedAuthProviders,
+    ...(Object.hasOwn(params, "modelAuthOverride")
+      ? { authLabelOverride: params.modelAuthOverride }
+      : {}),
+  });
+  let selectedModelAuth = selectedResolution.authLabel;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
-      ? await resolveAuth({
-          provider: activeStatusProvider,
-          model: modelRefs.active.model || model,
-          runtimeId: effectiveHarness,
-          acceptedProviderIds: activeAuthProviders,
-        })
+      ? (
+          await resolveModel({
+            provider: activeStatusProvider,
+            model: modelRefs.active.model || model,
+            runtimeId: effectiveHarness,
+            acceptedProviderIds: activeAuthProviders,
+          })
+        ).authLabel
       : selectedModelAuth;
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
@@ -539,7 +543,7 @@ export async function buildStatusReplyParts(
     }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const subagentReadContext = buildControlledSubagentRunsReadContext(
+    const subagentReadContext = await buildControlledSubagentRunsReadContext(
       requesterKey,
       statusAgentId,
       cfg,
@@ -688,6 +692,7 @@ export async function buildStatusReplyParts(
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
+    selectedEndpoint: selectedResolution.endpoint,
     activeModelAuth,
     uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,

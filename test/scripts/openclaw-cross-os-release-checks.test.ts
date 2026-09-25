@@ -15,7 +15,6 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
@@ -63,7 +62,6 @@ import {
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
-  maybeBuildOptionalAgentTurnSkipResult,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
@@ -76,7 +74,6 @@ import {
   readRunnerOverrideEnv,
   reserveGatewayPortForLane,
   resolveDashboardAssetUrls,
-  resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
@@ -99,8 +96,6 @@ import {
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldRunMainChannelDevUpdate,
-  shouldRetryCrossOsAgentTurnError,
-  shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayService,
   verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
@@ -112,6 +107,18 @@ import {
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
+
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  // Keep native socket/stream prototypes intact across shared-worker files.
+  return {
+    ...actual,
+    createConnection: vi.fn(actual.createConnection),
+    createServer: vi.fn(actual.createServer),
+  };
+});
 
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -917,130 +924,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("retries transient agent-turn failures", () => {
-    const messages = [
-      "Agent output did not contain the expected OK marker.",
-      "The model did not produce a response before the model idle timeout. Please try again.",
-      "gateway request timeout for agent after 210000ms",
-      "Command timed out and could not be terminated cleanly",
-      "GatewayClientRequestError: FailoverError: Rate limit reached for gpt-5.5: code=rate_limit_exceeded",
-      "OpenAI image generation failed (HTTP 503): upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
-    ];
-
-    expect(messages.map((message) => shouldRetryCrossOsAgentTurnError(new Error(message)))).toEqual(
-      messages.map(() => true),
-    );
-  });
-
-  it("requires explicit opt-in before cross-OS agent turns become optional", () => {
-    expect(resolveCrossOsAgentTurnOptional({})).toBe(false);
-    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
-      true,
-    );
-    expect(
-      resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" }),
-    ).toBe(false);
-  });
-
-  it("skips optional live agent turns only for model availability failures", () => {
-    withTempDir("openclaw-cross-os-agent-skip-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      writeFileSync(
-        logPath,
-        JSON.stringify({
-          status: "timeout",
-          result: {
-            payloads: [
-              {
-                text: "Request timed out before a response was generated.",
-              },
-            ],
-          },
-        }),
-      );
-
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          logPath,
-        ),
-      ).toBe(true);
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("document-extract: failed to install bundled runtime deps"),
-          logPath,
-        ),
-      ).toBe(false);
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          join(dir, "missing.log"),
-        ),
-      ).toBe(false);
-    });
-  });
-
-  it("does not classify stale timeout logs as current optional agent-turn failures", () => {
-    withTempDir("openclaw-cross-os-agent-skip-tail-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      writeFileSync(
-        logPath,
-        [
-          JSON.stringify({
-            status: "timeout",
-            result: { payloads: [{ text: "Request timed out before a response was generated." }] },
-          }),
-          "x".repeat(2_200_000),
-          JSON.stringify({ status: "error", message: "document-extract failed" }),
-        ].join("\n"),
-      );
-
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          logPath,
-        ),
-      ).toBe(false);
-    });
-  });
-
-  it("only skips opted-in cross-OS live agent turns after retry exhaustion", () => {
-    withTempDir("openclaw-cross-os-agent-skip-retry-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      const error = new Error("gateway request timeout for agent after 210000ms");
-
-      expect(
-        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-          attempt: 1,
-          maxAttempts: 2,
-          optional: true,
-        }),
-      ).toBeNull();
-      expect(
-        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-          attempt: 2,
-          maxAttempts: 2,
-          optional: false,
-        }),
-      ).toBeNull();
-
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-        attempt: 2,
-        maxAttempts: 2,
-        optional: true,
-      });
-
-      expect(skipped?.status).toBe(0);
-      expect(JSON.parse(skipped?.stdout ?? "{}")).toEqual({
-        status: "skipped",
-        reason: "cross-os live agent turn unavailable after retry",
-      });
-      expect(readFileSync(logPath, "utf8")).toContain(
-        "skipping optional cross-OS live agent turn after retryable failure",
-      );
-    });
-  });
-
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
     expect(
       resolveProviderConfig("openai", {
@@ -1336,8 +1219,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("uses collision-resistant IDs for cross-OS live release probes", () => {
-    expect(buildCrossOsReleaseAgentSessionId("installer-fresh", 2)).toMatch(
-      /^cross-os-release-check-installer-fresh-[0-9a-f-]{36}-2$/u,
+    expect(buildCrossOsReleaseAgentSessionId("installer-fresh")).toMatch(
+      /^cross-os-release-check-installer-fresh-[0-9a-f-]{36}$/u,
     );
 
     const nonces = buildCrossOsDiscordRoundtripNonces();
@@ -2104,9 +1987,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-"));
     const childPidPath = join(dir, "child.pid");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 
@@ -2169,9 +2050,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-exit-"));
     const childPidPath = join(dir, "child.pid");
     const logPath = join(dir, "signal.log");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 
@@ -2280,36 +2159,70 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
     const server = createNetServer();
+    const closed = vi.fn();
+    server.on("close", closed);
     await new Promise<void>((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    expect(await canConnectToLoopbackPort(port)).toBe(true);
-    await new Promise<void>((resolvePromise) => {
-      server.close(() => resolvePromise());
-    });
-    // Preserve the 500 ms close budget while detecting port release sooner.
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (!(await canConnectToLoopbackPort(port, 100))) {
-        return;
-      }
-      await delay(5);
+    try {
+      expect(await canConnectToLoopbackPort(port)).toBe(true);
+    } finally {
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        server.close((error) => (error ? rejectPromise(error) : resolvePromise()));
+      });
     }
-    expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
+
+    // Refusal belongs to the observed socket, not a released port another listener can acquire.
+    const actualNet = await vi.importActual<typeof import("node:net")>("node:net");
+    const refused = new actualNet.Socket();
+    const connect = vi.mocked(createNetConnection).mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        refused.emit(
+          "error",
+          Object.assign(new Error("fixture connection refused"), {
+            code: "ECONNREFUSED",
+          }),
+        );
+      });
+      return refused;
+    });
+    try {
+      expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+      expect(refused.destroyed).toBe(true);
+    } finally {
+      connect.mockRestore();
+      refused.destroy();
+    }
   });
 
   it("keeps a release gateway port reserved until the lane is ready to start", async () => {
     const lane = { gatewayPort: 0 } as Parameters<typeof reserveGatewayPortForLane>[0];
     const reservation = await reserveGatewayPortForLane(lane);
+    let server: ReturnType<typeof createNetServer>;
+    const closed = vi.fn();
     try {
+      const created = vi.mocked(createNetServer).mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Gateway port reservation did not create its native listener");
+      }
+      server = created.value;
+      server.on("close", closed);
       expect(lane.gatewayPort).toBe(reservation.port);
+      expect(server.address()).toMatchObject({ port: reservation.port });
       expect(await canConnectToLoopbackPort(reservation.port)).toBe(true);
     } finally {
       await reservation.release();
     }
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
     await reservation.release();
-    expect(await canConnectToLoopbackPort(reservation.port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

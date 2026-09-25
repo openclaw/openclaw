@@ -259,15 +259,20 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # v4 seeds config-owned leaves shared by single and mixed-config jobs.
+        key: ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+          ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ steps.vitest-cache-generation.outputs.value }}
         CACHE_WRITER: "0"
+        # Prefix restores report cache-hit=false too; matched-key owns whether
+        # the archive was restored, independently of runner-local contents.
+        CACHE_RESTORED: ${{ steps.vitest-cache.outputs['cache-matched-key'] != '' && 'true' || 'false' }}
+        CACHE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       shell: bash
       run: |
         set -euo pipefail
@@ -279,16 +284,24 @@ runs:
           cache_generation="$(<"$generation_file")"
         fi
         cache_entry="$(find "$cache_root" -mindepth 1 -maxdepth 1 -print -quit)"
+        cache_local=empty
+        if [[ -n "$cache_entry" ]]; then
+          cache_local=retained
+        fi
         # Every restore is runner-local. Never mix incompatible transform
         # inputs even when an older archive was selected through a prefix.
         if [[ -n "$cache_entry" ]] && [[ "$cache_generation" != "$CACHE_GENERATION" ]]; then
           echo "Vitest transform inputs changed; clearing incompatible cache generation"
           find "$cache_root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          cache_local=cleared
         fi
         printf '%s\n' "$CACHE_GENERATION" > "$generation_file"
+        # This describes archive/local generation state, not per-file transform hits.
+        printf 'Vitest transform cache: restored=%s local=%s generation=%s runner=%s\n' \
+          "$CACHE_RESTORED" "$cache_local" "$CACHE_GENERATION" "$CACHE_RUNNER_ENVIRONMENT"
         # The shard runner treats this as a persistent root and assigns one
         # isolated subdirectory per concurrent Vitest worker.
-        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
+        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=$cache_root" >> "$GITHUB_ENV"
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
     - name: Restore Node compile cache
@@ -335,7 +348,7 @@ runs:
           export PATH="$bun_bin:$PATH"
           echo "$bun_bin" >> "$GITHUB_PATH"
         else
-          npm install -g bun@1.4.0
+          npm install -g bun@1.4.2
         fi
 
     - name: Runtime versions

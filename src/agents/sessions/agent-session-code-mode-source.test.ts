@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessages,
@@ -20,8 +20,11 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import {
+  cleanupSessionStateForTest,
+  drainSessionStateForTest,
+} from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { isCodeModeExecTool } from "../code-mode-control-tools.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
@@ -42,13 +45,31 @@ import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
+  afterAll(async () => {
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
     cleanup();
   }),
 );
+let fixtureDir: string;
+let sessionSequence = 0;
+function createSessionScope(label: string) {
+  fixtureDir ??= tempDirs.make("openclaw-code-source-projection-");
+  const sessionId = `${label}-${++sessionSequence}`;
+  return {
+    dir: fixtureDir,
+    scope: {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: path.join(fixtureDir, "sessions.json"),
+    },
+  };
+}
+afterEach(async () => {
+  await drainSessionStateForTest({ stateDir: fixtureDir });
+});
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
   resetDiagnosticEventsForTest();
@@ -122,13 +143,7 @@ describe("AgentSession runtime and transcript projections", () => {
   it.each(sourceCases)(
     "preserves $label through SQLite close, reopen, and the next provider context",
     async ({ args, outcome, label }) => {
-      const dir = tempDirs.make("openclaw-code-source-projection-");
-      const scope = {
-        agentId: "main",
-        sessionId: "source-projection",
-        sessionKey: "agent:main:source-projection",
-        storePath: path.join(dir, "sessions.json"),
-      };
+      const { dir, scope } = createSessionScope("source-projection");
       const config = { logging: { redactPatterns: ["fixture-custom-source-value"] } };
       registerSecretValueForRedaction(registeredLiteral);
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -136,6 +151,7 @@ describe("AgentSession runtime and transcript projections", () => {
       guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
       const originalArgs = {
         ...args,
+        title: "Compute the harmless number",
         note: source,
         nested: { code: source, command: source },
         apiKey: "fixture-structured-secret",
@@ -206,7 +222,7 @@ describe("AgentSession runtime and transcript projections", () => {
         const cached = manager.buildSessionContext();
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         const reopened = SessionManager.open(scope, dir);
         expect(reopened.buildSessionContext()).toEqual(cached);
         const { session: nextSession } = await createTestSession({
@@ -271,7 +287,7 @@ describe("AgentSession runtime and transcript projections", () => {
           providerContext.messages.indexOf(assistant) + 1,
         );
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
       }
     },
   );
@@ -279,13 +295,7 @@ describe("AgentSession runtime and transcript projections", () => {
   it.each(["message_end", "before_message_write"] as const)(
     "revalidates source ownership after %s replacements",
     async (hook) => {
-      const dir = tempDirs.make("openclaw-source-hooks-");
-      const scope = {
-        agentId: "main",
-        sessionId: "source-hooks",
-        sessionKey: "agent:main:source-hooks",
-        storePath: path.join(dir, "sessions.json"),
-      };
+      const { dir, scope } = createSessionScope("source-hooks");
       const { tools, catalogRef } = createCodeModeHarness();
       registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
       const other: ToolDefinition = {
@@ -351,7 +361,15 @@ describe("AgentSession runtime and transcript projections", () => {
           case "collision":
             return { ...message, content: [call, { ...call }] };
           case "replace-with-literal":
-            return { ...message, content: [{ ...call, arguments: { code: maskedSource } }] };
+            return {
+              ...message,
+              content: [
+                {
+                  ...call,
+                  arguments: { title: "Compute the harmless number", code: maskedSource },
+                },
+              ],
+            };
           default:
             return { ...message, content: [{ type: "text", text: "Hook preserved call." }, call] };
         }
@@ -408,6 +426,7 @@ describe("AgentSession runtime and transcript projections", () => {
                     id: `hook_${action}`,
                     name: "exec",
                     arguments: {
+                      title: "Compute the harmless number",
                       code: source,
                       ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
                     },
@@ -467,26 +486,20 @@ describe("AgentSession runtime and transcript projections", () => {
         const cached = manager.buildSessionContext();
         session.dispose();
         expect(
-          closeOpenClawAgentDatabaseByPath(
+          await closeOpenClawAgentDatabaseByPathAsync(
             resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
           ),
         ).toBe(true);
         expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
         resetGlobalHookRunner();
       }
     },
   );
 
   it("keeps mixed outer calls separate from a reentrant direct SQLite append", async () => {
-    const dir = tempDirs.make("openclaw-source-mixed-");
-    const scope = {
-      agentId: "main",
-      sessionId: "source-mixed",
-      sessionKey: "agent:main:source-mixed",
-      storePath: path.join(dir, "sessions.json"),
-    };
+    const { dir, scope } = createSessionScope("source-mixed");
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
     let reentrant: AgentMessage | undefined;
@@ -529,7 +542,12 @@ describe("AgentSession runtime and transcript projections", () => {
             model,
             [
               { type: "toolCall", id: "mixed_rejected", name: "unavailable", arguments: {} },
-              { type: "toolCall", id: "mixed_code", name: "exec", arguments: { code: source } },
+              {
+                type: "toolCall",
+                id: "mixed_code",
+                name: "exec",
+                arguments: { title: "Compute the harmless number", code: source },
+              },
               { type: "toolCall", id: "mixed_other", name: "other", arguments: { code: source } },
             ],
             "toolUse",
@@ -586,25 +604,19 @@ describe("AgentSession runtime and transcript projections", () => {
       const cached = manager.buildSessionContext();
       session.dispose();
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
       expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
     } finally {
       resetGlobalHookRunner();
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 
   it("does not lend a previous run's source ownership to a reused manager or ordinary append batches", async () => {
-    const dir = tempDirs.make("openclaw-source-reuse-");
-    const scope = {
-      agentId: "main",
-      sessionId: "source-reuse",
-      sessionKey: "agent:main:source-reuse",
-      storePath: path.join(dir, "sessions.json"),
-    };
+    const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope, dir);
     const { tools, catalogRef } = createCodeModeHarness();
@@ -633,7 +645,10 @@ describe("AgentSession runtime and transcript projections", () => {
                     type: "toolCall",
                     id: "reused_id",
                     name: "exec",
-                    arguments: mode === "code" ? { code: source } : { command: source },
+                    arguments:
+                      mode === "code"
+                        ? { title: "Compute the harmless number", code: source }
+                        : { command: source },
                   },
                 ],
                 "toolUse",
@@ -703,7 +718,7 @@ describe("AgentSession runtime and transcript projections", () => {
         first.map((result) => result.messageId),
       );
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
@@ -727,7 +742,7 @@ describe("AgentSession runtime and transcript projections", () => {
         },
       });
     } finally {
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 });

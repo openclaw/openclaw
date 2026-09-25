@@ -58,6 +58,7 @@ import type {
   CodexTurnEnvironmentParams,
   JsonObject,
 } from "./protocol.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -76,7 +77,10 @@ import {
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { CodexThreadClientReplacementError } from "./thread-lifecycle-errors.js";
+import {
+  CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED,
+  CodexThreadClientReplacementError,
+} from "./thread-lifecycle-errors.js";
 import {
   startOrResumeThread,
   type CodexAppServerThreadLifecycleBinding,
@@ -90,19 +94,6 @@ import {
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
-const CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED =
-  "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED";
-
-/** True when a pre-write context restart must replay on the newly selected owner. */
-export function isCodexContextRestartSelectionChangedError(
-  error: unknown,
-): error is Error & { code: typeof CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED
-  );
-}
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
@@ -146,6 +137,7 @@ export async function startCodexAttemptThread(params: {
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   runtimeModelId?: string;
@@ -156,11 +148,13 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   nativeHookRelayRequired?: boolean;
+  nativeModelAdmission?: Parameters<typeof startOrResumeThread>[0]["nativeModelAdmission"];
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   /** Static configured MCP is present on the dynamic surface, so native MCP stays absent. */
   configuredMcpDynamicSurface?: boolean;
@@ -212,6 +206,7 @@ export async function startCodexAttemptThread(params: {
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+          hostedAppsSupported: !isCodexResponsesOAuth(params.startupPreparedAuth),
           scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
         const {
@@ -302,6 +297,7 @@ export async function startCodexAttemptThread(params: {
             }
             const runtimeArtifact = await verifyStartupArtifact({
               client: activeStartupClient,
+              startOptions: params.appServer.start,
               request: params.runtimeArtifactRequest,
               signal: startupAbandonController.signal,
             });
@@ -310,12 +306,16 @@ export async function startCodexAttemptThread(params: {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
               authMode:
-                params.startupPreparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
+                params.startupPreparedAuth?.kind === "api-key" ||
+                isCodexResponsesOAuth(params.startupPreparedAuth)
+                  ? "prepared-api-key"
+                  : "profile",
               authProfileStore: startupRuntimeAuthProfileStore ?? attemptParams.authProfileStore,
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
             let computerUseTools: string[] = [];
+            let computerUseConfig = params.computerUseConfig;
             try {
               const computerUseStatus = await ensureCodexComputerUse({
                 client: activeStartupClient,
@@ -326,6 +326,11 @@ export async function startCodexAttemptThread(params: {
                 signal: startupAbandonController.signal,
               });
               computerUseTools = computerUseStatus.tools;
+              computerUseConfig = {
+                ...computerUseConfig,
+                pluginName: computerUseStatus.pluginName,
+                mcpServerName: computerUseStatus.mcpServerName,
+              };
             } catch (error) {
               if (
                 startupAbandonController.signal.aborted ||
@@ -485,14 +490,17 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                skillsInstructions: params.skillsInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
+                shellPathPrepend: params.shellPathPrepend,
                 disableLoginShell: params.disableLoginShell,
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeHookRelayRequired: params.nativeHookRelayRequired,
+                nativeModelAdmission: params.nativeModelAdmission,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
@@ -555,7 +563,7 @@ export async function startCodexAttemptThread(params: {
               startupSandboxEnvironmentAcquired = false;
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,
-                config: params.computerUseConfig,
+                config: computerUseConfig,
                 tools: computerUseTools,
               });
               startupAttemptSucceeded = true;

@@ -2,8 +2,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
 
@@ -32,7 +33,7 @@ export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolea
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
-/** Warning rows preserve producer-classified advisories in the existing diagnostic ledger. */
+/** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
   const failed = isFailedUpdateStep(step);
@@ -93,11 +94,16 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           },
         ]
       : []),
-    ...warnings.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-      step: text(`warning:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
-      status: "completed" as const,
-      detail: text(detail),
-    })),
+    ...[
+      { kind: "warning", messages: warnings },
+      { kind: "diagnostic", messages: step.diagnostics ?? [] },
+    ].flatMap(({ kind, messages }) =>
+      messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
+        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        status: "completed" as const,
+        detail: text(detail),
+      })),
+    ),
     ...(step.configChanges ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((change, index) => {
       const configChange =
         change.kind === "key"
@@ -113,12 +119,32 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
-    step.status === "completed" && step.step.startsWith("warning:") && step.detail
+export function updateRunWarningMessages(
+  steps: readonly UpdateRunStep[],
+  maxMessages?: number,
+): string[] {
+  const messages = steps.flatMap((step) =>
+    (step.step === "reconcile:settle" ||
+      (step.status === "completed" && step.step.startsWith("warning:"))) &&
+    step.detail
       ? [step.detail]
       : [],
   );
+  if (maxMessages === undefined) {
+    return messages;
+  }
+  // The operator's restart command must survive later advisory Doctor warnings.
+  const serviceWarning = steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+  return (
+    serviceWarning
+      ? [
+          serviceWarning,
+          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
+        ]
+      : messages.slice(-maxMessages)
+  ).slice(0, maxMessages);
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

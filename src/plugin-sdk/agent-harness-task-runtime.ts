@@ -25,18 +25,106 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import {
+  captureAgentHarnessCompletionCustodyOwner,
+  isAgentHarnessCompletionCustodyCurrent,
+  runWithAgentHarnessCompletionCustody,
+  type AgentHarnessCompletionCustody,
+} from "../tasks/agent-harness-completion-custody.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "../tasks/agent-harness-task-runtime-scope.js";
 import {
+  DetachedTaskAssignmentUnsupportedError,
+  SUBAGENT_KILL_TASK_ERROR,
+} from "../tasks/detached-task-runtime-contract.js";
+import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
+import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
   setDetachedTaskDeliveryStatusByRunId,
+  transitionTaskAssignment,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
+import {
+  captureTaskPersistenceReceipt,
+  matchesTaskPersistenceReceipt,
+} from "../tasks/task-registry-records.js";
+import type { TaskPersistenceReceipt, TaskRunTransition } from "../tasks/task-registry.types.js";
+
+export { createAgentHarnessCommandTask } from "../tasks/agent-harness-command-task.js";
+
+export { createAgentHarnessTaskEventSink } from "../tasks/agent-harness-completion-custody.js";
+export type { AgentHarnessCompletionCustody };
+export {
+  DetachedTaskAssignmentUnsupportedError as AgentHarnessTaskAssignmentUnsupportedError,
+  DetachedTaskRuntimeOwnerRetiredError as AgentHarnessTaskAssignmentOwnerRetiredError,
+} from "../tasks/detached-task-runtime-contract.js";
+export type { TaskPersistenceReceipt as AgentHarnessTaskAssignment };
+export {
+  captureTaskPersistenceReceipt as captureAgentHarnessTaskAssignment,
+  matchesTaskPersistenceReceipt as matchesAgentHarnessTaskAssignment,
+} from "../tasks/task-registry-records.js";
+
+type AssignmentOwnership = {
+  /** Pin the record returned by admission, never rediscover it at completion. */
+  expectedTask?: TaskPersistenceReceipt;
+  completionCustody?: AgentHarnessCompletionCustody;
+};
+
+type HarnessTaskContent = {
+  task?: string;
+  label?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  eventSummary?: string | null;
+  error?: string;
+};
+
+/** Keep native task lifecycle receipts durable, not their temporary conversation content. */
+function projectHarnessTaskContentForPersistence<T extends HarnessTaskContent>(
+  requesterSessionKey: string,
+  params: T,
+): T {
+  if (!isIncognitoSessionKey(requesterSessionKey)) {
+    return params;
+  }
+  return {
+    ...params,
+    ...(params.task !== undefined ? { task: "Incognito task" } : {}),
+    ...(params.label !== undefined ? { label: "Incognito task" } : {}),
+    ...(params.progressSummary !== undefined ? { progressSummary: null } : {}),
+    ...(params.terminalSummary !== undefined ? { terminalSummary: null } : {}),
+    ...(params.eventSummary !== undefined ? { eventSummary: null } : {}),
+    ...(params.error !== undefined
+      ? {
+          error: params.error === SUBAGENT_KILL_TASK_ERROR ? params.error : "Incognito task error.",
+        }
+      : {}),
+  };
+}
+
+/** Retains admitted completion work for this exact physical requester lifecycle. */
+export function captureAgentHarnessCompletionCustody(
+  scope: AgentHarnessTaskRuntimeScope,
+): Promise<AgentHarnessCompletionCustody | undefined> {
+  assertAgentHarnessTaskRuntimeScope(scope);
+  const entry = loadRequesterSessionEntry(scope.requesterSessionKey).entry;
+  const expected = { sessionId: entry?.sessionId, lifecycleRevision: entry?.lifecycleRevision };
+  return captureAgentHarnessCompletionCustodyOwner(scope, () => {
+    const current = loadRequesterSessionEntry(scope.requesterSessionKey).entry;
+    if (
+      current?.sessionId !== expected.sessionId ||
+      current?.lifecycleRevision !== expected.lifecycleRevision
+    ) {
+      throw new Error("Harness completion requester lifecycle was replaced");
+    }
+  });
+}
 
 export type { TaskRecord as AgentHarnessTaskRecord };
 export type { AgentHarnessTaskRuntimeScope };
@@ -79,22 +167,27 @@ export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
 export type AgentHarnessScopedRecordTaskRunProgressParams = Omit<
   RecordTaskRunProgressParams,
   "runtime" | "sessionKey"
->;
+> &
+  AssignmentOwnership;
 
 /** Finalization params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedFinalizeTaskRunParams = Omit<
   FinalizeTaskRunParams,
   "runtime" | "sessionKey"
->;
+> &
+  AssignmentOwnership;
 
 /** Delivery-status params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
   SetDeliveryStatusParams,
   "runtime" | "sessionKey"
->;
+> &
+  AssignmentOwnership;
 
 /** Scoped task runtime that prevents callers from mutating tasks outside their harness scope. */
 export type AgentHarnessTaskRuntime = {
+  /** Check the captured runtime before accepting work that requires exact settlement. */
+  assertTaskAssignmentSupported(): void;
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
   tryCreateRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord | null;
   recordTaskRunProgressByRunId(params: AgentHarnessScopedRecordTaskRunProgressParams): TaskRecord[];
@@ -127,13 +220,37 @@ export function createAgentHarnessTaskRuntime(
   // Remote and unidentified harnesses must not inherit the Gateway's identity.
   const executionOwner =
     params.executionPid === undefined ? undefined : captureTaskExecutionOwner(params.executionPid);
+  const runtimeOwner = captureDetachedTaskRuntimeOwner();
   const assertRunId = (runId: string) => assertScopedRunId(runId, runIdPrefix);
+  const transitionAssignment = (
+    transition: TaskRunTransition,
+    ownership: AssignmentOwnership & { expectedTask: TaskPersistenceReceipt },
+  ) =>
+    transitionTaskAssignment({
+      transition,
+      expectedTask: ownership.expectedTask,
+      assertCurrent() {
+        runtimeOwner.assertCurrent();
+        assertAgentHarnessTaskRuntimeScope(scope);
+        if (
+          ownership.expectedTask.runtime !== runtime ||
+          ownership.expectedTask.ownerKey !== requesterSessionKey ||
+          ownership.expectedTask.scopeKind !== "session" ||
+          ownership.expectedTask.runId !== transition.params.runId ||
+          (taskKind && ownership.expectedTask.taskKind !== taskKind) ||
+          (ownership.completionCustody &&
+            !isAgentHarnessCompletionCustodyCurrent(ownership.completionCustody, scope))
+        ) {
+          throw new Error("Harness task assignment owner is no longer current");
+        }
+      },
+    });
   const tryCreateRunningTaskRun = (
     taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
   ): TaskRecord | null => {
     assertRunId(taskParams.runId);
     return createRunningTaskRun({
-      ...taskParams,
+      ...projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams),
       runtime,
       ...(taskKind ? { taskKind } : {}),
       requesterSessionKey,
@@ -143,6 +260,12 @@ export function createAgentHarnessTaskRuntime(
     });
   };
   return {
+    assertTaskAssignmentSupported() {
+      runtimeOwner.assertCurrent();
+      if (runtimeOwner.runtime && !runtimeOwner.runtime.transitionTaskAssignment) {
+        throw new DetachedTaskAssignmentUnsupportedError();
+      }
+    },
     createRunningTaskRun(taskParams) {
       const task = tryCreateRunningTaskRun(taskParams);
       if (!task) {
@@ -153,24 +276,48 @@ export function createAgentHarnessTaskRuntime(
     tryCreateRunningTaskRun,
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
+      const { expectedTask, completionCustody, ...progress } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      if (expectedTask) {
+        return transitionAssignment(
+          { kind: "state", params: { ...progress, runtime, sessionKey: requesterSessionKey } },
+          { expectedTask, completionCustody },
+        );
+      }
       return recordTaskRunProgressByRunId({
-        ...taskParams,
+        ...progress,
         runtime,
         sessionKey: requesterSessionKey,
       });
     },
     finalizeTaskRunByRunId(taskParams) {
       assertRunId(taskParams.runId);
+      const { expectedTask, completionCustody, ...terminal } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      if (expectedTask) {
+        return transitionAssignment(
+          { kind: "state", params: { ...terminal, runtime, sessionKey: requesterSessionKey } },
+          { expectedTask, completionCustody },
+        );
+      }
       return finalizeTaskRunByRunId({
-        ...taskParams,
+        ...terminal,
         runtime,
         sessionKey: requesterSessionKey,
       });
     },
     setDetachedTaskDeliveryStatusByRunId(taskParams) {
       assertRunId(taskParams.runId);
+      const { expectedTask, completionCustody, ...delivery } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      if (expectedTask) {
+        return transitionAssignment(
+          { kind: "delivery", params: { ...delivery, runtime, sessionKey: requesterSessionKey } },
+          { expectedTask, completionCustody },
+        );
+      }
       return setDetachedTaskDeliveryStatusByRunId({
-        ...taskParams,
+        ...delivery,
         runtime,
         sessionKey: requesterSessionKey,
       });
@@ -191,6 +338,9 @@ export function createAgentHarnessTaskRuntime(
 /** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessTaskCompletion(params: {
   scope: AgentHarnessTaskRuntimeScope;
+  /** Retained during live admission for this assignment, released by its lifecycle owner. */
+  completionCustody?: AgentHarnessCompletionCustody;
+  expectedTask?: TaskPersistenceReceipt;
   childSessionKey: string;
   childSessionId: string;
   announceId: string;
@@ -225,21 +375,31 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     );
   const ownedTasks = readOwnedTasks();
   const sourceTask = ownedTasks.length === 1 ? ownedTasks[0] : undefined;
+  const taskReceipt =
+    params.expectedTask ?? (sourceTask && captureTaskPersistenceReceipt(sourceTask));
   const isTaskCurrent = () => {
     const current = readOwnedTasks();
-    if (!sourceTask) {
+    if (!taskReceipt) {
       return ownedTasks.length === 0 && current.length === 0;
     }
     const task = current[0];
     return (
       current.length === 1 &&
-      task?.taskId === sourceTask.taskId &&
+      task !== undefined &&
+      taskReceipt !== undefined &&
+      matchesTaskPersistenceReceipt(task, taskReceipt) &&
       task.status === params.status &&
       task.deliveryStatus === "pending"
     );
   };
   const expectedRequester = params.expectedRequester;
   const isRequesterCurrent = () => {
+    if (
+      params.completionCustody &&
+      !isAgentHarnessCompletionCustodyCurrent(params.completionCustody, scope)
+    ) {
+      return false;
+    }
     if (!expectedRequester) {
       return true;
     }
@@ -249,7 +409,8 @@ export async function deliverAgentHarnessTaskCompletion(params: {
       current.lifecycleRevision === expectedRequester.lifecycleRevision
     );
   };
-  const isSourceSessionEffectsAllowed = () => isRequesterCurrent() && isTaskCurrent();
+  const isSourceSessionEffectsAllowed = () =>
+    !params.completionCustody?.signal.aborted && isRequesterCurrent() && isTaskCurrent();
   const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
   let directOrigin = scope.requesterOrigin;
   if (!requesterIsSubagent) {
@@ -352,13 +513,22 @@ export async function deliverAgentHarnessTaskCompletion(params: {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
-      signal: params.signal,
+      signal: params.completionCustody
+        ? AbortSignal.any([
+            params.completionCustody.signal,
+            ...(params.signal ? [params.signal] : []),
+          ])
+        : params.signal,
     });
   };
   const resolveGatewayContext = getGatewayContextResolver(scope);
-  return resolveGatewayContext
-    ? await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
-    : await deliver();
+  const deliverInGateway = () =>
+    resolveGatewayContext
+      ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
+      : deliver();
+  return params.completionCustody
+    ? await runWithAgentHarnessCompletionCustody(params.completionCustody, scope, deliverInGateway)
+    : await deliverInGateway();
 }
 
 function mapHarnessCompletionStatus(

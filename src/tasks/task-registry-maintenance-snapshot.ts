@@ -2,14 +2,14 @@ import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
-import type { TaskRegistryRead } from "./task-registry-read.js";
+import { isTaskRegistryTaskSettled, type TaskRegistryRead } from "./task-registry-read.js";
 import { cloneTaskRecord, compareTasksNewestFirst } from "./task-registry-records.js";
 import { tasks } from "./task-registry-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 export type TaskRegistryMaintenanceRead = Pick<
   TaskRegistryRead,
-  "assertOwnerCurrent" | "assertCurrent" | "isTaskSettled"
+  "assertOwnerCurrent" | "assertCurrent"
 >;
 
 export const TASK_MAINTENANCE_BATCH_SIZE = 25;
@@ -27,10 +27,8 @@ export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenance
   cronHistoryOverflowTaskIds: ReadonlySet<string>;
 } {
   read.assertCurrent();
-  const ordered = [...tasks.values()]
-    .map((task, insertionIndex) => ({ task, createdAt: task.createdAt, insertionIndex }))
-    .toSorted(compareTasksNewestFirst)
-    .map(({ task }) => task);
+  // Stable sorting keeps later insertions first when creation timestamps match.
+  const ordered = [...tasks.values()].toReversed().toSorted(compareTasksNewestFirst);
   return {
     taskIds: ordered.map((task) => task.taskId),
     cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(ordered),
@@ -38,12 +36,11 @@ export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenance
 }
 
 export function getTaskRegistryMaintenanceTask(
-  read: TaskRegistryMaintenanceRead,
   taskId: string,
   now: number,
   cronHistoryOverflowTaskIds: ReadonlySet<string>,
 ): TaskRecord | undefined | "needs-preparation" {
-  if (!read.isTaskSettled(taskId)) {
+  if (!isTaskRegistryTaskSettled(taskId)) {
     return "needs-preparation";
   }
   const task = tasks.get(taskId);
@@ -68,6 +65,7 @@ export async function visitTaskRegistryMaintenanceTasks(
     cronHistoryOverflowTaskIds: ReadonlySet<string>,
     assertOwnerCurrent: () => void,
   ) => Promise<void>,
+  prepareBatch?: (tasks: readonly TaskRecord[], now: number) => Promise<void>,
 ): Promise<{ read: TaskRegistryMaintenanceRead; deferred: number }> {
   const prepareRead = async (previous?: TaskRegistryMaintenanceRead) => {
     previous?.assertOwnerCurrent();
@@ -92,22 +90,24 @@ export async function visitTaskRegistryMaintenanceTasks(
     }
     if (needsPreparation) {
       read = await prepareRead(read);
+      // Revalidate after resuming; selection stays synchronous until the next await.
+      read.assertCurrent();
       needsPreparation = false;
     }
-    let selected = source.getTaskRegistryMaintenanceTask(
-      read,
-      taskId,
-      now,
-      cronHistoryOverflowTaskIds,
-    );
+    if (prepareBatch && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
+      const candidates = taskIds.slice(index, index + TASK_MAINTENANCE_BATCH_SIZE).flatMap((id) => {
+        const task = source.getTaskRegistryMaintenanceTask(id, now, cronHistoryOverflowTaskIds);
+        return task && task !== "needs-preparation" ? [task] : [];
+      });
+      await prepareBatch(candidates, now);
+      read = await prepareRead(read);
+      read.assertCurrent();
+    }
+    let selected = source.getTaskRegistryMaintenanceTask(taskId, now, cronHistoryOverflowTaskIds);
     if (selected === "needs-preparation") {
       read = await prepareRead(read);
-      selected = source.getTaskRegistryMaintenanceTask(
-        read,
-        taskId,
-        now,
-        cronHistoryOverflowTaskIds,
-      );
+      read.assertCurrent();
+      selected = source.getTaskRegistryMaintenanceTask(taskId, now, cronHistoryOverflowTaskIds);
       if (selected === "needs-preparation") {
         deferred += 1;
         continue;

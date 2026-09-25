@@ -30,6 +30,12 @@ shared `message` tool. Your plugin owns:
 - **Threading** - how replies are threaded
 - **Heartbeat typing** - optional typing/busy signals for heartbeat delivery
   targets
+- **Formatting contract** - optional `agentPrompt.inboundFormattingHints`,
+  resolved per delivering account. Despite its name, core gives it to every
+  OpenClaw agent turn whose delivery target is the channel: replies,
+  heartbeats, cron announces, and subagent announces. A `message` tool send to
+  another channel does not get that channel's rules, and external ACP agents do
+  not receive it. Keep all formatting rules in this one hook.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -136,6 +142,21 @@ raw callback string. Actor and source-message checks remain channel-owned.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
+
+    Operational account reads can be asynchronous. Define
+    `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
+    durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
+    the matching operational configured-state check. These optional callbacks
+    return a Promise of the same result as their synchronous counterparts.
+    Core awaits them when present; a rejection stays an error and never retries
+    the synchronous callback. Keep synchronous counterparts for older hosts and
+    external consumers of the existing contract.
+
+    Prepare current credentials for each operation, and revalidate live authority
+    after awaited preparation before any side effect. Account objects and registry
+    generations are not credential caches. Read-only `inspectAccount` and
+    config-only bootstrap activation remain separate; persisted credentials alone
+    do not enable a channel.
 
     Create `src/channel.ts`:
 

@@ -75,7 +75,7 @@ describe("session lifecycle persistence owner", () => {
     await owner.drain();
   });
 
-  it("preserves private restart-recovery metadata for the durable write", async () => {
+  it("preserves private lifecycle metadata for the durable write", async () => {
     persistLifecycle.mockResolvedValue(undefined);
     const event = {
       runId: "run-recovery",
@@ -88,6 +88,8 @@ describe("session lifecycle persistence owner", () => {
     Object.defineProperties(event, {
       lifecycleGeneration: { value: "generation-recovery", enumerable: false },
       mainSessionRestartRecovery: { value: true, enumerable: false },
+      controlUiVisible: { value: true, enumerable: false },
+      isHeartbeat: { value: false, enumerable: false },
     });
     const owner = createSessionLifecyclePersistenceOwner();
 
@@ -98,6 +100,8 @@ describe("session lifecycle persistence owner", () => {
       event: expect.objectContaining({
         lifecycleGeneration: "generation-recovery",
         mainSessionRestartRecovery: true,
+        controlUiVisible: true,
+        isHeartbeat: false,
       }),
     });
     await owner.drain();

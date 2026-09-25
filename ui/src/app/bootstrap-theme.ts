@@ -1,3 +1,7 @@
+import {
+  BUILTIN_THEMES,
+  resolveThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -13,6 +17,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
+import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
@@ -22,6 +27,29 @@ import {
   resolveTypefaces,
   syncTypefaceStylesheets,
 } from "./typography.ts";
+
+function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
+  return (
+    catalogTheme?.branding ??
+    resolveThemeBranding(BUILTIN_THEMES.find((theme) => theme.id === settings.theme))
+  );
+}
+
+function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
+  if (typeof globalThis.matchMedia !== "function") {
+    return undefined;
+  }
+  const mediaQuery = globalThis.matchMedia(query);
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }
+  if (typeof mediaQuery.addListener === "function") {
+    mediaQuery.addListener(onChange);
+    return () => mediaQuery.removeListener(onChange);
+  }
+  return undefined;
+}
 
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
   if (typeof document === "undefined") {
@@ -35,6 +63,13 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  const branding = themeBranding(settings, catalogTheme);
+  root.dataset.themeMascot = branding.mascot;
+  if (branding.avatarHat) {
+    root.dataset.themeAvatarHat = branding.avatarHat;
+  } else {
+    delete root.dataset.themeAvatarHat;
+  }
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
@@ -59,7 +94,6 @@ export function createApplicationTheme(
   let settings: UiPreferences = initialPreferences;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
-  let chromeBreakpointCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
   let presentationGeneration = 0;
@@ -70,12 +104,43 @@ export function createApplicationTheme(
   let disposed = false;
   const publish = () => {
     const generation = ++presentationGeneration;
+    setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
+      const previousMascot =
+        typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
+      const previousHat =
+        typeof document === "undefined"
+          ? undefined
+          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
+      if (
+        typeof document !== "undefined" &&
+        (previousMascot !== document.documentElement.dataset.themeMascot ||
+          previousHat !== document.documentElement.dataset.themeAvatarHat)
+      ) {
+        for (const listener of listeners) {
+          listener();
+        }
+      }
+      if (
+        typeof document !== "undefined" &&
+        (previousMascot === "none" || document.documentElement.dataset.themeMascot === "none")
+      ) {
+        void import("./control-ui-environment-presentation.runtime.ts").then(
+          ({ invalidateControlUiFaviconPalette, syncControlUiFavicon }) => {
+            // Before the shell connects, the theme still owns palette readiness.
+            // Read the latest presentation when this lazy runtime becomes available.
+            if (!disposed) {
+              invalidateControlUiFaviconPalette();
+              syncControlUiFavicon();
+            }
+          },
+        );
+      }
     });
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
@@ -121,37 +186,20 @@ export function createApplicationTheme(
 
   const syncSystemThemeListener = () => {
     detachSystemThemeListener();
-    if (settings.themeMode !== "system" || typeof globalThis.matchMedia !== "function") {
+    if (settings.themeMode !== "system") {
       return;
     }
-    const mediaQuery = globalThis.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => {
+    systemThemeCleanup = subscribeMediaQuery("(prefers-color-scheme: light)", () => {
       if (settings.themeMode === "system") {
         publish();
       }
-    };
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", onChange);
-      systemThemeCleanup = () => mediaQuery.removeEventListener("change", onChange);
-    } else if (typeof mediaQuery.addListener === "function") {
-      mediaQuery.addListener(onChange);
-      systemThemeCleanup = () => mediaQuery.removeListener(onChange);
-    }
+    });
   };
 
-  if (typeof globalThis.matchMedia === "function") {
-    const mediaQuery = globalThis.matchMedia(
-      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-    );
-    const onChange = () => syncControlUiSystemChrome();
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", onChange);
-      chromeBreakpointCleanup = () => mediaQuery.removeEventListener("change", onChange);
-    } else if (typeof mediaQuery.addListener === "function") {
-      mediaQuery.addListener(onChange);
-      chromeBreakpointCleanup = () => mediaQuery.removeListener(onChange);
-    }
-  }
+  const chromeBreakpointCleanup = subscribeMediaQuery(
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    () => syncControlUiSystemChrome(),
+  );
 
   const refresh = () => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
@@ -184,6 +232,9 @@ export function createApplicationTheme(
   void loadCatalog();
 
   return {
+    get branding() {
+      return themeBranding(settings, catalog?.theme(settings.theme));
+    },
     get catalog() {
       if (!catalogRequested) {
         catalogRequested = true;

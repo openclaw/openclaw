@@ -9,10 +9,10 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  findTranscriptEvent,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -98,6 +98,7 @@ export async function commitBackgroundResultToSession(params: {
       }
       const unavailable = resolveSessionWorkStartError(sessionKey, current, {
         expectedSessionId,
+        purpose: "accepted-result-settlement",
       });
       if (unavailable) {
         return { ok: false, reason: unavailable };
@@ -110,10 +111,7 @@ export async function commitBackgroundResultToSession(params: {
       };
       // A retry owns the original committed payload, including its managed-media IDs.
       // Restaging media would conflict with the transcript's exact replay contract.
-      const prior = await findTranscriptEvent(
-        scope,
-        (event) => readTranscriptEventMessage(event)?.idempotencyKey === idempotencyKey,
-      );
+      const prior = await findTranscriptEvent(scope, { kind: "idempotency", key: idempotencyKey });
       const priorMessage = prior && readTranscriptEventMessage(prior.event);
       const priorId = prior && readTranscriptEventId(prior.event);
       if (prior && (!priorMessage || !priorId)) {

@@ -152,6 +152,7 @@ export function createApplicationGateway(
         ? snapshot.suspensionPhase
         : undefined;
       snapshot.pluginCapabilities = null;
+      snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
     if (metadataObserver.synchronize(previous, snapshot)) {
@@ -191,6 +192,29 @@ export function createApplicationGateway(
             setSnapshot({ lastError: formatUiError(error) });
           }
         });
+    } else if (event.event === "chat.metadata.changed") {
+      const publication = asOptionalRecord(event.payload);
+      const agentId = publication?.agentId;
+      const usageUpdatedAt = publication?.usageUpdatedAt;
+      if (
+        typeof agentId === "string" &&
+        typeof usageUpdatedAt === "number" &&
+        usageUpdatedAt > (snapshot.usagePublications?.[agentId]?.usageUpdatedAt ?? 0)
+      ) {
+        setSnapshot({
+          usagePublications: {
+            ...snapshot.usagePublications,
+            [agentId]: {
+              usageUpdatedAt,
+              committedAt:
+                publication?.usageRefreshFailed === true
+                  ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+                  : usageUpdatedAt,
+              usageRefreshFailed: publication?.usageRefreshFailed === true || undefined,
+            },
+          },
+        });
+      }
     } else if (event.event === "gateway.suspension") {
       const suspensionPhase = readSuspensionPhase(event.payload);
       if (suspensionPhase) {
@@ -489,6 +513,7 @@ export function createApplicationGateway(
           : undefined;
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        const closeReason = formatUiExternalText(reason);
         setSnapshot({
           client: nextClient,
           phase:
@@ -512,7 +537,11 @@ export function createApplicationGateway(
             ? null
             : error?.message
               ? formatUiError(error.message)
-              : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
+              : closeReason
+                ? `disconnected (${code}): ${closeReason}`
+                : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
+                    code: String(code),
+                  }),
           lastErrorCode: startupPending ? null : lastErrorCode,
           lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });

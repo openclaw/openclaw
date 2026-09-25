@@ -52,7 +52,7 @@ import {
 } from "./task-registry.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -81,7 +81,7 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
-import { listTasksForOwnerOrRequesterSessionKeyForStatus } from "./task-status-access.js";
+import { getGeneratedMediaTaskIdsForSessionKey } from "./task-status-access.js";
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -205,7 +205,7 @@ describe("task-registry store runtime", () => {
     testState.applyEnv();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     resetLogger();
@@ -438,11 +438,12 @@ describe("task-registry store runtime", () => {
     expect(listTaskRecords()[0]?.detail).toEqual(["active detail"]);
   });
 
-  it("selects session status tasks before cloning unrelated details", () => {
+  it("snapshots generated-media tasks for exact owners and requesters without cloning unrelated details", () => {
     const sessionKey = "agent:main:cron:job:run:run-id";
     const unrelatedDetail = { history: "unrelated task output" };
     const base: TaskRecord = {
       ...createStoredTask(),
+      taskKind: "image_generation",
       requesterSessionKey: "other-requester",
       ownerKey: "other-owner",
       detail: [["selected detail"]],
@@ -471,14 +472,10 @@ describe("task-registry store runtime", () => {
     expect(getTaskById("owner-only")?.taskId).toBe("owner-only");
     const clone = vi.spyOn(globalThis, "structuredClone");
     try {
-      const selected = listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey);
-      expect(selected.map((task) => task.taskId)).toEqual([
-        "requester-only",
-        "owner-only",
-        "older",
-      ]);
+      const selected = getGeneratedMediaTaskIdsForSessionKey(sessionKey);
+      expect([...selected]).toEqual(["requester-only", "owner-only", "older"]);
       expect(clone).not.toHaveBeenCalledWith(unrelatedDetail);
-      const detail = selected[0]?.detail;
+      const detail = listTaskRecords((task) => selected.has(task.taskId))[0]?.detail;
       if (!Array.isArray(detail) || !Array.isArray(detail[0])) {
         throw new Error("expected nested task detail");
       }
@@ -979,19 +976,10 @@ describe("task-registry store runtime", () => {
   });
 
   it("uses atomic task-plus-delivery store methods", async () => {
-    const upsertTaskWithDeliveryState = vi.fn();
-    const deleteTaskWithDeliveryState = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        upsertTaskWithDeliveryState,
-        deleteTaskWithDeliveryState,
-      },
-    });
+    const store = createInMemoryTaskRegistryStore();
+    const upsertTaskWithDeliveryState = vi.spyOn(store, "upsertTaskWithDeliveryState");
+    const deleteTaskWithDeliveryState = vi.spyOn(store, "deleteTaskWithDeliveryState");
+    configureTaskRegistryRuntime({ store });
 
     const created = createTaskRecord({
       runtime: "acp",
@@ -1005,7 +993,7 @@ describe("task-registry store runtime", () => {
       deliveryStatus: "pending",
     });
 
-    await maybeDeliverTaskStateChangeUpdate(created.taskId, {
+    await maybeDeliverTaskStateChangeUpdate(created, {
       at: 200,
       kind: "progress",
       summary: "working",

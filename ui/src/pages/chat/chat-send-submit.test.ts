@@ -19,7 +19,7 @@ import {
   findChatSendPayload,
   makeChatHost,
 } from "./chat-host.test-support.ts";
-import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -33,6 +33,36 @@ useChatSendBrowserFixture();
 
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
+
+  it("keeps an idle Goal behind an older queued message", async () => {
+    const host = makeChatHost({
+      chatRunId: "active-run",
+      chatMessage: "Start this objective after the queued work",
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started", runId: "queued-run" },
+      },
+    });
+    await handleSendChat(host, "older queued input", { followUpMode: "queue" });
+    host.chatRunId = null;
+
+    await handleSendChat(host, undefined, { intent });
+
+    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.[1]).toMatchObject({ message: "older queued input" });
+    expect(sends[0]?.[1]).not.toHaveProperty("intent");
+    expect(host.chatQueue).toContainEqual(
+      expect.objectContaining({
+        text: "Start this objective after the queued work",
+        intent,
+        sendAttempts: 0,
+      }),
+    );
+  });
 
   it.each(["pause the rollout", "/stop", "  /goal clear\nkeep   this literal  "])(
     "sends %j as an objective without command interpretation",
@@ -747,7 +777,7 @@ describe("handleSendChat session ownership", () => {
         );
         expect(host.chatQueue).toEqual([]);
         readiness.mockReturnValue(true);
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
       }
       expect(host.chatQueue).toMatchObject([
         { id: original.id, text: "later turn", sendAttempts: 0, sendState },

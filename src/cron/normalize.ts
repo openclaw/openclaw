@@ -400,50 +400,23 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("scheduledToolPolicy" in base) {
-    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
-    if (scheduledToolPolicy) {
-      next.scheduledToolPolicy = scheduledToolPolicy;
-    } else {
-      delete next.scheduledToolPolicy;
+  // Preserve omitted patch fields; each authority owner decides whether an
+  // authored value is retained, discarded, or converted to recovery state.
+  for (const [field, normalize] of [
+    ["scheduledToolPolicy", normalizeCronScheduledToolPolicy],
+    ["toolsAllowProvenance", normalizeCronToolsAllowProvenance],
+    ["toolsAllowExecTarget", normalizeCronToolsAllowExecTarget],
+    ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
+    ["runtimeAuthority", normalizeCronRuntimeAuthority],
+  ] as const) {
+    if (!(field in base)) {
+      continue;
     }
-  }
-
-  if ("toolsAllowProvenance" in base) {
-    const provenance = normalizeCronToolsAllowProvenance(base.toolsAllowProvenance);
-    if (provenance) {
-      next.toolsAllowProvenance = provenance;
+    const value = normalize(base[field]);
+    if (value) {
+      next[field] = value;
     } else {
-      delete next.toolsAllowProvenance;
-    }
-  }
-
-  if ("toolsAllowExecTarget" in base) {
-    const execTarget = normalizeCronToolsAllowExecTarget(base.toolsAllowExecTarget);
-    if (execTarget) {
-      next.toolsAllowExecTarget = execTarget;
-    } else {
-      delete next.toolsAllowExecTarget;
-    }
-  }
-
-  if ("toolsAllowExecTargetRequirement" in base) {
-    const requirement = normalizeCronToolsAllowExecTargetRequirement(
-      base.toolsAllowExecTargetRequirement,
-    );
-    if (requirement) {
-      next.toolsAllowExecTargetRequirement = requirement;
-    } else {
-      delete next.toolsAllowExecTargetRequirement;
-    }
-  }
-
-  if ("runtimeAuthority" in base) {
-    const runtimeAuthority = normalizeCronRuntimeAuthority(base.runtimeAuthority);
-    if (runtimeAuthority) {
-      next.runtimeAuthority = runtimeAuthority;
-    } else {
-      delete next.runtimeAuthority;
+      delete next[field];
     }
   }
   if (base.runtimeAuthorityRecoveryRequired === true) {

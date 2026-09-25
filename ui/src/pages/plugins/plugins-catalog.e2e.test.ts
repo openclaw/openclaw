@@ -20,6 +20,71 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
+  it.each([
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "shows plugin artwork and opens its catalog page from search at $width px",
+    async (viewport) => {
+      const context = await newContext(viewport);
+      const page = await context.newPage();
+      await page.emulateMedia({ colorScheme: "dark" });
+      const gatewayUrl = server.baseUrl.replace(/^http/u, "ws");
+      await page.addInitScript((url) => {
+        window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: url };
+      }, gatewayUrl);
+      await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.list": inventory([
+            {
+              ...remoteIconPlugin,
+              id: "matrix",
+              name: "Matrix",
+              clawhubPackage: "matrix",
+              catalogId: "ch_bWF0cml4",
+            },
+          ]),
+        },
+      });
+      let iconAuthorization = "";
+      await page.route("**/__openclaw__/plugin-icon/matrix", async (route) => {
+        iconAuthorization = route.request().headers().authorization ?? "";
+        await route.fulfill({
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="#f97316"/></svg>',
+          contentType: "image/svg+xml",
+        });
+      });
+      try {
+        await page.goto(`${server.baseUrl}chat`);
+        await page.keyboard.press("ControlOrMeta+K");
+        await page.locator(".cmd-palette__input").fill("Matrix");
+        const result = page
+          .locator('.cmd-palette__item[role="option"]')
+          .filter({ hasText: "Matrix" });
+        await result.waitFor();
+        await expect
+          .poll(() => page.locator(".cmd-palette__results").getAttribute("aria-busy"))
+          .toBe("false");
+        await captureScreenshot(page, `palette-plugin-search-${viewport.width}.png`, "viewport");
+        const icon = result.locator(".cmd-palette__plugin-icon img");
+        await icon.waitFor();
+        await expect
+          .poll(() => icon.evaluate((image: HTMLImageElement) => image.naturalWidth))
+          .toBeGreaterThan(0);
+        expect(iconAuthorization).toBe("Bearer e2e-device-token");
+        await captureScreenshot(page, `palette-plugin-${viewport.width}.png`, "viewport");
+        await result.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/plugins/ch_bWF0cml4");
+        await page.getByRole("heading", { level: 1, name: "Matrix", exact: true }).waitFor();
+        await captureScreenshot(page, `palette-plugin-detail-${viewport.width}.png`, "viewport");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("finds an installed plugin by scoped package identity and opens it by keyboard", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -102,7 +167,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       });
       await toggle.waitFor();
       expect(await toggle.getAttribute("aria-disabled")).toBe("true");
-      for (const name of ["Reload Calendar Plus", "Uninstall Calendar Plus"]) {
+      for (const name of ["Uninstall Calendar Plus"]) {
         const action = page.getByRole("button", { name, exact: true });
         await action.waitFor();
         expect(await action.getAttribute("aria-disabled")).toBe("true");

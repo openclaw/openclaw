@@ -15,6 +15,7 @@ import {
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -157,7 +158,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
         `pr_gh_plain() { [ "$*" = writer-login ] || return 99; printf 'fixture-user\\n'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         provisionWorktreeFixture,
-        'pr_meta_json() { local head; head=$(git rev-parse refs/pull/42/head); jq -cn --arg head "$head" \'{number:42,title:"fixture",url:"https://example.invalid/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
+        'pr_meta_json() { local head base; head=$(git rev-parse refs/pull/42/head); base=$(git rev-parse refs/heads/main); jq -cn --arg head "$head" --arg base "$base" \'{number:42,title:"fixture",url:"https://github.com/fixture/repo/pull/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",baseRefOid:$base,baseRepository:{id:"R_fixture",databaseId:1,nameWithOwner:"fixture/repo",url:"https://github.com/fixture/repo"},isCrossRepository:false,headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
         'pr_gh() { if [ "$#" = 5 ] && [ "$1 $2 $3 $4" = "pr view 42 --json" ]; then pr_meta_json 42 | jq --arg fields "$5" \'with_entries(select(.key as $key | $fields | split(",") | index($key)))\'; else echo "Unexpected fixture GitHub request" >&2; return 99; fi; }',
         ...commands,
       ].join("\n"),
@@ -167,7 +168,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
       reviewScript,
       fixture.root,
     ],
-    { cwd: fixture.root, encoding: "utf8", env: { ...process.env, ...env } },
+    { cwd: fixture.root, encoding: "utf8", env: { ...createIndependentPrFixtureEnv(), ...env } },
   );
 }
 
@@ -278,7 +279,11 @@ describePosix("scripts/pr worktree containment", () => {
                   fixture.root,
                   String(pr),
                 ],
-                { cwd: fixture.root, stdio: ["ignore", "pipe", "pipe"] },
+                {
+                  cwd: fixture.root,
+                  env: createIndependentPrFixtureEnv(),
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
               );
               let output = "";
               child.stdout.on("data", (chunk) => {

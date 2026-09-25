@@ -9,6 +9,7 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -26,10 +27,12 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
+import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
@@ -154,6 +157,9 @@ export async function prepareGatewayLifecycle(params: {
     streamBroker: nodeDesktopStreamBroker,
   });
   nodeDesktopServiceRef.current = nodeDesktopService;
+  workerPlacementRuntime?.bindNodeWorkerAvailability((nodeId, options) =>
+    waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options),
+  );
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
@@ -329,6 +335,18 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
     isConnectionActive,
+    prepareRead: async (connId, session) => {
+      const client = clients.getByConnectionId(connId);
+      return client
+        ? await prepareControlUiSessionPrRead({
+            client,
+            ...session,
+            getRuntimeConfig,
+            getSessionRowProjection: runtime.getSessionRowProjection,
+            isCurrentClient: () => clients.getByConnectionId(connId) === client,
+          })
+        : undefined;
+    },
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     clients,
@@ -375,11 +393,12 @@ export async function prepareGatewayLifecycle(params: {
   const healthWork = new AsyncWorkScope();
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
     if (lifecycle.closePreludeStarted) {
-      return;
+      return params.pluginMetadata.beginClose();
     }
-    params.pluginMetadata.beginClose();
+    const prelude = params.pluginMetadata.beginClose();
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
+    markGatewaySuspendExiting();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
     // disposal callbacks; startup can otherwise fail before restart marking.
@@ -403,13 +422,14 @@ export async function prepareGatewayLifecycle(params: {
     cronReconciliation.invalidate();
     clearTimeout(postReadyState.maintenanceTimer ?? undefined);
     postReadyState.maintenanceTimer = null;
+    return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
   const stopConfigReloaderForClose = () =>
     (configReloaderStopPromise ??= runtimeState.configReloader.stop());
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     fenceSessionSuspensionWritesForGatewayShutdown();
-    markClosePreludeStarted(options);
+    await markClosePreludeStarted(options);
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
