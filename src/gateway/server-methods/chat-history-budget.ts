@@ -8,7 +8,7 @@ import {
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import type { InFlightRunSnapshot } from "../chat-abort.js";
 import {
@@ -80,6 +80,27 @@ export function createChatHistoryByteCounter(
 
 export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity[]): number {
   return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
+}
+
+/** Delta envelopes share one prepared plain-data snapshot throughout their synchronous projection. */
+export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string, unknown>) {
+  let snapshot: { bytes: number; keys: Set<string> } | undefined;
+  return (envelope: Record<string, unknown>): number => {
+    snapshot ??= {
+      bytes: jsonUtf8BytesOrInfinity(sessionSnapshot),
+      keys: new Set(Object.keys(sessionSnapshot)),
+    };
+    const fields: Record<string, unknown> = {};
+    for (const key in envelope) {
+      // The snapshot is the final writer, including keys whose undefined value omits a field.
+      if (!snapshot.keys.has(key) && Object.hasOwn(envelope, key)) {
+        fields[key] = envelope[key];
+      }
+    }
+    const fieldsBytes = jsonUtf8BytesOrInfinity(fields);
+    // Merge the object bodies with one brace pair and, when both have fields, one comma.
+    return snapshot.bytes + fieldsBytes - 2 + (snapshot.bytes > 2 && fieldsBytes > 2 ? 1 : 0);
+  };
 }
 
 function hasHistoryToolPresentation(
