@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { workspaceStatIdentity } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { root, type Root } from "../infra/fs-safe.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 type UploadSource = { path: string; size: number; sha256: string };

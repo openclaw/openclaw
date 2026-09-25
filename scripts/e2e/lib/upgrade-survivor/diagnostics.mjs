@@ -77,6 +77,7 @@ const logNames = [
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
+  "missing-load-path/startup-readiness.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
@@ -1955,13 +1956,20 @@ export function publishDiagnostics(
       throw new Error();
     }
     const redacted = redactSensitiveText(text, { mode: "tools" });
+    // Keep the last completed startup spans, after redacting the whole input.
+    const tail = label === "missing-load-path/baseline-gateway.log";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
     let result = "";
-    for (const line of redacted.split(/(?<=\n)/u)) {
-      if (Buffer.byteLength(JSON.stringify(result + line)) > outputLimit) {
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
         omissions[label] = "redacted output truncated at a complete line (16 KiB)";
         break;
       }
-      result += line;
+      result = next;
     }
     return result;
   }

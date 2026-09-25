@@ -459,7 +459,7 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
  * failure moot (its error is cleared too). In-flight writes, stale snapshots,
  * reconnect pauses and publication recovery survive local edits.
  */
-function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
+export function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   if (
     state.configAutoSaveStatus === "saving" ||
     state.configAutoSaveStatus === "conflict" ||

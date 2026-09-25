@@ -8,6 +8,10 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+CI continues during Full Release Validation; the legacy release-priority variable
+does not pause workflow admission. See [release recovery](/reference/RELEASING#release-priority)
+for runs already deferred by older workflow revisions.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
@@ -23,7 +27,7 @@ Eligible core-source and core-test PRs use targeted type checks when every selec
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -127,14 +131,22 @@ unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budget
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable
-worker jobs. Provision eligible runners in that group with the existing Linux,
-Windows, and macOS labels, grant this repository access, and reserve capacity
-outside ordinary PR/main pools. The variable selects the group; it does not
-provision runners or increase concurrency limits. Missing group capacity queues
-jobs. Leaving the variable unset preserves current labels and routing. Shared
-workflows receive an optional `runner_group` from their release caller; ordinary
-CI, scheduled performance, and unrelated reusable callers retain their routing.
+worker jobs. The Release Publish parent and its dispatched publish children read
+the same variable. It selects the group; it does not provision runners or increase
+concurrency limits. Missing group capacity queues jobs. Shared workflows receive
+an optional `runner_group` from their release caller, including `docker-release.yml`
+and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
+ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
+only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.
+
+To reserve capacity outside ordinary PR/main pools:
+
+1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
+2. Grant `openclaw/openclaw` access to the group.
+3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
 
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the

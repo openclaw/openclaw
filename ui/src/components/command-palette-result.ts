@@ -5,6 +5,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { renderArtTile } from "../pages/plugins/consent-dialog.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { icons } from "./icons.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
@@ -28,10 +29,13 @@ export function renderCommandPaletteResult(
   query: string,
   agent?: GatewayAgentRow,
   identity?: AgentIdentityResult | null,
+  pluginIconUrls: Readonly<Record<string, string>> = {},
+  onPluginIconError?: (pluginId: string) => void,
 ) {
   const session = item.session;
   const owner = session?.owner?.actor;
   const agentName = agent ? normalizeAgentLabel(agent, identity) : undefined;
+  const pluginId = item.pluginId;
   return html`
     ${
       agent
@@ -39,7 +43,15 @@ export function renderCommandPaletteResult(
             ${renderAgentIdentityAvatar({ id: agent.id, avatar: resolveAgentAvatarUrl(agent, identity), textAvatar: resolveAgentTextAvatar(agent, identity) })}
             ${owner?.id ? html`<span class="cmd-palette__owner">${renderSessionOwnerAvatar({ ...owner, id: owner.id })}</span>` : nothing}
           </span>`
-        : html`<span class="nav-item__icon" aria-hidden="true">${icons[item.icon]}</span>`
+        : pluginId
+          ? renderArtTile(
+              pluginId,
+              item.label,
+              pluginIconUrls[pluginId],
+              () => onPluginIconError?.(pluginId),
+              "cmd-palette__plugin-icon",
+            )
+          : html`<span class="nav-item__icon" aria-hidden="true">${icons[item.icon]}</span>`
     }
     <span class="cmd-palette__item-copy">
       <span class="cmd-palette__item-heading">

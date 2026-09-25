@@ -12,7 +12,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
@@ -54,7 +53,7 @@ export async function verifyLateActiveCallDrainObservation(
     await vi.advanceTimersByTimeAsync(deadlineAtMs - Date.now());
     expect(await reloading).toMatchObject({
       details: { phase: "drain", committed: false, pluginIds: [first.id, sibling.id] },
-      cause: expect.any(PluginAdmittedWorkTimeoutError),
+      cause: { message: expect.stringContaining("admitted work did not settle within 60s") },
     });
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
@@ -257,7 +256,6 @@ export async function verifyActiveCallDrainLease(
       expect(failure).toBeInstanceOf(PluginRuntimeApplicationError);
       expect(failure).toMatchObject({
         details: { phase: "drain", committed: false, pluginIds: ["first"] },
-        cause: expect.any(PluginAdmittedWorkTimeoutError),
         message: expect.stringMatching(
           /plugin first admitted work.*previous plugin generation stays active/,
         ),

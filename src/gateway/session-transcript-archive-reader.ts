@@ -1,12 +1,12 @@
 // Reads transcript artifacts; live store acquisition stays with the caller.
 import fs from "node:fs";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   resolveHistoryAnchorPageRange,

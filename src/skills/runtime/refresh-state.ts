@@ -11,11 +11,13 @@ type SkillsChangeEvent = {
     | "watch"
     | "watch-targets"
     | "watch-unavailable"
+    | "watch-available"
     | "manual"
     | "remote-node"
     | "config-change"
     | "workshop";
   changedPath?: string;
+  sourceScope?: SkillsSourceScope;
 };
 
 export type SkillsSourceScope = { executionWorkspaceDir?: string };
@@ -85,6 +87,14 @@ export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** Coverage recovery follows content reconciliation; it never creates a source revision. */
+export function notifySkillsWatchAvailable(params: {
+  workspaceDir: string;
+  sourceScope: SkillsSourceScope;
+}): void {
+  emit({ ...params, reason: "watch-available" });
 }
 
 function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): string {

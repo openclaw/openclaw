@@ -458,7 +458,12 @@ export async function stagePackageInstallUpdate(
   const completed = runPackageInstallUpdate(
     {
       ...params,
-      requirePackageReplacement: true,
+      // Admission pauses before the no-op decision, so its resumed caller can
+      // preserve an identical installation. Fresh-profile staging pauses later
+      // and must retain the candidate through initialization.
+      get requirePackageReplacement() {
+        return !params.pauseBeforeVerification || requireActive().requirePackageReplacement;
+      },
       beforeVerifyCandidate:
         params.pauseBeforeVerification || params.beforeVerifyCandidate
           ? async (root) => {
@@ -577,8 +582,9 @@ export async function runPackageInstallUpdate(
     packageName,
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.
-    requirePackageReplacement:
-      params.requirePackageReplacement === true || params.installKind === "git",
+    get requirePackageReplacement() {
+      return params.requirePackageReplacement === true || params.installKind === "git";
+    },
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     workTimeoutMs: params.workTimeoutMs,
