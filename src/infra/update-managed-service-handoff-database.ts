@@ -1,10 +1,10 @@
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,

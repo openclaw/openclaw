@@ -235,6 +235,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/msteams/src/conversation-store-state.test.ts",
   "extensions/msteams/src/conversation-store.shared.test.ts",
   "extensions/msteams/src/monitor-handler.file-consent.test.ts",
+  "extensions/msteams/src/monitor-sso.ingress.test.ts",
   "extensions/msteams/src/pending-uploads-fs.test.ts",
   "extensions/msteams/src/polls.test.ts",
   "extensions/msteams/src/sso-token-store.test.ts",

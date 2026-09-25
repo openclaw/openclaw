@@ -123,11 +123,17 @@ export async function prepareWorkspaceSkillCommandSpecs(
   opts: Omit<WorkspaceSkillCommandOptions, "entries" | "eligibility"> & {
     eligibility: SkillEligibilityContext;
   },
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
-  const eligible = await prepareWorkspaceSkills(workspaceDir, {
-    ...resolveCommandSkillLoadOptions(opts),
-    eligibility: opts.eligibility,
-  });
+  const eligible = await prepareWorkspaceSkills(
+    workspaceDir,
+    {
+      ...resolveCommandSkillLoadOptions(opts),
+      eligibility: opts.eligibility,
+    },
+    assertCurrent,
+  );
+  assertCurrent?.();
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
 

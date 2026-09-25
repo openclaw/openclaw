@@ -17,6 +17,7 @@ import { resolveResponsesContextUsageBoundary } from "./openai-responses-context
 import {
   completedSdkResponse,
   createModel,
+  createContext,
   createCompactionContext,
   createOrphanedToolOutputCompactionContext,
   SDK_FULL_HISTORY_PREFIX,
@@ -61,15 +62,6 @@ import {
 } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-
-function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
-  return {
-    systemPrompt,
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: [],
-    ...overrides,
-  } as Context;
-}
 
 function createJwt(): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");

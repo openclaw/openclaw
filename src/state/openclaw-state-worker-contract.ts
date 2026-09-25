@@ -18,7 +18,7 @@ import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
-import type { CronStateWorkerOperations } from "../cron/store/dispatch.worker.js";
+import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,

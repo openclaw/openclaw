@@ -42,7 +42,7 @@ import {
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
-import { readMainSessionReplaySafeCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
+import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -415,101 +415,6 @@ export async function recoverStore(params: {
       result[completed ? "settled" : "skipped"]++;
       continue;
     }
-    if (pendingAction === "fail") {
-      if (
-        !(await resumeCurrent({
-          ...(entry.pendingFinalDelivery?.kind === "replayable"
-            ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
-            : {}),
-          forceRestartSafeTools: true,
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
-    if (
-      entry.pendingFinalDelivery?.kind === "replayable" &&
-      entry.restartRecoveryForceSafeTools === true
-    ) {
-      if (
-        !(await resumeCurrent({
-          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-          forceRestartSafeTools: true,
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
-    const execPolicy = resolveExecDefaults({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: dispatchSessionKey,
-      sessionEntry: entry,
-    });
-    const fullAccess =
-      execPolicy.mode === "full" &&
-      execPolicy.security === "full" &&
-      execPolicy.ask === "off" &&
-      entry.restartRecoveryDeliveryMediaUrls === undefined &&
-      entry.restartRecoveryDisableMessageTool !== true &&
-      entry.restartRecoverySuppressTextDelivery !== true;
-    let replaySafeCheckpoint = false;
-    let messages: unknown[];
-    try {
-      const transcriptScope = {
-        ...target,
-        sessionEntry: entry,
-        sessionId: entry.sessionId,
-      };
-      messages = await readSessionMessagesAsync(transcriptScope, {
-        mode: "recent",
-        maxMessages: 20,
-        maxBytes: 256 * 1024,
-      });
-      if (fullAccess && !entry.pendingFinalDelivery) {
-        replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
-      }
-    } catch (err) {
-      if (stopped()) {
-        return result;
-      }
-      if (entry.pendingFinalDelivery?.kind === "replayable") {
-        mainSessionRecoveryLog.warn(
-          `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
-        );
-        if (
-          !(await resumeCurrent({
-            pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-          }))
-        ) {
-          return result;
-        }
-        continue;
-      }
-      mainSessionRecoveryLog.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
-      result.failed++;
-      continue;
-    }
-
-    if (stopped()) {
-      return result;
-    }
-    if (entry.pendingFinalDelivery?.kind === "replayable") {
-      if (
-        !(await resumeCurrent({
-          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-          forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
     const harnessCompletion = entry.restartRecoveryHarnessCompletion;
     let recoverableHarnessCompletion: boolean;
     try {
@@ -566,6 +471,109 @@ export async function recoverStore(params: {
         result.failed++;
       } else {
         result.skipped++;
+      }
+      continue;
+    }
+
+    const execPolicy = resolveExecDefaults({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: dispatchSessionKey,
+      sessionEntry: entry,
+    });
+    const fullAccess =
+      execPolicy.mode === "full" &&
+      execPolicy.security === "full" &&
+      execPolicy.ask === "off" &&
+      entry.restartRecoveryDeliveryMediaUrls === undefined &&
+      entry.restartRecoveryDisableMessageTool !== true &&
+      entry.restartRecoverySuppressTextDelivery !== true;
+    let replaySafeCheckpoint: boolean;
+    let source: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>["source"];
+    let messages: unknown[];
+    try {
+      const transcriptScope = {
+        ...target,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+      };
+      messages = await readSessionMessagesAsync(transcriptScope, {
+        mode: "recent",
+        maxMessages: 20,
+        maxBytes: 256 * 1024,
+      });
+      const checkpoint = await readMainSessionRecoveryCheckpoint(transcriptScope);
+      source = checkpoint.source;
+      replaySafeCheckpoint = fullAccess && !entry.pendingFinalDelivery && checkpoint.replaySafe;
+    } catch (err) {
+      if (stopped()) {
+        return result;
+      }
+      mainSessionRecoveryLog.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
+      result.failed++;
+      continue;
+    }
+
+    if (stopped()) {
+      return result;
+    }
+    if (
+      !recoverableHarnessCompletion &&
+      (source === "inter_session" ||
+        ((source === undefined ||
+          source === "internal_system" ||
+          source === "harness_completion") &&
+          entry.restartRecoverySourceIngress === "internal"))
+    ) {
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        ...target,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: "delegated recovery sender authority is unavailable",
+      });
+      result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
+      continue;
+    }
+
+    if (pendingAction === "fail") {
+      if (
+        !(await resumeCurrent({
+          ...(entry.pendingFinalDelivery?.kind === "replayable"
+            ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
+            : {}),
+          forceRestartSafeTools: true,
+        }))
+      ) {
+        return result;
+      }
+      continue;
+    }
+
+    if (
+      entry.pendingFinalDelivery?.kind === "replayable" &&
+      entry.restartRecoveryForceSafeTools === true
+    ) {
+      if (
+        !(await resumeCurrent({
+          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
+          forceRestartSafeTools: true,
+        }))
+      ) {
+        return result;
+      }
+      continue;
+    }
+
+    if (entry.pendingFinalDelivery?.kind === "replayable") {
+      if (
+        !(await resumeCurrent({
+          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
+          forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+        }))
+      ) {
+        return result;
       }
       continue;
     }

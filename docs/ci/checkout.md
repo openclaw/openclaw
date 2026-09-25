@@ -54,6 +54,12 @@ Plugin ClawHub Release and Plugin NPM Release also prepare that owner before sel
 
 To use the standalone action from another workflow, pin `openclaw/openclaw/.github/actions/git-owner@<full-40-character-commit-SHA>` to a reviewed revision containing the action. Supply policy from the trusted workflow inline or from the same trusted action package, never from the selected candidate. Within `ci.yml`, the existing bundled-protocol and CI-routing matrix tasks smoke-test the action from the separately pinned `.ci-harness` checkout before Node setup, compare its output and copied bytes, and run owned `git --version` without network access. Other workflows' direct Git commands remain outside this ownership coverage until they adopt it.
 
+Security Review keeps its two five-minute `actions/checkout` attempts in separate
+directories. After a successful checkout, it copies the selected trusted scripts
+and policy runtime into the workspace root. Locks and late writes in the failed
+attempt's directory cannot alter the retry's files. Both attempts retain the
+event's trusted default-branch revision and sparse file selection.
+
 ## Related
 
 - [Install overview](/install)
