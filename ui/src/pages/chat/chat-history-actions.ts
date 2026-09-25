@@ -235,6 +235,7 @@ export async function rewindChatHistory(
       state.chatAttachments,
       state.chatGoalDraftMode,
       state.chatMentions,
+      state.chatReplyTarget,
     );
   const composerSignature = readComposer();
   const attachmentReadSignal = attachmentReads.readSignal;
@@ -257,6 +258,7 @@ export async function rewindChatHistory(
       draft: editorText,
       mentions: [],
       goalMode: null,
+      replyTarget: null,
       expectedDraftRevision: loadChatComposerCommittedDraftRevision(
         state,
         sessionKey,
@@ -267,6 +269,7 @@ export async function rewindChatHistory(
       return null;
     }
     state.chatGoalDraftMode = null;
+    state.chatReplyTarget = null;
     state.chatAttachments = replaceChatAttachmentsFromEditor(
       state.chatAttachments,
       result.editorAttachments,
