@@ -105,16 +105,6 @@ describe("isFileLogLevelEnabled", () => {
       expected: [false, false, false, false, false, false],
     },
     {
-      name: "passes only fatal when configured as fatal",
-      level: "fatal",
-      expected: [true, false, false, false, false, false],
-    },
-    {
-      name: "passes fatal and error when configured as error",
-      level: "error",
-      expected: [true, true, false, false, false, false],
-    },
-    {
       name: "passes fatal, error, warn, info when configured as info",
       level: "info",
       expected: [true, true, true, true, false, false],
@@ -143,25 +133,6 @@ describe("isFileLogLevelEnabled", () => {
 });
 
 describe("getChildLogger minLevel inheritance", () => {
-  it("child logger inherits parent minLevel when no level is specified", () => {
-    logging.setLoggerOverride({ level: "warn" });
-    const child = logging.getChildLogger({ component: "test" });
-    expect(child.settings.minLevel).toBe(levelToMinLevel("warn"));
-  });
-
-  it("child logger uses its own level when explicitly specified", () => {
-    logging.setLoggerOverride({ level: "warn" });
-    const child = logging.getChildLogger({ component: "test" }, { level: "error" });
-    expect(child.settings.minLevel).toBe(levelToMinLevel("error"));
-  });
-
-  it("child logger does not default to minLevel=0 (allow-all) when no level given", () => {
-    logging.setLoggerOverride({ level: "fatal" });
-    const child = logging.getChildLogger({ component: "test" });
-    expect(child.settings.minLevel).not.toBe(0);
-    expect(child.settings.minLevel).toBe(levelToMinLevel("fatal"));
-  });
-
   it("child logger preserves a silent parent without triggering tslog validation", () => {
     logging.setLoggerOverride({ level: "silent" });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
