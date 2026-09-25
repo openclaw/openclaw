@@ -3238,6 +3238,7 @@ describe("CI changed Node test plan", () => {
     expect(shards).not.toBeNull();
     expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
     const full = createNodeTestShardBundles({
+      changedPaths: paths,
       compactMode: "pull-request",
       runnerBackend: "hybrid",
       includeReleaseOnlyRuntimeTests: false,
@@ -3319,10 +3320,18 @@ describe("CI changed Node test plan", () => {
     );
     expect(new Set(preciseFiles).size).toBe(preciseFiles.length);
     expect(precise!.length).toBeLessThan(shards!.length);
+    // Precise selection retains template capacity; complete plans rebalance measured jobs.
+    const preciseOwners = expectDefined(
+      createSelectedNodeTestShardBundles(preciseFiles, {
+        runnerBackend: options.runnerBackend,
+        includeReleaseOnlyRuntimeTests: true,
+      }),
+      "canonical precise UI consumer jobs",
+    );
     for (const job of precise ?? []) {
       for (const group of job.groups ?? []) {
         const ownerJob = expectDefined(
-          full.find((candidate) =>
+          preciseOwners.find((candidate) =>
             candidate.groups.some((owner) => owner.shard_name === group.shard_name),
           ),
           `canonical UI consumer job for ${group.shard_name}`,
