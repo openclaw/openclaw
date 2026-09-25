@@ -57,6 +57,12 @@ describe("status-overview-values", () => {
         },
         formatKTokens: (value) => `${Math.round(value / 1000)}k`,
       }),
-    ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 stores");
+    ).toBe("2 stored · default gpt-5.5 (12k ctx) · 2 stores");
+    expect(
+      buildStatusSessionsOverviewValue({
+        sessions: { count: 0, paths: [], defaults: {} },
+        formatKTokens: (value) => `${Math.round(value / 1000)}k`,
+      }),
+    ).toBe("0 stored · default unknown · unknown");
   });
 });

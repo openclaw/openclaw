@@ -9,20 +9,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
-import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
-import { createDefaultDeps } from "../cli/deps.js";
-import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import {
+  renderFileAttachmentOutcome,
+  resolveFileExtractionOutcome,
+} from "../media-understanding/file-attachment-outcomes.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -35,28 +34,31 @@ import {
   resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
-  type InputImageSource,
 } from "../media/input-files.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
-import { defaultRuntime } from "../runtime.js";
 import {
-  isReplaceableAssistantStreamEvent,
-  resolveAssistantStreamDeltaText,
-  resolveAssistantStreamSnapshotText,
+  mergeAssistantText,
+  mergePendingAssistantText,
+  resolveAssistantResultText,
+  resolveAssistantTextCompletion,
+  resolveAssistantTextInput,
+  resolveAssistantTextStreamDelta,
+  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
+  retainGatewayHttpResponseWork,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
+  sendUnauthorized,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -70,7 +72,7 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
@@ -85,26 +87,21 @@ import {
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
+  type OpenAiCompatiblePendingToolCall,
+  readOpenAiHttpRunTerminal,
+  runOpenAiCompatibleAgentCommand,
+  type OpenAiCompatibleHttpOptions,
+} from "./openai-compatible-agent-run.js";
+import {
+  applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveResponsesToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
-  toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
-import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
-
-type OpenResponsesHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  maxBodyBytes?: number;
-  config?: GatewayHttpResponsesConfig;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  resolveGatewayContext?: GatewayContextResolver;
-};
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
@@ -177,12 +174,7 @@ function matchesResponseSessionScope(
 }
 
 function pruneExpiredResponseSessions(now: number) {
-  while (responseSessionMap.size > 0) {
-    const oldest = responseSessionMap.entries().next().value;
-    if (!oldest) {
-      return;
-    }
-    const [oldestKey, oldestValue] = oldest;
+  for (const [oldestKey, oldestValue] of responseSessionMap) {
     if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
       return;
     }
@@ -229,7 +221,6 @@ export const testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
-  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -252,19 +243,7 @@ export const testing = {
 };
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
-  res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function resolveResponsePayloadText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  return Array.isArray(payloads)
-    ? payloads
-        .flatMap((payload) =>
-          typeof payload.text === "string" && payload.text ? [payload.text] : [],
-        )
-        .join("\n\n")
-    : "";
+  res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 type ResolvedResponsesLimits = {
@@ -311,72 +290,12 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   }));
 }
 
-function applyToolChoice(params: {
-  tools: ClientToolDefinition[];
-  toolChoice: CreateResponseBody["tool_choice"];
-}): {
-  tools: ClientToolDefinition[];
-  extraSystemPrompt?: string;
-  constraint?: ToolChoiceConstraint;
-} {
-  const { tools, toolChoice } = params;
-  if (!toolChoice) {
-    return { tools };
-  }
-
-  if (toolChoice === "none") {
-    return { tools: [] };
-  }
-
-  if (toolChoice === "required") {
-    if (tools.length === 0) {
-      throw new Error("tool_choice=required but no tools were provided");
-    }
-    const constraint: ToolChoiceConstraint = { type: "required" };
-    return { tools, extraSystemPrompt: toolChoiceConstraintPrompt(constraint), constraint };
-  }
-
-  if (typeof toolChoice === "object" && toolChoice.type === "function") {
-    const targetName = ("name" in toolChoice ? toolChoice.name : toolChoice.function.name).trim();
-    if (!targetName) {
-      throw new Error("tool_choice.name is required");
-    }
-    const matched = tools.filter((tool) => tool.function?.name === targetName);
-    if (matched.length === 0) {
-      throw new Error(`tool_choice requested unknown tool: ${targetName}`);
-    }
-    const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
-    return {
-      tools: matched,
-      extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
-      constraint,
-    };
-  }
-
-  return { tools };
-}
-
-export { buildAgentPrompt } from "./openresponses-prompt.js";
-
 function createEmptyUsage(): Usage {
   return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
   return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
-}
-
-type PendingToolCall = { id: string; name: string; arguments: string };
-
-function resolveStopReasonAndPendingToolCalls(meta: unknown): {
-  stopReason: string | undefined;
-  pendingToolCalls: PendingToolCall[] | undefined;
-} {
-  if (!meta || typeof meta !== "object") {
-    return { stopReason: undefined, pendingToolCalls: undefined };
-  }
-  const record = meta as { stopReason?: string; pendingToolCalls?: PendingToolCall[] };
-  return { stopReason: record.stopReason, pendingToolCalls: record.pendingToolCalls };
 }
 
 function createResponseResource(params: {
@@ -397,72 +316,28 @@ function createResponseResource(params: {
     output: params.output,
     usage: params.usage ?? createEmptyUsage(),
     error: params.error,
+    ...(params.status === "incomplete"
+      ? { incomplete_details: { reason: "max_output_tokens" as const } }
+      : {}),
   };
-}
-
-async function runResponsesAgentCommand(params: {
-  message: string;
-  images: ImageContent[];
-  clientTools: ClientToolDefinition[];
-  extraSystemPrompt: string;
-  modelOverride?: string;
-  streamParams: { maxTokens?: number; temperature?: number; topP?: number } | undefined;
-  sessionKey: string;
-  runId: string;
-  messageChannel: string;
-  senderIsOwner: boolean;
-  deps: CliDeps;
-  resolveGatewayContext?: GatewayContextResolver;
-  abortSignal?: AbortSignal;
-}) {
-  return agentCommandFromGatewayIngress(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      model: params.modelOverride,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: params.messageChannel,
-      senderIsOwner: params.senderIsOwner,
-      bestEffortDeliver: false,
-      allowModelOverride: params.modelOverride !== undefined,
-      abortSignal: params.abortSignal,
-      ...(params.resolveGatewayContext
-        ? {
-            onAdmittedRunContext: (context: AdmittedRunContext) =>
-              bindGatewayContextResolver(context, params.resolveGatewayContext),
-          }
-        : {}),
-    },
-    defaultRuntime,
-    params.deps,
-    {},
-  );
 }
 
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenResponsesHttpOptions,
+  opts: OpenAiCompatibleHttpOptions<GatewayHttpResponsesConfig>,
 ): Promise<boolean> {
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
     // Compat HTTP uses a different scope model from generic HTTP helpers:
     // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -471,6 +346,10 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  const abortController = new AbortController();
+  // The signal owns preparation; SSE installs presentation cleanup below.
+  let onDisconnect = () => {};
+  watchClientDisconnect(req, res, abortController, () => onDisconnect());
   const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelOverrideAuth.allowed) {
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
@@ -536,6 +415,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   };
   try {
+    abortController.signal.throwIfAborted();
     if (Array.isArray(payload.input)) {
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
@@ -543,62 +423,46 @@ export async function handleOpenResponsesHttpRequest(
             if (part.type !== "input_image" && part.type !== "input_file") {
               continue;
             }
+            assertGatewayHttpRequestCurrent(handled.requestAuth);
             if (part.source.type === "url") {
               markUrlPart();
             }
             if (item !== prompt.activeUserMessage) {
               continue;
             }
+            const source = part.source;
+            const inputSource =
+              source.type === "url"
+                ? source
+                : {
+                    type: source.type,
+                    data: source.data,
+                    mediaType: source.media_type,
+                    filename: "filename" in source ? source.filename : undefined,
+                  };
             if (part.type === "input_image") {
-              const source = part.source;
-              const imageSource: InputImageSource =
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                    };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                inputSource,
+                limits.images,
+                abortController.signal,
+              );
               images.push(image);
               continue;
             }
 
-            const source = part.source;
             const file = await extractFileContentFromSource({
-              source:
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                      filename: source.filename,
-                    },
+              source: inputSource,
               limits: limits.files,
+              signal: abortController.signal,
             });
-            const rawText = file.text;
-            if (rawText?.trim()) {
+            const outcome = resolveFileExtractionOutcome(file);
+            const content = renderFileAttachmentOutcome(outcome);
+            if (content !== null) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: wrapUntrustedFileContent(rawText),
-                }),
-              );
-            } else if (file.images && file.images.length > 0) {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: "[PDF content rendered to images]",
-                  surroundContentWithNewlines: false,
-                }),
-              );
-            } else {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: "[No extractable text]",
-                  surroundContentWithNewlines: false,
+                  content,
+                  surroundContentWithNewlines: outcome.kind === "extracted",
                 }),
               );
             }
@@ -610,6 +474,13 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    if (abortController.signal.aborted) {
+      return true;
+    }
+    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+      sendUnauthorized(res);
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
     return true;
@@ -620,10 +491,10 @@ export async function handleOpenResponsesHttpRequest(
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   let resolvedClientTools = clientTools;
   try {
-    const toolChoiceResult = applyToolChoice({
-      tools: clientTools,
-      toolChoice: payload.tool_choice,
-    });
+    const toolChoiceResult = applyToolChoice(
+      clientTools,
+      resolveResponsesToolChoice(payload.tool_choice),
+    );
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;
@@ -714,13 +585,9 @@ export async function handleOpenResponsesHttpRequest(
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
-  const deps = createDefaultDeps();
-  const abortController = new AbortController();
-  const streamMaxTokens =
-    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
-  const streamTemperature =
-    typeof payload.temperature === "number" ? payload.temperature : undefined;
-  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const streamMaxTokens = payload.max_output_tokens;
+  const streamTemperature = payload.temperature;
+  const streamTopP = payload.top_p;
   const streamParams =
     streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
       ? {
@@ -729,37 +596,39 @@ export async function handleOpenResponsesHttpRequest(
           ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
         }
       : undefined;
+  const runAgentCommand = () =>
+    runOpenAiCompatibleAgentCommand({
+      message: prompt.message,
+      images,
+      clientTools: resolvedClientTools,
+      extraSystemPrompt,
+      modelOverride,
+      streamParams,
+      sessionKey,
+      runId: responseId,
+      messageChannel,
+      senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
+      resolveGatewayContext: opts.resolveGatewayContext,
+      abortSignal: abortController.signal,
+      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+    });
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        modelOverride,
-        streamParams,
-        sessionKey,
-        runId: responseId,
-        messageChannel,
-        senderIsOwner,
-        deps,
-        resolveGatewayContext: opts.resolveGatewayContext,
-        abortSignal: abortController.signal,
-      });
+      const result = await runAgentCommand();
 
       if (abortController.signal.aborted) {
         return true;
       }
 
-      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (readAgentRunTerminalOutcome(result) === "failed") {
+      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+      if (runFailed) {
         throw new Error("agent run failed");
       }
-      const assistantText = resolveResponsePayloadText(result);
+      const assistantText = resolveAssistantResultText(result);
       const usage = extractUsageFromResult(result);
-      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
       // of returning ordinary assistant prose, mirroring /v1/chat/completions.
@@ -785,53 +654,35 @@ export async function handleOpenResponsesHttpRequest(
       // model produced before the tool calls. Pre-#52288 only the first
       // pending call was emitted, so multi-tool turns lost every call but
       // the leading one.
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const output: OutputItem[] = [];
-        if (assistantText) {
-          output.push(
-            createAssistantOutputItem({
-              id: outputItemId,
-              text: assistantText,
-              phase: "commentary",
-              status: "completed",
-            }),
-          );
-        }
-        for (const functionCall of pendingToolCalls) {
-          output.push(
-            createFunctionCallOutputItem({
-              id: `call_${randomUUID()}`,
-              callId: functionCall.id,
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            }),
-          );
-        }
-
-        const response = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output,
-          usage,
-        });
-        rememberResponseSession();
-        sendJson(res, 200, response);
-        return true;
-      }
-
-      const response = createResponseResource({
-        ...responseIdentity,
-        model,
-        status: "completed",
-        output: [
+      const toolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
+      const status = stopReason === "length" ? "incomplete" : "completed";
+      const output: OutputItem[] = [];
+      if (assistantText || !toolCalls) {
+        output.push(
           createAssistantOutputItem({
             id: outputItemId,
             text: assistantText || "No response from OpenClaw.",
-            phase: "final_answer",
-            status: "completed",
+            phase: toolCalls ? "commentary" : "final_answer",
+            status,
           }),
-        ],
+        );
+      }
+      for (const functionCall of toolCalls ?? []) {
+        output.push(
+          createFunctionCallOutputItem({
+            id: `call_${randomUUID()}`,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          }),
+        );
+      }
+      const response = createResponseResource({
+        ...responseIdentity,
+        model,
+        status,
+        output,
         usage,
       });
 
@@ -862,8 +713,6 @@ export async function handleOpenResponsesHttpRequest(
       }
       rememberResponseSession();
       sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
-    } finally {
-      stopWatchingDisconnect();
     }
     return true;
   }
@@ -874,19 +723,18 @@ export async function handleOpenResponsesHttpRequest(
 
   setSseHeaders(res);
 
-  let accumulatedText = "";
-  let streamedAssistantText = "";
-  let bufferedReplaceableAssistantContent = "";
-  let sawAssistantDelta = false;
+  let assistantText: AssistantTextSnapshot = { text: "" };
+  let streamedAssistantText = assistantText;
+  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  let finalResultText: string | undefined;
+  let finalToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
-  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
-  let finalizeStatus: ResponseResource["status"] | null = null;
-  let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalOutputStatus: "completed" | "incomplete" = "completed";
+  let finalizeRequested: { status: "completed" | "failed"; errorMessage?: string } | null = null;
   let finalizeScheduled = false;
-  let finalizeErrorMessage: string | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
@@ -911,11 +759,29 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       const usage = finalUsage;
-      const finalText =
-        accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;
-
+      const status = finalizeRequested.status === "failed" ? "failed" : finalOutputStatus;
+      const finalText = resolveAssistantTextCompletion({
+        assistantText,
+        pending: pendingAssistantText,
+        resultText: finalResultText,
+        streamedText: streamedAssistantText.text,
+        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
+      });
+      if (!finalText.startsWith(streamedAssistantText.text)) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
+      const delta = finalText.slice(streamedAssistantText.text.length);
+      if (delta) {
+        writeSseEvent(res, {
+          type: "response.output_text.delta",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          delta,
+        });
+      }
       closed = true;
-      stopWatchingDisconnect();
       unsubscribe();
 
       writeSseEvent(res, {
@@ -937,8 +803,11 @@ export async function handleOpenResponsesHttpRequest(
       const completedItem = createAssistantOutputItem({
         id: outputItemId,
         text: finalText,
-        phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
-        status: "completed",
+        phase:
+          finalizeRequested.status === "completed" && !finalToolCalls
+            ? "final_answer"
+            : "commentary",
+        status: status === "incomplete" ? "incomplete" : "completed",
       });
 
       writeSseEvent(res, {
@@ -947,17 +816,39 @@ export async function handleOpenResponsesHttpRequest(
         item: completedItem,
       });
 
+      const output: OutputItem[] = [completedItem];
+      for (const functionCall of finalToolCalls ?? []) {
+        const item = createFunctionCallOutputItem({
+          id: `call_${randomUUID()}`,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+        });
+        const outputIndex = output.length;
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item,
+        });
+        const completedCall: OutputItem = { ...item, status: "completed" };
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: outputIndex,
+          item: completedCall,
+        });
+        output.push(completedCall);
+      }
       const finalResponse = createResponseResource({
         ...responseIdentity,
         model,
-        status: finalizeRequested.status,
-        output: [completedItem],
+        status,
+        output,
         usage,
         ...(finalizeRequested.status === "failed"
           ? {
               error: {
                 code: "server_error",
-                message: finalizeErrorMessage || "Agent run failed",
+                message: finalizeRequested.errorMessage || "Agent run failed",
               },
             }
           : {}),
@@ -965,7 +856,7 @@ export async function handleOpenResponsesHttpRequest(
 
       rememberResponseSession();
       writeSseEvent(res, {
-        type: finalizeRequested.status === "failed" ? "response.failed" : "response.completed",
+        type: `response.${status}`,
         response: finalResponse,
       });
       writeDone(res);
@@ -973,17 +864,11 @@ export async function handleOpenResponsesHttpRequest(
     });
   };
 
-  const requestFinalize = (
-    status: ResponseResource["status"],
-    text: string,
-    errorMessage?: string,
-  ) => {
+  const requestFinalize = (status: "completed" | "failed", errorMessage?: string) => {
     if (finalizeRequested) {
       return;
     }
-    finalizeStatus = status;
-    finalizeErrorMessage = errorMessage;
-    finalizeRequested = { status, text };
+    finalizeRequested = { status, errorMessage };
     maybeFinalize();
   };
 
@@ -993,7 +878,6 @@ export async function handleOpenResponsesHttpRequest(
     }
     // Failure is terminal even when an earlier lifecycle event is waiting for usage.
     closed = true;
-    stopWatchingDisconnect();
     unsubscribe();
     writeSseEvent(res, { type: "response.failed", response });
     writeDone(res);
@@ -1051,73 +935,53 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   unsubscribe = onAgentEventForRun(responseId, (evt) => {
-    if (evt.runId !== responseId) {
-      return;
-    }
     if (closed) {
       return;
     }
 
     if (evt.stream === "assistant") {
-      if (isReplaceableAssistantStreamEvent(evt)) {
-        const snapshot = resolveAssistantStreamSnapshotText(evt);
-        if (snapshot) {
-          bufferedReplaceableAssistantContent = snapshot;
+      const input = resolveAssistantTextInput(evt.data);
+      if (!input) {
+        return;
+      }
+      // Once a provisional replacement begins, even its terminal text echo
+      // stays held until the run result selects the authoritative output.
+      if (input.replaceable || pendingAssistantText) {
+        pendingAssistantText = mergePendingAssistantText(
+          pendingAssistantText ?? assistantText,
+          input,
+        );
+        if (
+          !input.replaceable &&
+          input.replace &&
+          input.text !== undefined &&
+          pendingAssistantText.text.startsWith(streamedAssistantText.text)
+        ) {
+          unrepresentableAssistantReplacement = false;
         }
         return;
       }
 
-      const text = evt.data?.text;
-      const replace = evt.data?.replace === true;
-      if (replace && typeof text === "string") {
-        accumulatedText = text;
-        if (toolChoiceConstraint) {
-          return;
-        }
-        // Responses deltas can only append. A conflicting replacement must
-        // fail after usage resolves instead of claiming inconsistent success.
-        if (!text.startsWith(streamedAssistantText)) {
-          unrepresentableAssistantReplacement = true;
-          return;
-        }
+      const previous = assistantText;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      assistantText = merged;
+      // Unconfirmed tool-choice prose may still be corrected before it is sent.
+      if (toolChoiceConstraint) {
+        return;
+      }
+      // Keep physical wire progress separate from a corrected item snapshot.
+      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
+      if (content === undefined) {
+        unrepresentableAssistantReplacement = true;
+        return;
+      }
+      if (input.replace && input.text !== undefined) {
         unrepresentableAssistantReplacement = false;
-        const replacementDelta = text.slice(streamedAssistantText.length);
-        if (replacementDelta) {
-          sawAssistantDelta = true;
-          streamedAssistantText = text;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: replacementDelta,
-          });
-        }
-        return;
       }
-
-      const content =
-        typeof text === "string" && text.startsWith(streamedAssistantText)
-          ? text.slice(streamedAssistantText.length)
-          : resolveAssistantStreamDeltaText(evt);
+      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
-      streamedAssistantText += content;
-
-      // Hold assistant prose until the tool-choice contract is confirmed. A
-      // `required`/pinned request must reject text-only turns, so streaming
-      // deltas now could leak output we may have to fail. Buffered text is
-      // still flushed as commentary if a matching tool call arrives, matching
-      // the openai-http.ts streaming buffer.
-      if (toolChoiceConstraint) {
-        accumulatedText += content;
-        return;
-      }
-
-      sawAssistantDelta = true;
-      accumulatedText += content;
-
       writeSseEvent(res, {
         type: "response.output_text.delta",
         item_id: outputItemId,
@@ -1131,14 +995,12 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText =
-          accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         const errorMessage =
           phase === "error" && typeof evt.data?.error === "string"
             ? evt.data.error.trim()
             : undefined;
-        requestFinalize(finalStatus, finalText, errorMessage);
+        requestFinalize(finalStatus, errorMessage);
       }
     }
   });
@@ -1146,44 +1008,24 @@ export async function handleOpenResponsesHttpRequest(
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
   const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseStreamRootWork = () => {
-    res.off("finish", releaseStreamRootWork);
-    res.off("close", releaseStreamRootWork);
-    releaseResponseRootWork?.();
-  };
-  res.once("finish", releaseStreamRootWork);
-  res.once("close", releaseStreamRootWork);
+  const releaseStreamRootWork = retainGatewayHttpResponseWork(res);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   void (async () => {
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        modelOverride,
-        streamParams,
-        sessionKey,
-        runId: responseId,
-        messageChannel,
-        senderIsOwner,
-        deps,
-        resolveGatewayContext: opts.resolveGatewayContext,
-        abortSignal: abortController.signal,
-      });
+      const result = await runAgentCommand();
 
       if (closed) {
         return;
       }
 
-      if (readAgentRunTerminalOutcome(result) === "failed") {
+      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+      if (runFailed) {
         terminalLifecyclePhase = "error";
         rememberResponseSession();
         finalizeFailedResponse(
@@ -1197,23 +1039,14 @@ export async function handleOpenResponsesHttpRequest(
 
       finalUsage = extractUsageFromResult(result);
 
-      if (unrepresentableAssistantReplacement) {
-        finalizeUnrepresentableAssistantReplacement();
-        return;
-      }
-
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
-      const resultAny = result as { meta?: unknown };
-      const resultPayloadText = resolveResponsePayloadText(result);
-      const meta = resultAny.meta;
-      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+      const resultPayloadText = resolveAssistantResultText(result);
 
       // Reject an unsatisfied `required`/pinned `tool_choice` before any
       // buffered prose is flushed, mirroring the non-streaming path and
       // /v1/chat/completions. Closes the stream with a `response.failed` event.
       if (
-        !closed &&
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
@@ -1222,135 +1055,17 @@ export async function handleOpenResponsesHttpRequest(
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
-          finalUsage ?? createEmptyUsage(),
+          finalUsage,
         );
         rememberResponseSession();
         finalizeFailedResponse(failed);
         return;
       }
 
-      if (
-        !closed &&
-        stopReason === "tool_calls" &&
-        pendingToolCalls &&
-        pendingToolCalls.length > 0
-      ) {
-        const usage = finalUsage ?? createEmptyUsage();
-        const finalText =
-          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
-
-        if (finalText && !sawAssistantDelta) {
-          sawAssistantDelta = true;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: finalText,
-          });
-        }
-        writeSseEvent(res, {
-          type: "response.output_text.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          text: finalText,
-        });
-        writeSseEvent(res, {
-          type: "response.content_part.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: finalText },
-        });
-
-        const completedItem = createAssistantOutputItem({
-          id: outputItemId,
-          text: finalText,
-          phase: "commentary",
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: completedItem,
-        });
-
-        // Emit one `function_call` output item per pending call, preserving
-        // arrival order. `output_index` continues past the assistant
-        // message at index 0 so the SSE stream keeps a single, monotonic
-        // index per response. Pre-#52288 the streaming path read only
-        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
-        // with multiple client tool calls dropped every call past the
-        // first.
-        const functionCallItems: OutputItem[] = [];
-        let nextStreamOutputIndex = 1;
-        for (const functionCall of pendingToolCalls) {
-          const functionCallItemId = `call_${randomUUID()}`;
-          const functionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.added",
-            output_index: nextStreamOutputIndex,
-            item: functionCallItem,
-          });
-          const completedFunctionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-            status: "completed",
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: nextStreamOutputIndex,
-            item: completedFunctionCallItem,
-          });
-          functionCallItems.push(completedFunctionCallItem);
-          nextStreamOutputIndex += 1;
-        }
-
-        const completedResponse = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output: [completedItem, ...functionCallItems],
-          usage,
-        });
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: completedResponse });
-        writeDone(res);
-        res.end();
-        return;
-      }
-
-      // Fallback: if no streaming deltas were received, send the full response as text
-      if (!sawAssistantDelta) {
-        const content =
-          resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
-
-        accumulatedText = content;
-        sawAssistantDelta = true;
-        if (finalizeStatus !== null) {
-          finalizeRequested = { status: finalizeStatus, text: content };
-        }
-
-        writeSseEvent(res, {
-          type: "response.output_text.delta",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          delta: content,
-        });
-      }
-
+      finalResultText = resultPayloadText;
+      finalOutputStatus = stopReason === "length" ? "incomplete" : "completed";
+      finalToolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       maybeFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
@@ -1389,7 +1104,7 @@ export async function handleOpenResponsesHttpRequest(
     } finally {
       releaseAgentRootWork?.();
       // Existing provider terminals must not be replaced or emitted twice.
-      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
+      if (finalizeRequested === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",

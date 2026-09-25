@@ -56,20 +56,23 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")?.style.aspectRatio).toBe("9 / 16");
   });
 
-  it("applies a renewed ticket when playback resumes", async () => {
+  it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {
     const player = document.createElement("openclaw-chat-video-player");
+    player.preview = true;
     player.src = "/media/clip.mp4?mediaTicket=A";
     player.sourceIdentity = "media:renewing-clip";
     player.label = "clip.mp4";
     document.body.append(player);
     await player.updateComplete;
     const video = player.querySelector("video")!;
+    let readyState = 2;
     let paused = true;
     let currentTime = 12;
     const play = vi.spyOn(video, "play").mockImplementation(async () => {
       paused = false;
     });
     Object.defineProperties(video, {
+      readyState: { configurable: true, get: () => readyState },
       currentTime: {
         configurable: true,
         get: () => currentTime,
@@ -80,9 +83,13 @@ describe("ChatVideoPlayer", () => {
       paused: { configurable: true, get: () => paused },
     });
 
+    video.dispatchEvent(new Event("loadeddata"));
+    await player.updateComplete;
+    readyState = 1;
     player.src = "/media/clip.mp4?mediaTicket=B";
     await player.updateComplete;
     expect(video.getAttribute("src")).toContain("mediaTicket=A");
+    expect(player.querySelector('[aria-busy="true"]')).toBeNull();
 
     paused = false;
     video.dispatchEvent(new Event("play"));
@@ -90,6 +97,21 @@ describe("ChatVideoPlayer", () => {
     expect(video.getAttribute("src")).toContain("mediaTicket=B");
     video.dispatchEvent(new Event("loadedmetadata"));
     expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("allows resolved downloads and reveals playback when loadeddata is suppressed", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.preview = true;
+    player.src = "https://example.com/deferred.mp4";
+    player.label = "deferred.mp4";
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
+    expect(player.querySelector('[aria-busy="true"]')).not.toBeNull();
+    player.querySelector("video")!.dispatchEvent(new Event("playing"));
+    await player.updateComplete;
+    expect(player.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
   it("keeps one video element mounted across 202 preparation", async () => {

@@ -1,6 +1,6 @@
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 /**
  * Compatibility tools for the retired Codex Supervisor plugin.
  *
@@ -9,30 +9,36 @@ import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-
  * continuation belongs to the Codex harness, which installs approval and tool
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
+import type { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
+import type {
+  CodexAppServerStartOptions,
+  CodexSupervisionEndpoint,
+} from "./app-server/config-contracts.js";
 import {
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
-import {
-  assertCodexAppServerConnectionSecurity,
   codexAppServerStartOptionsKey,
-  readCodexPluginConfig,
-  resolveCodexSupervisionAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-  type CodexSupervisionEndpoint,
-} from "./app-server/config.js";
+  type createCodexAppServerConfig,
+} from "./app-server/config-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
+import {
+  CodexSupervisionPolicyError,
+  requireOwnerAccess,
+  requireRawTranscriptAccess,
+  requireSupervisionEnabled,
+  requireWriteAccess,
+  resolveToolPolicy,
+} from "./supervision-tool-policy.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
-/** Legacy standalone-MCP transcript gate. Agent tools use canonical config. */
-const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
-  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
-/** Legacy standalone-MCP write gate. Agent tools use canonical config. */
-const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -103,8 +109,6 @@ const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
 type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
 
-class CodexSupervisionPolicyError extends Error {}
-
 type NormalizedSupervisionEndpoint = {
   id: string;
   label?: string;
@@ -147,14 +151,19 @@ type EndpointRequest = <T = unknown>(
 
 type CodexSupervisionToolsOptions = {
   getPluginConfig: () => unknown;
+  resolveAuthProfileId: ReturnType<
+    typeof createCodexAuthProfileSelection
+  >["resolveCodexAppServerAuthProfileIdForAgent"];
+  resolveRuntimeOptions: ReturnType<
+    typeof createCodexAppServerConfig
+  >["resolveCodexSupervisionAppServerRuntimeOptions"];
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
   senderIsOwner: boolean;
+  assertInvocationCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
   /** Test seam; production omits this to use the canonical shared client. */
   request?: EndpointRequest;
-  /** Only a trusted standalone MCP adapter may opt into the shipped env gates. */
-  useLegacyMcpPolicyEnv?: boolean;
 };
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
@@ -204,10 +213,6 @@ function readStoredThreads(data: unknown[], maxEntries: number): Record<string, 
     readCompatThreadId(entry.id, "thread/list", index);
     return entry;
   });
-}
-
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
-  return params[key] === true;
 }
 
 function readIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
@@ -353,6 +358,8 @@ function resolveEndpoints(
   pluginConfig: unknown,
   env: NodeJS.ProcessEnv,
   runtimeConfig: OpenClawConfig | undefined,
+  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"],
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
 ): ResolvedSupervisionEndpoint[] {
   const configured = readCodexPluginConfig(pluginConfig).supervision?.endpoints;
   const endpoints = configured?.length ? configured : readLegacyEnvEndpoints(env);
@@ -367,6 +374,8 @@ function resolveEndpoints(
         pluginConfig,
         env,
         runtimeConfig,
+        resolveAuthProfileId,
+        resolveRuntimeOptions,
       }),
     };
     if (endpoint.label !== undefined) {
@@ -383,9 +392,10 @@ function resolveEndpointStartOptions(params: {
   endpoint: NormalizedSupervisionEndpoint;
   pluginConfig: unknown;
   env: NodeJS.ProcessEnv;
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
   validateSecurity?: boolean;
 }): CodexAppServerStartOptions {
-  const base = resolveCodexSupervisionAppServerRuntimeOptions({
+  const base = params.resolveRuntimeOptions({
     pluginConfig: params.pluginConfig,
     env: params.env,
   }).start;
@@ -430,6 +440,8 @@ function supervisionEndpointConnectionKey(params: {
   pluginConfig: unknown;
   env: NodeJS.ProcessEnv;
   runtimeConfig: OpenClawConfig | undefined;
+  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"];
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
 }): string {
   // Endpoint probes report unsafe connections as unhealthy; the actual request path still
   // validates security before connecting, while this path only fingerprints live ownership.
@@ -439,7 +451,7 @@ function supervisionEndpointConnectionKey(params: {
   const agentDir = usesNativeAuth ? undefined : resolveDefaultAgentDir(params.runtimeConfig ?? {});
   const authProfileId = usesNativeAuth
     ? undefined
-    : resolveCodexAppServerAuthProfileIdForAgent({
+    : params.resolveAuthProfileId({
         agentDir,
         config: params.runtimeConfig,
       });
@@ -456,26 +468,38 @@ function supervisionEndpointConnectionKey(params: {
   });
 }
 
-function createCanonicalEndpointRequest(options: CodexSupervisionToolsOptions): EndpointRequest {
+function createPolicyGuardedRequest(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+): EndpointRequest {
   return async <T>(
     endpoint: ResolvedSupervisionEndpoint,
     method: string,
     requestParams?: unknown,
   ) => {
+    const currentEndpoint = requireCurrentEndpoint(options, policy, endpoint);
+    if (options.request) {
+      return await options.request<T>(currentEndpoint, method, requestParams);
+    }
     const pluginConfig = options.getPluginConfig();
     const env = options.env ?? process.env;
-    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig, env });
+    const runtime = options.resolveRuntimeOptions({ pluginConfig, env });
     const config = options.getRuntimeConfig?.();
     const startOptions = resolveEndpointStartOptions({
-      endpoint,
+      endpoint: currentEndpoint,
       pluginConfig,
       env,
+      resolveRuntimeOptions: options.resolveRuntimeOptions,
     });
     return await requestCodexAppServerJson<T>({
       method,
       requestParams,
       timeoutMs: runtime.requestTimeoutMs,
       startOptions,
+      // Client acquisition and queued writes can outlive the policy that admitted this request.
+      assertCurrent: () => {
+        requireCurrentEndpoint(options, policy, currentEndpoint);
+      },
       ...(endpoint.configured || startOptions.homeScope === "user" ? { authProfileId: null } : {}),
       ...(config ? { config } : {}),
     });
@@ -528,7 +552,7 @@ function threadFromRead(value: unknown): Record<string, unknown> | undefined {
 }
 
 function isLoadedThreadReadMiss(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return message.includes("thread not found") || message.includes("thread not loaded");
 }
 
@@ -707,7 +731,7 @@ async function listSessionSnapshot(params: {
       errors.push({
         endpointId: endpoint.id,
         ok: false,
-        detail: error instanceof Error ? error.message : String(error),
+        detail: coerceErrorMessage(error),
       });
     }
   }
@@ -742,9 +766,6 @@ async function resolveEndpointForThread(params: {
     } catch (error) {
       if (error instanceof CodexSupervisionPolicyError) {
         throw error;
-      }
-      if (!isLoadedThreadReadMiss(error)) {
-        continue;
       }
     }
   }
@@ -842,6 +863,7 @@ function endpointResult(
   endpoint: ResolvedSupervisionEndpoint,
   pluginConfig: unknown,
   env: NodeJS.ProcessEnv,
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
 ): Record<string, unknown> {
   const configured = endpoint.configured;
   if (
@@ -862,7 +884,7 @@ function endpointResult(
       url: redactEndpointUrl(configured.url),
     };
   }
-  const start = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig, env }).start;
+  const start = resolveRuntimeOptions({ pluginConfig, env }).start;
   return {
     id: endpoint.id,
     transport: start.transport === "stdio" ? "stdio-proxy" : "websocket",
@@ -896,62 +918,6 @@ function sanitizeSessionListResult(
   };
 }
 
-function requireSupervisionEnabled(pluginConfig: unknown): void {
-  if (readCodexPluginConfig(pluginConfig).supervision?.enabled !== true) {
-    throw new CodexSupervisionPolicyError(
-      "Codex supervision is disabled in the codex plugin config.",
-    );
-  }
-}
-
-function requireOwnerAccess(options: CodexSupervisionToolsOptions): void {
-  if (!options.senderIsOwner) {
-    throw new CodexSupervisionPolicyError(
-      "Codex supervision compatibility tools require an owner-authorized sender.",
-    );
-  }
-}
-
-function resolveToolPolicy(
-  options: CodexSupervisionToolsOptions,
-  pluginConfig: unknown,
-): {
-  allowRawTranscripts: boolean;
-  allowWriteControls: boolean;
-} {
-  const config = readCodexPluginConfig(pluginConfig).supervision;
-  const env = options.env ?? process.env;
-  return {
-    allowRawTranscripts:
-      config?.allowRawTranscripts === true ||
-      (options.useLegacyMcpPolicyEnv === true &&
-        env[LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV] === "1"),
-    allowWriteControls:
-      config?.allowWriteControls === true ||
-      (options.useLegacyMcpPolicyEnv === true &&
-        env[LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV] === "1"),
-  };
-}
-
-function requireRawTranscriptAccess(
-  options: CodexSupervisionToolsOptions,
-  pluginConfig: unknown,
-): void {
-  if (!resolveToolPolicy(options, pluginConfig).allowRawTranscripts) {
-    throw new CodexSupervisionPolicyError(
-      "Codex session reads are disabled for this codex plugin supervision config.",
-    );
-  }
-}
-
-function requireWriteAccess(options: CodexSupervisionToolsOptions, pluginConfig: unknown): void {
-  if (!resolveToolPolicy(options, pluginConfig).allowWriteControls) {
-    throw new CodexSupervisionPolicyError(
-      "Codex write controls are disabled for this codex plugin supervision config.",
-    );
-  }
-}
-
 function requireLiveToolPolicy(
   options: CodexSupervisionToolsOptions,
   policy: CodexSupervisionRequestPolicy,
@@ -960,9 +926,9 @@ function requireLiveToolPolicy(
   const pluginConfig = options.getPluginConfig();
   requireSupervisionEnabled(pluginConfig);
   if (policy === "raw-transcripts") {
-    requireRawTranscriptAccess(options, pluginConfig);
+    requireRawTranscriptAccess(pluginConfig);
   } else if (policy === "write-controls") {
-    requireWriteAccess(options, pluginConfig);
+    requireWriteAccess(pluginConfig);
   }
   return {
     pluginConfig,
@@ -970,6 +936,8 @@ function requireLiveToolPolicy(
       pluginConfig,
       options.env ?? process.env,
       options.getRuntimeConfig?.(),
+      options.resolveAuthProfileId,
+      options.resolveRuntimeOptions,
     ),
   };
 }
@@ -1010,19 +978,6 @@ function requireCurrentEndpointSet(
   return { pluginConfig: current.pluginConfig };
 }
 
-function createPolicyGuardedRequest(
-  options: CodexSupervisionToolsOptions,
-  request: EndpointRequest,
-  policy: CodexSupervisionRequestPolicy,
-): EndpointRequest {
-  return async <T>(endpoint: ResolvedSupervisionEndpoint, method: string, params?: unknown) => {
-    // Configuration can be reloaded while one compatibility call is paginating or resolving a
-    // thread. Recheck immediately before every app-server request so revocation stops the call.
-    const currentEndpoint = requireCurrentEndpoint(options, policy, endpoint);
-    return await request<T>(currentEndpoint, method, params);
-  };
-}
-
 function idleContinuationError(threadId: string): Error {
   return new Error(
     `Codex thread ${threadId} is idle. Continue it from Codex Sessions so OpenClaw can install the Codex harness approval and tool handlers before resume.`,
@@ -1031,10 +986,9 @@ function idleContinuationError(threadId: string): Error {
 
 /** Builds the five shipped Codex Supervisor compatibility tools. */
 export function createCodexSupervisionTools(options: CodexSupervisionToolsOptions): AnyAgentTool[] {
-  const baseRequest = options.request ?? createCanonicalEndpointRequest(options);
-  const request = createPolicyGuardedRequest(options, baseRequest, "enabled");
-  const rawTranscriptRequest = createPolicyGuardedRequest(options, baseRequest, "raw-transcripts");
-  const writeRequest = createPolicyGuardedRequest(options, baseRequest, "write-controls");
+  const request = createPolicyGuardedRequest(options, "enabled");
+  const rawTranscriptRequest = createPolicyGuardedRequest(options, "raw-transcripts");
+  const writeRequest = createPolicyGuardedRequest(options, "write-controls");
   const current = () => {
     // Keep the execute-time check beside factory filtering so direct/internal
     // callers cannot construct a usable tool without explicit owner authorization.
@@ -1065,7 +1019,12 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         return jsonResult({
           summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
           endpoints: endpoints.map((endpoint) =>
-            endpointResult(endpoint, pluginConfig, options.env ?? process.env),
+            endpointResult(
+              endpoint,
+              pluginConfig,
+              options.env ?? process.env,
+              options.resolveRuntimeOptions,
+            ),
           ),
           health,
         });
@@ -1082,16 +1041,13 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         const result = await listSessionSnapshot({
           endpoints,
           request,
-          includeStored: readBooleanParam(params, "include_stored"),
+          includeStored: params.include_stored === true,
           maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
         const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
-          ...sanitizeSessionListResult(
-            result,
-            resolveToolPolicy(options, pluginConfig).allowRawTranscripts,
-          ),
+          ...sanitizeSessionListResult(result, resolveToolPolicy(pluginConfig).allowRawTranscripts),
         });
       },
     },
@@ -1102,7 +1058,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionReadParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireRawTranscriptAccess(options, pluginConfig);
+        requireRawTranscriptAccess(pluginConfig);
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
@@ -1115,7 +1071,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           request: rawTranscriptRequest,
           endpoint,
           threadId,
-          includeTurns: readBooleanParam(params, "include_turns"),
+          includeTurns: params.include_turns === true,
         });
         requireCurrentEndpoint(options, "raw-transcripts", endpoint);
         return jsonResult({
@@ -1132,7 +1088,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionSendParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireWriteAccess(options, pluginConfig);
+        requireWriteAccess(pluginConfig);
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const text = readStringParam(params, "text", { required: true, allowEmpty: false });
@@ -1181,7 +1137,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionInterruptParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireWriteAccess(options, pluginConfig);
+        requireWriteAccess(pluginConfig);
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({

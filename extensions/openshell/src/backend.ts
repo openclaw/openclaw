@@ -1,7 +1,13 @@
 // Openshell plugin module implements backend behavior.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -38,7 +44,6 @@ import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
-  movePathWithCopyFallback,
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
@@ -86,107 +91,29 @@ function buildOpenShellDirectoryUploadArgs(params: {
 // holds operator data) and re-seeding would destroy remote-canonical state.
 const REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT =
   'for root in "$@"; do if [ -d "$root" ] && [ -n "$(ls -A "$root")" ]; then printf "1\\n"; exit 0; fi; done; printf "0\\n"';
-const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
-  "set -eu",
-  'die() { echo "$1" >&2; exit 1; }',
-  "validate_basename() {",
-  '  case "$1" in ""|"."|".."|*/*) die "unsafe remote basename: $1" ;; esac',
-  "}",
-  "pin_dir() {",
-  '  root="$1"',
-  '  relative="$2"',
-  '  create="$3"',
-  '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
-  '  root="${root%/}"',
-  '  [ -n "$root" ] || root="/"',
-  '  if [ -L "$root" ]; then die "unsafe remote root symlink: $root"; fi',
-  '  mkdir -p -- "$root"',
-  '  canonical_root="$(cd "$root" && pwd -P)"',
-  '  current="$canonical_root"',
-  '  relative="${relative#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") die "unsafe remote directory component: $part" ;; esac',
-  '    if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '    if [ -L "$next" ]; then die "unsafe remote directory symlink: $next"; fi',
-  '    if [ -e "$next" ]; then',
-  '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
-  "    else",
-  '      if [ "$create" != "1" ]; then die "remote directory not found: $next"; fi',
-  '      mkdir -- "$next"',
-  "    fi",
-  '    current="$next"',
-  "  done",
-  '  printf "%s\\n" "$current"',
-  "}",
-  "pin_dir_or_missing() {",
-  '  root="$1"',
-  '  relative="$2"',
-  '  missing_ok="$3"',
-  '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
-  '  root="${root%/}"',
-  '  [ -n "$root" ] || root="/"',
-  '  if [ -L "$root" ]; then die "unsafe remote root symlink: $root"; fi',
-  '  if [ ! -d "$root" ]; then',
-  '    if [ -e "$root" ]; then die "unsafe remote root component: $root"; fi',
-  '    if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
-  '    die "remote directory not found: $root"',
-  "  fi",
-  '  canonical_root="$(cd "$root" && pwd -P)"',
-  '  current="$canonical_root"',
-  '  relative="${relative#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") die "unsafe remote directory component: $part" ;; esac',
-  '    if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '    if [ -L "$next" ]; then die "unsafe remote directory symlink: $next"; fi',
-  '    if [ -e "$next" ]; then',
-  '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
-  "    else",
-  '      if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
-  '      die "remote directory not found: $next"',
-  "    fi",
-  '    current="$next"',
-  "  done",
-  '  printf "%s\\n" "$current"',
-  "}",
-  'operation="$1"',
-  'case "$operation" in',
-  "  mkdirp)",
-  '    pin_dir "$2" "$3" 1 >/dev/null',
-  "    ;;",
-  "  remove)",
-  '    validate_basename "$4"',
-  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
-  '    [ -n "$parent" ] || exit 0',
-  '    target="$parent/$4"',
-  '    if [ -d "$target" ] && [ ! -L "$target" ]; then rm -rf -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
-  "    ;;",
-  "  removefile)",
-  '    validate_basename "$4"',
-  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
-  '    [ -n "$parent" ] || exit 0',
-  '    target="$parent/$4"',
-  '    if [ -d "$target" ] && [ ! -L "$target" ]; then rmdir -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
-  "    ;;",
-  "  rename)",
-  '    src_parent="$(pin_dir "$2" "$3" 0)"',
-  '    validate_basename "$4"',
-  '    dst_parent="$(pin_dir "$5" "$6" 1)"',
-  '    validate_basename "$7"',
-  '    if [ -L "$dst_parent/$7" ]; then die "unsafe remote rename target symlink: $dst_parent/$7"; fi',
-  '    if [ -d "$dst_parent/$7" ]; then die "unsafe remote rename target directory: $dst_parent/$7"; fi',
-  '    mv -- "$src_parent/$4" "$dst_parent/$7"',
-  "    ;;",
-  "  *)",
-  '    die "unknown remote path mutation: $operation"',
-  "    ;;",
-  "esac",
-].join("\n");
+// Keep mirror admission and missing-parent policy outside the shared guest engine.
+const OPEN_SHELL_GUEST_MUTATION_PYTHON = `
+import os, sys
+guest = sys.argv.pop(1)
+ignore_missing_parent = sys.argv.pop(1) == '1'
+operation = sys.argv[1]
+for index in ((2, 5) if operation == 'rename' else (2,)):
+    root = sys.argv[index].rstrip('/') or '/'
+    sys.argv[index] = root
+    if not os.path.isabs(root) or os.path.islink(root):
+        raise OSError('unsafe remote root: ' + root)
+    if operation != 'remove':
+        os.makedirs(root, exist_ok=True)
+if operation == 'rename':
+    target = os.path.join(sys.argv[5], sys.argv[6], sys.argv[7])
+    if os.path.islink(target) or os.path.isdir(target):
+        raise OSError('unsafe remote rename target: ' + target)
+try:
+    exec(guest)
+except FileNotFoundError:
+    if operation != 'remove' or not ignore_missing_parent:
+        raise
+`;
 const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "set -e",
   'target="$1"',
@@ -391,9 +318,14 @@ class OpenShellSandboxBackendImpl {
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
     return {
+      get pathMappings() {
+        return bridge.pathMappings;
+      },
       resolvePath: (params) => bridge.resolvePath(params),
       readFile: (params) =>
         this.runWorkspaceOperation(() => bridge.readFile(params), params.signal),
+      readDirectory: (params) =>
+        this.runWorkspaceOperation(() => bridge.readDirectory(params), params.signal),
       writeFile: (params) =>
         this.runWorkspaceOperation(() => bridge.writeFile(params), params.signal),
       createFileExclusive: (params) =>
@@ -648,14 +580,16 @@ class OpenShellSandboxBackendImpl {
     const target = this.resolveRemoteTarget(remotePath);
     await this.runPinnedRemotePathMutation({
       args: [
-        params?.recursive ? "remove" : "removefile",
+        "remove",
         target.root,
         path.posix.dirname(target.relativePath) === "."
           ? ""
           : path.posix.dirname(target.relativePath),
         path.posix.basename(target.relativePath),
-        params?.ignoreMissing ? "1" : "0",
+        params?.recursive ? "1" : "0",
+        "1",
       ],
+      ignoreMissingParent: params?.ignoreMissing,
       signal: params?.signal,
     });
   }
@@ -676,6 +610,7 @@ class OpenShellSandboxBackendImpl {
         to.root,
         path.posix.dirname(to.relativePath) === "." ? "" : path.posix.dirname(to.relativePath),
         path.posix.basename(to.relativePath),
+        "1",
       ],
       signal,
     });
@@ -711,32 +646,8 @@ class OpenShellSandboxBackendImpl {
     await this.maybeSeedRemoteWorkspace();
     const target = this.resolveRemoteTarget(remotePath);
     const stats = await fs.lstat(localPath).catch(() => null);
-    if (!stats) {
-      await this.runPinnedRemotePathMutation({
-        args: [
-          "remove",
-          target.root,
-          path.posix.dirname(target.relativePath) === "."
-            ? ""
-            : path.posix.dirname(target.relativePath),
-          path.posix.basename(target.relativePath),
-          "1",
-        ],
-      });
-      return;
-    }
-    if (stats.isSymbolicLink()) {
-      await this.runPinnedRemotePathMutation({
-        args: [
-          "remove",
-          target.root,
-          path.posix.dirname(target.relativePath) === "."
-            ? ""
-            : path.posix.dirname(target.relativePath),
-          path.posix.basename(target.relativePath),
-          "1",
-        ],
-      });
+    if (!stats || stats.isSymbolicLink()) {
+      await this.removeRemotePath(remotePath, { recursive: true, ignoreMissing: true });
       return;
     }
     if (stats.isDirectory()) {
@@ -771,11 +682,17 @@ class OpenShellSandboxBackendImpl {
 
   private async runPinnedRemotePathMutation(params: {
     args: string[];
+    ignoreMissingParent?: boolean;
     signal?: AbortSignal;
   }): Promise<SandboxBackendCommandResult> {
     return await this.runRemoteShellScript({
-      script: PINNED_REMOTE_PATH_MUTATION_SCRIPT,
-      args: params.args,
+      script: 'python_script="$1"; shift; python3 -c "$python_script" "$@"',
+      args: [
+        OPEN_SHELL_GUEST_MUTATION_PYTHON,
+        GUEST_FILESYSTEM_PYTHON,
+        params.ignoreMissingParent ? "1" : "0",
+        ...params.args,
+      ],
       signal: params.signal,
     });
   }
@@ -1075,6 +992,7 @@ class OpenShellSandboxBackendImpl {
             throw new Error(result.stderr.trim() || "openshell sandbox download failed");
           }
           const preservedShadows: PreservedLocalShadow[] = [];
+          const failures: unknown[] = [];
           try {
             for (const shadowedRoot of roots.slice(index + 1)) {
               if (
@@ -1088,14 +1006,12 @@ class OpenShellSandboxBackendImpl {
                 .split("/")
                 .filter(Boolean);
               await removeDownloadedWorkspacePath(tmpDir, relativeParts);
-              const preserved = await moveLocalShadowAside({
+              await moveLocalShadowAside({
                 workspaceDir: root.local,
                 tmpDir,
                 relativeParts,
+                preservedShadows,
               });
-              if (preserved) {
-                preservedShadows.push(preserved);
-              }
             }
             const relativeSkillsPath = path.posix.relative(root.remote, remoteSkillsWorkspaceDir);
             if (
@@ -1108,14 +1024,12 @@ class OpenShellSandboxBackendImpl {
               );
             }
             if (root.owner === "workspace") {
-              const preserved = await moveLocalShadowAside({
+              await moveLocalShadowAside({
                 workspaceDir: root.local,
                 tmpDir,
                 relativeParts: MATERIALIZED_SKILLS_REMOTE_PARTS,
+                preservedShadows,
               });
-              if (preserved) {
-                preservedShadows.push(preserved);
-              }
             }
             await replaceDirectoryContents({
               sourceDir: tmpDir,
@@ -1124,10 +1038,38 @@ class OpenShellSandboxBackendImpl {
               // the remote sandbox.
               excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
             });
-          } finally {
-            for (const preserved of preservedShadows.toReversed()) {
-              await restoreLocalShadow({ workspaceDir: root.local, preserved });
+          } catch (error) {
+            failures.push(error);
+          }
+          const retained: string[] = [];
+          for (const preserved of preservedShadows.toReversed()) {
+            if (preserved.sourceRetired) {
+              try {
+                const cleanupFailure = await restoreLocalShadow(preserved);
+                if (cleanupFailure) {
+                  failures.push(cleanupFailure);
+                }
+                continue;
+              } catch (error) {
+                failures.push(error);
+              }
             }
+            retained.push(`${preserved.receipt.path} (workspace path: ${preserved.shadowPath})`);
+          }
+          if (retained.length > 0 || failures.length > 1) {
+            const recovery =
+              retained.length > 0
+                ? ` Inspect the recovery paths ${retained.join("; ")}. ` +
+                  "Remaining workspace entries were preserved; compare both paths before recovering or deleting either copy."
+                : "";
+            throw new AggregateError(
+              failures,
+              `OpenShell mirror synchronization failed: ${failures.map(String).join("; ")}.${recovery}`,
+              { cause: failures[0] },
+            );
+          }
+          if (failures.length > 0) {
+            throw failures[0];
           }
         },
       );
@@ -1317,60 +1259,85 @@ async function removeDownloadedWorkspacePath(
 }
 
 type PreservedLocalShadow = {
-  preservedPath: string;
-  preserveRoot: string;
-  relativeParts: readonly string[];
+  receipt: MovePathPublicationReceipt;
+  shadowPath: string;
+  sourceRetired: boolean;
 };
 
 async function moveLocalShadowAside(params: {
   workspaceDir: string;
   tmpDir: string;
   relativeParts: readonly string[];
-}): Promise<PreservedLocalShadow | undefined> {
+  preservedShadows: PreservedLocalShadow[];
+}): Promise<void> {
   const shadowPath = path.join(params.workspaceDir, ...params.relativeParts);
   const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const shadowStats = await fs.lstat(shadowPath).catch(() => null);
   if (!shadowStats || shadowStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const preserveRoot = await fs.mkdtemp(
     path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
   );
-  const preservedPath = path.join(preserveRoot, "shadow");
-  await movePathWithCopyFallback({ from: shadowPath, to: preservedPath });
-  return { preservedPath, preserveRoot, relativeParts: params.relativeParts };
+  let preserved: PreservedLocalShadow | undefined;
+  await movePathWithCopyFallback({
+    from: shadowPath,
+    to: path.join(preserveRoot, "shadow"),
+    onDestinationPublished: (receipt) => {
+      preserved = { receipt, shadowPath, sourceRetired: false };
+      params.preservedShadows.push(preserved);
+    },
+  });
+  if (preserved) {
+    preserved.sourceRetired = true;
+  }
 }
 
-async function restoreLocalShadow(params: {
-  workspaceDir: string;
-  preserved: PreservedLocalShadow;
-}): Promise<void> {
-  let restored = false;
-  try {
-    const shadowPath = path.join(params.workspaceDir, ...params.preserved.relativeParts);
-    const parentPath = path.dirname(shadowPath);
-    const parentStats = await fs.lstat(parentPath).catch(() => null);
-    if (parentStats?.isSymbolicLink()) {
-      throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
-    }
-    if (parentStats && !parentStats.isDirectory()) {
-      await fs.rm(parentPath, { recursive: true, force: true });
-    }
-    await fs.mkdir(parentPath, { recursive: true });
-    await fs.rm(shadowPath, { recursive: true, force: true });
-    await movePathWithCopyFallback({
-      from: params.preserved.preservedPath,
-      to: shadowPath,
-    });
-    restored = true;
-  } finally {
-    if (restored) {
-      await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
-    }
+function assertPreservedShadowIdentity(receipt: MovePathPublicationReceipt): void {
+  const stat = fsSync.lstatSync(receipt.path, { bigint: true });
+  if (
+    stat.isSymbolicLink() ||
+    stat.dev !== receipt.dev ||
+    stat.ino !== receipt.ino ||
+    (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
+  ) {
+    throw new Error(`Refusing to restore an unverified workspace shadow: ${receipt.path}`);
   }
+}
+
+async function restoreLocalShadow(preserved: PreservedLocalShadow): Promise<Error | undefined> {
+  const { shadowPath, receipt } = preserved;
+  const assertBackup = () => assertPreservedShadowIdentity(receipt);
+  const parentPath = path.dirname(shadowPath);
+  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  if (parentStats?.isSymbolicLink()) {
+    throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
+  }
+  if (parentStats && !parentStats.isDirectory()) {
+    assertBackup();
+    await fs.rm(parentPath, { recursive: true, force: true });
+  }
+  assertBackup();
+  await fs.mkdir(parentPath, { recursive: true });
+  assertBackup();
+  await fs.rm(shadowPath, { recursive: true, force: true });
+  await movePathWithCopyFallback({
+    from: receipt.path,
+    to: shadowPath,
+    assertBeforeMutation: assertBackup,
+  });
+  try {
+    await fs.rmdir(path.dirname(receipt.path));
+  } catch (error) {
+    return new Error(
+      `Workspace shadow was restored at ${shadowPath}, but preservation directory cleanup failed at ${path.dirname(receipt.path)}`,
+      { cause: error },
+    );
+  }
+  return undefined;
 }
 
 function resolveOpenShellTmpRoot(): string {

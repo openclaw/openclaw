@@ -33,18 +33,20 @@ const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
 const releases: { release: Mock<() => Promise<void>>; cleanup: () => Promise<void> }[] = [];
 let completedReleases = 0;
 
+async function trackGuardedFetch(params: Parameters<typeof guardedFetch>[0]) {
+  const result = await guardedFetch(params);
+  const release = vi.fn(async () => {
+    await result.release();
+    completedReleases += 1;
+  });
+  releases.push({ release, cleanup: result.release });
+  return { ...result, release };
+}
+
 beforeEach(() => {
   releases.length = 0;
   completedReleases = 0;
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async (params) => {
-    const result = await guardedFetch(params);
-    const release = vi.fn(async () => {
-      await result.release();
-      completedReleases += 1;
-    });
-    releases.push({ release, cleanup: result.release });
-    return { ...result, release };
-  });
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(trackGuardedFetch);
 });
 
 afterEach(async () => {
@@ -64,6 +66,106 @@ afterEach(async () => {
 });
 
 describe("A2A outbound channel delivery", () => {
+  it("rejects revoked handoff authority after asynchronous transport preparation", async () => {
+    let resolveLookup: (() => void) | undefined;
+    let markLookupStarted: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    const lookupFinished = new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
+      resolveLookup = () => resolve([{ address: "93.184.216.34", family: 4 }]);
+    });
+    const lookupFn: NonNullable<Parameters<typeof guardedFetch>[0]["lookupFn"]> = vi.fn(
+      async () => {
+        markLookupStarted?.();
+        return await lookupFinished;
+      },
+    );
+    vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(
+      async (params) => await trackGuardedFetch({ ...params, lookupFn }),
+    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(createA2aJsonResponse({ jsonrpc: "2.0", result: {} }));
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      url: "https://hermes.example/a2a/v1",
+    });
+    let current = true;
+    const assertDirectAdapterHandoff = vi.fn(() => {
+      if (!current) {
+        throw new Error("source authority revoked");
+      }
+    });
+
+    const send = sendA2aChannelText({
+      cfg,
+      to: "hermes",
+      text: "hello",
+      assertDirectAdapterHandoff,
+    });
+    await lookupStarted;
+    current = false;
+    resolveLookup?.();
+
+    await expect(send).rejects.toThrow("source authority revoked");
+    expect(lookupFn).toHaveBeenCalledOnce();
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks handoff authority before the compatibility retry", async () => {
+    let current = true;
+    const assertDirectAdapterHandoff = vi.fn(() => {
+      if (!current) {
+        throw new Error("source authority revoked");
+      }
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      current = false;
+      return createA2aJsonResponse({
+        jsonrpc: "2.0",
+        error: { code: -32601, message: "Method not found" },
+      });
+    });
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      url: "https://hermes.example/a2a/v1",
+    });
+
+    await expect(
+      sendA2aChannelText({ cfg, to: "hermes", text: "hello", assertDirectAdapterHandoff }),
+    ).rejects.toThrow("source authority revoked");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an accepted result when authority closes after request dispatch", async () => {
+    let current = true;
+    const assertDirectAdapterHandoff = vi.fn(() => {
+      if (!current) {
+        throw new Error("source authority revoked");
+      }
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      current = false;
+      return createA2aJsonResponse({
+        jsonrpc: "2.0",
+        result: { task: { id: "accepted-task-1" } },
+      });
+    });
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      url: "https://hermes.example/a2a/v1",
+    });
+
+    await expect(
+      sendA2aChannelText({ cfg, to: "hermes", text: "hello", assertDirectAdapterHandoff }),
+    ).resolves.toMatchObject({ messageId: "accepted-task-1" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
+  });
+
   it("sends authenticated canonical A2A messages without following redirects", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       createA2aJsonResponse({
@@ -133,10 +235,11 @@ describe("A2A outbound channel delivery", () => {
       token: "inbound-token",
       url: "https://hermes.example/a2a/v1",
     });
+    const assertDirectAdapterHandoff = vi.fn();
 
-    await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).resolves.toMatchObject({
-      messageId: "legacy-task-1",
-    });
+    await expect(
+      sendA2aChannelText({ cfg, to: "hermes", text: "hello", assertDirectAdapterHandoff }),
+    ).resolves.toMatchObject({ messageId: "legacy-task-1" });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const methods = fetchMock.mock.calls.map(([, init]) => {
@@ -144,6 +247,7 @@ describe("A2A outbound channel delivery", () => {
       return body.method;
     });
     expect(methods).toEqual(["SendMessage", "message/send"]);
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(2);
     const firstHeaders = fetchMock.mock.calls[0]?.[1]?.headers;
     expect(firstHeaders).not.toHaveProperty("authorization");
   });

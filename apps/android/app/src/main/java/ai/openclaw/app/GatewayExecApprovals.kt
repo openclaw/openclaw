@@ -17,6 +17,15 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
+enum class GatewayApprovalKind(
+  val wireValue: String,
+  val eventPrefix: String,
+) {
+  Exec("exec", "exec"),
+  Plugin("plugin", "plugin"),
+  SystemAgent("system-agent", "openclaw"),
+}
+
 data class GatewayExecApprovalSummary(
   val id: String,
   val commandText: NativeText,
@@ -30,6 +39,18 @@ data class GatewayExecApprovalSummary(
   val expiresAtMs: Long?,
   val resolvingDecision: String? = null,
   val errorText: String? = null,
+  val sessionKey: String? = null,
+  val kind: GatewayApprovalKind = GatewayApprovalKind.Exec,
+  val title: String? = null,
+  val externalResolutionLabel: String? = null,
+  val externalResolutionDecisions: List<String> = emptyList(),
+)
+
+internal data class GatewayExecApprovalInboxState(
+  val approvals: List<GatewayExecApprovalSummary> = emptyList(),
+  val refreshing: Boolean = false,
+  val errorText: String? = null,
+  val notice: GatewayExecApprovalNotice? = null,
 )
 
 internal enum class GatewayApprovalTerminalStatus {
@@ -75,7 +96,7 @@ data class GatewayExecApprovalNotice(
   val message: String,
   val warning: Boolean,
   // Distinct per constructed notice: a re-requested approval can lose again with an
-  // identical id/message, and the dismiss compareAndSet must not treat the stale
+  // identical id/message, and conditional dismissal must not treat the stale
   // banner as equal to its replacement.
   val publication: Long = execApprovalNoticePublications.incrementAndGet(),
 )
@@ -217,31 +238,37 @@ internal fun buildGatewayExecApprovalGetParams(id: String): JsonObject = buildJs
 internal fun buildGatewayExecApprovalResolveParams(
   id: String,
   decision: String,
+  kind: GatewayApprovalKind = GatewayApprovalKind.Exec,
 ): JsonObject =
   buildJsonObject {
     put("id", id)
-    put("kind", "exec")
+    put("kind", kind.wireValue)
     put("decision", decision)
   }
 
 internal fun parseGatewayExecApprovalListPayload(
   payloadJson: String,
   json: Json,
+  kind: GatewayApprovalKind = GatewayApprovalKind.Exec,
 ): List<GatewayExecApprovalSummary> =
   try {
     (json.parseToJsonElement(payloadJson) as? JsonArray)
-      ?.mapNotNull(::parseGatewayExecApprovalListEntry)
+      ?.mapNotNull { parseGatewayExecApprovalListEntry(it, kind) }
       ?.sortedBy { it.createdAtMs ?: Long.MAX_VALUE }
       .orEmpty()
   } catch (_: Throwable) {
     emptyList()
   }
 
-internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecApprovalSummary? {
+internal fun parseGatewayExecApprovalListEntry(
+  item: JsonElement,
+  kind: GatewayApprovalKind = GatewayApprovalKind.Exec,
+): GatewayExecApprovalSummary? {
   val obj = item.asObjectOrNull() ?: return null
   val id = obj.strictApprovalId("id") ?: return null
   val createdAtMs = obj.strictNonNegativeLong("createdAtMs") ?: return null
   val expiresAtMs = obj.strictNonNegativeLong("expiresAtMs") ?: return null
+  val request = obj["request"].asObjectOrNull()
   // The legacy list is discovery-only. Its embedded request can contain runtime-only
   // details, so rendering waits for the reviewer-safe unified approval projection.
   return GatewayExecApprovalSummary(
@@ -255,6 +282,8 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
     agentId = null,
     createdAtMs = createdAtMs,
     expiresAtMs = expiresAtMs,
+    sessionKey = request?.strictNonEmptyString("sessionKey"),
+    kind = kind,
   )
 }
 
@@ -438,13 +467,16 @@ internal fun legacyGatewayExecApprovalTerminal(
 private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprovalSnapshot? {
   val status = obj.strictString("status") ?: return null
   val expectedKeys = APPROVAL_SNAPSHOT_KEYS_BY_STATUS[status] ?: return null
-  if (!obj.hasExactKeys(expectedKeys)) return null
+  val attributionKeys = if (status == "pending") setOf("sourceSessionKey") else setOf("source", "resolver")
+  if (!obj.keys.containsAll(expectedKeys) || !obj.hasOnlyKeys(expectedKeys + attributionKeys)) return null
   val id = obj.strictApprovalId("id") ?: return null
   obj.strictNonEmptyString("urlPath") ?: return null
   val createdAtMs = obj.strictNonNegativeLong("createdAtMs") ?: return null
   val expiresAtMs = obj.strictNonNegativeLong("expiresAtMs") ?: return null
   val presentation = obj["presentation"].asObjectOrNull() ?: return null
-  val summary = parseGatewayExecApprovalPresentation(id, createdAtMs, expiresAtMs, presentation) ?: return null
+  val summary =
+    (parseGatewayExecApprovalPresentation(id, createdAtMs, expiresAtMs, presentation) ?: return null)
+      .copy(sessionKey = obj.strictNonEmptyString("sourceSessionKey"))
   return when (status) {
     "pending" -> {
       GatewayExecApprovalSnapshot.Pending(summary)
@@ -500,11 +532,45 @@ private fun parseGatewayExecApprovalPresentation(
   expiresAtMs: Long,
   presentation: JsonObject,
 ): GatewayExecApprovalSummary? {
+  val kind = GatewayApprovalKind.entries.firstOrNull { it.wireValue == presentation.strictString("kind") } ?: return null
+  if (kind != GatewayApprovalKind.Exec) {
+    val keys = if (kind == GatewayApprovalKind.Plugin) PLUGIN_APPROVAL_PRESENTATION_KEYS else SYSTEM_APPROVAL_PRESENTATION_KEYS
+    if (!presentation.hasOnlyKeys(keys)) return null
+    val title = presentation.strictNonEmptyString("title") ?: return null
+    val description = presentation.strictNonEmptyString("description") ?: return null
+    val decisions = parseAllowedDecisions(presentation["allowedDecisions"] as? JsonArray) ?: return null
+    if (kind == GatewayApprovalKind.SystemAgent && decisions != listOf("allow-once", "deny")) return null
+    if (kind == GatewayApprovalKind.SystemAgent && presentation.strictString("proposalHash")?.matches(Regex("[a-f0-9]{64}")) != true) return null
+    if (kind == GatewayApprovalKind.Plugin && presentation.strictString("severity") !in setOf("info", "warning", "critical")) return null
+    val agentId = presentation.optionalString("agentId", requireNonEmpty = true) ?: return null
+    val external = if (presentation.containsKey("externalResolution")) presentation["externalResolution"].asObjectOrNull() ?: return null else null
+    val externalDecisions =
+      external
+        ?.let {
+          if (!it.hasExactKeys(setOf("label", "decisions")) || it.strictNonEmptyString("label") == null) return null
+          val values = (it["decisions"] as? JsonArray)?.map { value -> value.strictString() ?: return null } ?: return null
+          if (values.size !in 1..2 || values.distinct().size != values.size || values.any { decision -> decision !in setOf("allow-once", "allow-always") }) return null
+          values
+        }.orEmpty()
+    return GatewayExecApprovalSummary(
+      id = id,
+      commandText = verbatimText(description),
+      commandPreview = presentation.strictNonEmptyString("detail"),
+      warningText = null,
+      allowedDecisions = decisions,
+      host = null,
+      nodeId = null,
+      agentId = agentId.value,
+      createdAtMs = createdAtMs,
+      expiresAtMs = expiresAtMs,
+      kind = kind,
+      title = title,
+      externalResolutionLabel = external?.strictNonEmptyString("label"),
+      externalResolutionDecisions = externalDecisions,
+    )
+  }
   if (!presentation.hasOnlyKeys(EXEC_APPROVAL_PRESENTATION_KEYS)) return null
   if (!presentation.keys.containsAll(EXEC_APPROVAL_PRESENTATION_REQUIRED_KEYS)) return null
-  // A unified lookup can return other approval owners. Android's exec inbox must
-  // never reinterpret plugin copy or metadata as an executable command request.
-  if (presentation.strictString("kind") != "exec") return null
   val commandText = presentation.strictNonEmptyString("commandText") ?: return null
   val allowedDecisions = parseAllowedDecisions(presentation["allowedDecisions"] as? JsonArray) ?: return null
   val commandPreview = presentation.optionalString("commandPreview") ?: return null
@@ -641,7 +707,10 @@ private val EXEC_APPROVAL_PRESENTATION_REQUIRED_KEYS = setOf("kind", "commandTex
 
 private val EXEC_APPROVAL_PRESENTATION_KEYS =
   EXEC_APPROVAL_PRESENTATION_REQUIRED_KEYS +
-    setOf("commandPreview", "warningText", "host", "nodeId", "agentId")
+    setOf("commandPreview", "warningText", "host", "nodeId", "agentId", "scope")
+
+private val PLUGIN_APPROVAL_PRESENTATION_KEYS = setOf("kind", "title", "description", "detail", "severity", "pluginId", "toolName", "agentId", "scope", "allowedDecisions", "externalResolution")
+private val SYSTEM_APPROVAL_PRESENTATION_KEYS = setOf("kind", "title", "description", "proposalHash", "agentId", "allowedDecisions")
 
 private val APPROVAL_DECISIONS = setOf("allow-once", "allow-always", "deny")
 

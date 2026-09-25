@@ -12,6 +12,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rollbackChatGptImportRun } from "./chatgpt-import.js";
 import { configureMemoryWikiCompiledCacheStore } from "./compiled-cache.js";
+import { deferred } from "./deferred.test-helpers.js";
+import type { RootMoveHooks } from "./guarded-root.test-support.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
@@ -32,6 +34,29 @@ const compileControl = vi.hoisted(
     },
 );
 
+const rootControl = vi.hoisted(() => ({
+  afterMove: undefined as RootMoveHooks["afterMove"],
+  moves: vi.fn<(from: string, to: string) => void>(),
+  lists: [] as Array<{ rootDir: string; calls: [string, ...unknown[]][] }>,
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  const { observeRootMoves } = await import("./guarded-root.test-support.js");
+  return {
+    ...actual,
+    root: async (...args: Parameters<typeof actual.root>) => {
+      const vault = observeRootMoves(await actual.root(...args), {
+        beforeMove: rootControl.moves,
+        afterMove: (from, to) => rootControl.afterMove?.(from, to),
+      });
+      const list = vi.spyOn(vault, "list");
+      rootControl.lists.push({ rootDir: vault.rootDir, calls: list.mock.calls });
+      return vault;
+    },
+  };
+});
+
 vi.mock("./compile.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./compile.js")>();
   return {
@@ -46,14 +71,6 @@ vi.mock("./compile.js", async (importOriginal) => {
 });
 
 const { configureCompiledCacheStore, createTempDir, createVault } = createMemoryWikiTestHarness();
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function configureDurableImportRunStore(
   stateDir: string,
@@ -114,6 +131,9 @@ function renderCompiledRelatedPage(base: string, suffix = ""): string {
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   compileControl.calls = 0;
+  rootControl.afterMove = undefined;
+  rootControl.moves.mockClear();
+  rootControl.lists.length = 0;
   configureMemoryWikiImportRunStateStore(undefined);
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
@@ -207,9 +227,10 @@ describe("ChatGPT import rollback recovery", () => {
       contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
     });
 
-    const realRename = fs.rename;
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
-      await realRename(from, to);
+    rootControl.afterMove = async (from, to) => {
+      expect(from).toBe(targetPath);
+      expect(path.basename(to)).toBe("content");
+      rootControl.afterMove = undefined;
       await expect(
         readMemoryWikiImportRunRecord(rootDir, "chatgpt-crash-retry"),
       ).resolves.toMatchObject({
@@ -217,11 +238,11 @@ describe("ChatGPT import rollback recovery", () => {
       });
       await fs.writeFile(from, "# Recreated before fence\n", "utf8");
       throw new Error("simulated process crash after rename");
-    });
+    };
     await expect(
       rollbackChatGptImportRun({ config, runId: "chatgpt-crash-retry" }),
     ).rejects.toThrow("simulated process crash");
-    renameSpy.mockRestore();
+    rootControl.afterMove = undefined;
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("# Recreated before fence\n");
     await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).resolves.toBeDefined();
 
@@ -244,7 +265,7 @@ describe("ChatGPT import rollback recovery", () => {
     await fs.writeFile(path.join(rootDir, preserved?.recoveryPath ?? ""), imported, "utf8");
     resetPluginStateStoreForTests();
     configureDurableImportRunStore(stateDir);
-    const renameRetrySpy = vi.spyOn(fs, "rename");
+    rootControl.moves.mockClear();
     const mkdtempRetrySpy = vi.spyOn(fs, "mkdtemp");
     const rmRetrySpy = vi.spyOn(fs, "rm");
     const rmdirRetrySpy = vi.spyOn(fs, "rmdir");
@@ -252,7 +273,7 @@ describe("ChatGPT import rollback recovery", () => {
     const repeated = await rollbackChatGptImportRun({ config, runId: "chatgpt-crash-retry" });
     expect(repeated.alreadyRolledBack).toBe(true);
     expect(repeated.preservedPaths).toStrictEqual(retried.preservedPaths);
-    expect(renameRetrySpy).not.toHaveBeenCalled();
+    expect(rootControl.moves).not.toHaveBeenCalled();
     expect(mkdtempRetrySpy).not.toHaveBeenCalled();
     expect(rmRetrySpy).not.toHaveBeenCalled();
     expect(rmdirRetrySpy).not.toHaveBeenCalled();
@@ -291,24 +312,18 @@ describe("ChatGPT import rollback recovery", () => {
       contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
     });
 
-    const realRename = fs.rename;
     let recreateCount = 0;
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      await realRename(from, to);
-      if (
-        recreateCount < 32 &&
-        path.basename(String(from)) === path.basename(targetPath) &&
-        path.basename(String(to)) === "content"
-      ) {
+    rootControl.afterMove = async (from, to) => {
+      if (recreateCount < 32 && from === targetPath && path.basename(to) === "content") {
         recreateCount += 1;
         await fs.writeFile(targetPath, `# Recreated ${recreateCount}\n`, "utf8");
       }
-    });
+    };
 
     await expect(rollbackChatGptImportRun({ config, runId })).rejects.toThrow(
       "after 32 concurrent recreations",
     );
-    renameSpy.mockRestore();
+    rootControl.afterMove = undefined;
     expect(recreateCount).toBe(32);
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("# Recreated 32\n");
 
@@ -367,12 +382,15 @@ describe("ChatGPT import rollback recovery", () => {
     const rollbackQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        rollbackQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      rollbackQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let rollback: ReturnType<typeof rollbackChatGptImportRun> | undefined;
     try {
       rollback = rollbackChatGptImportRun({ config, runId: "chatgpt-queued" });
@@ -417,20 +435,18 @@ describe("ChatGPT import rollback recovery", () => {
       },
     });
 
-    const realRename = fs.rename;
     let recreatedOnce = false;
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      await realRename(from, to);
-      if (!recreatedOnce && path.basename(String(to)) === "content") {
+    rootControl.afterMove = async (from, to) => {
+      if (!recreatedOnce && from === targetPath && path.basename(to) === "content") {
         recreatedOnce = true;
         await fs.writeFile(from, recreated, "utf8");
       }
-    });
+    };
     const result = await rollbackChatGptImportRun({
       config,
       runId: "chatgpt-created-recreated",
     });
-    renameSpy.mockRestore();
+    rootControl.afterMove = undefined;
 
     expect(recreatedOnce).toBe(true);
     expect(rollbackWrites).toBe(4);
@@ -560,7 +576,7 @@ describe("ChatGPT import rollback recovery", () => {
     configureCompiledCacheStore();
     const realReadFile = fs.readFile;
     const realWriteFile = fs.writeFile;
-    const renameSpy = vi.spyOn(fs, "rename");
+    rootControl.moves.mockClear();
     let savedAfterRead = false;
     const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const result = await Reflect.apply(realReadFile, fs, args);
@@ -589,13 +605,13 @@ describe("ChatGPT import rollback recovery", () => {
     expect(savedAfterRead).toBe(true);
     expect(result.alreadyRolledBack).toBe(false);
     expect(
-      renameSpy.mock.calls.some(([from, to]) => from === targetPath || to === targetPath),
+      rootControl.moves.mock.calls.some(([from, to]) => from === targetPath || to === targetPath),
     ).toBe(false);
     expect(sourceWrites).toBe(0);
     await expect(realReadFile(targetPath, "utf8")).resolves.toBe(afterCompilerRead);
     readSpy.mockRestore();
     writeSpy.mockRestore();
-    renameSpy.mockRestore();
+    rootControl.afterMove = undefined;
     await expect(
       readMemoryWikiImportRunRecord(rootDir, "chatgpt-finalizing"),
     ).resolves.toMatchObject({
@@ -641,20 +657,20 @@ describe("ChatGPT import rollback recovery", () => {
         rollbackWrites += 1;
       },
     });
-    const realReaddir = fs.readdir;
-    let recoveryScans = 0;
-    vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-      if (path.basename(String(args[0])) === "recovered" && String(args[0]).includes(runId)) {
-        recoveryScans += 1;
-      }
-      return await Reflect.apply(realReaddir, fs, args);
-    });
+    rootControl.lists.length = 0;
 
     await expect(rollbackChatGptImportRun({ config, runId })).resolves.toMatchObject({
       removedCount: createdPaths.length,
       preservedPaths: [],
     });
-    expect(recoveryScans).toBe(1);
+    const recoveryScans = rootControl.lists.flatMap(({ rootDir: listedRoot, calls }) =>
+      calls.filter(
+        ([relativePath]) =>
+          path.resolve(listedRoot, relativePath) ===
+          path.join(rootDir, ".openclaw-wiki", "import-runs", runId, "recovered"),
+      ),
+    );
+    expect(recoveryScans).toHaveLength(1);
     expect(rollbackWrites).toBe(3);
   });
 

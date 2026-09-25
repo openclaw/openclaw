@@ -1,11 +1,9 @@
-// Discord plugin module implements agent components.modal behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import { resolveDiscordModalEntryWithPersistence } from "../components-registry.js";
 import { Modal, type ComponentData, type ModalInteraction } from "../internal/discord.js";
 import {
   type AgentComponentContext,
-  ensureComponentUserAllowed,
   formatModalSubmissionText,
   parseDiscordModalId,
   replyUnavailableComponentInteraction,
@@ -52,38 +50,14 @@ export class DiscordComponentModal extends Modal {
       label: "discord component modal",
       componentLabel: "form",
       unauthorizedReply,
+      allowedUsers: modalEntry.allowedUsers,
       defer: false,
     });
     if (!authorized) {
       return;
     }
-    const {
-      interactionCtx,
-      channelCtx,
-      guildInfo,
-      allowNameMatching,
-      commandAuthorized,
-      user,
-      replyOpts,
-    } = authorized;
-
-    const modalAllowed = await ensureComponentUserAllowed({
-      entry: {
-        id: modalEntry.id,
-        kind: "button",
-        label: modalEntry.title,
-        allowedUsers: modalEntry.allowedUsers,
-      },
-      interaction,
-      user,
-      replyOpts,
-      componentLabel: "form",
-      unauthorizedReply,
-      allowNameMatching,
-    });
-    if (!modalAllowed) {
-      return;
-    }
+    const ctx = authorized.ctx;
+    const { interactionCtx, channelCtx, guildInfo, commandAuthorized } = authorized;
 
     const consumed = await resolveDiscordModalEntryWithPersistence({
       id: modalId,
@@ -101,7 +75,7 @@ export class DiscordComponentModal extends Modal {
         values: resolveModalFieldValues(field, interaction),
       }));
       const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-        ctx: this.ctx,
+        ctx,
         interaction,
         interactionCtx,
         channelCtx,
@@ -124,7 +98,7 @@ export class DiscordComponentModal extends Modal {
 
     const eventText = formatModalSubmissionText(consumed, interaction);
     await dispatchDiscordComponentEvent({
-      ctx: this.ctx,
+      ctx,
       interaction,
       interactionCtx,
       channelCtx,

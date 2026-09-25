@@ -1,7 +1,7 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 // Provider stream tests cover shared stream-wrapper families and payload compatibility.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
@@ -68,14 +68,7 @@ function streamTestMessage(text: string) {
     api: streamTestModel.api,
     provider: streamTestModel.provider,
     model: streamTestModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: 1,
   };
@@ -588,16 +581,22 @@ describe("buildProviderStreamFamilyHooks", () => {
       "high",
     );
 
+    const openRouterNoEffortModel = {
+      ...streamTestModel,
+      provider: "openrouter",
+      id: "example/no-effort-selector",
+      compat: { supportsReasoningEffort: false },
+    };
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
-        modelId: "x-ai/grok-3",
+        modelId: openRouterNoEffortModel.id,
       } as never),
-    )({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
-    const openRouterGrokPayload = requirePayload(capturedPayload);
-    expectDefaultThinkingBudget(openRouterGrokPayload);
-    expect(openRouterGrokPayload).not.toHaveProperty("reasoning");
+    )(openRouterNoEffortModel, {} as never, {});
+    const openRouterNoEffortPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterNoEffortPayload);
+    expect(openRouterNoEffortPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(
@@ -621,16 +620,6 @@ describe("buildProviderStreamFamilyHooks", () => {
     const toolStreamDisabledPayload = requirePayload(capturedPayload);
     expectDefaultThinkingBudget(toolStreamDisabledPayload);
     expect(toolStreamDisabledPayload).not.toHaveProperty("tool_stream");
-  });
-
-  it("exposes canonical stream hook constants for reused families", () => {
-    expect(GOOGLE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(KILOCODE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(MINIMAX_FAST_MODE_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(MOONSHOT_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
   });
 });
 

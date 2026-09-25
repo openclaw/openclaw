@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 
@@ -12,7 +12,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
+function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
   const makeAccount = (id: string): UserModelAccount => ({
     authProfileId: `personal:person-a:test:${id}`,
     provider: "test",
@@ -21,8 +21,7 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
     selected: false,
   });
   const accounts: [UserModelAccount, UserModelAccount] = [makeAccount("one"), makeAccount("two")];
-  const confirmed: ChatMetadataResult = {
-    commands: [],
+  const confirmed: ModelCatalogResult = {
     models: [{ id: "primary", name: "Primary", provider: "test", available: true }],
     accountSelection: {
       kind: "personal",
@@ -38,7 +37,7 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
       if (method === "users.listModelAccounts") {
         return { profileId: "person-a", accounts, links: [] };
       }
-      if (method === "chat.metadata") {
+      if (method === "models.list") {
         const account =
           params && typeof params === "object" && "authProfileId" in params
             ? accounts.find((candidate) => candidate.authProfileId === params.authProfileId)
@@ -53,8 +52,7 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
               },
             })
           : {
-              commands: [],
-              models: confirmed.models?.map((model) =>
+              models: confirmed.models.map((model) =>
                 Object.assign({}, model, { available: false, unavailableReason: "missing-auth" }),
               ),
               accountSelection: { kind: "automatic", label: "Automatic" },
@@ -68,9 +66,7 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
   const select = (value: string) =>
-    draw()
-      .querySelector(".chat-model-account__picker")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
   return {
     ...fixture,
     accounts,
@@ -78,7 +74,7 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector(".chat-model-account__picker")!.dispatchEvent(new Event("wa-show"));
+      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);
@@ -140,7 +136,7 @@ describe("prepared title creation handoff", () => {
   it.each(["pending", "unconfirmed", "different provider"])(
     "pauses personal title inference for a %s preview without disabling ordinary naming",
     async (outcome) => {
-      const preview = createDeferred<ChatMetadataResult>();
+      const preview = createDeferred<ModelCatalogResult>();
       const fixture = accountTitleFixture(preview.promise);
       const { accounts, confirmed, flow, titles, titleRequest, chooseAccount, select } = fixture;
       try {

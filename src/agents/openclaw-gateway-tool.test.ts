@@ -1,6 +1,15 @@
 // Verifies the read-only OpenClaw gateway tool schema and config reads.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REDACTED_SENTINEL, redactConfigSnapshot } from "../config/redact-snapshot.js";
+import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  resultDetails,
+} from "./code-mode.test-support.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -41,6 +50,8 @@ function expectRecordFields(
 }
 
 describe("gateway tool", () => {
+  afterEach(resetCodeModeTestState);
+
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
@@ -81,13 +92,56 @@ describe("gateway tool", () => {
     });
   });
 
-  it("scopes config.get output to the requested path and keeps metadata compact", async () => {
+  it("preserves scoped redacted config.get data through Code Mode", async () => {
+    const secret = "fixture-gateway-token-not-live";
+    const snapshot = redactConfigSnapshot(
+      makeSnapshot({ gateway: { port: 19_001, auth: { token: secret } } }),
+      { "gateway.auth.token": { sensitive: true } },
+    );
+    callGatewayToolMock.mockResolvedValue(snapshot);
+    const gateway = createGatewayTool();
+    const direct = await gateway.execute("direct-config", {
+      action: "config.get",
+      path: "gateway",
+    });
+    const text = expectDefined(
+      direct.content.find((part) => part.type === "text"),
+      "config JSON content",
+    );
+    const expected = {
+      ok: true,
+      result: {
+        hash: "abc123",
+        path: "gateway",
+        config: { port: 19_001, auth: { token: REDACTED_SENTINEL } },
+      },
+    };
+    expect(JSON.parse(text.text)).toEqual(expected);
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, gateway] });
+    const bridged = resultDetails(
+      await h.tools[0]!.execute("config-through-code", {
+        code: 'return await gateway({ action: "config.get", path: "gateway" });',
+      }),
+    );
+    expect(bridged).toMatchObject({ status: "completed", value: expected });
+    expect(JSON.stringify(bridged)).not.toContain(secret);
+  });
+
+  it("scopes both config.get result representations to the requested path", async () => {
     const result = await createGatewayTool().execute("call-config-get", {
       action: "config.get",
       path: "tools.exec",
     });
 
-    expect(result.details).toEqual({ ok: true });
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        hash: "hash-1",
+        path: "tools.exec",
+        config: { ask: "on-miss", security: "allowlist" },
+      },
+    });
     expect(result.content).toEqual([
       {
         type: "text",

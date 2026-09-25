@@ -26,12 +26,14 @@ The older Coding Plan does not include these models. `qwen3.7-max` and
 
 ## Install plugin
 
-`qwen` ships as an official external plugin, not bundled with core. Install it and restart Gateway:
+`qwen` ships as an official external plugin, not bundled with core. Install it:
 
 ```bash
 openclaw plugins install @openclaw/qwen-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -214,6 +216,9 @@ Override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
+Setup keeps connection settings and model aliases, including `modelstudio` aliases, without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 OpenClaw discovers models from the configured endpoint's authenticated `/models`
 API. The plugin keeps the following seed metadata for offline discovery and for
 endpoints that return only model IDs. Coding Plan configs omit models that are
@@ -264,6 +269,9 @@ included here because they use different APIs.
 | `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
 
 ## Thinking controls
+
+Agent runs and standalone completions use the same model-specific thinking
+controls, including Token Plan tool-choice and reasoning-replay requirements.
 
 `qwen3.8-max` and `qwen3.8-flash` support `off`, `low`, `medium`, and `xhigh`
 thinking, with `xhigh` as the default. `minimal` maps to `low`; `high` and `max`
@@ -383,16 +391,15 @@ See [Video generation](/tools/video-generation) for shared tool parameters, prov
   </Accordion>
 
   <Accordion title="Capability plan">
-    The `qwen` plugin is being positioned as the vendor home for the full Qwen
-    Cloud surface, not just coding/text models.
+    Which parts of the Qwen Cloud surface the `qwen` plugin covers today:
 
     - **Text/chat models:** available through the plugin
     - **Tool calling, structured output, thinking:** inherited from the OpenAI-compatible transport
-    - **Image generation:** planned at the provider-plugin layer
     - **Image/video understanding:** available through the plugin on the Standard endpoint
-    - **Speech/audio:** planned at the provider-plugin layer
-    - **Memory embeddings/reranking:** planned through the embedding adapter surface
     - **Video generation:** available through the plugin through the shared video-generation capability
+    - **Image generation:** not exposed by the plugin
+    - **Speech/audio:** not exposed by the plugin
+    - **Memory embeddings/reranking:** not exposed by the plugin
 
   </Accordion>
 

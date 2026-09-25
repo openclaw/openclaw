@@ -53,6 +53,11 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
     parentToolCallId?: string;
     signal?: AbortSignal;
     onUpdate?: AgentToolUpdateCallback;
+    /**
+     * Code Mode's MCP namespace guest expects a thrown denial for resource and
+     * prompt operations. Ordinary `tool_call` keeps the blocked result envelope.
+     */
+    mcpNamespaceGuest?: boolean;
   };
 
 export type ToolSearchCatalogToolExecutor = (params: {
@@ -107,6 +112,8 @@ export type ToolSearchCatalogEntry = {
   name: string;
   label?: string;
   description: string;
+  /** Recorded when the catalog owner also exposes this tool in the native surface. */
+  directVisible?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;

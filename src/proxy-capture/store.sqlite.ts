@@ -3,37 +3,28 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
-import { gunzipSync, gzipSync } from "node:zlib";
-import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sha256Hex } from "../infra/crypto-digest.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { readDebugProxyCaptureBlob, readDebugProxyCaptureSessionEvents } from "./store-readonly.js";
-import type {
-  CaptureBlobRecord,
-  CaptureEventRecord,
-  CaptureObservedDimension,
-  CaptureQueryPreset,
-  CaptureQueryRow,
-  CaptureSessionCoverageSummary,
-  CaptureSessionRecord,
-  CaptureSessionSummary,
-  SharedCaptureBlobRecord,
-} from "./types.js";
+import { finalizeCaptureStore } from "./store-lifecycle.js";
+import {
+  DEBUG_PROXY_CAPTURE_DIR_MODE,
+  DEBUG_PROXY_CAPTURE_FILE_MODE,
+  DebugProxyCaptureKernel,
+} from "./store.kernel.js";
+import type { CaptureBlobRecord, SharedCaptureBlobRecord } from "./types.js";
 
 // Capture rows and compressed payload BLOBs live in the shared global state DB.
 type DebugProxyCaptureStoreOptions = {
@@ -45,8 +36,6 @@ type PathBasedDebugProxyCaptureStore = {
   walMaintenance: SqliteWalMaintenance;
 };
 
-const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
-const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
 const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION = 1;
 const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -182,26 +171,6 @@ function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
-// Metadata is optional and user/tool supplied, so parse defensively for coverage
-// summaries instead of assuming every event has valid JSON.
-function parseMetaJson(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimension[] {
-  return [...counts.entries()]
-    .map(([value, count]) => ({ value, count }))
-    .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
-}
-
 type SharedDebugProxyCaptureState = {
   database: OpenClawStateDatabase;
   env?: NodeJS.ProcessEnv;
@@ -220,12 +189,11 @@ function runSharedDebugProxyCaptureWrite<T>(owner: object, operation: () => T): 
   });
 }
 
-class DebugProxyCaptureStoreImpl {
-  readonly db: DatabaseSync;
-  readonly dbPath: string;
-  readonly blobDir: string;
+class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
-  private closed = false;
+  private readonly releaseIdleReference?: () => void;
+  private closed: boolean;
+  private closing: boolean;
 
   constructor(
     optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
@@ -236,29 +204,59 @@ class DebugProxyCaptureStoreImpl {
         throw new TypeError("legacy debug proxy capture store requires a blob directory");
       }
       const opened = openPathBasedDebugProxyCaptureStore(optionsOrDbPath, legacyBlobDir);
-      this.db = opened.db;
-      this.dbPath = optionsOrDbPath;
-      this.blobDir = legacyBlobDir;
+      super({
+        db: opened.db,
+        dbPath: optionsOrDbPath,
+        blobDir: legacyBlobDir,
+        pathBased: opened.pathBased,
+        runWrite: (operation) => runSharedDebugProxyCaptureWrite(this, operation),
+      });
       this.pathBased = opened.pathBased;
+      this.closed = false;
+      this.closing = false;
       return;
     }
     const database = openOpenClawStateDatabase({ env: optionsOrDbPath.env });
+    super({
+      db: database.db,
+      dbPath: database.path,
+      // Retain the shipped public property while shared-state blobs live in this DB.
+      blobDir: database.path,
+      runWrite: (operation) => runSharedDebugProxyCaptureWrite(this, operation),
+    });
+    this.closed = false;
+    this.closing = false;
+    this.releaseIdleReference = retainOpenClawStateDatabaseForIdle(database);
     sharedDebugProxyCaptureStates.set(this, { database, env: optionsOrDbPath.env });
-    this.db = database.db;
-    this.dbPath = database.path;
-    // Retain the shipped public property while shared-state blobs live in this DB.
-    this.blobDir = database.path;
   }
 
   close(): void {
-    if (this.closed) {
+    if (this.closed || this.closing) {
       return;
     }
-    if (this.pathBased) {
-      this.pathBased.walMaintenance.close();
-      this.db.close();
+    this.closing = true;
+    const errors: unknown[] = [];
+    for (const close of [
+      () => finalizeCaptureStore(this),
+      () => this.releaseIdleReference?.(),
+      () => this.pathBased?.walMaintenance.close(),
+      () => {
+        if (this.pathBased && this.db.isOpen) {
+          this.db.close();
+        }
+      },
+    ]) {
+      try {
+        close();
+      } catch (error) {
+        errors.push(error);
+      }
     }
     this.closed = true;
+    this.closing = false;
+    if (errors.length) {
+      throw new AggregateError(errors, "Capture store close failed.");
+    }
   }
 
   get isClosed(): boolean {
@@ -266,557 +264,6 @@ class DebugProxyCaptureStoreImpl {
     // be closed underneath us (exit-time cache close), and the cache must then
     // rebind a fresh store instead of handing out a dead connection.
     return this.closed || !this.db.isOpen;
-  }
-
-  upsertSession(session: CaptureSessionRecord): void {
-    if (this.pathBased) {
-      this.db
-        .prepare(
-          `INSERT INTO capture_sessions (
-            id, started_at, ended_at, mode, source_scope, source_process, proxy_url, db_path, blob_dir
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            ended_at=excluded.ended_at,
-            proxy_url=excluded.proxy_url,
-            source_process=excluded.source_process`,
-        )
-        .run(
-          session.id,
-          session.startedAt,
-          session.endedAt ?? null,
-          session.mode,
-          session.sourceScope,
-          session.sourceProcess,
-          session.proxyUrl ?? null,
-          session.dbPath ?? this.dbPath,
-          session.blobDir ?? this.pathBased.blobDir,
-        );
-      return;
-    }
-    runSharedDebugProxyCaptureWrite(this, () =>
-      this.db
-        .prepare(
-          `INSERT INTO capture_sessions (
-            id, started_at, ended_at, mode, source_scope, source_process, proxy_url
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            started_at=MIN(capture_sessions.started_at, excluded.started_at),
-            ended_at=excluded.ended_at,
-            mode=CASE
-              WHEN capture_sessions.mode = 'implicit' THEN excluded.mode
-              ELSE capture_sessions.mode
-            END,
-            proxy_url=excluded.proxy_url,
-            source_process=excluded.source_process`,
-        )
-        .run(
-          session.id,
-          session.startedAt,
-          session.endedAt ?? null,
-          session.mode,
-          session.sourceScope,
-          session.sourceProcess,
-          session.proxyUrl ?? null,
-        ),
-    );
-  }
-
-  endSession(sessionId: string, endedAt = Date.now()): void {
-    const update = () =>
-      this.db
-        .prepare(`UPDATE capture_sessions SET ended_at = ? WHERE id = ?`)
-        .run(endedAt, sessionId);
-    if (this.pathBased) {
-      update();
-      return;
-    }
-    runSharedDebugProxyCaptureWrite(this, update);
-  }
-
-  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
-    const sha256 = sha256Hex(data);
-    const blobId = sha256.slice(0, 24);
-    if (this.pathBased) {
-      fs.mkdirSync(this.pathBased.blobDir, {
-        recursive: true,
-        mode: DEBUG_PROXY_CAPTURE_DIR_MODE,
-      });
-      const outputPath = path.join(this.pathBased.blobDir, `${blobId}.bin.gz`);
-      if (!fs.existsSync(outputPath)) {
-        fs.writeFileSync(outputPath, gzipSync(data), {
-          mode: DEBUG_PROXY_CAPTURE_FILE_MODE,
-        });
-      }
-      applyPrivateModeSync(outputPath, DEBUG_PROXY_CAPTURE_FILE_MODE);
-      return {
-        blobId,
-        path: outputPath,
-        encoding: "gzip",
-        sizeBytes: data.byteLength,
-        sha256,
-        ...(contentType ? { contentType } : {}),
-      };
-    }
-    runSharedDebugProxyCaptureWrite(this, () =>
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO capture_blobs (
-            blob_id, content_type, encoding, size_bytes, sha256, data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          blobId,
-          contentType ?? null,
-          "gzip",
-          data.byteLength,
-          sha256,
-          gzipSync(data),
-          Date.now(),
-        ),
-    );
-    return {
-      blobId,
-      encoding: "gzip",
-      sizeBytes: data.byteLength,
-      sha256,
-      ...(contentType ? { contentType } : {}),
-    };
-  }
-
-  recordEvent(event: CaptureEventRecord): void {
-    if (this.pathBased) {
-      this.insertEvent(event, event.dataBlobId ?? null);
-      return;
-    }
-    runSharedDebugProxyCaptureWrite(this, () => {
-      // Capture can be invoked directly by provider seams before the top-level
-      // runtime initializes. Keep the shared-schema foreign key valid without
-      // making diagnostics break the request they are observing.
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO capture_sessions (
-            id, started_at, mode, source_scope, source_process
-          ) VALUES (?, ?, 'implicit', ?, ?)`,
-        )
-        .run(event.sessionId, event.ts, event.sourceScope, event.sourceProcess);
-      // A concurrent purge can remove a payload before its event is recorded.
-      // Keep the inline preview instead of failing the observed request.
-      const dataBlobId =
-        event.dataBlobId &&
-        this.db.prepare(`SELECT 1 FROM capture_blobs WHERE blob_id = ?`).get(event.dataBlobId)
-          ? event.dataBlobId
-          : null;
-      this.insertEvent(event, dataBlobId);
-    });
-  }
-
-  private insertEvent(event: CaptureEventRecord, dataBlobId: string | null): void {
-    this.db
-      .prepare(
-        `INSERT INTO capture_events (
-          session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-          method, host, path, status, close_code, content_type, headers_json,
-          data_text, data_blob_id, data_sha256, error_text, meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.sessionId,
-        event.ts,
-        event.sourceScope,
-        event.sourceProcess,
-        event.protocol,
-        event.direction,
-        event.kind,
-        event.flowId,
-        event.method ?? null,
-        event.host ?? null,
-        event.path ?? null,
-        event.status ?? null,
-        event.closeCode ?? null,
-        event.contentType ?? null,
-        event.headersJson ?? null,
-        event.dataText ?? null,
-        dataBlobId,
-        event.dataSha256 ?? null,
-        event.errorText ?? null,
-        event.metaJson ?? null,
-      );
-  }
-
-  listSessions(limit = 50): CaptureSessionSummary[] {
-    return this.db
-      .prepare(
-        `SELECT
-           s.id,
-           s.started_at AS startedAt,
-           s.ended_at AS endedAt,
-           s.mode,
-           s.source_process AS sourceProcess,
-           s.proxy_url AS proxyUrl,
-           COUNT(e.id) AS eventCount
-         FROM capture_sessions s
-         LEFT JOIN capture_events e ON e.session_id = s.id
-         GROUP BY s.id
-         ORDER BY s.started_at DESC
-         LIMIT ?`,
-      )
-      .all(limit) as CaptureSessionSummary[];
-  }
-
-  getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
-    return readDebugProxyCaptureSessionEvents(this.db, sessionId, limit);
-  }
-
-  summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = this.db
-      .prepare(
-        `SELECT host, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?`,
-      )
-      .all(sessionId) as Array<{ host?: string | null; metaJson?: string | null }>;
-    const providers = new Map<string, number>();
-    const apis = new Map<string, number>();
-    const models = new Map<string, number>();
-    const hosts = new Map<string, number>();
-    const localPeers = new Map<string, number>();
-    let unlabeledEventCount = 0;
-    for (const row of rows) {
-      const meta = parseMetaJson(row.metaJson);
-      const provider = normalizeObservedValue(meta?.provider);
-      const api = normalizeObservedValue(meta?.api);
-      const model = normalizeObservedValue(meta?.model);
-      const host = normalizeObservedValue(row.host);
-      if (!provider && !api && !model) {
-        unlabeledEventCount += 1;
-      }
-      if (provider) {
-        providers.set(provider, (providers.get(provider) ?? 0) + 1);
-      }
-      if (api) {
-        apis.set(api, (apis.get(api) ?? 0) + 1);
-      }
-      if (model) {
-        models.set(model, (models.get(model) ?? 0) + 1);
-      }
-      if (host) {
-        hosts.set(host, (hosts.get(host) ?? 0) + 1);
-        // Local model/provider endpoints are useful to surface separately when
-        // debugging why cloud-provider labels are absent.
-        if (host.startsWith("127.0.0.1:") || host.startsWith("localhost:")) {
-          localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
-        }
-      }
-    }
-    return {
-      sessionId,
-      totalEvents: rows.length,
-      unlabeledEventCount,
-      providers: sortObservedCounts(providers),
-      apis: sortObservedCounts(apis),
-      models: sortObservedCounts(models),
-      hosts: sortObservedCounts(hosts),
-      localPeers: sortObservedCounts(localPeers),
-    };
-  }
-
-  readBlob(blobId: string): string | null {
-    if (this.pathBased) {
-      const legacyRow = this.db
-        .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
-        .get(blobId) as { blobId?: string } | undefined;
-      if (!legacyRow?.blobId) {
-        return null;
-      }
-      const blobPath = path.join(this.pathBased.blobDir, `${legacyRow.blobId}.bin.gz`);
-      return fs.existsSync(blobPath)
-        ? gunzipSync(fs.readFileSync(blobPath)).toString("utf8")
-        : null;
-    }
-    return readDebugProxyCaptureBlob(this.db, blobId);
-  }
-
-  queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
-    const sessionWhere = sessionId ? "AND session_id = ?" : "";
-    const args = sessionId ? [sessionId] : [];
-    switch (preset) {
-      // Presets are intentionally SQL-only summaries so the CLI can query large
-      // capture sessions without loading every event into memory.
-      case "double-sends":
-        return this.db
-          .prepare(
-            `SELECT host, path, method, COUNT(*) AS duplicateCount
-             FROM capture_events
-             WHERE kind = 'request' ${sessionWhere}
-             GROUP BY host, path, method, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "retry-storms":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'response' AND status >= 429 ${sessionWhere}
-             GROUP BY host, path
-             HAVING COUNT(*) > 1
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "cache-busting":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS variantCount
-             FROM capture_events
-             WHERE kind = 'request'
-               AND (path LIKE '%?%' OR headers_json LIKE '%cache-control%' OR headers_json LIKE '%pragma%')
-               ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY variantCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "ws-duplicate-frames":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS duplicateFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-             GROUP BY host, path, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateFrames DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "missing-ack":
-        return this.db
-          .prepare(
-            `SELECT flow_id AS flowId, host, path, COUNT(*) AS outboundFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-               AND flow_id NOT IN (
-                 SELECT flow_id FROM capture_events
-                 WHERE kind = 'ws-frame' AND direction = 'inbound' ${sessionId ? "AND session_id = ?" : ""}
-               )
-             GROUP BY flow_id, host, path
-             ORDER BY outboundFrames DESC`,
-          )
-          .all(...(sessionId ? [sessionId, sessionId] : [])) as CaptureQueryRow[];
-      case "error-bursts":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'error' ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      default:
-        return [];
-    }
-  }
-
-  purgeAll(): { sessions: number; events: number; blobs: number } {
-    if (this.pathBased) {
-      const sessionCount =
-        (
-          this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as {
-            count: number;
-          }
-        ).count ?? 0;
-      const eventCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
-          .count ?? 0;
-      runSqliteImmediateTransactionSync(this.db, () => {
-        this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
-      });
-      let blobs = 0;
-      if (fs.existsSync(this.pathBased.blobDir)) {
-        for (const entry of fs.readdirSync(this.pathBased.blobDir)) {
-          fs.rmSync(path.join(this.pathBased.blobDir, entry), { force: true });
-          blobs += 1;
-        }
-      }
-      return { sessions: sessionCount, events: eventCount, blobs };
-    }
-    return runSharedDebugProxyCaptureWrite(this, () => {
-      const sessionCount =
-        (
-          this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as {
-            count: number;
-          }
-        ).count ?? 0;
-      const eventCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
-          .count ?? 0;
-      const blobCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_blobs`).get() as { count: number })
-          .count ?? 0;
-      this.db.exec(
-        `DELETE FROM capture_events; DELETE FROM capture_sessions; DELETE FROM capture_blobs;`,
-      );
-      return { sessions: sessionCount, events: eventCount, blobs: blobCount };
-    });
-  }
-
-  deleteSessions(sessionIds: string[]): { sessions: number; events: number; blobs: number } {
-    const uniqueSessionIds = normalizeUniqueStringEntries(sessionIds);
-    if (uniqueSessionIds.length === 0) {
-      return { sessions: 0, events: 0, blobs: 0 };
-    }
-    if (this.pathBased) {
-      return this.deletePathBasedSessions(uniqueSessionIds);
-    }
-    return runSharedDebugProxyCaptureWrite(this, () => {
-      const placeholders = uniqueSessionIds.map(() => "?").join(", ");
-      const blobRows = this.db
-        .prepare(
-          `SELECT DISTINCT data_blob_id AS blobId
-           FROM capture_events
-           WHERE session_id IN (${placeholders})
-             AND data_blob_id IS NOT NULL`,
-        )
-        .all(...uniqueSessionIds) as Array<{ blobId?: string | null }>;
-      const eventCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_events
-               WHERE session_id IN (${placeholders})`,
-            )
-            .get(...uniqueSessionIds) as { count: number }
-        ).count ?? 0;
-      const sessionCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_sessions
-               WHERE id IN (${placeholders})`,
-            )
-            .get(...uniqueSessionIds) as { count: number }
-        ).count ?? 0;
-      this.db
-        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-        .run(...uniqueSessionIds);
-      this.db
-        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-        .run(...uniqueSessionIds);
-      const candidateBlobIds = blobRows
-        .map((row) => row.blobId?.trim())
-        .filter((blobId): blobId is string => Boolean(blobId));
-      const remainingBlobRefs =
-        // Shared blobs are deleted only when no surviving event references them.
-        candidateBlobIds.length > 0
-          ? new Set(
-              (
-                this.db
-                  .prepare(
-                    `SELECT DISTINCT data_blob_id AS blobId
-                     FROM capture_events
-                     WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
-                       AND data_blob_id IS NOT NULL`,
-                  )
-                  .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
-              )
-                .map((row) => row.blobId?.trim())
-                .filter((blobId): blobId is string => Boolean(blobId)),
-            )
-          : new Set<string>();
-      let blobs = 0;
-      const deleteBlob = this.db.prepare(`DELETE FROM capture_blobs WHERE blob_id = ?`);
-      for (const blobId of candidateBlobIds) {
-        if (remainingBlobRefs.has(blobId)) {
-          continue;
-        }
-        const result = deleteBlob.run(blobId);
-        if (Number(result.changes) > 0) {
-          blobs += 1;
-        }
-      }
-      return { sessions: sessionCount, events: eventCount, blobs };
-    });
-  }
-
-  private deletePathBasedSessions(sessionIds: string[]): {
-    sessions: number;
-    events: number;
-    blobs: number;
-  } {
-    const pathBased = this.pathBased;
-    if (!pathBased) {
-      throw new Error("path-based debug proxy capture store is unavailable");
-    }
-    const placeholders = sessionIds.map(() => "?").join(", ");
-    const blobRows = this.db
-      .prepare(
-        `SELECT DISTINCT data_blob_id AS blobId
-         FROM capture_events
-         WHERE session_id IN (${placeholders})
-           AND data_blob_id IS NOT NULL`,
-      )
-      .all(...sessionIds) as Array<{ blobId?: string | null }>;
-    const eventCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_events
-             WHERE session_id IN (${placeholders})`,
-          )
-          .get(...sessionIds) as { count: number }
-      ).count ?? 0;
-    const sessionCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_sessions
-             WHERE id IN (${placeholders})`,
-          )
-          .get(...sessionIds) as { count: number }
-      ).count ?? 0;
-    runSqliteImmediateTransactionSync(this.db, () => {
-      this.db
-        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-        .run(...sessionIds);
-      this.db
-        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-        .run(...sessionIds);
-    });
-    const candidateBlobIds = blobRows
-      .map((row) => row.blobId?.trim())
-      .filter((blobId): blobId is string => Boolean(blobId));
-    const remainingBlobRefs =
-      candidateBlobIds.length > 0
-        ? new Set(
-            (
-              this.db
-                .prepare(
-                  `SELECT DISTINCT data_blob_id AS blobId
-                   FROM capture_events
-                   WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
-                     AND data_blob_id IS NOT NULL`,
-                )
-                .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
-            )
-              .map((row) => row.blobId?.trim())
-              .filter((blobId): blobId is string => Boolean(blobId)),
-          )
-        : new Set<string>();
-    let blobs = 0;
-    for (const blobId of candidateBlobIds) {
-      if (remainingBlobRefs.has(blobId)) {
-        continue;
-      }
-      const blobPath = path.join(pathBased.blobDir, `${blobId}.bin.gz`);
-      if (fs.existsSync(blobPath)) {
-        fs.rmSync(blobPath, { force: true });
-        blobs += 1;
-      }
-    }
-    return { sessions: sessionCount, events: eventCount, blobs };
   }
 }
 
@@ -893,10 +340,19 @@ export function getDebugProxyCaptureStore(
 export function closeDebugProxyCaptureStore(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
-  for (const cached of cachedStores.values()) {
-    cached.store.close();
-  }
+  const stores = [...cachedStores.values()];
   cachedStores.clear();
+  const errors: unknown[] = [];
+  for (const cached of stores) {
+    try {
+      cached.store.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, "Capture stores failed to close.");
+  }
 }
 
 // Lease API keeps one cached capture-store wrapper alive across related
@@ -940,8 +396,8 @@ export function acquireDebugProxyCaptureStore(
       }
       current.leases = Math.max(0, current.leases - 1);
       if (current.leases === 0) {
-        current.store.close();
         cachedStores.delete(key);
+        current.store.close();
       }
     },
   };
@@ -973,4 +429,3 @@ export function safeJsonString(value: unknown): string | undefined {
   const raw = serializeJson(value);
   return raw ?? undefined;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

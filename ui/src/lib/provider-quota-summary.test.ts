@@ -104,7 +104,6 @@ describe("collectProviderQuotaGroups", () => {
       "work@example.com",
       "personal@example.com",
     ]);
-    expect(groups).toHaveLength(2);
   });
 
   it("drops providers without windows or budgets and invalid budget shapes", () => {

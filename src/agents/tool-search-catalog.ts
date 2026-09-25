@@ -9,9 +9,11 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
+import { disposeCodeModeResults } from "./code-mode-results.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
@@ -45,6 +47,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
+        entry.directVisible === true,
         entry.source === "openclaw"
           ? stableStringify(entry.parameters)
           : untrustedSchemaFingerprint(entry.parameters),
@@ -295,6 +298,9 @@ function registerToolSearchCatalog(params: {
     toolExecutionAllow,
   });
   params.catalogRef.current = next;
+  if (!prior) {
+    disposeCodeModeResults(params.catalogRef);
+  }
   delete params.catalogRef.closedTelemetry;
   params.catalogRef.onChange?.();
 }
@@ -319,6 +325,8 @@ export function clearToolSearchCatalog(params: {
       );
     }
     params.catalogRef.current = undefined;
+    disposeCodeModeResults(params.catalogRef);
+    disposeToolSearchSchedule(params.catalogRef);
     params.catalogRef.disposeObserver?.();
     params.catalogRef.onDispose?.forEach((dispose) => dispose());
     delete params.catalogRef.onChange;
@@ -333,8 +341,9 @@ export function restrictToolSearchCatalog(params: {
   allowedToolNames: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
 }): number {
-  const current = params.catalogRef?.current;
-  if (!current) {
+  const owner = params.catalogRef;
+  const current = owner?.current;
+  if (!owner || !current) {
     return 0;
   }
   const metadata = catalogMetadata.get(current);
@@ -351,6 +360,7 @@ export function restrictToolSearchCatalog(params: {
     return entries.length;
   }
   current.entries = entries;
+  disposeCodeModeResults(owner);
   catalogMetadata.set(current, {
     ...metadata,
     fingerprint: catalogEntriesFingerprint(current.entries),
@@ -473,8 +483,9 @@ export function applyToolCatalogCompaction(
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      if (!params.isVisibleCatalogTool?.(tool)) {
+      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      if (!directVisible) {
         continue;
       }
     }
@@ -485,36 +496,28 @@ export function applyToolCatalogCompaction(
   const existingCatalog = catalogRef.current;
   const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
   const metadata = existingCatalog && catalogMetadata.get(existingCatalog);
-  if (
+  const reboundEntries =
     existingCatalog &&
     metadata &&
     metadata.fingerprint === incomingFingerprint &&
     stableStringify(metadata.toolExecutionAllow) === stableStringify(params.toolExecutionAllow)
-  ) {
-    const reboundEntries = rebindCatalogExecutors(existingCatalog.entries, catalog);
-    if (reboundEntries) {
-      existingCatalog.entries = reboundEntries;
-      return {
-        tools: visible,
-        compacted: catalog.length > 0,
-        catalogToolCount: catalog.length,
-        catalogRegistered: true,
-        catalogReused: true,
-      };
-    }
+      ? rebindCatalogExecutors(existingCatalog.entries, catalog)
+      : undefined;
+  if (existingCatalog && reboundEntries) {
+    existingCatalog.entries = reboundEntries;
+  } else {
+    registerToolSearchCatalog({
+      catalogRef,
+      entries: catalog,
+      toolExecutionAllow: params.toolExecutionAllow,
+    });
   }
-
-  registerToolSearchCatalog({
-    catalogRef,
-    entries: catalog,
-    toolExecutionAllow: params.toolExecutionAllow,
-  });
   return {
     tools: visible,
     compacted: catalog.length > 0,
     catalogToolCount: catalog.length,
     catalogRegistered: true,
-    catalogReused: false,
+    catalogReused: reboundEntries !== undefined,
   };
 }
 

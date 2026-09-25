@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Package-installed release journey smoke with provider, plugins, ClickClack,
 # agent turn, and restart survival.
 set -euo pipefail
@@ -16,13 +20,7 @@ HTTP_BODY_MAX_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES 1048576
 )"
 run_log=""
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-user-journey "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"

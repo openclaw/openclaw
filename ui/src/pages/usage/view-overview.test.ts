@@ -1,32 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
+import type { UsageAggregates, UsageSessionEntry } from "./types.ts";
+import { totals, dailyEntry } from "./usage-chart.test-support.ts";
+import { renderCostBreakdownCompact } from "./view-chart.ts";
 import {
-  renderDailyChartCompact,
-  renderCostBreakdownCompact,
   renderCostWindowComparison,
   renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
-
-const totals: UsageTotals = {
-  input: 100,
-  output: 40,
-  cacheRead: 300,
-  cacheWrite: 600,
-  totalTokens: 1040,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
 
 const aggregates = {
   messages: {
@@ -48,36 +32,6 @@ const aggregates = {
   byChannel: [],
   daily: [],
 } as unknown as UsageAggregates;
-
-function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {
-  return {
-    ...totals,
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-  };
-}
-
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderDailyChartCompact(daily, [], "tokens", "total", () => {}, onSelectDay),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
-}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -106,14 +60,20 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
-  it("renders overview hints as focusable tooltip anchors", () => {
+  it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
     render(
       renderUsageInsights(
         totals,
-        aggregates,
+        {
+          ...aggregates,
+          byAgent: [
+            { agentId: "main", totals },
+            { agentId: "research", totals },
+          ],
+        },
         {
           durationSumMs: 0,
           durationCount: 0,
@@ -133,6 +93,14 @@ describe("renderUsageInsights", () => {
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
     expect(
       buttons.every(
         (button) =>
@@ -265,44 +233,6 @@ describe("renderUsageInsights", () => {
   });
 });
 
-describe("renderUsageHeatmap", () => {
-  it("renders the selected activity range from usage cost data", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-      "Token Activity",
-    );
-    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(
-      container
-        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
-        ?.getAttribute("data-tooltip"),
-    ).toContain("20 tokens");
-  });
-
-  it("keeps short ranges at their natural cell width", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector<SVGElement>(".usage-heatmap__svg")
-        ?.style.getPropertyValue("--usage-heatmap-width"),
-    ).toBe("44px");
-  });
-});
-
 describe("usage overview presentation owners", () => {
   it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
     const container = document.createElement("div");
@@ -321,7 +251,12 @@ describe("usage overview presentation owners", () => {
       container,
     );
 
-    const categories = ["output", "input", "cache-write", "cache-read"];
+    const categories = [
+      "usage-token-output",
+      "usage-token-input",
+      "usage-token-cache-write",
+      "usage-token-cache-read",
+    ];
     expect(
       [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
         categories.find((category) => segment.classList.contains(category)),
@@ -371,147 +306,6 @@ describe("usage overview presentation owners", () => {
   });
 });
 
-describe("renderDailyChartCompact", () => {
-  it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
-    const bar = expectDefined(bars[0], "daily usage bar");
-
-    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-
-    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
-
-    const space = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: " ",
-      shiftKey: true,
-    });
-    bar.dispatchEvent(space);
-    expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-  });
-
-  it("labels the chart scale with the selected metric", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 2)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["$2.00", "$1.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 100)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 0.004), dailyEntry("2026-05-04", 1_000, 0.008)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const container = document.createElement("div");
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    render(
-      renderDailyChartCompact(
-        [microCostDay],
-        [],
-        "cost",
-        "by-type",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const container = document.createElement("div");
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
-    );
-    render(
-      renderDailyChartCompact(
-        daily,
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
-  });
-});
-
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
@@ -524,6 +318,7 @@ describe("renderCostWindowComparison", () => {
         ],
         "2026-06-01",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -547,6 +342,7 @@ describe("renderCostWindowComparison", () => {
         [dailyEntry("2026-07-01", 300, 0.003)],
         "2026-06-02",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -559,6 +355,177 @@ describe("renderCostWindowComparison", () => {
 
 describe("renderSessionsCard", () => {
   const noop = () => {};
+  const renderCard = (
+    sessions: UsageSessionEntry[],
+    options: {
+      selected?: string[];
+      days?: string[];
+      tokens?: boolean;
+      sort?: Parameters<typeof renderSessionsCard>[4];
+      direction?: Parameters<typeof renderSessionsCard>[5];
+      recent?: string[];
+      tab?: Parameters<typeof renderSessionsCard>[7];
+      onSelect?: Parameters<typeof renderSessionsCard>[8];
+      totalSessions?: number;
+    } = {},
+  ) => {
+    const container = document.createElement("div");
+    render(
+      renderSessionsCard(
+        sessions,
+        options.selected ?? [],
+        options.days ?? [],
+        options.tokens ?? true,
+        options.sort ?? "tokens",
+        options.direction ?? "desc",
+        options.recent ?? [],
+        options.tab ?? "all",
+        options.onSelect ?? noop,
+        noop,
+        noop,
+        noop,
+        [],
+        options.totalSessions ?? sessions.length,
+        noop,
+      ),
+      container,
+    );
+    return container;
+  };
+
+  it("identifies mixed-agent sessions even when optional metadata columns are hidden", async () => {
+    const container = renderCard([
+      { key: "agent:main:one", agentId: "main", usage: null },
+      { key: "agent:research:two", agentId: "research", usage: null },
+    ]);
+    document.body.append(container);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".session-bar-row .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
+  });
+
+  const shownCountCases: Array<{
+    name: string;
+    sessionCount: number;
+    options?: Parameters<typeof renderCard>[1];
+    shown: number;
+    header: string;
+    empty?: string;
+    more?: string;
+    primaryLabels?: string[];
+    selectedLabel?: string;
+  }> = [
+    {
+      name: "empty All list",
+      sessionCount: 0,
+      shown: 0,
+      header: "0 shown",
+      empty: "No sessions in range",
+    },
+    {
+      name: "All list below the display cap",
+      sessionCount: 3,
+      shown: 3,
+      header: "3 shown",
+    },
+    {
+      name: "All list above the display cap",
+      sessionCount: 51,
+      shown: 50,
+      header: "50 shown · 51 total",
+      more: "+1 more",
+    },
+    {
+      name: "empty Recently viewed list",
+      sessionCount: 3,
+      options: { tab: "recent" },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "Recently viewed list with a separate selected comparison",
+      sessionCount: 3,
+      options: {
+        tab: "recent",
+        recent: ["session-2", "missing", "session-0"],
+        selected: ["session-0", "session-1"],
+      },
+      shown: 2,
+      header: "2 shown · 3 total",
+      primaryLabels: ["Session 2", "Session 0"],
+      selectedLabel: "Selected (2)",
+    },
+    {
+      name: "Recently viewed list whose keys no longer match",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["missing"] },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "filtered All list with its original total",
+      sessionCount: 3,
+      options: { totalSessions: 7 },
+      shown: 3,
+      header: "3 shown · 7 total",
+    },
+    {
+      name: "filtered Recently viewed list with its original total",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["session-1", "missing"], totalSessions: 7 },
+      shown: 1,
+      header: "1 shown · 7 total",
+      primaryLabels: ["Session 1"],
+    },
+  ];
+
+  it.each(shownCountCases)("reports the rows shown in the $name", (scenario) => {
+    const sessions: UsageSessionEntry[] = Array.from(
+      { length: scenario.sessionCount },
+      (_, index) => ({
+        key: `session-${index}`,
+        label: `Session ${index}`,
+        usage: {
+          ...totals,
+          input: 100 - index,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 100 - index,
+        },
+      }),
+    );
+    const container = renderCard(sessions, scenario.options);
+    const primaryList = container.querySelector(".sessions-card > .session-bars");
+    expect(primaryList?.querySelectorAll(".session-bar-row").length ?? 0).toBe(scenario.shown);
+    expect(
+      container
+        .querySelector(".sessions-card-header .sessions-card-count")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(scenario.header);
+    expect(container.querySelector(".usage-empty-block")?.textContent?.trim()).toBe(scenario.empty);
+    expect(container.querySelector(".usage-more-sessions")?.textContent?.trim()).toBe(
+      scenario.more,
+    );
+    expect(
+      container.querySelector(".sessions-selected-group .sessions-card-count")?.textContent?.trim(),
+    ).toBe(scenario.selectedLabel);
+    if (scenario.primaryLabels) {
+      expect(
+        [...(primaryList?.querySelectorAll(".session-bar-title") ?? [])].map((label) =>
+          label.textContent?.trim(),
+        ),
+      ).toEqual(scenario.primaryLabels);
+    }
+  });
 
   it.each([
     { copied: true, feedback: "Copied!" },
@@ -644,8 +611,36 @@ describe("renderSessionsCard", () => {
     );
   });
 
-  it("sorts cost by the selected day values when day filters are active", () => {
-    const container = document.createElement("div");
+  it.each([
+    {
+      tokens: true,
+      sort: "tokens",
+      names: ["All time winner", "Day winner"],
+      values: ["30", "10"],
+      avg: "20",
+    },
+    {
+      tokens: true,
+      sort: "cost",
+      names: ["Day winner", "All time winner"],
+      values: ["10", "30"],
+      avg: "20",
+    },
+    {
+      tokens: false,
+      sort: "tokens",
+      names: ["All time winner", "Day winner"],
+      values: ["$1.00", "$10.00"],
+      avg: "$5.50",
+    },
+    {
+      tokens: false,
+      sort: "cost",
+      names: ["Day winner", "All time winner"],
+      values: ["$10.00", "$1.00"],
+      avg: "$5.50",
+    },
+  ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {
     const sessions: UsageSessionEntry[] = [
       {
         key: "all-time-winner",
@@ -656,7 +651,8 @@ describe("renderSessionsCard", () => {
           totalCost: 100,
           totalTokens: 100,
           dailyBreakdown: [
-            { ...totals, date: "2026-02-05", cost: 1, tokens: 1, totalCost: 1, totalTokens: 1 },
+            { ...totals, date: "2026-02-05", cost: 1, tokens: 30 },
+            { ...totals, date: "2026-02-04", cost: 90, tokens: 900 },
           ],
         },
       } as UsageSessionEntry,
@@ -668,37 +664,195 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 50,
           totalTokens: 50,
-          dailyBreakdown: [
-            { ...totals, date: "2026-02-05", cost: 10, tokens: 10, totalCost: 10, totalTokens: 10 },
-          ],
+          dailyBreakdown: [{ ...totals, date: "2026-02-05", cost: 10, tokens: 10 }],
         },
       } as UsageSessionEntry,
     ];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        [],
-        ["2026-02-05"],
-        false,
-        "cost",
-        "desc",
-        [],
-        "all",
-        noop,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
-      container,
-    );
-
-    const titles = Array.from(container.querySelectorAll(".session-bar-title")).map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(titles.slice(0, 2)).toEqual(["Day winner", "All time winner"]);
+    const container = renderCard(sessions, { ...scenario, days: ["2026-02-05"] });
+    expect(
+      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
+    ).toEqual(scenario.names);
+    expect(
+      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
+    ).toEqual(scenario.values);
+    expect(
+      container
+        .querySelector(".sessions-card-stats span")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(`${scenario.avg} avg`);
   });
+
+  it("reads each daily bucket once across sorting, totals, recent and selected rows", () => {
+    const reads = { dates: 0, tokens: 0, cost: 0 };
+    const sessions = Array.from({ length: 3 }, (_, index): UsageSessionEntry => ({
+      key: `session-${index}`,
+      label: `Session ${index}`,
+      usage: {
+        ...totals,
+        totalTokens: (index + 1) * 100,
+        dailyBreakdown: ["2026-02-04", "2026-02-05"].map((date) =>
+          Object.assign(
+            {
+              get date() {
+                reads.dates += 1;
+                return date;
+              },
+              get tokens() {
+                reads.tokens += 1;
+                return (index + 1) * 10;
+              },
+              get cost() {
+                reads.cost += 1;
+                return 3 - index;
+              },
+            },
+            totals,
+          ),
+        ),
+      },
+    }));
+    const container = renderCard(sessions, {
+      days: ["2026-02-05"],
+      sort: "cost",
+      selected: ["session-0", "session-2"],
+      recent: ["session-2", "session-0"],
+      tab: "recent",
+    });
+    expect(
+      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
+    ).toEqual(["Session 2", "Session 0", "Session 0", "Session 2"]);
+    expect(
+      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
+    ).toEqual(["30", "10", "10", "30"]);
+    expect(
+      container
+        .querySelector(".sessions-card-stats span")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("20 avg");
+    expect(reads.dates).toBeLessThanOrEqual(6);
+    expect(reads.tokens).toBeLessThanOrEqual(3);
+    expect(reads.cost).toBeLessThanOrEqual(3);
+  });
+
+  it.each([true, false])(
+    "preserves missing, empty, unmatched and zero daily values (tokens=%s)",
+    (tokens) => {
+      const sessions: UsageSessionEntry[] = [
+        { key: "missing-usage", usage: null },
+        { key: "missing-breakdown", usage: { ...totals, totalTokens: 10, totalCost: 1 } },
+        {
+          key: "empty-breakdown",
+          usage: { ...totals, totalTokens: 20, totalCost: 2, dailyBreakdown: [] },
+        },
+        {
+          key: "unmatched",
+          usage: {
+            ...totals,
+            totalTokens: 900,
+            totalCost: 90,
+            dailyBreakdown: [{ ...totals, date: "2026-02-04", tokens: 300, cost: 30 }],
+          },
+        },
+        {
+          key: "zero",
+          usage: {
+            ...totals,
+            totalTokens: 500,
+            totalCost: 50,
+            dailyBreakdown: [{ ...totals, date: "2026-02-05", tokens: 0, cost: 0 }],
+          },
+        },
+        {
+          key: "duplicate-days",
+          usage: {
+            ...totals,
+            totalTokens: 60,
+            totalCost: 6,
+            dailyBreakdown: [
+              { ...totals, date: "2026-02-05", tokens: 2, cost: 0.2 },
+              { ...totals, date: "2026-02-05", tokens: 3, cost: 0.3 },
+            ],
+          },
+        },
+      ];
+      const values = (container: HTMLElement) =>
+        Object.fromEntries(
+          [...container.querySelectorAll(".session-bar-row")].map((row) => [
+            row.getAttribute("title"),
+            row.querySelector(".session-bar-value")?.textContent?.trim(),
+          ]),
+        );
+      const formatted = (amounts: number[]) =>
+        Object.fromEntries(
+          sessions.map((session, index) => [
+            session.key,
+            tokens ? String(amounts[index]) : `$${amounts[index]!.toFixed(2)}`,
+          ]),
+        );
+      expect(values(renderCard(sessions, { tokens, days: ["2026-02-05", "2026-02-05"] }))).toEqual(
+        formatted(tokens ? [0, 10, 20, 0, 0, 5] : [0, 1, 2, 0, 0, 0.5]),
+      );
+      expect(values(renderCard(sessions, { tokens }))).toEqual(
+        formatted(tokens ? [0, 10, 20, 900, 500, 60] : [0, 1, 2, 90, 50, 6]),
+      );
+    },
+  );
+
+  it.each(["desc", "asc"] as const)(
+    "preserves ties, duplicate keys and each selection group's %s order",
+    (direction) => {
+      const sessions: UsageSessionEntry[] = [
+        { key: "shared", label: "Alpha", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
+        { key: "shared", label: "Beta", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
+        { key: "newest", label: "Newest", updatedAt: 2, usage: { ...totals, totalTokens: 10 } },
+        { key: "other", label: "Other", updatedAt: 0, usage: { ...totals, totalTokens: 10 } },
+      ];
+      const titles = (container: Element) =>
+        [...container.querySelectorAll(".session-bar-title")].map((entry) =>
+          entry.textContent?.trim(),
+        );
+      expect(titles(renderCard(sessions, { direction }))).toEqual(
+        direction === "desc"
+          ? ["Newest", "Alpha", "Beta", "Other"]
+          : ["Other", "Beta", "Alpha", "Newest"],
+      );
+      expect(sessions.map((session) => session.label)).toEqual([
+        "Alpha",
+        "Beta",
+        "Newest",
+        "Other",
+      ]);
+      const onSelect = vi.fn();
+      const container = renderCard(sessions, {
+        direction,
+        tab: "recent",
+        recent: ["shared", "newest", "shared"],
+        selected: ["shared", "newest"],
+        onSelect,
+      });
+      const recent = container.querySelector(".session-bars--recent")!;
+      const selected = container.querySelector(".session-bars--selected")!;
+      expect(titles(recent)).toEqual(
+        direction === "desc" ? ["Beta", "Newest", "Beta"] : ["Alpha", "Newest", "Alpha"],
+      );
+      expect(titles(selected)).toEqual(
+        direction === "desc" ? ["Newest", "Alpha", "Beta"] : ["Beta", "Alpha", "Newest"],
+      );
+      recent
+        .querySelector(".session-bar-selection")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      expect(onSelect).toHaveBeenLastCalledWith("shared", true, ["shared", "newest", "shared"]);
+      selected
+        .querySelector(".session-bar-selection")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      expect(onSelect).toHaveBeenLastCalledWith(
+        direction === "desc" ? "newest" : "shared",
+        true,
+        direction === "desc" ? ["newest", "shared", "shared"] : ["shared", "shared", "newest"],
+      );
+    },
+  );
 });

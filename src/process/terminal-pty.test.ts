@@ -21,6 +21,28 @@ const { spawnTerminalPty } = await import("./terminal-pty.js");
 
 const tempDirs: string[] = [];
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  }
+});
+
+async function spawnDirectTerminalPty(
+  params: Parameters<typeof spawnTerminalPty>[0],
+): ReturnType<typeof spawnTerminalPty> {
+  const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+  if (!bunDescriptor) {
+    return await spawnTerminalPty(params);
+  }
+  Object.defineProperty(process.versions, "bun", { ...bunDescriptor, value: undefined });
+  try {
+    return await spawnTerminalPty(params);
+  } finally {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  }
+}
+
 function createWindowsNpmShim(command: string) {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-shim-"));
   tempDirs.push(binDir);
@@ -55,7 +77,7 @@ function fakePty(pid = 4321) {
 async function spawnFakePty(pid = 4321) {
   const pty = fakePty(pid);
   mocks.spawn.mockReturnValueOnce(pty);
-  const handle = await spawnTerminalPty({
+  const handle = await spawnDirectTerminalPty({
     file: "/bin/sh",
     args: [],
     env: {},
@@ -70,13 +92,6 @@ describe("terminal PTY teardown", () => {
     mocks.signalPtySessionTree.mockReset();
     mocks.signalProcessTree.mockReset();
     mocks.spawn.mockReset();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    for (const tempDir of tempDirs.splice(0)) {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
   });
 
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
@@ -117,16 +132,12 @@ describe("terminal PTY invocation", () => {
     mocks.spawn.mockReset();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it.each(nonInteractiveEnvironments)(
     "upgrades non-interactive TERM for a real PTY: %o",
     async (env) => {
       mocks.spawn.mockReturnValueOnce(fakePty());
 
-      await spawnTerminalPty({
+      await spawnDirectTerminalPty({
         file: "/usr/bin/codex",
         args: ["resume", "thread"],
         env,
@@ -148,7 +159,7 @@ describe("terminal PTY invocation", () => {
   it("preserves an interactive TERM", async () => {
     mocks.spawn.mockReturnValueOnce(fakePty());
 
-    await spawnTerminalPty({
+    await spawnDirectTerminalPty({
       file: "/usr/bin/codex",
       args: [],
       env: { TERM: "screen-256color" },
@@ -170,7 +181,7 @@ describe("terminal PTY invocation", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
 
-    await spawnTerminalPty({
+    await spawnDirectTerminalPty({
       file: "powershell.exe",
       args: [],
       env: { Term: "screen-256color" },
@@ -204,7 +215,7 @@ describe("terminal PTY invocation", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
 
-    await spawnTerminalPty({
+    await spawnDirectTerminalPty({
       file: `C:\\Program Files\\Codex\\codex${extension}`,
       args: ["resume", "thread title"],
       env,
@@ -225,7 +236,7 @@ describe("terminal PTY invocation", () => {
       const { entrypoint, shimPath } = createWindowsNpmShim("codex");
       mocks.spawn.mockReturnValueOnce(fakePty());
 
-      await spawnTerminalPty({
+      await spawnDirectTerminalPty({
         file: shimPath,
         args: ["exec", "--", "Fix A&B and 100%"],
         env: { PATH: path.dirname(process.execPath), PATHEXT: ".EXE;.CMD" },
@@ -248,13 +259,13 @@ describe("terminal PTY invocation", () => {
       const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
       tempDirs.push(nodeDir);
       const nodePath = path.join(nodeDir, "node.exe");
-      fs.linkSync(process.execPath, nodePath);
+      fs.copyFileSync(process.execPath, nodePath);
       vi.spyOn(process, "execPath", "get").mockReturnValue(
         "C:\\Program Files\\OpenClaw\\openclaw.exe",
       );
       mocks.spawn.mockReturnValueOnce(fakePty());
 
-      await spawnTerminalPty({
+      await spawnDirectTerminalPty({
         file: shimPath,
         args: ["--", "literal"],
         env: { PATH: nodeDir, PATHEXT: ".EXE;.CMD" },
@@ -277,7 +288,7 @@ describe("terminal PTY invocation", () => {
       );
 
       await expect(
-        spawnTerminalPty({
+        spawnDirectTerminalPty({
           file: shimPath,
           args: ["--", "literal"],
           env: { PATH: path.dirname(shimPath), PATHEXT: ".EXE;.CMD" },
@@ -298,7 +309,7 @@ describe("terminal PTY invocation", () => {
       fs.writeFileSync(wrapperPath, "@ECHO off\r\necho custom\r\n", "utf8");
 
       await expect(
-        spawnTerminalPty({
+        spawnDirectTerminalPty({
           file: wrapperPath,
           args: ["Fix A&B and 100%"],
           env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
@@ -319,7 +330,7 @@ describe("terminal PTY invocation", () => {
       fs.copyFileSync(process.execPath, barePath);
       mocks.spawn.mockReturnValueOnce(fakePty());
 
-      await spawnTerminalPty({
+      await spawnDirectTerminalPty({
         file: barePath,
         args: ["--version"],
         env: {},
@@ -338,7 +349,7 @@ describe("terminal PTY invocation", () => {
   it("keeps executables and non-Windows commands direct", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
-    await spawnTerminalPty({
+    await spawnDirectTerminalPty({
       file: "C:\\tools\\codex.exe",
       args: ["resume", "thread"],
       env: {},
@@ -348,7 +359,7 @@ describe("terminal PTY invocation", () => {
 
     platform.mockReturnValue("linux");
     mocks.spawn.mockReturnValueOnce(fakePty());
-    await spawnTerminalPty({
+    await spawnDirectTerminalPty({
       file: "/tmp/codex.cmd",
       args: [],
       env: {},

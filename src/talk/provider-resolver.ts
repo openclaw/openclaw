@@ -18,12 +18,14 @@ import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider
 import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderResolveConfigContext,
 } from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  capabilities?: InternalRealtimeVoiceProviderCapabilities;
 };
 
 /** Inputs for resolving a configured or auto-selected realtime voice provider. */
@@ -45,8 +47,13 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   assertProviderAvailable?: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
+  /** Retain the provider's default when adding a transport to an existing consumer. */
+  useProviderDefaultModel?: boolean;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
-  surface?: "browser-session" | "gateway-relay" | "bridge";
+  surface?: RealtimeVoiceProviderResolveConfigContext["surface"];
+  autoRespondToAudio?: RealtimeVoiceProviderResolveConfigContext["autoRespondToAudio"];
+  requiredCapabilities?: RealtimeVoiceProviderResolveConfigContext["requiredCapabilities"];
+  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   noRegisteredProviderMessage?: string;
 };
 
@@ -121,9 +128,11 @@ export function resolveConfiguredRealtimeVoiceProvider(
     resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
       // Provider config resolution should see the default model as if it came
       // from config, while explicit provider config still wins.
+      const defaultModel =
+        params.defaultModel ?? (params.useProviderDefaultModel ? provider.defaultModel : undefined);
       const rawConfigWithModel =
-        params.defaultModel && rawConfig.model === undefined
-          ? { ...rawConfig, model: params.defaultModel }
+        defaultModel && rawConfig.model === undefined
+          ? { ...rawConfig, model: defaultModel }
           : rawConfig;
       const rawConfigWithOverrides = {
         ...rawConfigWithModel,
@@ -132,8 +141,14 @@ export function resolveConfiguredRealtimeVoiceProvider(
       // Per-call overrides are applied before provider normalization so provider
       // implementations can validate and coerce them consistently.
       return (
-        provider.resolveConfig?.({ cfg, rawConfig: rawConfigWithOverrides }) ??
-        rawConfigWithOverrides
+        provider.resolveConfig?.({
+          cfg,
+          rawConfig: rawConfigWithOverrides,
+          agentId: params.agentId,
+          surface: params.surface,
+          autoRespondToAudio: params.autoRespondToAudio,
+          requiredCapabilities: params.requiredCapabilities,
+        }) ?? rawConfigWithOverrides
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
@@ -165,5 +180,13 @@ export function resolveConfiguredRealtimeVoiceProvider(
   return {
     provider: resolution.provider,
     providerConfig: resolution.providerConfig,
+    capabilities: resolveRealtimeVoiceProviderCapabilities({
+      provider: resolution.provider,
+      providerConfig: resolution.providerConfig,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      surface: params.surface,
+      clientControl: params.clientControl,
+    }),
   };
 }

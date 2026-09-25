@@ -11,6 +11,7 @@ import { parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
 
 type ScheduledToolPolicyMigrationResult = {
   mutated: boolean;
+  ownerReconciled?: boolean;
   status: "current" | "migrated" | "legacy" | "invalid" | "not-applicable";
 };
 
@@ -21,11 +22,14 @@ export function createScheduledToolPolicyMigrationCollector() {
   return {
     legacyJobs,
     invalidJobs,
-    migrate(raw: Record<string, unknown>, onMigrated: () => void) {
+    migrate(raw: Record<string, unknown>, onMigrated: (kind: "owner" | "policy") => void) {
       const result = migrateScheduledToolPolicy(raw);
       const jobName = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
       if (result.status === "migrated") {
-        onMigrated();
+        onMigrated("policy");
+      }
+      if (result.ownerReconciled) {
+        onMigrated("owner");
       }
       if (result.status === "legacy" && jobName) {
         legacyJobs.push(jobName);
@@ -86,9 +90,7 @@ function migrateScheduledToolPolicy(
     return { mutated, status: "current" };
   }
 
-  // Capless historical jobs have no bounded authority to recover. They remain
-  // on legacy sender-policy resolution until an operator explicitly edits tools.
-  if (!toolsAllow || !ownerSessionKey) {
+  if (!ownerSessionKey) {
     return { mutated: false, status: "legacy" };
   }
   const parsedSession = parseAgentSessionKey(ownerSessionKey);
@@ -116,12 +118,19 @@ function migrateScheduledToolPolicy(
   if (!scheduledToolPolicy) {
     return { mutated: false, status: "legacy" };
   }
-  raw.owner = {
+  const reconciledOwner = {
     ...owner,
     ...(ownerAgentId ? { agentId: normalizeAgentId(ownerAgentId) } : {}),
     sessionKey: ownerSessionKey,
     accountId: recoveredAccountId,
   };
+  const ownerReconciled = JSON.stringify(raw.owner) !== JSON.stringify(reconciledOwner);
+  raw.owner = reconciledOwner;
+  // Creator identity is recoverable independently of a tool cap. Capless jobs
+  // retain legacy execution policy until an explicit permission edit.
+  if (!toolsAllow) {
+    return { mutated: ownerReconciled, ownerReconciled, status: "legacy" };
+  }
   raw.scheduledToolPolicy = scheduledToolPolicy;
-  return { mutated: true, status: "migrated" };
+  return { mutated: true, ownerReconciled, status: "migrated" };
 }

@@ -21,6 +21,7 @@ export function createWorkerChatProjection(sessionKey: string) {
   const handler = createAgentEventHandler({
     broadcast: captureChat,
     broadcastToConnIds: captureChat,
+    nodeHasSessionSubscribers: () => false,
     nodeSendToSession: () => {},
     agentRunSeq: new Map(),
     chatRunState: state,

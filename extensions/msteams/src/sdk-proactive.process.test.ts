@@ -3,20 +3,22 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 
 describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
   it("keeps root exports intact when quoted behavior is the first SDK access", async () => {
+    const nodeExecPath = resolveTestNodeExecPath();
     await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["scripts/lib/plugin-npm-runtime-build.mjs", "extensions/msteams"],
       { cwd: process.cwd() },
     );
     const outDir = path.join(process.cwd(), "extensions/msteams/dist");
     const proactiveArtifact = fs
-      .readdirSync(outDir)
+      .readdirSync(outDir, { recursive: true, encoding: "utf8" })
       .filter((entry) => entry.endsWith(".cjs"))
       .map((entry) => path.join(outDir, entry))
       .find((entry) =>
@@ -79,13 +81,6 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const quotedCreates = [];
       const posts = [];
       const app = {
-        client: {
-          request: async () => ({}),
-          post: async (url, activity) => {
-            posts.push({ url, activity });
-            return { data: { id: "normal-proactive" } };
-          },
-        },
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer",
           conversations: {
@@ -129,6 +124,24 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
         api.toActivityParams({ type: "message", text: "Direct conversion" }),
       );
 
+      const { Client } = await import("@microsoft/teams.common");
+      app.client = new Client({
+        interceptors: [{
+          request: ({ config }) => {
+            config.adapter = async (request) => {
+              posts.push({ url: request.url, activity: JSON.parse(request.data) });
+              return {
+                data: { id: "normal-proactive" },
+                status: 201,
+                statusText: "Created",
+                headers: {},
+                config: request,
+              };
+            };
+            return config;
+          },
+        }],
+      });
       await assert.doesNotReject(() =>
         sendMSTeamsActivityWithReference(
           app,
@@ -146,7 +159,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
     `;
 
     const { stdout, stderr } = await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
         cwd: path.dirname(outDir),

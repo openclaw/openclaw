@@ -1,19 +1,22 @@
 /**
- * Shared OAuth credential replacement and identity policy.
+ * Shared OAuth credential identity policy.
  * Used by manager, external CLI overlays, and persistence paths to decide when
- * incoming runtime credentials may replace or bootstrap stored profiles.
+ * incoming runtime credentials may bootstrap or settle stored profiles.
  */
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
+  hasOAuthIdentity,
   isSafeToCopyOAuthIdentity,
+  type OAuthIdentity,
+} from "./oauth-identity.js";
+import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
+
+export {
+  hasOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-identity.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
 /** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {
@@ -43,79 +46,47 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
-// Keep newer usable stored credentials over incoming runtime imports to avoid
-// replacing a fresh access token with stale external CLI state.
-function hasNewerStoredOAuthCredential(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  const existingExpires = asDateTimestampMs(existing?.expires);
-  const incomingExpires = asDateTimestampMs(incoming.expires);
-  return Boolean(
-    existing &&
-    existing.provider === incoming.provider &&
-    existingExpires !== undefined &&
-    (incomingExpires === undefined || existingExpires > incomingExpires),
-  );
-}
-
-/** Returns true when an incoming OAuth credential should replace stored state. */
-export function shouldReplaceStoredOAuthCredential(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return true;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return false;
-  }
-  return !hasNewerStoredOAuthCredential(existing, incoming);
-}
-
-/** Returns true when an OAuth credential has account or email identity. */
-export function hasOAuthIdentity(
-  credential: Pick<OAuthCredential, "accountId" | "email">,
-): boolean {
-  return (
-    normalizeAuthIdentityToken(credential.accountId) !== undefined ||
-    normalizeAuthEmailToken(credential.email) !== undefined
-  );
-}
-
-/** Returns true when OAuth identity fields match by account id or email. */
+/** Returns true when both credentials describe the same registered identity. */
 export function hasMatchingOAuthIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
+  existing: OAuthIdentity,
+  incoming: OAuthIdentity,
 ): boolean {
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
-// Different adoption paths have different safety thresholds. Bootstrap can
-// adopt missing identities, while stored overwrite requires an identity match.
-type OAuthIdentitySafetyPolicy = {
-  whenExistingCredentialMissing: boolean;
-  whenExistingIdentityMissing: boolean;
-};
+/** Returns true when the current owner accepts its provider refresh result. */
+export function isSafeOAuthOwnerRefreshResult(
+  claimed: OAuthCredential,
+  refreshed: OAuthCredential,
+): boolean {
+  return claimed.provider === refreshed.provider && isSafeToCopyOAuthIdentity(claimed, refreshed);
+}
+
+/** Returns true when a claimed generation may settle with a live credential. */
+export function isSafeOAuthPostClaimSettlement(
+  claimedGeneration: OAuthCredential,
+  candidate: OAuthCredential | undefined,
+): candidate is OAuthCredential {
+  return (
+    candidate?.type === "oauth" &&
+    candidate.provider === claimedGeneration.provider &&
+    hasUsableOAuthCredential(candidate) &&
+    hasMatchingOAuthIdentity(claimedGeneration, candidate)
+  );
+}
 
 function isSafeOAuthIdentityTransition(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
-  policy: OAuthIdentitySafetyPolicy,
+  allowMissingCredential: boolean,
 ): boolean {
   if (!existing || existing.type !== "oauth") {
-    return policy.whenExistingCredentialMissing;
+    return allowMissingCredential;
   }
   if (existing.provider !== incoming.provider) {
     return false;
   }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return policy.whenExistingIdentityMissing;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
 /** Returns true when bootstrap may adopt an external OAuth identity. */
@@ -123,10 +94,7 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: true,
-    whenExistingIdentityMissing: true,
-  });
+  return isSafeOAuthIdentityTransition(existing, incoming, true);
 }
 
 /** Returns true when agent-local state may adopt a main-store OAuth identity. */
@@ -134,10 +102,7 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: false,
-    whenExistingIdentityMissing: true,
-  });
+  return isSafeOAuthIdentityTransition(existing, incoming, false);
 }
 
 /** Returns true when an external CLI credential should bootstrap stored OAuth. */
@@ -160,10 +125,11 @@ export function overlayRuntimeExternalOAuthProfiles(
   options?: { runtimeExternalProfileIdsAuthoritative?: boolean },
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
-  const next = cloneAuthProfileStore(store);
+  const next: RuntimeAuthProfileStore = cloneAuthProfileStore(store);
   const overlaidProfileIds = new Set(externalProfiles.map((profile) => profile.profileId));
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
+    delete next.runtimeCredentialSources?.[profile.profileId];
   }
   next.runtimePersistedProfileIds = store.runtimePersistedProfileIds
     ?.filter((profileId) => next.profiles[profileId] && !overlaidProfileIds.has(profileId))

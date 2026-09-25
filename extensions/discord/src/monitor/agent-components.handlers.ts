@@ -7,9 +7,9 @@ import {
 } from "../components-registry.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import {
+  ackComponentInteraction,
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
-  ensureComponentUserAllowed,
   mapSelectValues,
   parseDiscordComponentData,
   replyUnavailableComponentInteraction,
@@ -59,33 +59,14 @@ async function handleDiscordComponentEvent(params: {
     label: params.label,
     componentLabel: params.componentLabel,
     unauthorizedReply,
+    allowedUsers: entry.allowedUsers,
     defer: false,
   });
   if (!authorized) {
     return;
   }
-  const {
-    interactionCtx,
-    channelCtx,
-    guildInfo,
-    allowNameMatching,
-    commandAuthorized,
-    user,
-    replyOpts,
-  } = authorized;
+  const { ctx, interactionCtx, channelCtx, guildInfo, commandAuthorized, replyOpts } = authorized;
 
-  const componentAllowed = await ensureComponentUserAllowed({
-    entry,
-    interaction: params.interaction,
-    user,
-    replyOpts,
-    componentLabel: params.componentLabel,
-    unauthorizedReply,
-    allowNameMatching,
-  });
-  if (!componentAllowed) {
-    return;
-  }
   const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,
@@ -113,7 +94,7 @@ async function handleDiscordComponentEvent(params: {
   const pluginCallbackData = consumed.callbackData ?? selectedCallbackData;
   if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-      ctx: params.ctx,
+      ctx,
       interaction: params.interaction,
       interactionCtx,
       channelCtx,
@@ -148,19 +129,23 @@ async function handleDiscordComponentEvent(params: {
       values,
     });
 
-  try {
-    await params.interaction.reply({ content: "✓", ...replyOpts });
-  } catch (err) {
-    logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
-  }
+  await ackComponentInteraction({
+    interaction: params.interaction,
+    replyOpts,
+    label: params.label,
+  });
 
   await dispatchDiscordComponentEvent({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     interactionCtx,
     channelCtx,
     guildInfo,
     eventText,
+    commandSource:
+      consumed.callbackDataKind === "command" && (buttonCallbackFallback || selectedCommandFallback)
+        ? "native"
+        : undefined,
     replyToId: consumed.messageId ?? params.interaction.message?.id,
     routeOverrides: {
       sessionKey: consumed.sessionKey,
@@ -213,26 +198,12 @@ async function handleDiscordModalTrigger(params: {
     label: params.label,
     componentLabel: "form",
     unauthorizedReply,
+    allowedUsers: entry.allowedUsers,
     defer: false,
   });
   if (!authorized) {
     return;
   }
-  const { user, replyOpts, allowNameMatching } = authorized;
-
-  const componentAllowed = await ensureComponentUserAllowed({
-    entry,
-    interaction: params.interaction,
-    user,
-    replyOpts,
-    componentLabel: "form",
-    unauthorizedReply,
-    allowNameMatching,
-  });
-  if (!componentAllowed) {
-    return;
-  }
-
   const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,

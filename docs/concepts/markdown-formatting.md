@@ -26,6 +26,13 @@ splits formatting mid-span.
 3. **Render per channel** (`renderMarkdownWithMarkers`) - a style-marker map
    turns spans into the channel's native markup.
 
+Raw inline HTML lexemes retain their original bytes during parsing. Markdown
+markers and entities inside attribute values or recognized inline comments are
+not parsed as Markdown content. Non-serialized authored-tag ranges let
+HTML-aware renderers interpret those tags; other renderers keep them literal or
+escape them. HTML block parsing stays disabled so Markdown inside containers
+still works, and bare URLs in their bodies retain normal linkification.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |
@@ -95,6 +102,8 @@ channels:
   channels render the closing fence correctly.
 - List and blockquote prefixes are part of the IR text, so chunking never
   splits mid-prefix.
+- Paragraphs, headings, and code blocks inside a list item stay separated in
+  the IR, including paragraphs nested inside a quoted list item.
 - Inline styles never split across chunks; the renderer reopens an open
   style at the start of the next chunk.
 
@@ -147,6 +156,10 @@ content is hidden or lost.
   lands on its own line.
 - Code-span parsing preserves all-space content. It removes one surrounding
   space from each end only when both are present and the content is not all spaces.
+- Assistant-reply cleanup removes valid `<final>` markers outside Markdown code,
+  including nested or stray markers, while keeping their enclosed answer text.
+  Put literal `<final>payload</final>` examples in inline code or fenced code
+  blocks so their tags are preserved.
 
 ## Related
 

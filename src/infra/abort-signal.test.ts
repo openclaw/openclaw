@@ -1,5 +1,6 @@
-// Covers abort signal wait helpers.
+import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createAbortError,
   isAbortError,
@@ -19,6 +20,14 @@ describe("abort errors", () => {
     expect(isAbortError(createAbortError("aborted"))).toBe(true);
     expect(isAbortError({ name: "AbortError", message: "test" })).toBe(true);
     expect(isAbortError(new Error("This operation was aborted"))).toBe(true);
+    expect(
+      isAbortError({
+        name: "AbortError",
+        get message() {
+          throw new Error("Abort metadata is unavailable");
+        },
+      }),
+    ).toBe(true);
   });
 
   it.each([
@@ -29,6 +38,13 @@ describe("abort errors", () => {
     new Error("Operation aborted"),
     new Error("aborted"),
     new Error("Request was aborted"),
+    ...(["name", "message"] as const).map((field) =>
+      Object.defineProperty(new Error("Metadata is unavailable"), field, {
+        get() {
+          throw new Error("Error metadata is unavailable");
+        },
+      }),
+    ),
   ])("rejects non-abort input %#", (value) => {
     expect(isAbortError(value)).toBe(false);
   });
@@ -58,66 +74,77 @@ describe("waitForAbortSignal", () => {
     abort.abort();
     await task;
     expect(resolved).toBe(true);
-  });
-
-  it("registers and removes the abort listener exactly once", async () => {
-    let handler: (() => void) | undefined;
-    const addEventListener = (
-      _type: string,
-      listener: () => void,
-      options?: AddEventListenerOptions,
-    ) => {
-      handler = listener;
-      expect(options).toEqual({ once: true });
-    };
-    const removeEventListener = (_type: string, listener: () => void) => {
-      expect(listener).toBe(handler);
-      removed += 1;
-    };
-    let removed = 0;
-
-    const task = waitForAbortSignal({
-      aborted: false,
-      addEventListener,
-      removeEventListener,
-    } as unknown as AbortSignal);
-
-    expect(handler).toBeTypeOf("function");
-    handler?.();
-    await expect(task).resolves.toBeUndefined();
-    expect(removed).toBe(1);
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
   });
 });
 
 describe("racePromiseWithAbortSignal", () => {
+  it.each(["rejected", "pending", "fulfilled"] as const)(
+    "observes a %s source when an existing abort wins",
+    async (state) => {
+      const controller = new AbortController();
+      const reason = new Error("already stopped");
+      controller.abort(reason);
+      const deferred = createDeferred<string>();
+      const sourceError = new Error("source failed");
+      const source =
+        state === "rejected"
+          ? Promise.reject(sourceError)
+          : state === "fulfilled"
+            ? Promise.resolve("done")
+            : deferred.promise;
+
+      await expect(racePromiseWithAbortSignal(source, controller.signal)).rejects.toMatchObject({
+        name: "AbortError",
+        cause: reason,
+      });
+      if (state === "pending") {
+        deferred.reject(sourceError);
+      }
+      // Let Node report an unobserved rejection before this regression finishes.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    },
+  );
+
+  it("observes a later source rejection after an active signal aborts", async () => {
+    const controller = new AbortController();
+    const source = createDeferred<string>();
+    const raced = racePromiseWithAbortSignal(source.promise, controller.signal);
+    controller.abort();
+    await expect(raced).rejects.toMatchObject({ name: "AbortError" });
+    source.reject(new Error("late source failure"));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("returns the source unchanged when no signal is supplied", async () => {
+    const source = Promise.resolve("done");
+    expect(racePromiseWithAbortSignal(source)).toBe(source);
+    await expect(source).resolves.toBe("done");
+    const failure = new Error("source failed");
+    await expect(racePromiseWithAbortSignal(Promise.reject(failure))).rejects.toBe(failure);
+  });
+
   it("preserves source settlement and removes the listener", async () => {
-    let handler: (() => void) | undefined;
-    let removed = 0;
-    const signal = {
-      aborted: false,
-      addEventListener: (_type: string, listener: () => void) => {
-        handler = listener;
-      },
-      removeEventListener: (_type: string, listener: () => void) => {
-        expect(listener).toBe(handler);
-        removed += 1;
-      },
-    } as unknown as AbortSignal;
+    const signal = new AbortController().signal;
     const sourceError = new Error("source failed");
 
     await expect(racePromiseWithAbortSignal(Promise.resolve("done"), signal)).resolves.toBe("done");
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
     await expect(racePromiseWithAbortSignal(Promise.reject(sourceError), signal)).rejects.toBe(
       sourceError,
     );
-    expect(removed).toBe(2);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
   });
 
   it("rejects with the abort reason as cause without cancelling the source", async () => {
     const controller = new AbortController();
-    let resolveSource!: (value: string) => void;
-    const source = new Promise<string>((resolve) => {
-      resolveSource = resolve;
-    });
+    const { promise: source, resolve: resolveSource } = createDeferred<string>();
     const raced = racePromiseWithAbortSignal(source, controller.signal);
     const reason = new Error("caller stopped");
 

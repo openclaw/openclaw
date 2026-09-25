@@ -104,6 +104,15 @@ describe("durable nested activity composition", () => {
       ...children[0],
       content: children.flatMap((child) => child.content),
     };
+    expect(extractToolCardsCached(durable)).toEqual(
+      ids.map((id) =>
+        expect.objectContaining({
+          callId: id,
+          runId: "run",
+          parentToolCallId: "exec",
+        }),
+      ),
+    );
     const history = [user, exec, wait, durable];
     const original = structuredClone(history);
     const items = buildChatItems({

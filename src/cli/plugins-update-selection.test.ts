@@ -37,7 +37,10 @@ describe("resolvePluginUpdateSelection", () => {
   it.each(["missing-plugin", "@acme/missing-plugin@beta", "constructor"])(
     "does not select the untracked plugin target %s",
     (rawId) => {
-      expect(resolvePluginUpdateSelection({ installs: {}, rawId })).toEqual({ pluginIds: [] });
+      expect(resolvePluginUpdateSelection({ installs: {}, rawIds: [rawId] })).toEqual({
+        pluginIds: [],
+        unmatchedIds: [rawId],
+      });
     },
   );
 
@@ -48,9 +51,9 @@ describe("resolvePluginUpdateSelection", () => {
           alpha: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
           beta: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
         },
-        rawId: "@acme/shared@beta",
+        rawIds: ["@acme/shared@beta"],
       }),
-    ).toEqual({ pluginIds: [] });
+    ).toEqual({ pluginIds: [], unmatchedIds: ["@acme/shared@beta"] });
   });
 
   it.each([
@@ -119,7 +122,7 @@ describe("resolvePluginUpdateSelection", () => {
               resolvedName: packageName,
             }),
           },
-          rawId: requestedSpec,
+          rawIds: [requestedSpec],
         }),
       ).toEqual({
         pluginIds: [expectedPluginId],
@@ -140,7 +143,7 @@ describe("resolvePluginUpdateSelection", () => {
             resolvedName: "openclaw-codex-app-server",
           }),
         },
-        rawId: "openclaw-codex-app-server",
+        rawIds: ["openclaw-codex-app-server"],
       }),
     ).toEqual({
       pluginIds: ["openclaw-codex-app-server"],
@@ -157,9 +160,25 @@ describe("resolvePluginUpdateSelection", () => {
           ["pack/one", "pack"],
           ["pack/two", "pack"],
         ]),
-        rawId: "pack/two",
+        rawIds: ["pack/two"],
       }),
     ).toEqual({ pluginIds: ["pack"] });
+  });
+
+  it("deduplicates packed children and retains an explicit selector in input order", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          pack: createNpmInstall({ spec: "@acme/pack@stable" }),
+          other: createNpmInstall({ spec: "@acme/other" }),
+        },
+        installOwnerByPluginId: new Map([
+          ["pack/one", "pack"],
+          ["pack/two", "pack"],
+        ]),
+        rawIds: ["pack/one", "other", "@acme/pack@beta", "pack/two", "@acme/pack@beta"],
+      }),
+    ).toEqual({ pluginIds: ["pack", "other"], specOverrides: { pack: "@acme/pack@beta" } });
   });
 
   it("does not infer a packed child owner when owner metadata is missing", () => {
@@ -168,9 +187,9 @@ describe("resolvePluginUpdateSelection", () => {
         installs: {
           pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
         },
-        rawId: "pack/two",
+        rawIds: ["pack/two"],
       }),
-    ).toEqual({ pluginIds: [] });
+    ).toEqual({ pluginIds: [], unmatchedIds: ["pack/two"] });
   });
 
   it("rejects an ambiguous child before exact install-record selection", () => {
@@ -184,7 +203,7 @@ describe("resolvePluginUpdateSelection", () => {
           ["pack/one", "ambiguous pack/one"],
           ["pack/two", "ambiguous pack/two"],
         ]),
-        rawId: "pack/one",
+        rawIds: ["pack/one"],
       }),
     ).toEqual({ pluginIds: [], error: "ambiguous pack/one" });
   });
@@ -196,11 +215,15 @@ describe("resolvePluginUpdateSelection", () => {
     };
     const rejectedPluginIds = new Map([["pack", "ambiguous pack"]]);
 
-    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawId: "pack" })).toEqual({
-      pluginIds: [],
-      error: "ambiguous pack",
-    });
-    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, all: true })).toEqual({
+    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawIds: ["pack"] })).toEqual(
+      {
+        pluginIds: [],
+        error: "ambiguous pack",
+      },
+    );
+    expect(
+      resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawIds: [], all: true }),
+    ).toEqual({
       pluginIds: [],
       error: "ambiguous pack",
     });
@@ -215,7 +238,7 @@ describe("resolvePluginUpdateSelection", () => {
             resolvedName: "constructor",
           }),
         },
-        rawId: "constructor",
+        rawIds: ["constructor"],
       }),
     ).toEqual({
       pluginIds: ["tracked-constructor"],
@@ -243,7 +266,7 @@ describe("resolveHookPackUpdateSelection", () => {
               resolvedName: packageName,
             }),
           },
-          rawId: requestedSpec,
+          rawIds: [requestedSpec],
         }),
       ).toEqual({
         hookIds: ["demo-hooks"],
@@ -258,7 +281,7 @@ describe("resolveHookPackUpdateSelection", () => {
         installs: {
           "demo-hooks": createNpmHookInstall({ spec: "@acme/demo-hooks@beta" }),
         },
-        rawId: "demo-hooks",
+        rawIds: ["demo-hooks"],
       }),
     ).toEqual({ hookIds: ["demo-hooks"] });
   });
@@ -270,19 +293,20 @@ describe("resolveHookPackUpdateSelection", () => {
           alpha: createNpmHookInstall({ spec: "@acme/shared" }),
           beta: createNpmHookInstall({ spec: "@acme/shared" }),
         },
-        rawId: "@acme/shared",
+        rawIds: ["@acme/shared"],
       }),
-    ).toEqual({ hookIds: [] });
+    ).toEqual({ hookIds: [], unmatchedIds: ["@acme/shared"] });
   });
 
   it("does not treat inherited prototype keys as installed hook ids", () => {
     expect(
       resolveHookPackUpdateSelection({
         installs: {},
-        rawId: "constructor",
+        rawIds: ["constructor"],
       }),
     ).toEqual({
       hookIds: [],
+      unmatchedIds: ["constructor"],
     });
   });
 
@@ -295,7 +319,7 @@ describe("resolveHookPackUpdateSelection", () => {
             resolvedName: "openclaw-hooks-constructor",
           }),
         },
-        rawId: "constructor",
+        rawIds: ["constructor"],
       }),
     ).toEqual({
       hookIds: ["constructor"],

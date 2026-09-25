@@ -1,4 +1,3 @@
-// Telegram plugin module implements command ui behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildBrowseProvidersButton,
@@ -40,19 +39,6 @@ export function buildCommandsPaginationKeyboard(
 
 export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
   return buildProviderKeyboard(params.providers);
-}
-
-export function buildTelegramModelsMenuChannelData(params: {
-  providers: ProviderInfo[];
-}): ReplyPayload["channelData"] | null {
-  if (params.providers.length === 0) {
-    return null;
-  }
-  return {
-    telegram: {
-      buttons: buildTelegramModelsMenuButtons(params),
-    },
-  };
 }
 
 export function buildTelegramCommandsListChannelData(params: {

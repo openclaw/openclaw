@@ -1,8 +1,5 @@
 // Byte-size parser shared by CLI flags and config schemas.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
@@ -30,7 +27,7 @@ function invalidByteSize(raw: string, reason?: string): Error {
 
 /** Parse a non-negative byte size with optional binary units like kb, mb, gb, or tb. */
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidByteSize(raw, "empty");
   }

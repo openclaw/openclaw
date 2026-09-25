@@ -1,6 +1,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
@@ -75,6 +76,7 @@ export async function prepareCompactionSessionAgent(params: {
     provider: params.provider,
     config: params.config,
     workspaceDir: params.effectiveWorkspace,
+    runtimeHandle: getModelProviderRuntimePluginHandle(params.effectiveModel),
   });
   if (providerTextTransforms) {
     params.session.agent.streamFn = wrapStreamFnTextTransforms({
@@ -84,7 +86,10 @@ export async function prepareCompactionSessionAgent(params: {
       transformSystemPrompt: false,
     }) as never;
   }
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(
+    params.thinkLevel,
+    params.effectiveModel,
+  );
   const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
     thinkingLevel: providerThinkingLevel,
     agentId: params.sessionAgentId,
@@ -105,6 +110,12 @@ export async function prepareCompactionSessionAgent(params: {
     undefined,
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
+      auth: params.runtimePlan?.auth.selectedAuthMode
+        ? {
+            mode: params.runtimePlan.auth.selectedAuthMode,
+            authFlow: params.runtimePlan.auth.selectedAuthFlow,
+          }
+        : undefined,
       nativeWebSearchPolicyContext: {
         // Summaries have no tool loop; provider-hosted tools must not inherit
         // the originating conversation's broader web-search authority.

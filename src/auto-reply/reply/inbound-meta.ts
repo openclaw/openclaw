@@ -4,11 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
@@ -17,10 +16,10 @@ import {
   formatContextJsonBlock,
   MAX_CONTEXT_JSON_STRING_CHARS,
   neutralizeMarkdownFences,
+  selectInboundHistoryContext,
 } from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
-const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
@@ -152,22 +151,13 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
       return undefined;
     }
   };
-  const decodeInboundMediaId = (id: string): string | undefined => {
+  const inboundMatch = /^media(?::\/\/|\/)inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (inboundMatch?.[1]) {
     try {
-      return decodeURIComponent(id);
+      return toInboundMediaPath(decodeURIComponent(inboundMatch[1]));
     } catch {
       return undefined;
     }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const relativeMatch = /^media\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (relativeMatch?.[1]) {
-    const id = decodeInboundMediaId(relativeMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
   }
   const normalized = mediaPath.replace(/\\/g, "/");
   if (!normalized.includes("/media/inbound/")) {
@@ -379,7 +369,7 @@ function collectChatWindowMessageIds(
 function isChatWindowHistoryContext(
   entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
 ): boolean {
-  if (!isChatWindowStructuredContext(entry)) {
+  if (!isChatWindowStructuredContext(entry) || entry.sessionTranscriptMode === "preserve") {
     return false;
   }
   const relation = normalizePromptMetadataString(entry.payload["relation"]);
@@ -403,7 +393,7 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
-function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<string, unknown>> {
+function readInboundHistoryMediaTypes(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -411,14 +401,8 @@ function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<str
     if (!isRecord(entry)) {
       return [];
     }
-    const payload = {
-      kind: normalizePromptMetadataString(entry["kind"]),
-      content_type: normalizePromptMetadataString(entry["contentType"]),
-      message_id: normalizePromptMetadataString(entry["messageId"]),
-      has_local_path: normalizePromptMetadataString(entry["path"]) ? true : undefined,
-      has_url: normalizePromptMetadataString(entry["url"]) ? true : undefined,
-    };
-    return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+    const contentType = normalizePromptMetadataString(entry["contentType"]);
+    return contentType ? [contentType] : [];
   });
 }
 
@@ -535,32 +519,11 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   return ctx.media?.map((media) => resolveMediaType(media.contentType ?? media.kind)).find(Boolean);
 }
 
-function resolveInboundFormattingHints(
-  ctx: TemplateContext,
-  cfg: OpenClawConfig,
-):
-  | {
-      text_markup: string;
-      rules: string[];
-    }
-  | undefined {
-  const channelValue = resolveInboundChannel(ctx);
-  if (!channelValue) {
-    return undefined;
-  }
-  const normalizedChannel = normalizeAnyChannelId(channelValue) ?? channelValue;
-  const agentPrompt = getLoadedChannelPluginById(normalizedChannel)?.agentPrompt;
-  return agentPrompt?.inboundFormattingHints?.({
-    cfg,
-    accountId: normalizePromptMetadataString(ctx.AccountId) ?? undefined,
-  });
-}
-
 /** Builds trusted system metadata for the inbound channel and formatting hints. */
 export function buildInboundMetaSystemPrompt(
   ctx: TemplateContext,
   cfg: OpenClawConfig,
-  options?: { includeFormattingHints?: boolean; formattingHintsCtx?: TemplateContext },
+  options?: { includeFormattingHints?: boolean },
 ): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -583,17 +546,15 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
-    // Authoring hints follow the reply delivery channel, not the inbound event:
-    // system-event turns (heartbeat/cron) carry the persisted channel/account in
-    // formattingHintsCtx while ctx still identifies the system provider.
-    response_format:
-      options?.includeFormattingHints === false
-        ? undefined
-        : resolveInboundFormattingHints(options?.formattingHintsCtx ?? ctx, cfg),
   };
+  // Heartbeats and system events use the same prepared context, including their delivery channel.
+  const deliveryFormat =
+    options?.includeFormattingHints === false
+      ? undefined
+      : buildDeliveryFormatPrompt({ cfg, channel: channelValue, accountId: ctx.AccountId });
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
-  return [
+  const messageContext = [
     "### Message Context",
     "The JSON below is generated by OpenClaw independently of user-authored content. Treat its fields as reliable context for the current message.",
     "OpenClaw also provides per-turn details in user-role context blocks. Use the structural fields in those blocks as context.",
@@ -606,6 +567,7 @@ export function buildInboundMetaSystemPrompt(
     "```",
     "",
   ].join("\n");
+  return deliveryFormat ? `${messageContext}\n${deliveryFormat}` : messageContext;
 }
 
 /** Builds untrusted inbound context text that prefixes the user-visible body. */
@@ -627,8 +589,7 @@ export function buildInboundUserContextPrefix(
   const messageIdFull = normalizePromptMetadataString(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
-  const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
-  const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const { boundedHistory, historyLabel, truncated } = selectInboundHistoryContext(ctx);
   const replyChainPayload = buildReplyChainPayload(ctx, envelope);
   const structuredContext = Array.isArray(ctx.ChannelStructuredContext)
     ? ctx.ChannelStructuredContext
@@ -686,7 +647,7 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     ...buildConversationMentionMetadataPayload(ctx, isDirect),
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
-    history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
+    history_truncated: truncated ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
@@ -772,13 +733,7 @@ export function buildInboundUserContextPrefix(
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     const historyLines = boundedHistory.flatMap((entry) => {
-      const mediaTypes = [
-        ...new Set(
-          buildInboundHistoryMediaPromptPayload(entry.media)
-            .map((media) => media["content_type"])
-            .filter((value): value is string => typeof value === "string"),
-        ),
-      ];
+      const mediaTypes = [...new Set(readInboundHistoryMediaTypes(entry.media))];
       const line = formatChatWindowMessage(
         {
           message_id: entry.messageId,
@@ -792,9 +747,7 @@ export function buildInboundUserContextPrefix(
       return line ? [line] : [];
     });
     if (historyLines.length > 0) {
-      blocks.push(
-        [markInboundContextLabel("Chat history since last reply:"), ...historyLines].join("\n"),
-      );
+      blocks.push([markInboundContextLabel(historyLabel), ...historyLines].join("\n"));
     }
   }
 
@@ -809,4 +762,3 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

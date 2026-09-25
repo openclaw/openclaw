@@ -1,4 +1,3 @@
-// Covers installed plugin index record parsing and normalization.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -14,6 +13,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -30,15 +30,16 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecordsSync,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
-  resolveInstalledPluginIndexRecordsStorePath,
   withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
+// Covers installed plugin index record parsing and normalization.
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs = createTempDirTracker();
@@ -102,7 +103,8 @@ function updatePersistedInstallRecordsWithoutClearingCache(
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.doUnmock("./installed-plugin-index-store.js");
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -117,7 +119,7 @@ describe("plugin index install records store", () => {
   ])("preserves read errors without recovery or cache poisoning: %j", async (details) => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } } as const;
-    await writePersistedInstalledPluginIndexInstallRecords(records, { stateDir, candidates: [] });
+    await seedInstalledPluginIndex(records, { stateDir, candidates: [] });
     writeManagedNpmPlugin({
       stateDir,
       packageName: "recoverable",
@@ -129,10 +131,8 @@ describe("plugin index install records store", () => {
     const scanSpy = vi.spyOn(fs, "readdirSync");
     for (const read of [
       inspectPersistedInstalledPluginIndexInstallRecordsSync,
-      readPersistedInstalledPluginIndexInstallRecordsSync,
       readPersistedInstalledPluginIndexInstallRecords,
       loadInstalledPluginIndexInstallRecordsSync,
-      loadInstalledPluginIndexInstallRecords,
     ]) {
       readSpy.mockImplementationOnce(() => {
         throw error;
@@ -144,7 +144,12 @@ describe("plugin index install records store", () => {
         )
         .rejects.toBe(error);
     }
+    const asyncReadSpy = vi
+      .spyOn(metadataWorker, "readPluginMetadataStateRow")
+      .mockRejectedValueOnce(error);
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).rejects.toBe(error);
     expect(scanSpy).not.toHaveBeenCalled();
+    asyncReadSpy.mockRestore();
     readSpy.mockRestore();
     scanSpy.mockRestore();
 
@@ -158,7 +163,7 @@ describe("plugin index install records store", () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "twitch");
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         twitch: {
           source: "npm",
@@ -173,7 +178,7 @@ describe("plugin index install records store", () => {
       },
     );
 
-    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const indexPath = resolveInstalledPluginIndexStorePath({ stateDir });
     expect(indexPath).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     if (!persisted) {
@@ -189,7 +194,7 @@ describe("plugin index install records store", () => {
     expect(persisted.plugins).toHaveLength(1);
     expect(persisted.plugins?.[0]?.pluginId).toBe("twitch");
     expect(persisted.plugins?.[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
-    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({
       twitch: {
         source: "npm",
         spec: "@openclaw/plugin-twitch@1.0.0",
@@ -201,7 +206,7 @@ describe("plugin index install records store", () => {
   it("preserves install records for plugins without a discovered manifest", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         missing: {
           source: "npm",
@@ -238,7 +243,7 @@ describe("plugin index install records store", () => {
   it("reads persisted records from the plugin index", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "persisted");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         persisted: {
           source: "npm",
@@ -262,7 +267,7 @@ describe("plugin index install records store", () => {
 
   it("preserves newer shared-state schema errors while loading install records", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         persisted: {
           source: "npm",
@@ -272,7 +277,7 @@ describe("plugin index install records store", () => {
       { stateDir, candidates: [] },
     );
     closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
@@ -291,7 +296,7 @@ describe("plugin index install records store", () => {
   it("returns prototype-safe map copies without cloning cached records", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "cached");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         cached: {
           source: "npm",
@@ -315,15 +320,17 @@ describe("plugin index install records store", () => {
   it("invalidates cached records when the persisted index is rewritten", () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const first = createPluginCandidate(stateDir, "first");
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      candidates: [first],
+      reason: "source-changed",
+      installRecords: {
         first: {
           source: "npm",
           spec: "first@1.0.0",
         },
       },
-      { stateDir, candidates: [first] },
-    );
+    });
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       first: {
         source: "npm",
@@ -332,15 +339,17 @@ describe("plugin index install records store", () => {
     });
 
     const second = createPluginCandidate(stateDir, "second");
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      candidates: [second],
+      reason: "source-changed",
+      installRecords: {
         second: {
           source: "npm",
           spec: "second@1.0.0",
         },
       },
-      { stateDir, candidates: [second] },
-    );
+    });
 
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       second: {
@@ -353,15 +362,17 @@ describe("plugin index install records store", () => {
   it("keeps cached records until cache clear after an external index write", () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "external");
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      candidates: [candidate],
+      reason: "source-changed",
+      installRecords: {
         external: {
           source: "npm",
           spec: "external@1.0.0",
         },
       },
-      { stateDir, candidates: [candidate] },
-    );
+    });
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       external: {
         source: "npm",
@@ -395,7 +406,7 @@ describe("plugin index install records store", () => {
 
   it("reads persisted records when the plugin index has no plugin list", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         legacy: {
           source: "npm",
@@ -481,7 +492,7 @@ describe("plugin index install records store", () => {
       version: "2026.5.2",
     });
     const candidate = createPluginCandidate(stateDir, "discord");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -596,7 +607,7 @@ describe("plugin index install records store", () => {
         ...packageName.split("/"),
       );
 
-      await writePersistedInstalledPluginIndexInstallRecords(
+      await seedInstalledPluginIndex(
         {
           discord: {
             source: "npm",
@@ -662,7 +673,7 @@ describe("plugin index install records store", () => {
       ...packageName.split("/"),
     );
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -716,7 +727,7 @@ describe("plugin index install records store", () => {
       .join(staleProjectRoot, "node_modules", ...packageName.split("/"))
       .replace(stateDir, stateDir.toUpperCase());
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -747,7 +758,7 @@ describe("plugin index install records store", () => {
       version: "2026.5.18-beta.1",
     });
     const candidate = createPluginCandidate(stateDir, "codex");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         codex: {
           source: "npm",
@@ -841,15 +852,17 @@ describe("plugin index install records store", () => {
   it("does not probe install record files again on hot cache hits", () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "hot-cache");
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      candidates: [candidate],
+      reason: "source-changed",
+      installRecords: {
         "hot-cache": {
           source: "npm",
           spec: "hot-cache@1.0.0",
         },
       },
-      { stateDir, candidates: [candidate] },
-    );
+    });
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       "hot-cache": {
         source: "npm",
@@ -873,7 +886,7 @@ describe("plugin index install records store", () => {
   it("preserves git install resolution fields in persisted records", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "git-demo");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         "git-demo": {
           source: "git",
@@ -900,7 +913,7 @@ describe("plugin index install records store", () => {
   it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "clawpack-demo");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         "clawpack-demo": {
           source: "clawhub",
@@ -1041,7 +1054,7 @@ describe("plugin index install records store", () => {
   it("returns empty records when the persisted plugin index is missing", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
 
-    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toBeNull();
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
     const records = await loadInstalledPluginIndexInstallRecords({ stateDir });
     expect(Object.keys(records)).toEqual([]);
     expect(Object.getPrototypeOf(records)).toBeNull();

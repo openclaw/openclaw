@@ -39,8 +39,10 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+  }),
 }));
 
 const OPENAI_ENV_KEY_REF = {
@@ -411,14 +413,36 @@ describe("secrets runtime snapshot core lanes", () => {
             token: "old-gh",
             tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
           },
+          "openai:literal": { type: "api_key", provider: "openai", key: "literal-key" },
+          "custom:literal": { type: "token", provider: "custom", token: "literal-token" },
+          "custom:expired": {
+            type: "token",
+            provider: "custom",
+            expires: 1,
+            tokenRef: { source: "env", provider: "default", id: "FIXTURE_EXPIRED_TOKEN" },
+          },
         }),
     });
 
-    const warningPaths = snapshot.warnings.map((warning) => warning.path);
-    expect(warningPaths).toContain("/tmp/openclaw-agent-main.auth-profiles.openai:default.key");
-    expect(warningPaths).toContain(
-      "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-    );
+    expect(snapshot.warnings).toEqual([
+      {
+        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+        path: "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
+        message: "auth-profiles openai:default: keyRef is set; runtime will ignore plaintext key.",
+      },
+      {
+        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+        path: "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+        message:
+          "auth-profiles github-copilot:default: tokenRef is set; runtime will ignore plaintext token.",
+      },
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "/tmp/openclaw-agent-main.auth-profiles.custom:expired.token",
+        message:
+          "/tmp/openclaw-agent-main.auth-profiles.custom:expired.token: auth profile is not eligible (expired); skipping resolution until it becomes eligible.",
+      },
+    ]);
     const openAiProfile = snapshot.authStores[0]?.store.profiles["openai:default"] as
       | Record<string, unknown>
       | undefined;
@@ -429,6 +453,14 @@ describe("secrets runtime snapshot core lanes", () => {
       | undefined;
     expect(copilotProfile?.type).toBe("token");
     expect(copilotProfile?.token).toBe("ghp-env-token");
+    expect(snapshot.authStores[0]?.store.profiles["openai:literal"]).toMatchObject({
+      key: "literal-key",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["custom:literal"]).toMatchObject({
+      token: "literal-token",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["custom:expired"]).not.toHaveProperty("token");
+    expect(snapshot.degradedOwners).toEqual([]);
   });
 
   it("can materialize auth stores without resolving unrelated config refs", async () => {

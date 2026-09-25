@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   renderSettingsSection,
@@ -7,17 +7,18 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type SystemSectionProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
+  systemInfoLoading?: boolean;
 };
 
 type SystemStat = {
   label: string;
-  value: string;
+  value: string | TemplateResult;
   unit?: string;
   detail?: string;
   /** Used share of the resource (0..1); renders the meter bar when present. */
@@ -60,7 +61,7 @@ function renderSystemMeter(label: string, fraction: number) {
 function renderSystemStat(stat: SystemStat) {
   const label = stat.path ? `${stat.label} ${stat.path}` : stat.label;
   return html`
-    <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
+    <div class="config-host__stat" title=${stat.title ?? nothing}>
       <div class="config-host__stat-label">
         ${stat.label}${
           stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
@@ -106,7 +107,6 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           label: t("quickSettings.system.cpu"),
           value: coresLabel,
           detail: info.cpuModel,
-          title: cpuTitle,
         }
       : {
           label: t("quickSettings.system.cpu"),
@@ -149,11 +149,11 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
   return stats;
 }
 
-function buildSystemStatsPlaceholder(): SystemStat[] {
+function buildSystemStatsPlaceholder(value: SystemStat["value"]): SystemStat[] {
   return [
-    { label: t("quickSettings.system.cpu"), value: "—" },
-    { label: t("quickSettings.system.memory"), value: "—" },
-    { label: t("quickSettings.system.disk"), value: "—" },
+    { label: t("quickSettings.system.cpu"), value },
+    { label: t("quickSettings.system.memory"), value },
+    { label: t("quickSettings.system.disk"), value },
   ];
 }
 
@@ -163,12 +163,14 @@ export function renderSystemSection(props: SystemSectionProps) {
     return nothing;
   }
   const info = props.systemInfo;
-  const placeholder = "—";
+  const placeholder = props.systemInfoLoading
+    ? html`<span class="skeleton config-host__placeholder" aria-hidden="true"></span>`
+    : "—";
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : undefined;
-  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
+  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder(placeholder);
 
   // Escape hatch: host identity + metered stats are a genuine two-column grid,
   // kept as custom markup inside the single group with row-matched paddings.
@@ -182,7 +184,7 @@ export function renderSystemSection(props: SystemSectionProps) {
       : undefined,
   };
   return html`
-    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host}>
+    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy=${Boolean(props.systemInfoLoading)}>
       ${renderSettingsSection(
         sectionProps,
         html`

@@ -6,6 +6,7 @@ import {
 } from "../../daemon/hosted-stop.js";
 import type { GatewayHostLifecycle } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { disarmGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import { scheduleSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 
 /** The run loop retains this owner; kernels receive only its request capability. */
@@ -14,6 +15,7 @@ export function createGatewayHostLifecycle(params: {
   isServing: () => boolean;
   acceptStop: () => void;
   processOwner: GatewayProcessOwner;
+  getShutdownBudget?: GatewayHostLifecycle["getShutdownBudget"];
 }) {
   const abort = new AbortController();
   const processOwner = { ...params.processOwner };
@@ -23,6 +25,9 @@ export function createGatewayHostLifecycle(params: {
   let preparationFinished: Promise<void> | undefined;
   let execution: ReturnType<HostedGatewayStop["execute"]> | undefined;
   let retirement: Promise<void> | undefined;
+  const externalRestart = {
+    isCurrent: () => state === "serving" && params.isCurrent() && params.isServing(),
+  };
   const assertCurrent = () => {
     if (state === "retired" || !params.isCurrent()) {
       throw new Error(
@@ -35,6 +40,7 @@ export function createGatewayHostLifecycle(params: {
       return retirement;
     }
     state = "retired";
+    disarmGatewaySuspendHandoff(externalRestart);
     abort.abort();
     // Fence now; join the child, preparation, and execution before replacement.
     // finishStop owns execution errors; retirement only waits for its unwind.
@@ -47,6 +53,16 @@ export function createGatewayHostLifecycle(params: {
     return retirement;
   };
   const capability: GatewayHostLifecycle = {
+    ...(processOwner.ownsProcessLifecycle ? { externalRestart } : {}),
+    getShutdownBudget() {
+      // Current shutdown facts remain readable while control authority retires.
+      const budget = params.isCurrent() ? params.getShutdownBudget?.() : undefined;
+      if (!budget) {
+        return undefined;
+      }
+      const { timeoutMs, reserveMs, nativeStopBudget } = budget;
+      return { timeoutMs, reserveMs, nativeStopBudget };
+    },
     async request(action, assertCaller) {
       const assertRequest = () => {
         assertCurrent();

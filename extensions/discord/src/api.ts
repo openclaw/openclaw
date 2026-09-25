@@ -1,5 +1,5 @@
 // Discord API module exposes the plugin public contract.
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureChannelReadAuthority, resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
@@ -11,6 +11,7 @@ import {
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "./endpoint-runtime.js";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
@@ -129,6 +130,7 @@ function getDiscordApiRetryAfterMs(
 }
 
 type DiscordFetchOptions = {
+  endpointRuntime?: DiscordEndpointRuntime | null;
   retry?: RetryConfig;
   label?: string;
   signal?: AbortSignal;
@@ -182,7 +184,14 @@ export async function requestDiscord<T>(
   token: string,
   options?: DiscordApiRequestOptions,
 ): Promise<T> {
-  const fetchImpl = resolveFetch(options?.fetcher ?? fetch);
+  const assertReadAuthority = captureChannelReadAuthority();
+  const endpoint =
+    options?.endpointRuntime === undefined ? getDiscordEndpointRuntime() : options.endpointRuntime;
+  const fetchImpl = resolveFetch(
+    endpoint
+      ? (input, init) => endpoint.fetch(input, init, assertReadAuthority)
+      : (options?.fetcher ?? fetch),
+  );
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
@@ -195,12 +204,16 @@ export async function requestDiscord<T>(
       const body = normalizeDiscordRequestBody(options?.body, headers);
       const requestSignal = createDiscordRequestSignal(options ?? {});
       try {
-        const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-          method: options?.method ?? (body === undefined ? "GET" : "POST"),
-          headers,
-          body,
-          signal: requestSignal.signal,
-        });
+        assertReadAuthority?.();
+        const res = await fetchImpl(
+          `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}${path}`,
+          {
+            method: options?.method ?? (body === undefined ? "GET" : "POST"),
+            headers,
+            body,
+            signal: requestSignal.signal,
+          },
+        );
         if (!res.ok) {
           const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
             () => "",

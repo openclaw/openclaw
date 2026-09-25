@@ -1,4 +1,4 @@
-// Models method tests cover slow catalog timeouts, configured/all views,
+// Models method tests cover published inventory, configured/all views,
 // validation errors, and protocol response shapes.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -12,6 +12,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -37,120 +38,9 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
   consumesWorkerSlot: true,
 };
 
-const modelPluginMetadataSnapshot = vi.hoisted(() => {
-  const plugins = [
-    {
-      id: "anthropic",
-      channels: [],
-      providers: ["anthropic"],
-      cliBackends: ["claude-cli"],
-      syntheticAuthRefs: ["claude-cli"],
-      providerAuthChoices: [
-        {
-          provider: "anthropic",
-          method: "cli",
-          choiceId: "anthropic-cli",
-          deprecatedChoiceIds: ["claude-cli"],
-        },
-        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
-        { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
-      ],
-      modelSupport: { modelPrefixes: ["claude-"] },
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      enabledByDefault: true,
-      rootDir: "/test/anthropic",
-      source: "/test/anthropic/index.js",
-      manifestPath: "/test/anthropic/openclaw.plugin.json",
-    },
-    {
-      id: "byteplus",
-      channels: [],
-      providers: ["byteplus", "byteplus-plan"],
-      syntheticAuthRefs: [],
-      providerAuthAliases: { "byteplus-plan": "byteplus" },
-      providerAuthChoices: [
-        { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
-      ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/byteplus",
-      source: "/test/byteplus/index.js",
-      manifestPath: "/test/byteplus/openclaw.plugin.json",
-    },
-    {
-      id: "github-copilot",
-      channels: [],
-      providers: ["github-copilot"],
-      syntheticAuthRefs: [],
-      providerAuthChoices: [
-        { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
-        {
-          provider: "github-copilot",
-          method: "device-enterprise",
-          choiceId: "github-copilot-enterprise",
-        },
-      ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/github-copilot",
-      source: "/test/github-copilot/index.js",
-      manifestPath: "/test/github-copilot/openclaw.plugin.json",
-    },
-  ];
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "models-test-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    // A real isolated bundled snapshot has no installed-index rows; bundled
-    // manifest records remain the authoritative graph for this fixture.
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "models-test-plugin-policy",
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins, diagnostics: [] },
-    plugins,
-    diagnostics: [],
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId: string) => pluginId,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map([
-        ["anthropic", ["anthropic"]],
-        ["byteplus", ["byteplus"]],
-        ["byteplus-plan", ["byteplus"]],
-        ["github-copilot", ["github-copilot"]],
-      ]),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map([["claude-cli", ["anthropic"]]]),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
-  };
+const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
+  const { createModelPluginMetadataSnapshot } = await import("./models-metadata.test-support.js");
+  return createModelPluginMetadataSnapshot();
 });
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -273,8 +163,12 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
+  includeDefaultModels?: boolean;
   includeProviderCapabilities?: boolean;
   deferredAuth?: Promise<PreparedModelRuntimeAuth>;
+  refresh?: boolean;
+  publishedCatalog?: ModelCatalogEntry[];
+  catalogComplete?: boolean;
   preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
 }) {
   const respond = params.respond ?? vi.fn();
@@ -304,7 +198,7 @@ function requestModelsList(params: {
     return {
       ...owner,
       ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
-      catalogComplete: loadParams?.readOnly === false,
+      catalogComplete: params.catalogComplete ?? loadParams?.readOnly === false,
       entries,
       routeVariants: entries,
       authMaterializations: [],
@@ -313,27 +207,46 @@ function requestModelsList(params: {
   const loadGatewayModelCatalogSnapshot = async (
     loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
   ) => loadSnapshot(loadParams);
+  let published: PreparedGatewayModelCatalogSnapshot | undefined;
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: async (loadParams) => {
       const snapshot = await loadSnapshot(loadParams);
+      published = snapshot;
       if (!params.deferredAuth) {
         return snapshot;
       }
       try {
-        return { ...snapshot, ...(await params.deferredAuth) };
+        published = { ...snapshot, ...(await params.deferredAuth) };
+        return published;
       } catch {
         return snapshot;
       }
     },
-    readPrepared: async () =>
-      ({
-        ...resolveOwnerFacts(),
-        catalogComplete: false,
-        entries: [],
-        routeVariants: [],
-        authMaterializations: [],
-      }) as PreparedGatewayModelCatalogSnapshot,
+    readPrepared: async () => {
+      if (published && published.config === getRuntimeConfig()) {
+        return published;
+      }
+      published = params.publishedCatalog
+        ? {
+            ...resolveOwnerFacts(),
+            catalogComplete: false,
+            entries: params.publishedCatalog,
+            routeVariants: params.publishedCatalog,
+            authMaterializations: [],
+          }
+        : await loadSnapshot({ agentId: params.agentId, readOnly: true });
+      return published;
+    },
   });
+  const requestParams = {
+    view: params.view,
+    ...(params.includeDefaultModels === undefined
+      ? {}
+      : { includeDefaultModels: params.includeDefaultModels }),
+    ...(params.refresh ? { refresh: true } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
+  };
   const request = expectDefined(
     modelsHandlers["models.list"],
     'modelsHandlers["models.list"] test invariant',
@@ -342,17 +255,9 @@ function requestModelsList(params: {
       type: "req",
       id: params.reqId ?? `req-models-list-${params.view}`,
       method: "models.list",
-      params: {
-        view: params.view,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
-      },
+      params: requestParams,
     },
-    params: {
-      view: params.view,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
-    },
+    params: requestParams,
     respond: respond as RespondFn,
     client: null,
     isWebchatConnect: () => false,
@@ -370,6 +275,40 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it.each(["claude-fable-5-1", "Claude Gateway/claude-fable-5-1"])(
+    "publishes the native Fable effort ladder for %s on a custom Messages provider",
+    async (id) => {
+      const { request, respond } = requestModelsList({
+        view: "all",
+        loadGatewayModelCatalog: vi.fn(async () => [
+          {
+            id,
+            name: "Pooled Fable",
+            provider: "proxy",
+            api: "anthropic-messages",
+            reasoning: true,
+          },
+        ]),
+      });
+
+      await request;
+
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        models: [
+          {
+            id,
+            provider: "proxy",
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max", "ultra"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            thinkingDefault: "medium",
+          },
+        ],
+      });
+    },
+  );
+
   it("loads the requested agent catalog", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => [
       { id: "writer-model", name: "Writer Model", provider: "test" },
@@ -419,74 +358,13 @@ describe("models.list", () => {
 
     const selected = requestModelsList({
       view: "configured",
+      includeDefaultModels: false,
       agentId: "research",
       runtimeConfig,
       loadGatewayModelCatalog: vi.fn(async () => []),
     });
     await selected.request;
     expect(selected.respond).toHaveBeenCalledWith(true, { models: [] }, undefined);
-  });
-
-  it("uses the replacement owner config for the whole catalog projection", async () => {
-    const initialConfig = {
-      agents: { defaults: { models: { "test/old": {} } } },
-    } as OpenClawConfig;
-    const latestConfig = {
-      agents: { defaults: { models: { "test/demo": {} } } },
-    } as OpenClawConfig;
-    let currentConfig = initialConfig;
-    const loadGatewayModelCatalog = vi.fn(async () => {
-      if (currentConfig === initialConfig) {
-        currentConfig = latestConfig;
-      }
-      return [{ id: "demo", name: "Demo", provider: "test" }];
-    });
-
-    const { request, respond } = requestModelsList({
-      view: "configured",
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalog,
-    });
-    await request;
-
-    expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { models: [expect.objectContaining({ id: "demo", provider: "test" })] },
-      undefined,
-    );
-  });
-
-  it("escalates to the full owner when replacement config adds a provider wildcard", async () => {
-    const initialConfig = {
-      agents: { defaults: { models: { "test/demo": {} } } },
-    } as OpenClawConfig;
-    const latestConfig = {
-      agents: { defaults: { models: { "test/*": {} } } },
-    } as OpenClawConfig;
-    let currentConfig = initialConfig;
-    let firstLoad = true;
-    const loadGatewayModelCatalog = vi.fn(async (_params?: { readOnly?: boolean }) => {
-      if (firstLoad) {
-        firstLoad = false;
-        currentConfig = latestConfig;
-      }
-      return [{ id: "demo", name: "Demo", provider: "test" }];
-    });
-
-    const { request, respond } = requestModelsList({
-      view: "configured",
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalog,
-    });
-    await request;
-
-    expect(loadGatewayModelCatalog.mock.calls.map(([params]) => params?.readOnly)).toEqual([
-      true,
-      false,
-    ]);
-    expect(respond).toHaveBeenCalledWith(true, { models: [] }, undefined);
   });
 
   it("reports API-key capability from provider auth contracts when requested", async () => {
@@ -576,6 +454,7 @@ describe("models.list", () => {
           { id: "low", label: "low" },
           { id: "medium", label: "medium" },
           { id: "high", label: "high" },
+          { id: "ultra", label: "ultra" },
         ],
       });
     }
@@ -624,7 +503,10 @@ describe("models.list", () => {
     ).toMatchObject({
       reasoning: false,
       agentRuntime: { id: "claude-cli" },
-      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "ultra", label: "ultra" },
+      ],
     });
   });
 
@@ -688,6 +570,7 @@ describe("models.list", () => {
         { id: "high", label: "high" },
         { id: "xhigh", label: "xhigh" },
         { id: "max", label: "max" },
+        { id: "ultra", label: "ultra" },
       ],
       thinkingDefault: "high",
     });
@@ -796,7 +679,10 @@ describe("models.list", () => {
       provider: "anthropic",
       reasoning: true,
       agentRuntime: { id: "claude-cli" },
-      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "ultra", label: "ultra" },
+      ],
       thinkingDefault: "off",
     });
     expect(model).not.toHaveProperty("thinkingPolicyProvider");
@@ -898,6 +784,7 @@ describe("models.list", () => {
                 { id: "low", label: "low" },
                 { id: "medium", label: "medium" },
                 { id: "high", label: "high" },
+                { id: "ultra", label: "ultra" },
               ],
               thinkingDefault: "medium",
             },
@@ -975,7 +862,7 @@ describe("models.list", () => {
     }
   });
 
-  it("does not block the configured view on slow model catalog discovery", async () => {
+  it("reads configured rows without awaiting provider discovery", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<never>();
       const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
@@ -989,54 +876,45 @@ describe("models.list", () => {
           },
         },
       } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        publishedCatalog: [],
+        view: "configured",
+        includeDefaultModels: false,
+        runtimeConfig,
+        loadGatewayModelCatalog,
+        reqId: "req-models-list-slow-catalog",
+      });
+      await request;
 
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const { request, respond } = requestModelsList({
-          view: "configured",
-          runtimeConfig,
-          loadGatewayModelCatalog,
-          reqId: "req-models-list-slow-catalog",
-        });
-
-        await vi.advanceTimersByTimeAsync(800);
-        await vi.runOnlyPendingTimersAsync();
-        await request;
-
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          {
-            models: [
-              {
-                id: "gpt-test",
-                name: "GPT Test",
-                provider: "openai",
-                agentRuntime: {
-                  id: "openclaw",
-                  cloudPlacementSupported: true,
-                  cloudPlacementExecutionMode: "worker-turn",
-                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-                  devicePlacementSupported: true,
-                  source: "implicit",
-                },
-                available: false,
-                unavailableReason: "missing-auth",
-                tags: ["default"],
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "gpt-test",
+              name: "GPT Test",
+              provider: "openai",
+              agentRuntime: {
+                id: "openclaw",
+                cloudPlacementSupported: true,
+                cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+                devicePlacementSupported: true,
+                source: "implicit",
               },
-            ],
-          },
-          undefined,
-        );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
-          expect.objectContaining({ readOnly: true }),
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+              available: false,
+              unavailableReason: "missing-auth",
+              tags: ["default"],
+            },
+          ],
+        },
+        undefined,
+      );
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
     });
   });
 
-  it("does not let deferred auth outlive the configured browse deadline", async () => {
+  it("reads configured rows without awaiting deferred auth", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const auth = createDeferred<PreparedModelRuntimeAuth>();
       const runtimeConfig = {
@@ -1049,75 +927,17 @@ describe("models.list", () => {
           },
         },
       } as unknown as OpenClawConfig;
-
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const { request, respond } = requestModelsList({
-          view: "configured",
-          runtimeConfig,
-          deferredAuth: auth.promise,
-          loadGatewayModelCatalog: vi.fn(() =>
-            Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
-          ),
-          reqId: "req-models-list-slow-auth",
-        });
-
-        await vi.advanceTimersByTimeAsync(800);
-        await vi.runOnlyPendingTimersAsync();
-        await request;
-
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          {
-            models: [
-              {
-                id: "gpt-test",
-                name: "GPT Test",
-                provider: "openai",
-                agentRuntime: {
-                  id: "openclaw",
-                  cloudPlacementSupported: true,
-                  cloudPlacementExecutionMode: "worker-turn",
-                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-                  devicePlacementSupported: true,
-                  source: "implicit",
-                },
-                available: false,
-                unavailableReason: "missing-auth",
-                tags: ["default"],
-              },
-            ],
-          },
-          undefined,
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  it("keeps prepared auth when deferred auth refresh rejects", async () => {
-    await withoutOpenAIEnvAuth(async () => {
-      const runtimeConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.com",
-              models: [{ id: "gpt-test", name: "GPT Test" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
       const { request, respond } = requestModelsList({
+        publishedCatalog: [],
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
-        deferredAuth: Promise.reject(new Error("auth refresh failed")),
+        deferredAuth: auth.promise,
         loadGatewayModelCatalog: vi.fn(() =>
           Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
         ),
-        reqId: "req-models-list-rejected-auth",
+        reqId: "req-models-list-slow-auth",
       });
-
       await request;
 
       expect(respond).toHaveBeenCalledWith(
@@ -1147,6 +967,60 @@ describe("models.list", () => {
     });
   });
 
+  it("keeps prepared auth when deferred auth refresh rejects", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        refresh: true,
+        view: "configured",
+        includeDefaultModels: false,
+        runtimeConfig,
+        deferredAuth: Promise.reject(new Error("auth refresh failed")),
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
+        ),
+        reqId: "req-models-list-rejected-auth",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "gpt-test",
+              name: "GPT Test",
+              provider: "openai",
+              agentRuntime: {
+                id: "openclaw",
+                cloudPlacementSupported: true,
+                cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+                devicePlacementSupported: true,
+                source: "implicit",
+              },
+              available: false,
+              supportsFastMode: false,
+              unavailableReason: "missing-auth",
+              tags: ["default"],
+            },
+          ],
+        },
+        undefined,
+      );
+    });
+  });
+
   it("does not advertise a subscription route after deferred auth observes logout", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const runtimeConfig = {
@@ -1161,7 +1035,9 @@ describe("models.list", () => {
         },
       } as unknown as OpenClawConfig;
       const { request, respond } = requestModelsList({
+        refresh: true,
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
         preparedAuthModes: { openai: "oauth" },
         deferredAuth: Promise.resolve({
@@ -1196,7 +1072,7 @@ describe("models.list", () => {
     });
   });
 
-  it("does not block wildcard provider inventory on slow full discovery", async () => {
+  it("reads wildcard provider inventory without discovery", async () => {
     const catalog = createDeferred<never>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
     const runtimeConfig = {
@@ -1214,43 +1090,33 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      publishedCatalog: [],
+      view: "provider-config",
+      runtimeConfig,
+      loadGatewayModelCatalog,
+      reqId: "req-models-list-wildcard-provider-timeout",
+    });
+    await request;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { request, respond } = requestModelsList({
-        view: "provider-config",
-        runtimeConfig,
-        loadGatewayModelCatalog,
-        reqId: "req-models-list-wildcard-provider-timeout",
-      });
-
-      await vi.advanceTimersByTimeAsync(800);
-      await vi.runOnlyPendingTimersAsync();
-      await request;
-
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
-            {
-              id: "llama-local",
-              name: "Llama Local",
-              provider: "vllm",
-              tags: ["default"],
-            },
-          ],
-        },
-        undefined,
-      );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({ readOnly: false }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          {
+            id: "llama-local",
+            name: "Llama Local",
+            provider: "vllm",
+            tags: ["default"],
+          },
+        ],
+      },
+      undefined,
+    );
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
-  it("keeps SecretRef configured fallback rows unknown when catalog discovery times out", async () => {
+  it("keeps SecretRef configured rows unavailable without acquiring auth", async () => {
     const catalog = createDeferred<never>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
     const runtimeConfig = {
@@ -1277,41 +1143,34 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      publishedCatalog: [],
+      view: "configured",
+      includeDefaultModels: false,
+      runtimeConfig,
+      loadGatewayModelCatalog,
+      reqId: "req-models-list-secretref-timeout",
+    });
+    await request;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { request, respond } = requestModelsList({
-        view: "configured",
-        runtimeConfig,
-        loadGatewayModelCatalog,
-        reqId: "req-models-list-secretref-timeout",
-      });
-
-      await vi.advanceTimersByTimeAsync(800);
-      await vi.runOnlyPendingTimersAsync();
-      await request;
-
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
-            {
-              id: "llama-secure",
-              name: "Llama Secure",
-              provider: "vllm",
-              available: false,
-              tags: ["default"],
-            },
-          ],
-        },
-        undefined,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          {
+            id: "llama-secure",
+            name: "Llama Secure",
+            provider: "vllm",
+            available: false,
+            tags: ["default"],
+          },
+        ],
+      },
+      undefined,
+    );
   });
 
-  it("keeps the all view exact instead of timing out to a partial catalog", async () => {
+  it("keeps the published all view exact while projection settles", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
       const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
@@ -1352,7 +1211,7 @@ describe("models.list", () => {
           undefined,
         );
         expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
-          expect.objectContaining({ readOnly: false }),
+          expect.objectContaining({ readOnly: true }),
         );
       } finally {
         vi.useRealTimers();
@@ -1394,7 +1253,7 @@ describe("models.list", () => {
     );
   });
 
-  it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
+  it("filters provider-scoped configured views from the published catalog", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = [
         { id: "claude-test", name: "Claude Test", provider: "anthropic" },
@@ -1427,6 +1286,7 @@ describe("models.list", () => {
       const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
       const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig: cfg,
         loadGatewayModelCatalog: loadConfiguredCatalog,
         reqId: "req-models-list-provider-allowlist",
@@ -1468,7 +1328,7 @@ describe("models.list", () => {
         undefined,
       );
       expect(loadConfiguredCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({ readOnly: false }),
+        expect.objectContaining({ readOnly: true }),
       );
 
       const { request: allRequest, respond: allRespond } = requestModelsList({
@@ -1582,6 +1442,7 @@ describe("models.list", () => {
           for (const view of ["default", "configured"] as const) {
             const { request, respond } = requestModelsList({
               view,
+              includeDefaultModels: false,
               runtimeConfig: cfg,
               loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
               reqId: `req-models-list-local-wildcard-${view}`,
@@ -1659,11 +1520,12 @@ describe("models.list", () => {
   });
 
   it.each([
-    { authenticated: true, available: true },
-    { authenticated: false, available: false },
+    { authenticated: true, available: true, catalogComplete: false },
+    { authenticated: false, available: false, catalogComplete: false },
+    { authenticated: false, available: false, catalogComplete: true },
   ])(
-    "projects native Claude runtime availability when authenticated=$authenticated",
-    async ({ authenticated, available }) => {
+    "projects native Claude runtime availability when authenticated=$authenticated, complete=$catalogComplete",
+    async ({ authenticated, available, catalogComplete }) => {
       await withoutAnthropicEnvAuth(async () => {
         await withModelsTestState(
           {
@@ -1691,6 +1553,7 @@ describe("models.list", () => {
               const { request, respond } = requestModelsList({
                 view: "all",
                 runtimeConfig,
+                catalogComplete,
                 preparedAuthModes: authenticated ? { "claude-cli": "api_key" } : {},
                 loadGatewayModelCatalog: vi.fn(() =>
                   Promise.resolve([
@@ -1721,7 +1584,9 @@ describe("models.list", () => {
                       },
                       available,
                       tags: ["configured"],
-                      ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
+                      ...(!authenticated && catalogComplete
+                        ? { unavailableReason: "missing-auth" }
+                        : {}),
                     },
                   ],
                 },

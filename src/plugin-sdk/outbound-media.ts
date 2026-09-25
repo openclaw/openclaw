@@ -1,7 +1,7 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
@@ -569,10 +569,27 @@ export function createHostedOutboundMediaStore(
         }
         const buffer = Buffer.allocUnsafe(meta.byteLength);
         let offset = 0;
+        let chunkBatch:
+          | Awaited<ReturnType<NonNullable<typeof options.chunkStore.lookupMany>>>
+          | undefined;
+        const lookupBatchSize = 10_000;
         for (let index = 0; index < meta.chunkCount; index += 1) {
-          const chunk = await options.chunkStore.lookup(
-            buildHostedOutboundMediaChunkKey(id, index),
-          );
+          // Public store adapters can predate lookupMany; retain their point-read contract.
+          if (options.chunkStore.lookupMany && index % lookupBatchSize === 0) {
+            chunkBatch = await options.chunkStore.lookupMany(
+              Array.from(
+                { length: Math.min(lookupBatchSize, meta.chunkCount - index) },
+                (_, chunkOffset) => buildHostedOutboundMediaChunkKey(id, index + chunkOffset),
+              ),
+            );
+          }
+          const result = chunkBatch?.[index % lookupBatchSize];
+          if (result && !result.ok) {
+            throw result.error;
+          }
+          const chunk = chunkBatch
+            ? result?.value
+            : await options.chunkStore.lookup(buildHostedOutboundMediaChunkKey(id, index));
           if (!chunk || chunk.id !== id || chunk.index !== index) {
             await withCapacityMutation(async () => await deleteEntry(id));
             return null;

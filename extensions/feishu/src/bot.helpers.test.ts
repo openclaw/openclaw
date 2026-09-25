@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { buildBroadcastSessionKey, resolveBroadcastAgents } from "./bot-broadcast.js";
-import { parseMergeForwardContent, parseMessageContent } from "./bot-content.js";
+import { parseMessageContent } from "./bot-content.js";
+import { parseMergeForwardContent } from "./message-content.js";
 
 describe("buildFeishuAgentBody", () => {
   it("builds message id, speaker, quoted content, mention context, and permission notice in order", () => {
@@ -105,19 +106,42 @@ describe("parseMessageContent media captions", () => {
     expect(parseMessageContent(JSON.stringify({ file_key: fileKey }), "sticker")).toBe(expected);
   });
 
-  it("keeps a forwarded sticker key available to the agent", () => {
-    expect(
-      parseMergeForwardContent({
-        content: JSON.stringify([
-          { message_id: "om_forward", msg_type: "merge_forward" },
-          {
-            upper_message_id: "om_forward",
-            msg_type: "sticker",
-            body: { content: JSON.stringify({ file_key: "file_forwarded_sticker" }) },
-          },
-        ]),
-      }),
-    ).toBe('[Merged and Forwarded Messages]\n- <sticker key="file_forwarded_sticker"/>');
+  it("keeps forwarded sticker keys and styled posts in chronological order", () => {
+    const items = [
+      { message_id: "om_forward", msg_type: "merge_forward" },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "post",
+        create_time: "2000",
+        body: {
+          content: JSON.stringify({
+            post: {
+              zh_cn: {
+                title: "Forwarded",
+                content: [
+                  [
+                    { tag: "text", text: "Status", style: ["bold"] },
+                    { tag: "text", text: " " },
+                    { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+                  ],
+                ],
+              },
+            },
+          }),
+        },
+      },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "sticker",
+        create_time: "1000",
+        body: { content: JSON.stringify({ file_key: "file_forwarded_sticker" }) },
+      },
+    ];
+    const before = structuredClone(items);
+    expect(parseMergeForwardContent(items)).toBe(
+      '[Merged and Forwarded Messages]\n- <sticker key="file_forwarded_sticker"/>\n- Forwarded\n\n**Status** *[Docs](https://example.com)*',
+    );
+    expect(items).toEqual(before);
   });
 });
 

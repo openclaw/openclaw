@@ -1,3 +1,5 @@
+import { createDeferredCore } from "../shared/deferred.js";
+
 const REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS = 320;
 const REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
 
@@ -139,7 +141,7 @@ export class RealtimeVoiceSessionLifecycle {
     if (this.isReady()) {
       return Promise.resolve();
     }
-    if (this.connectPromise) {
+    if (this.connectPromise && this.state.phase !== "terminal") {
       return this.connectPromise;
     }
     const connection = this.createFreshConnection();
@@ -197,12 +199,7 @@ export class RealtimeVoiceSessionLifecycle {
     let settled = false;
     let ready = false;
     let startupFailed = false;
-    let resolvePromise!: () => void;
-    let rejectPromise!: (error: Error) => void;
-    const promise = new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
+    const { promise, resolve: resolvePromise, reject: rejectPromise } = createDeferredCore();
     let removeAbortListener = () => {};
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {

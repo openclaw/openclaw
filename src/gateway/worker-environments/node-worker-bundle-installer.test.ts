@@ -31,6 +31,12 @@ const artifact = {
   tarballPath: "/gateway/bundle.tgz",
 };
 
+const receipt = {
+  bundleHash: artifact.bundleHash,
+  openclawVersion: artifact.openclawVersion,
+  protocolFeatures: artifact.protocolFeatures,
+};
+
 function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeProof {
   return {
     ...node,
@@ -59,6 +65,9 @@ describe("Gateway node worker bundle installer", () => {
       gatewayNamespace: "gateway-test",
       getTransport: () => ({
         hasCurrentRunner: () => false,
+        async getCurrentNode(nodeId) {
+          return (await this.listCurrentNodes()).find((candidate) => candidate.nodeId === nodeId);
+        },
         listCurrentNodes,
         isCurrent: (candidate) => candidate === node,
         invoke,
@@ -66,7 +75,12 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
     let settled = false;
-    const pending = ensure({ deviceId: node.nodeId, artifact, signal: controller.signal })
+    const pending = ensure({
+      deviceId: node.nodeId,
+      artifact,
+      prewarm: true,
+      signal: controller.signal,
+    })
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
@@ -101,6 +115,7 @@ describe("Gateway node worker bundle installer", () => {
     }));
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
       listCurrentNodes: async () => [node],
       isCurrent: (candidate) => candidate === node,
       invoke,
@@ -111,9 +126,11 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId, artifact })).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).resolves.toMatchObject(
+      {
+        bundleHash: artifact.bundleHash,
+      },
+    );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         node,
@@ -134,6 +151,7 @@ describe("Gateway node worker bundle installer", () => {
     });
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
       listCurrentNodes: async () => [node],
       isCurrent: () => true,
       invoke: async () => ({
@@ -151,7 +169,7 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId, artifact })).rejects.toThrow(
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).rejects.toThrow(
       "mismatched build receipt",
     );
   });
@@ -168,6 +186,8 @@ describe("Gateway node worker bundle installer", () => {
     }));
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) =>
+        [advertising, legacy].find((candidate) => candidate.nodeId === nodeId),
       listCurrentNodes: async () => [advertising, legacy],
       isCurrent: () => true,
       invoke,
@@ -178,14 +198,52 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: advertising.nodeId, artifact })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: advertising.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
-    await expect(ensure({ deviceId: legacy.nodeId, artifact })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: legacy.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
 
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundlePrewarm: 1 });
     expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundlePrewarm");
   });
+
+  it.each([true, false])(
+    "keeps explicit cancellation with its request when prewarm is %s",
+    async (prewarm) => {
+      const controller = new AbortController();
+      const transfer = createNodeWorkerBundleTransferService();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        expect(request.signal).toBe(controller.signal);
+        controller.abort();
+        return { ok: true, payloadJSON: JSON.stringify(receipt) };
+      });
+      const transport: NodeWorkerSupervisorTransport = {
+        hasCurrentRunner: () => true,
+        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
+        listCurrentNodes: async () => [node],
+        isCurrent: () => true,
+        invoke,
+      };
+      const ensure = createGatewayNodeWorkerBundleInstaller({
+        gatewayNamespace: "gateway-test",
+        getTransport: () => transport,
+        transfer,
+      });
+      await expect(
+        ensure({
+          deviceId: node.nodeId,
+          artifact,
+          prewarm,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("no longer current");
+      transfer.closeAll();
+    },
+  );
 });

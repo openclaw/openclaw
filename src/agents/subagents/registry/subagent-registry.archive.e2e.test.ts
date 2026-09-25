@@ -4,57 +4,61 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
+import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import {
+  SUBAGENT_KILL_TASK_ERROR,
+  type DetachedTaskLifecycleRuntime,
+} from "../../../tasks/detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/task-runtime.test-helpers.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import {
+  captureSubagentCompletionReply,
+  runSubagentAnnounceFlow,
+} from "../announce/subagent-announce.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
 const taskRuntimeMocks = vi.hoisted(() => ({
-  finalizeTaskRunByRunId: vi.fn<(_params: unknown) => unknown[]>(() => [{}]),
+  finalizeTaskRunByRunId:
+    vi.fn<NonNullable<DetachedTaskLifecycleRuntime["finalizeTaskRunByRunId"]>>(),
 }));
 const taskStatusMocks = vi.hoisted(() => ({
   findTaskByRunIdForStatus: vi.fn(),
   listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
 }));
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntriesReadOnly: vi.fn(() => [] as Array<{ sessionKey: string; entry: unknown }>),
+  loadSessionEntryReadOnly: vi.fn<
+    typeof import("../../../config/sessions/session-accessor.js").loadSessionEntryReadOnly
+  >(() => undefined),
 }));
 
 const noop = () => {};
 let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
 };
-const loadConfigMock = vi.fn(() => currentConfig);
-const flushSweepMicrotasks = async () => {
-  // Archive sweeps schedule follow-up work through microtasks; drain them before
-  // asserting registry and context-engine side effects.
-  await Promise.resolve();
-  await Promise.resolve();
-};
+const loadConfigMock = vi.mocked(getRuntimeConfig);
+
+const respondToGatewayRequest = vi.hoisted(() => async (request: unknown) => {
+  const method = (request as { method?: string }).method;
+  if (method === "agent.wait") {
+    // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
+    return { status: "pending" };
+  }
+  return {};
+});
 
 vi.mock("../../../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: unknown) => {
-    const method = (request as { method?: string }).method;
-    if (method === "agent.wait") {
-      // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
-      return { status: "pending" };
-    }
-    return {};
-  }),
+  callGateway: vi.fn(respondToGatewayRequest),
 }));
-
-vi.mock("../../../tasks/detached-task-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../tasks/detached-task-runtime.js")>();
-  return {
-    ...actual,
-    finalizeTaskRunByRunId: taskRuntimeMocks.finalizeTaskRunByRunId,
-  };
-});
 
 vi.mock("../../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: taskStatusMocks.findTaskByRunIdForStatus,
@@ -66,7 +70,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
     await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    listSessionEntriesReadOnly: sessionAccessorMocks.listSessionEntriesReadOnly,
+    loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
   };
 });
 
@@ -78,20 +82,44 @@ vi.mock("../../../infra/agent-events.js", () => ({
 }));
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: vi.fn(() => undefined),
+  hasLiveAgentRunContext: vi.fn(() => false),
 }));
 
-vi.mock("../../../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../config/config.js")>(
-    "../../../config/config.js",
-  );
+vi.mock("../../../config/config.js", { spy: true });
+vi.mock("../../../context-engine/init.js", { spy: true });
+vi.mock("../../../context-engine/registry.js", { spy: true });
+
+vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn<
+    typeof import("../../../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd
+  >(async () => {}),
+}));
+
+vi.mock("../../runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   return {
-    ...actual,
-    getRuntimeConfig: loadConfigMock,
+    loadAgentRuntimePluginRegistryHandle: vi.fn<
+      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+    >(() => createEmptyPluginRegistry()),
   };
 });
 
 vi.mock("../announce/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
+  captureSubagentCompletionReply: vi.fn<
+    typeof import("../announce/subagent-announce.js").captureSubagentCompletionReply
+  >(async () => undefined),
+  runSubagentAnnounceFlow: vi.fn<
+    typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
+  >(async () => "delivered"),
+}));
+
+vi.mock("../announce/subagent-announce.requester-settle-wake.js", () => ({
+  maybeWakeRequesterAfterAllChildrenSettled: vi.fn<
+    typeof import("../announce/subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled
+  >(async (params) => {
+    params.completeBatch([params.settledEntry]);
+    return false;
+  }),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -99,6 +127,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
+  let settleRootWork: ReturnType<typeof observeRootWork>;
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
   let createSubagentRunRecord: typeof import("../../subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
@@ -109,23 +138,6 @@ describe("subagent registry archive behavior", () => {
     ({ createSubagentRunRecord } = await import("../../subagent-test-fixtures.test-helpers.js"));
     mod = await import("./subagent-registry.test-helpers.js");
   });
-
-  const setRegistryTestDeps = (
-    overrides: NonNullable<Parameters<typeof mod.testing.setDepsForTest>[0]> = {},
-  ) => {
-    mod.testing.setDepsForTest({
-      callGateway,
-      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-      getRuntimeConfig:
-        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      loadAgentRuntimePluginRegistryHandle: vi.fn(),
-      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
-        params.completeBatch([params.settledEntry]);
-        return false;
-      }),
-      ...overrides,
-    });
-  };
 
   const addCanonicalSubagentRunForTests = (
     entry: Parameters<typeof mod.addSubagentRunForTests>[0],
@@ -147,22 +159,36 @@ describe("subagent registry archive behavior", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
     vi.mocked(callGateway).mockReset();
-    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
-      const method = (request as { method?: string }).method;
-      if (method === "agent.wait") {
-        // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
-        return { status: "pending" };
-      }
-      return {};
-    });
-    loadConfigMock.mockClear();
+    vi.mocked(callGateway).mockImplementation(respondToGatewayRequest);
+    loadConfigMock.mockReset().mockImplementation(() => currentConfig);
+    vi.mocked(ensureContextEnginesInitialized).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    vi.mocked(captureSubagentCompletionReply).mockReset();
+    vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
-    taskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
+    taskRuntimeMocks.finalizeTaskRunByRunId.mockReset().mockImplementation((params) => [
+      {
+        taskId: params.taskId ?? `task-${params.runId}`,
+        runtime: params.runtime ?? "subagent",
+        runId: params.runId,
+        childSessionKey: params.sessionKey,
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Finalized archive fixture task",
+        status: params.status,
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 0,
+        endedAt: params.endedAt,
+        error: params.error,
+      },
+    ]);
     taskStatusMocks.findTaskByRunIdForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReset();
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([]);
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
     taskStatusMocks.findTaskByRunIdForStatus.mockImplementation((runId: string) => {
       const entry = mod
         .listSubagentRunsForRequester("agent:main:main")
@@ -179,19 +205,27 @@ describe("subagent registry archive behavior", () => {
           } as never)
         : undefined;
     });
-    setRegistryTestDeps();
     mod.resetSubagentRegistryForTests({ persist: false });
+    // Async sweeps and shipped synchronous termination share the same fixture owner.
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      finalizeTaskRunByRunId: taskRuntimeMocks.finalizeTaskRunByRunId,
+    });
+    settleRootWork = observeRootWork();
   });
 
-  afterEach(() => {
-    resetDetachedTaskLifecycleRuntimeForTests();
-    mod.testing.setDepsForTest();
-    mod.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
+  afterEach(async () => {
+    try {
+      await settleRootWork();
+    } finally {
+      resetDetachedTaskLifecycleRuntimeForTests();
+      mod.resetSubagentRegistryForTests({ persist: false });
+      vi.useRealTimers();
+    }
   });
 
-  it("does not set archiveAtMs for keep-mode run subagents", () => {
-    mod.registerSubagentRun({
+  it("does not set archiveAtMs for keep-mode run subagents", async () => {
+    await mod.registerSubagentRun({
       runId: "run-keep-1",
       childSessionKey: "agent:main:subagent:keep-1",
       requesterSessionKey: "agent:main:main",
@@ -212,7 +246,7 @@ describe("subagent registry archive behavior", () => {
     };
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-1",
       childSessionKey: "agent:main:subagent:delete-1",
       requesterSessionKey: "agent:main:main",
@@ -243,12 +277,10 @@ describe("subagent registry archive behavior", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
-    setRegistryTestDeps({
-      captureSubagentCompletionReply: vi.fn(async () => "completed result"),
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
-    });
+    vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-completed",
       childSessionKey: "agent:main:subagent:delete-completed",
       requesterSessionKey: "agent:main:main",
@@ -381,15 +413,11 @@ describe("subagent registry archive behavior", () => {
     const attachmentsDir = path.join(attachmentsRootDir, "child");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:subagent:delete-retry",
-        entry: {
-          sessionId: "session-delete-retry",
-          lifecycleRevision: "lifecycle-delete-retry",
-        },
-      },
-    ]);
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+      sessionId: "session-delete-retry",
+      lifecycleRevision: "lifecycle-delete-retry",
+      updatedAt: Date.now(),
+    });
     let deleteAttempts = 0;
     vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
       const method = (request as { method?: string }).method;
@@ -404,9 +432,13 @@ describe("subagent registry archive behavior", () => {
       }
       return {};
     });
-    setRegistryTestDeps({
-      ensureContextEnginesInitialized: vi.fn(),
-      resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
+    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(resolveContextEngine).mockResolvedValue({
+      info: { id: "test", name: "Test", version: "0.0.1" },
+      ingest: async () => ({ ingested: false }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: false, compacted: false }),
+      onSubagentEnded,
     });
 
     addCanonicalSubagentRunForTests({
@@ -424,10 +456,11 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(deleteAttempts).toBe(1);
     expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+      assertDispatchCurrent: expect.any(Function),
       method: "sessions.delete",
       params: {
         key: "agent:main:subagent:delete-retry",
@@ -443,7 +476,7 @@ describe("subagent registry archive behavior", () => {
     await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(deleteAttempts).toBe(2);
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
@@ -471,9 +504,10 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      taskId: "task-run-killed-tombstone-expired",
       runId: "run-killed-tombstone-expired",
       runtime: "subagent",
       sessionKey: "agent:main:subagent:killed-tombstone-expired",
@@ -541,7 +575,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
     await waitForNoRequesterRuns();
@@ -577,7 +611,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
     await waitForNoRequesterRuns();
@@ -645,7 +679,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalled();
     await waitForNoRequesterRuns();
@@ -684,7 +718,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -771,7 +805,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
     await waitForNoRequesterRuns();
@@ -798,7 +832,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalled();
     await waitForNoRequesterRuns();
@@ -853,10 +887,8 @@ describe("subagent registry archive behavior", () => {
 
   it("continues killed cleanup when ended hook loading fails", async () => {
     const now = Date.now();
-    setRegistryTestDeps({
-      loadAgentRuntimePluginRegistryHandle: vi.fn(() => {
-        throw new Error("plugin load failed");
-      }),
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+      throw new Error("plugin load failed");
     });
     addCanonicalSubagentRunForTests({
       runId: "run-killed-hook-load-failure",
@@ -876,7 +908,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     await expect(mod.testing.sweepOnceForTests()).resolves.toBeUndefined();
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
 
     await waitForNoRequesterRuns();
   });
@@ -885,26 +917,21 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
-    let resolveDelete: (() => void) | undefined;
-    const deletePromise = new Promise<void>((resolve) => {
-      resolveDelete = resolve;
+    const deleteGate = createDeferred();
+    const deleteEntered = createDeferred();
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+      sessionId: "session-delete-inflight",
+      lifecycleRevision: "lifecycle-delete-inflight",
+      updatedAt: Date.now(),
     });
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:subagent:delete-inflight",
-        entry: {
-          sessionId: "session-delete-inflight",
-          lifecycleRevision: "lifecycle-delete-inflight",
-        },
-      },
-    ]);
     vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
       const method = (request as { method?: string }).method;
       if (method === "agent.wait") {
         return { status: "pending" };
       }
       if (method === "sessions.delete") {
-        await deletePromise;
+        deleteEntered.resolve();
+        await deleteGate.promise;
       }
       return {};
     });
@@ -922,49 +949,51 @@ describe("subagent registry archive behavior", () => {
     });
 
     const firstSweep = mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.filter(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
-        ),
-    ).toHaveLength(1);
-    expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:delete-inflight",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "session-delete-inflight",
-        expectedLifecycleRevision: "lifecycle-delete-inflight",
-      },
-      timeoutMs: 10_000,
-    });
+    try {
+      await deleteEntered.promise;
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+      expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+        assertDispatchCurrent: expect.any(Function),
+        method: "sessions.delete",
+        params: {
+          key: "agent:main:subagent:delete-inflight",
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+          expectedSessionId: "session-delete-inflight",
+          expectedLifecycleRevision: "lifecycle-delete-inflight",
+        },
+        timeoutMs: 10_000,
+      });
 
-    await mod.testing.sweepOnceForTests();
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.filter(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
-        ),
-    ).toHaveLength(1);
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
-
-    if (!resolveDelete) {
-      throw new Error("expected delete resolver");
+      await mod.testing.sweepOnceForTests();
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+    } finally {
+      deleteGate.resolve();
+      await firstSweep;
     }
-    resolveDelete();
-    await firstSweep;
-    await flushSweepMicrotasks();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() => {
       expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
     });
   });
 
-  it("does not set archiveAtMs for persistent session-mode runs", () => {
-    mod.registerSubagentRun({
+  it("does not set archiveAtMs for persistent session-mode runs", async () => {
+    await mod.registerSubagentRun({
       runId: "run-session-1",
       childSessionKey: "agent:main:subagent:session-1",
       requesterSessionKey: "agent:main:main",
@@ -980,8 +1009,8 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", () => {
-    mod.registerSubagentRun({
+  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", async () => {
+    await mod.registerSubagentRun({
       runId: "run-old",
       childSessionKey: "agent:main:subagent:run-1",
       requesterSessionKey: "agent:main:main",
@@ -1008,7 +1037,7 @@ describe("subagent registry archive behavior", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-old",
       childSessionKey: "agent:main:subagent:delete-old",
       requesterSessionKey: "agent:main:main",
@@ -1031,7 +1060,7 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("removes attachments for the replaced run after steer restart", async () => {
+  it("does not traverse legacy attachment paths after steer restart", async () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-replace-attachments-"),
     );
@@ -1039,7 +1068,7 @@ describe("subagent registry archive behavior", () => {
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-attachments-old",
       childSessionKey: "agent:main:subagent:delete-attachments-old",
       requesterSessionKey: "agent:main:main",
@@ -1056,24 +1085,15 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(replaced).toBe(true);
-    await vi.waitFor(async () => {
-      let err: unknown;
-      try {
-        await fs.access(attachmentsDir);
-      } catch (caught) {
-        err = caught;
-      }
-      expect(err).toBeInstanceOf(Error);
-      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    });
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
   });
 
-  it("treats archiveAfterMinutes=0 as never archive", () => {
+  it("treats archiveAfterMinutes=0 as never archive", async () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     };
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-no-archive",
       childSessionKey: "agent:main:subagent:no-archive",
       requesterSessionKey: "agent:main:main",

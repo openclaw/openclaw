@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
@@ -19,6 +19,7 @@ import {
   loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -52,7 +53,7 @@ function databaseEnv(baseDir: string): NodeJS.ProcessEnv {
 
 afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
@@ -92,7 +93,7 @@ describe("push APNs registration store", () => {
     );
 
     await expect(loadApnsRegistration("legacy-node", baseDir)).resolves.toBeNull();
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
@@ -335,6 +336,47 @@ describe("push APNs registration store", () => {
     ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
     await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "keeps the prior APNs owner when the connection changes before worker %s admission",
+    async (stage) => {
+      const baseDir = await makeTempDir();
+      const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      let connectionCurrent = true;
+      let reachedStage = false;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              reachedStage = true;
+              connectionCurrent = false;
+            }
+            admit(request, grant);
+          }),
+        );
+      try {
+        await expect(
+          registerApnsRegistration({
+            nodeId: "ios-lease",
+            token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+            topic: "ai.openclaw.ios",
+            baseDir,
+            assertCurrent: () => {
+              if (!connectionCurrent) {
+                throw new ApnsRegistrationPairingChangedError();
+              }
+            },
+          }),
+        ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+        expect(reachedStage).toBe(true);
+        await expect(loadApnsRegistration("ios-lease", baseDir)).resolves.toEqual(previous);
+      } finally {
+        admission.mockRestore();
+      }
+    },
+  );
 
   it("rejects invalid direct and relay inputs", async () => {
     const baseDir = await makeTempDir();

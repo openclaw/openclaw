@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
+import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 type ResolveHook = (
   specifier: string,
@@ -249,7 +250,7 @@ describe.skipIf(!fs.existsSync(DIST_ENTRY_PATH) || !fs.existsSync(DIST_INDEX_PAT
           `import { appendFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 function recordTarget(specifier, context, nextResolve) {
-  if (specifier.startsWith(${JSON.stringify(targetPrefix)}) && specifier.endsWith(".js")) {
+  if (specifier.startsWith(${JSON.stringify(targetPrefix)}) && (specifier.endsWith(".js") || specifier.endsWith(".mjs"))) {
     appendFileSync(process.env.OPENCLAW_TEST_RESOLVER_HOOK_MARKER, specifier + "\\n");
   }
   return nextResolve(specifier, context);
@@ -262,7 +263,7 @@ ${registerSource}
           ? [entryPath, ...argv]
           : [nodeOption, hookUrl, entryPath, ...argv];
 
-        const result = spawnSync(process.execPath, nodeArgs, {
+        const result = spawnSync(resolveTestNodeExecPath(), nodeArgs, {
           encoding: "utf8",
           env: {
             ...process.env,

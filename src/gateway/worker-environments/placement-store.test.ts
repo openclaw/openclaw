@@ -9,13 +9,14 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type {
-  WorkerSessionPlacementIdentity,
   WorkerPlacementExecutionMode,
+  WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -45,42 +46,35 @@ describe("worker session placement store", () => {
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: `environment-${identity.sessionId}`,
+      sessionId: identity.sessionId,
+      ownerEpoch: 7,
+    });
     let placement = store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: `environment-${identity.sessionId}` },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+    for (const step of [
+      { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        },
       },
-    });
-    const active = store.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (active.state !== "active") {
+      { to: "active", patch: { activeOwnerEpoch: 7 } },
+    ] as const) {
+      placement = store.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
+    if (placement.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    return active;
+    return placement;
   }
 
   it("persists the placement lifecycle and rejects stale transition generations", () => {
@@ -302,7 +296,7 @@ describe("worker session placement store", () => {
       }),
     ).toThrow("during an active turn");
 
-    const released = store.waitForTurnClaimRelease(SESSION.sessionId, { timeoutMs: 1_000 });
+    const released = store.waitForTurnClaimRelease(SESSION.sessionId, {});
     store.releaseTurn(localClaim);
     await released;
     expect(
@@ -436,13 +430,6 @@ describe("worker session placement store", () => {
         },
       }),
     ).toBe(false);
-    expect(
-      store.validateWorkerOwner({
-        sessionId: SESSION.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      }),
-    ).toBe(true);
     expect(() =>
       store.claimTurn({
         ...SESSION,
@@ -942,42 +929,6 @@ describe("worker session placement store", () => {
         expectedGeneration: active.generation,
       }),
     ).toThrow("pending cloud workspace result");
-  });
-
-  it("accepts a reconciled workspace for the exact idle active owner", () => {
-    const active = advanceToActive();
-    const manifestRef = `sha256:${"e".repeat(64)}`;
-
-    expect(
-      store.acceptIdleWorkspaceReconciliation({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-        manifestRef,
-      }),
-    ).toMatchObject({ state: "active", workspaceBaseManifestRef: manifestRef, turnClaim: null });
-
-    const claim = store.claimTurn({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "worker-busy-claim",
-      runId: "worker-busy-run",
-    });
-    expect(() =>
-      store.acceptIdleWorkspaceReconciliation({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-        manifestRef,
-      }),
-    ).toThrow("Cannot accept stale idle worker workspace");
-    store.releaseTurn(claim);
   });
 
   it("persists a workspace rollback journal and clears it with manifest acceptance", () => {

@@ -1,7 +1,7 @@
 /** SQLite persistence and stable cursor queries for metadata-only audit events. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
@@ -11,10 +11,12 @@ import {
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
@@ -23,7 +25,7 @@ import {
   isOutboundMessageProgressInput,
   type AgentRunAuditEventRecord,
   type AuditEventInput,
-  type AuditEventListFilters,
+  type AuditEventListQuery,
   type AuditEventListPage,
   type AuditEventRecord,
   type InboundMessageAuditEventRecord,
@@ -510,7 +512,7 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
   };
 }
 
-function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<AuditEventsTable> {
+function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
@@ -544,7 +546,7 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     conversation_ref: message?.conversationRef ?? null,
     message_ref: message?.messageRef ?? null,
     target_ref: message?.targetRef ?? null,
-  };
+  } satisfies AuditEventInsert;
 }
 
 function countAuditEvents(db: DatabaseSync): number {
@@ -606,9 +608,9 @@ function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
-export function recordAuditEvent(
+export function recordAuditEventInDatabase(
   input: AuditEventInput,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): AuditEventRecord | undefined {
   if (isOutboundMessageProgressInput(input)) {
     throw new Error("outbound message progress belongs to its companion store");
@@ -624,28 +626,19 @@ export function recordAuditEvent(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
-      const insert = executeSqliteQuerySync(
-        db,
-        getAuditKysely(db)
-          .insertInto("audit_events")
-          .values(bindAuditEvent(db, input))
-          .onConflict((conflict) => conflict.column("source_id").doNothing()),
-      );
-      if (insert.insertId === undefined) {
+      // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
+      const values = bindAuditEvent(db, input);
+      const queries = getAuditEventQueries(db);
+      const insert = queries.insert(values);
+      if (insert === undefined) {
         return undefined;
       }
-      const insertedSequence = Number(insert.insertId);
+      const insertedSequence = Number(insert.sequence);
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }
       pruneAuditEventsAfterInsert(db, Date.now());
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        getAuditKysely(db)
-          .selectFrom("audit_events")
-          .selectAll()
-          .where("sequence", "=", insertedSequence),
-      );
+      const row = queries.read(insertedSequence);
       recordConfirmedTerminalMessageExecutionBinding(db, {
         eventId: row?.event_id,
         token: executionToken,
@@ -661,76 +654,29 @@ export function recordAuditEvent(
   }
 }
 
-/** List newest-first records using a stable sequence cursor. */
-export function listAuditEvents(params: {
-  filters?: AuditEventListFilters;
-  cursor?: number;
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): AuditEventListPage {
-  const { db } = openOpenClawStateDatabase(params.database);
-  const filters = params.filters ?? {};
-  const retainedAfter = (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS;
-  let query = getAuditKysely(db)
-    .selectFrom("audit_events")
-    .selectAll()
-    .where("occurred_at", ">=", retainedAfter)
-    // Nonterminal outbound facts belong to the lazy progress owner. Excluding
-    // transitional rows keeps the released activity contract terminal-only.
-    .where("action", "not in", ["message.outbound.queued", "message.outbound.platform-started"]);
-  if (params.cursor !== undefined) {
-    query = query.where("sequence", "<", params.cursor);
-  }
-  if (filters.agentId) {
-    query = query.where("agent_id", "=", filters.agentId);
-  }
-  if (filters.sessionKey) {
-    query = query.where("session_key", "=", filters.sessionKey);
-  }
-  if (filters.runId) {
-    query = query.where("run_id", "=", filters.runId);
-  }
-  if (filters.kind) {
-    query = query.where("kind", "=", filters.kind);
-  } else if (filters.includeMessages !== true) {
-    query = query.where("kind", "!=", "message");
-  }
-  if (filters.status) {
-    query = query.where("status", "=", filters.status);
-  }
-  if (filters.direction) {
-    query = query.where("direction", "=", filters.direction);
-  }
-  if (filters.channel) {
-    query = query.where("channel", "=", filters.channel);
-  }
-  if (filters.after !== undefined) {
-    query = query.where("occurred_at", ">=", filters.after);
-  }
-  if (filters.before !== undefined) {
-    query = query.where("occurred_at", "<=", filters.before);
-  }
-  const rows = executeSqliteQuerySync(
-    db,
-    query.orderBy("sequence", "desc").limit(params.limit + 1),
-  ).rows;
-  const hasMore = rows.length > params.limit;
-  const pageRows = hasMore ? rows.slice(0, params.limit) : rows;
-  const events = pageRows.map(rowToAuditEvent);
-  return {
-    events,
-    ...(hasMore && events.length > 0 ? { nextCursor: events[events.length - 1]?.sequence } : {}),
+/** List newest-first records using the shared state worker and a stable sequence cursor. */
+export async function listAuditEvents(
+  params: Omit<AuditEventListQuery, "now"> & {
+    now?: number;
+    database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  },
+): Promise<AuditEventListPage> {
+  const input: AuditEventListQuery = {
+    limit: params.limit,
+    now: params.now ?? Date.now(),
+    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+    ...(params.filters ? { filters: { ...params.filters } } : {}),
   };
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  return executeOpenClawStateWorker(context, { type: "audit.events.list", input });
 }
 
 /** Delete one bounded batch during Gateway startup and periodic audit maintenance. */
-export function pruneExpiredAuditEvents(
-  params: {
-    now?: number;
-    database?: OpenClawStateDatabaseOptions;
-  } = {},
-): number {
+export function pruneExpiredAuditEventsInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
   return runOpenClawStateWriteTransaction(({ db }) => {
     const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
     auditEventRowCounts.delete(db);

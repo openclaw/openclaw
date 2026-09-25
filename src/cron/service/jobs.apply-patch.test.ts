@@ -100,7 +100,10 @@ describe("schedule activation ownership", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { scheduleActivatedAtMs: now - 60_000 },
+      state: {
+        scheduleActivatedAtMs: now - 60_000,
+        runningScheduleChangeId: "caller-supplied-edit",
+      },
     } as unknown as CronJobCreate;
 
     const job = createJob(
@@ -114,17 +117,21 @@ describe("schedule activation ownership", () => {
     );
 
     expect(job.state.scheduleActivatedAtMs).toBeUndefined();
+    expect(job.state.runningScheduleChangeId).toBeUndefined();
   });
 
   it("ignores caller-supplied activation state during updates", () => {
-    const job = makeJob({ state: { scheduleActivatedAtMs: 456 } });
+    const job = makeJob({
+      state: { scheduleActivatedAtMs: 456, runningScheduleChangeId: "pending-run-edit" },
+    });
     const patch = {
-      state: { scheduleActivatedAtMs: 123 },
+      state: { scheduleActivatedAtMs: 123, runningScheduleChangeId: null },
     } as unknown as CronJobPatch;
 
     applyJobPatch(job, patch);
 
     expect(job.state.scheduleActivatedAtMs).toBe(456);
+    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
   });
 
   it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(

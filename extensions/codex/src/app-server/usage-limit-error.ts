@@ -52,7 +52,14 @@ export function resolveCodexPromptError(
   // Native retry exhaustion is not a permanent model/configuration failure.
   // Preserve the provider facts before terminal projection drops the native envelope.
   const info = source.codexErrorInfo;
-  let status = info === "serverOverloaded" ? 503 : info === "internalServerError" ? 500 : undefined;
+  let status =
+    info === "rateLimitExceeded"
+      ? 429
+      : info === "serverOverloaded"
+        ? 503
+        : info === "internalServerError"
+          ? 500
+          : undefined;
   if (isJsonObject(info)) {
     for (const variant of [
       "httpConnectionFailed",
@@ -158,21 +165,9 @@ async function refreshCodexUsageLimitError(params: {
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
+  const rateLimits = shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)
+    ? await readCodexRateLimitsFromAppServerForUsageLimitError(params)
+    : undefined;
   if (!rateLimits) {
     return initialMessage
       ? {

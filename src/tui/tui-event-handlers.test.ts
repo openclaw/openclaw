@@ -1,7 +1,7 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as failoverClassifier from "../agents/failover/classify.js";
+import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -178,6 +178,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
+    const updateFooter = vi.fn();
     const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
       loaded: true,
       runOutcome: { state: "completed" },
@@ -203,6 +204,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       tui,
       state,
       setActivityStatus,
+      updateFooter,
       loadHistory,
       noteLocalRunId,
       noteLocalBtwRunId,
@@ -232,6 +234,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
+      updateFooter: context.updateFooter,
       refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
@@ -859,8 +862,48 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("error");
   });
 
+  it.each(
+    [
+      null,
+      undefined,
+      true,
+      false,
+      0,
+      1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      {},
+      ["anthropic/claude-sonnet-4"],
+      "",
+      "malformed",
+      "/model",
+      "provider/",
+    ].map((destination) => ({ destination })),
+  )("preserves model state for an invalid reported destination %#", ({ destination }) => {
+    const { state, handleAgentEvent, dispose } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-invalid-destination",
+        sessionInfo: { modelProvider: "openai", model: "gpt-4o" },
+      },
+    });
+    try {
+      handleAgentEvent({
+        runId: "run-invalid-destination",
+        data: {
+          phase: "fallback_step",
+          fallbackStepToModel: destination,
+        },
+      });
+      expect(state.sessionInfo.modelProvider).toBe("openai");
+      expect(state.sessionInfo.model).toBe("gpt-4o");
+      expect(state.activeChatRunId).toBe("run-invalid-destination");
+    } finally {
+      dispose();
+    }
+  });
+
   it("updates the displayed model from fallback lifecycle steps", () => {
-    const { state, tui, handleAgentEvent } = createHandlersHarness({
+    const { state, tui, updateFooter, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-fallback",
         sessionInfo: {
@@ -883,14 +926,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.sessionInfo.modelProvider).toBe("openrouter");
     expect(state.sessionInfo.model).toBe("meta-llama/llama-3.1-70b");
+    expect(updateFooter).toHaveBeenCalledExactlyOnceWith();
+    expect(updateFooter.mock.invocationCallOrder[0]).toBeLessThan(
+      tui.requestRender.mock.invocationCallOrder.at(-1)!,
+    );
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
-  it("accepts fallback model updates for the pending run before chat registration", () => {
-    const { state, tui, handleAgentEvent } = createHandlersHarness({
+  it.each(["pending", "tracked"])("refreshes the fallback model for a %s run", (ownership) => {
+    const { state, tui, updateFooter, handleAgentEvent } = createHandlersHarness({
       state: {
-        activeChatRunId: null,
-        pendingSubmit: acceptedSubmit("run-pending"),
+        activeChatRunId: ownership === "pending" ? null : "other-active-run",
+        pendingSubmit: ownership === "pending" ? acceptedSubmit("run-pending") : null,
         sessionInfo: {
           verboseLevel: "on",
           modelProvider: "llamaforge",
@@ -898,6 +945,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         },
       },
     });
+
+    if (ownership === "tracked") {
+      handleAgentEvent({
+        runId: "run-pending",
+        sessionKey: state.currentSessionKey,
+        data: { phase: "start" },
+      });
+      expect(state.activeChatRunId).toBe("other-active-run");
+    }
 
     handleAgentEvent({
       runId: "run-pending",
@@ -911,6 +967,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.sessionInfo.modelProvider).toBe("nvidia");
     expect(state.sessionInfo.model).toBe("deepseek-ai/deepseek-v3.2");
+    expect(updateFooter).toHaveBeenCalledExactlyOnceWith();
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -1603,8 +1660,13 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
   });
 
-  it("ignores selected-global chat events from other agents", () => {
-    const { chatLog, handleChatEvent } = createHandlersHarness({
+  it.each([
+    { sessionKey: "global", agentId: "main" },
+    { sessionKey: "global", agentId: undefined },
+    { sessionKey: "agent:main:global", agentId: undefined },
+    { sessionKey: "agent:work:global", agentId: "main" },
+  ])("ignores foreign global events $sessionKey/$agentId", (event) => {
+    const { chatLog, btw, handleChatEvent, handleBtwEvent } = createHandlersHarness({
       state: {
         agentDefaultId: "main",
         currentAgentId: "work",
@@ -1614,37 +1676,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleChatEvent({
-      runId: "run-main-global",
-      agentId: "main",
+      ...event,
+      runId: "run-foreign-global",
       message: { content: "wrong agent" },
     });
-    handleChatEvent({
-      runId: "run-legacy-default-global",
-      message: { content: "legacy default" },
-    });
-
-    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
-  });
-
-  it("ignores selected-global BTW events from other agents", () => {
-    const { btw, handleBtwEvent } = createHandlersHarness({
-      state: {
-        agentDefaultId: "main",
-        currentAgentId: "work",
-        currentSessionKey: "global",
-      },
-    });
-
     handleBtwEvent({
+      ...event,
       kind: "btw",
-      runId: "btw-main-global",
-      sessionKey: "global",
-      agentId: "main",
+      runId: "btw-foreign-global",
       question: "status?",
       text: "wrong agent",
     });
 
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
     expect(btw.showResult).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-selected-global",
+      sessionKey: "AGENT:WORK:GLOBAL",
+      message: { content: "selected agent" },
+    });
+    expect(chatLog.updateAssistant).toHaveBeenCalledExactlyOnceWith(
+      "selected agent",
+      "run-selected-global",
+    );
   });
 
   it("clears run mapping when the session changes", () => {
@@ -2173,7 +2228,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       },
     });
 
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Attached image", "run-external-image");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Attached image", "run-external-image", [
+      { source: "file:///Users/operator/private/image.png" },
+    ]);
     expect(chatLog.dropAssistant).not.toHaveBeenCalled();
     expect(loadHistory).not.toHaveBeenCalled();
   });
@@ -2482,7 +2539,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleChatEvent({ runId: "run-stale", seq: 1, message: { content: "complete reply" } });
       handleChatEvent({ runId: "run-terminal", seq: 2, state: terminal });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
       expect(state.activeChatRunId).toBeNull();
       expect(state.activityStatus).toBe("idle");
@@ -2506,7 +2563,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         state: { activeChatRunId: "run-restored", activityStatus: "streaming" },
       });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", ...event });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", ...event });
 
       expect(state.activeChatRunId).toBe("run-restored");
       expect(state.activityStatus).toBe("streaming");
@@ -2524,7 +2581,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleSessionsChangedEvent({
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       sessionId: "session-old",
       activeRunIds: [],
     });
@@ -2555,7 +2612,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleSessionsChangedEvent({
         sessionKey: "main",
         ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        reason: "chat.run.settled",
+        reason: "agent.input.settled",
         activeRunIds: [],
       });
 
@@ -2577,7 +2634,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     Object.assign(state, pending);
     setActivityStatus.mockClear();
 
-    handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+    handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingSubmit).toEqual(pending.pendingSubmit);
@@ -2798,7 +2855,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("renders non-auth failures without invoking provider classification", () => {
     const classify = vi
-      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .spyOn(failoverClassifier, "classifyFailoverReasonCore")
       .mockImplementation(() => {
         throw new Error("provider classification must not block non-auth error rendering");
       });
@@ -3995,6 +4052,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
       tui,
       state,
       setActivityStatus,
+      updateFooter: vi.fn(),
       loadHistory,
       noteLocalRunId,
       isLocalRunId: localRunIds.has.bind(localRunIds),
@@ -4032,7 +4090,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     handlers.handleSessionsChangedEvent({
       sessionKey: state.currentSessionKey,
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       activeRunIds: [],
     });
 

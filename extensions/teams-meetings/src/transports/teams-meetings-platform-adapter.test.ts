@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
@@ -16,6 +17,29 @@ import {
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
 describe("Microsoft Teams meeting platform adapter", () => {
+  it.each([true, false])(
+    "starts browser capture only for the current Teams session (owner=%s)",
+    async (owns) => {
+      const source = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+        action: "start",
+        captureId: "capture-1",
+        meetingSessionId: "session-1",
+        meetingUrl: CONSUMER_URL,
+      });
+      const identity = TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(CONSUMER_URL);
+      const result = runInNewContext(`(${source})()`, {
+        URL,
+        location: { href: CONSUMER_URL },
+        window: {
+          __openclawTeamsMeeting: { sessionId: owns ? "session-1" : "session-2", identity },
+        },
+        AudioContext: function AudioContext() {
+          throw new Error("capture admitted");
+        },
+      });
+      await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+    },
+  );
   it.each([
     ["teams-login-required", "login-required"],
     ["teams-admission-required", "admission-required"],

@@ -1,5 +1,6 @@
 // Focused incomplete-turn behavior coverage.
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -42,11 +43,7 @@ describe("incomplete-turn payload resolution", () => {
       assistantTexts: [],
       toolMetas: [{ toolName: "bash", meta: "workspace" }],
       messagesSnapshot: [
-        {
-          role: "user",
-          content: "check running processes",
-          timestamp: 1,
-        },
+        makeUserMessage("check running processes", 1),
         {
           role: "toolResult",
           content: "",

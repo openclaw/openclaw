@@ -9,7 +9,7 @@ import { makeBridge } from "./session-runtime.test-support.js";
 describe("native delegation session facade", () => {
   it.each([false, true])(
     "preserves hook absence and blocks pre-adoption input (enabled=%s)",
-    (enabled) => {
+    async (enabled) => {
       const handleDelegationInput = vi.fn(() => "control" as const);
       const respond = vi.fn();
       let request!: RealtimeVoiceBridgeCreateRequest;
@@ -40,7 +40,7 @@ describe("native delegation session facade", () => {
         expect(handleDelegationInput).toHaveBeenCalledTimes(enabled ? 1 : 0);
         expect(respond).not.toHaveBeenCalled();
       } finally {
-        session.close();
+        await session.close();
       }
     },
   );
@@ -79,7 +79,7 @@ describe("native delegation session facade", () => {
       if (ending === "provider-close") {
         request.onClose?.("completed");
       }
-      session.close();
+      void session.close();
       expect(request.handleDelegationInput?.("late task", respond)).toBe("control");
       reply?.("late result");
       expect(respond).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe("native delegation session facade", () => {
 
   it.each([false, true])(
     "contains callback failure without task fallthrough or a second reply (replied=%s)",
-    (replied) => {
+    async (replied) => {
       let request!: RealtimeVoiceBridgeCreateRequest;
       const onError = vi.fn();
       const session = createRealtimeVoiceBridgeSession({
@@ -120,7 +120,7 @@ describe("native delegation session facade", () => {
         expect(respond.mock.calls[0]?.[0]).toContain(replied ? "accepted" : "Please try again.");
         expect(onError).toHaveBeenCalledExactlyOnceWith(new Error("callback failed"));
       } finally {
-        session.close();
+        await session.close();
       }
     },
   );

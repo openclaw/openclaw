@@ -11,7 +11,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
@@ -51,7 +51,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 1 },
   });
 
-  it("refuses to apply a delegated change after its run authority closes", async () => {
+  it("refuses to apply a delegated change after its run authority closes", async (testContext) => {
     const proposal = {
       operation: { kind: "gateway-restart" as const },
       hash: "a".repeat(64),
@@ -69,7 +69,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       ownerKey: "agent:main:main",
     } as unknown as SystemAgentChatSession;
     const sessions = new Map([["delegate-closed", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+    const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -103,8 +103,8 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
 
     expect(approvalId).toBeTruthy();
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(false);
-    expect(manager.getSnapshot(approvalId!)?.status).toBe("cancelled");
+    expect(await manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(false);
+    expect((await manager.getSnapshot(approvalId!))?.status).toBe("cancelled");
     await vi.waitFor(() =>
       expect(resolveOperatorApproval).toHaveBeenCalledWith(
         null,
@@ -115,7 +115,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     );
   });
 
-  it("rechecks authority after queued approval work before the final effect", async () => {
+  it("rechecks authority after queued approval work before the final effect", async (testContext) => {
     const proposal = {
       operation: { kind: "gateway-restart" as const },
       hash: "b".repeat(64),
@@ -151,7 +151,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       ownerKey: "agent:main:main",
     } as unknown as SystemAgentChatSession;
     const sessions = new Map([["delegate-race", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+    const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -184,7 +184,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       },
     );
 
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
+    expect(await manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
     await applyStarted.promise;
     expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
     releaseApply.resolve();
@@ -276,7 +276,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     },
   );
 
-  it("publishes the channel completion after the delegated change is applied", async () => {
+  it("publishes the channel completion after the delegated change is applied", async (testContext) => {
     const proposal = {
       operation: { kind: "gateway-restart" as const },
       hash: "c".repeat(64),
@@ -298,7 +298,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       ownerKey: "agent:main:main",
     } as unknown as SystemAgentChatSession;
     const sessions = new Map([["delegate-applied", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+    const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -331,7 +331,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       },
     );
 
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
+    expect(await manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
     await vi.waitFor(() =>
       expect(publishResolved).toHaveBeenCalledWith(
         "system-agent",
@@ -340,7 +340,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     );
   });
 
-  it("fences a delegated worker turn before the persistent effect", async () => {
+  it("fences a delegated worker turn before the persistent effect", async (testContext) => {
     const proposal = {
       operation: { kind: "gateway-restart" as const },
       hash: "d".repeat(64),
@@ -377,7 +377,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       ownerKey: "agent:main:main",
     } as unknown as SystemAgentChatSession;
     const sessions = new Map([["delegate-worker", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+    const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: (authority) =>
@@ -413,7 +413,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       },
     );
 
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
+    expect(await manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
     await applyStarted.promise;
     workerTurnActive = false;
     releaseApply.resolve();
@@ -422,9 +422,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     expect(applyEffect).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "reuses the exact worker approval with Full Access=%s",
-    async (fullPermission) => {
+    async (fullPermission, testContext) => {
       const proposal = {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
@@ -441,7 +441,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         ownerKey: "agent:main:main",
       } as unknown as SystemAgentChatSession;
       const sessions = new Map([["delegate-worker", session]]);
-      const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
         approvalKind: "system-agent",
         resolveAllowedDecisions: (request) => request.allowedDecisions,
         validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -497,10 +497,10 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       );
 
       expect(secondApprovalId).toBe(firstApprovalId);
-      expect(manager.listPendingRecords()).toHaveLength(1);
+      expect(await manager.listPendingRecords()).toHaveLength(1);
       expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
       const completion = session.pendingApproval?.completion;
-      manager.expire(firstApprovalId!);
+      await manager.expire(firstApprovalId!);
       await completion;
     },
   );

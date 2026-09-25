@@ -4,6 +4,7 @@ import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
   captureChatComposerMemoryFallbackOwnership,
@@ -12,25 +13,12 @@ import {
   retainChatComposerMemoryFallback,
   type ChatComposerMemoryFallbackOwnership,
 } from "./chat-composer-memory-fallback.ts";
-import {
-  excludeComposerAttachments,
-  removeVisibleOrScopedQueuedMessageWithoutReleasing,
-} from "./chat-queue.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { excludeComposerAttachments } from "./chat-queue.ts";
+import type { ChatComposerRecoveryOwner, ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-
-function attachmentSubmitSignature(attachment: ChatAttachment): string {
-  const dataUrl = getChatAttachmentDataUrl(attachment);
-  return JSON.stringify([
-    attachment.id,
-    attachment.mimeType,
-    attachment.fileName ?? "",
-    attachment.sizeBytes ?? 0,
-    dataUrl?.length ?? 0,
-    dataUrl?.slice(0, 64) ?? "",
-  ]);
-}
 
 export function chatSubmitKey(
   host: ChatHost,
@@ -42,9 +30,7 @@ export function chatSubmitKey(
   return JSON.stringify([
     kind,
     host.sessionKey,
-    message.trim(),
-    mentions ?? [],
-    attachments.map(attachmentSubmitSignature),
+    chatAttachmentDraftSignature(message.trim(), attachments, undefined, mentions),
   ]);
 }
 
@@ -53,27 +39,29 @@ export function clearSubmittedComposerState(
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
   submittedMentions: readonly HumanMention[] | undefined,
-  preserveBrowserAnnotations = false,
+  retainAttachments: "none" | "annotations" | "all" = "none",
 ) {
-  const attachmentsUnchanged =
-    host.chatAttachments.length === submittedAttachments.length &&
-    host.chatAttachments.every(
-      (attachment, index) =>
-        attachmentSubmitSignature(attachment) ===
-        attachmentSubmitSignature(submittedAttachments[index]!),
-    );
   if (
-    host.chatMessage !== submittedDraft ||
-    JSON.stringify(host.chatMentions ?? []) !== JSON.stringify(submittedMentions ?? []) ||
-    !attachmentsUnchanged
+    chatAttachmentDraftSignature(
+      host.chatMessage,
+      host.chatAttachments,
+      undefined,
+      host.chatMentions,
+    ) !==
+    chatAttachmentDraftSignature(submittedDraft, submittedAttachments, undefined, submittedMentions)
   ) {
     return {};
   }
   host.chatMessage = "";
   host.chatMentions = [];
-  host.chatAttachments = preserveBrowserAnnotations
-    ? host.chatAttachments.filter((attachment) => attachment.browserAnnotation)
-    : [];
+  if (retainAttachments !== "all") {
+    host.chatAttachments =
+      retainAttachments === "annotations"
+        ? host.chatAttachments.filter(
+            (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+          )
+        : [];
+  }
   resetChatInputHistoryNavigation(host);
   return {
     previousAttachments: submittedAttachments,
@@ -91,6 +79,8 @@ export function snapshotChatAttachments(attachments: readonly ChatAttachment[]):
 
 export type ChatCommandComposerRecovery = {
   client: ChatHost["client"];
+  clientGeneration: number | undefined;
+  owner?: ChatComposerRecoveryOwner;
   composer?: {
     attachments: ChatAttachment[];
     draft: string;
@@ -117,6 +107,8 @@ export function captureChatCommandComposerRecovery(
   const fallbackHost = chatCommandRecoveryHost(host);
   return {
     client: host.client,
+    clientGeneration: host.client?.connectionGeneration,
+    owner: host.captureComposerRecoveryOwner?.(),
     ...(composer
       ? {
           composer: {
@@ -142,11 +134,15 @@ export function captureChatCommandComposerRecovery(
   };
 }
 
-export function submittedCommandConnectionIsCurrent(
+function submittedCommandConnectionIsCurrent(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
-  return host.client === recovery.client && host.connectionEpoch === recovery.connectionEpoch;
+  return (
+    host.client === recovery.client &&
+    host.connectionEpoch === recovery.connectionEpoch &&
+    host.client?.connectionGeneration === recovery.clientGeneration
+  );
 }
 
 export function submittedCommandScopeIsVisible(
@@ -159,23 +155,54 @@ export function submittedCommandScopeIsVisible(
   );
 }
 
-export function clearOwnedCommandComposerFallback(
+function clearOwnedCommandComposerFallback(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
   const ownership = recovery.composer?.fallbackOwnership;
-  const fallbackHost = chatCommandRecoveryHost(host);
+  const owner = recovery.owner ? recovery.owner.resolveOwner() : host;
+  if (
+    !owner ||
+    !submittedCommandConnectionIsCurrent(host, recovery) ||
+    owner.client !== recovery.client
+  ) {
+    return false;
+  }
+  const fallbackHost = chatCommandRecoveryHost(owner);
   return fallbackHost ? clearChatComposerMemoryFallback(fallbackHost, ownership) : false;
 }
 
-export function commandComposerFallbackRetainsAttachments(
+function commandComposerFallbackRetainsAttachments(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
   const ownership = recovery.composer?.fallbackOwnership;
-  const fallbackHost = chatCommandRecoveryHost(host);
+  const owner = recovery.owner ? recovery.owner.resolveOwner() : host;
+  const fallbackHost = owner && chatCommandRecoveryHost(owner);
   return Boolean(
     ownership && fallbackHost && ownsChatComposerMemoryFallback(fallbackHost, ownership),
+  );
+}
+
+function releaseCommandComposerAttachments(
+  host: ChatHost,
+  recovery: ChatCommandComposerRecovery,
+  attachments: readonly ChatAttachment[] | undefined,
+): void {
+  const owner = recovery.owner?.resolveOwner();
+  const retained: ChatAttachment[][] = [];
+  for (const candidate of owner && owner !== host ? [host, owner] : [host]) {
+    retained.push(candidate.chatAttachments);
+    for (const fallback of Object.values(
+      chatCommandRecoveryHost(candidate)?.chatComposerFallbackByScope ?? {},
+    )) {
+      retained.push(fallback.attachments);
+    }
+  }
+  const stagedIds = recovery.owner?.retainedAttachmentIds(attachments ?? []);
+  releaseDisplacedChatAttachmentPayloads(
+    attachments?.filter((attachment) => !stagedIds?.has(attachment.id)) ?? [],
+    retained,
   );
 }
 
@@ -183,19 +210,22 @@ function composerRetainsSubmittedAnnotations(
   host: ChatHost,
   submittedAttachments?: readonly ChatAttachment[],
 ): boolean {
-  const retained = submittedAttachments?.filter((attachment) => attachment.browserAnnotation);
+  const retained = submittedAttachments?.filter(
+    (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+  );
   return Boolean(
     retained?.length &&
     retained.length === host.chatAttachments.length &&
     retained.every(
       (attachment, index) =>
         attachment.id === host.chatAttachments[index]?.id &&
-        attachment.browserAnnotation === host.chatAttachments[index]?.browserAnnotation,
+        attachment.browserAnnotation === host.chatAttachments[index]?.browserAnnotation &&
+        attachment.selectionAnnotation === host.chatAttachments[index]?.selectionAnnotation,
     ),
   );
 }
 
-export function restoreFailedCommandComposer(
+function restoreFailedCommandComposer(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -203,13 +233,25 @@ export function restoreFailedCommandComposer(
   if (!composer) {
     return true;
   }
-  const fallbackHost = chatCommandRecoveryHost(host);
   if (!submittedCommandConnectionIsCurrent(host, recovery)) {
     return (
       composer.attachments.length === 0 || commandComposerFallbackRetainsAttachments(host, recovery)
     );
   }
-  if (!submittedCommandScopeIsVisible(host, recovery)) {
+  const owner = recovery.owner ? recovery.owner.resolveOwner() : host;
+  if (!owner) {
+    return false;
+  }
+  if (owner.client !== recovery.client) {
+    return (
+      composer.attachments.length === 0 || commandComposerFallbackRetainsAttachments(host, recovery)
+    );
+  }
+  const fallbackHost = chatCommandRecoveryHost(owner);
+  if (
+    owner.canRestoreComposer?.() === false ||
+    !visibleSessionMatches(owner, recovery.scope.sessionKey, recovery.scope.agentId)
+  ) {
     if (!fallbackHost) {
       return composer.attachments.length === 0;
     }
@@ -222,29 +264,52 @@ export function restoreFailedCommandComposer(
     return composer.attachments.length === 0 || ownership !== undefined;
   }
   if (
-    host.chatAttachments.length > 0 &&
-    !composerRetainsSubmittedAnnotations(host, composer.attachments)
+    owner.chatAttachments.length > 0 &&
+    !composerRetainsSubmittedAnnotations(owner, composer.attachments)
   ) {
     clearOwnedCommandComposerFallback(host, recovery);
     return composer.attachments.length === 0;
   }
-  const restorePlan = pendingComposerRestorePlan(host, {
+  const restorePlan = strictComposerRestore(owner, {
     previousAttachments: composer.attachments,
     previousDraft: composer.draft,
     previousMentions: composer.mentions,
   });
-  if (restorePlan.willRestoreDraft) {
-    host.chatMessage = composer.draft;
-    host.chatMentions = composer.mentions ?? [];
+  if (restorePlan.draft) {
+    owner.chatMessage = composer.draft;
+    owner.chatMentions = composer.mentions ?? [];
   }
-  if (restorePlan.willRestoreAttachments) {
-    host.chatAttachments = composer.attachments;
+  if (restorePlan.attachments) {
+    owner.chatAttachments = composer.attachments;
   }
-  const retained = composer.attachments.length === 0 || restorePlan.willRestoreAttachments;
+  const retained = composer.attachments.length === 0 || restorePlan.attachments;
   if (!restorePlan.complete) {
     clearOwnedCommandComposerFallback(host, recovery);
   }
+  if (owner !== host) {
+    owner.requestUpdate?.();
+  }
   return retained;
+}
+
+export function settleChatCommandComposer(
+  host: ChatHost,
+  recovery: ChatCommandComposerRecovery,
+  completed: boolean,
+  attachments: readonly ChatAttachment[] | undefined,
+): void {
+  if (!completed) {
+    if (!restoreFailedCommandComposer(host, recovery)) {
+      releaseCommandComposerAttachments(host, recovery, attachments);
+    }
+    return;
+  }
+  if (submittedCommandConnectionIsCurrent(host, recovery)) {
+    clearOwnedCommandComposerFallback(host, recovery);
+  }
+  if (!commandComposerFallbackRetainsAttachments(host, recovery)) {
+    releaseCommandComposerAttachments(host, recovery, attachments);
+  }
 }
 
 type PendingComposerSnapshot = {
@@ -261,54 +326,52 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
     (host.chatAttachments.length === 0 ||
       composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
   const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);
-  return { attachments, draft: snapshot.previousDraft != null && composerBlank };
+  const draft = snapshot.previousDraft != null && composerBlank;
+  return {
+    attachments,
+    draft,
+    complete:
+      (!snapshot.previousDraft?.trim() || draft) &&
+      (!snapshot.previousAttachments?.length || attachments),
+  };
 }
 
 export function cancelChatDelivery(
   host: ChatHost,
   item: ChatQueueItem,
   snapshot: PendingComposerSnapshot,
-): void {
-  const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
-    host,
-    item.id,
-    item.sessionKey,
-  );
-  const plan = removed ? strictComposerRestore(host, snapshot) : null;
-  if (plan?.draft) {
+): boolean {
+  const plan = strictComposerRestore(host, snapshot);
+  const removed = chatOutboxOwner(host).remove(host, item.id);
+  if (!removed) {
+    return false;
+  }
+  if (plan.draft) {
     host.chatMessage = snapshot.previousDraft ?? "";
     host.chatMentions = snapshot.previousMentions ?? [];
   }
-  if (plan?.attachments) {
+  if (plan.attachments) {
     host.chatAttachments = snapshot.previousAttachments ?? [];
   }
-  if (removed && !plan?.attachments) {
+  if (!plan.attachments) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
+  return true;
 }
 
-export function canRestoreComposer(host: ChatHost, snapshot?: PendingComposerSnapshot): boolean {
-  const plan = strictComposerRestore(host, snapshot ?? {});
+export function restoreRejectedChatDelivery(
+  host: ChatHost,
+  item: ChatQueueItem,
+  snapshot: PendingComposerSnapshot = {},
+): boolean {
+  const plan = strictComposerRestore(host, snapshot);
+  // A detached or relinquished pane can finish delivery, but no longer owns its
+  // composer. Keep the outbox row until that owner can accept the whole draft.
   return (
-    (snapshot?.previousDraft !== undefined || snapshot?.previousAttachments !== undefined) &&
-    (!snapshot.previousDraft?.trim() || plan.draft) &&
-    (!snapshot.previousAttachments?.length || plan.attachments)
+    host.canRestoreComposer?.() === true &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId) &&
+    (snapshot.previousDraft !== undefined || snapshot.previousAttachments !== undefined) &&
+    plan.complete &&
+    cancelChatDelivery(host, item, snapshot)
   );
-}
-
-function pendingComposerRestorePlan(host: ChatHost, snapshot: PendingComposerSnapshot) {
-  const willRestoreDraft = snapshot.previousDraft != null && !host.chatMessage.trim();
-  const willRestoreAttachments = Boolean(
-    snapshot.previousAttachments?.length &&
-    (host.chatAttachments.length === 0 ||
-      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments)) &&
-    (willRestoreDraft || !host.chatMessage.trim()),
-  );
-  return {
-    complete:
-      (!snapshot.previousDraft?.trim() || willRestoreDraft) &&
-      (!snapshot.previousAttachments?.length || willRestoreAttachments),
-    willRestoreAttachments,
-    willRestoreDraft,
-  };
 }

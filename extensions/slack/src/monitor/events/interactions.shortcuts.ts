@@ -1,4 +1,3 @@
-// Slack plugin module implements shortcut interaction behavior.
 import type {
   AllMiddlewareArgs,
   GlobalShortcut,
@@ -29,26 +28,27 @@ async function handleSlackShortcut(params: {
 }): Promise<void> {
   const { ack, body } = params.args;
   await ack();
+  const runtimeContext = await params.ctx.readRuntimeContext();
   const eventScope = resolveSlackListenerEventScope({
-    identity: params.ctx.installationIdentity,
+    identity: runtimeContext.installationIdentity,
     body,
     context: params.args.context,
     client: params.args.client,
-    clientOptions: params.ctx.app.webClientOptions,
-    onDrop: (reason) => params.ctx.runtime.log?.(`slack:interaction drop shortcut ${reason}`),
+    clientOptions: runtimeContext.app.webClientOptions,
+    onDrop: (reason) => runtimeContext.runtime.log?.(`slack:interaction drop shortcut ${reason}`),
   });
   if (eventScope === null) {
     return;
   }
-  if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
-    params.ctx.runtime.log?.("slack:interaction drop shortcut payload (mismatched app/team)");
+  if (runtimeContext.shouldDropMismatchedSlackEvent?.(body)) {
+    runtimeContext.runtime.log?.("slack:interaction drop shortcut payload (mismatched app/team)");
     return;
   }
 
   const callbackId = body.callback_id?.trim();
   const userId = body.user?.id?.trim();
   if (!callbackId || !userId) {
-    params.ctx.runtime.log?.("slack:interaction drop shortcut reason=invalid-payload");
+    runtimeContext.runtime.log?.("slack:interaction drop shortcut reason=invalid-payload");
     return;
   }
   params.trackEvent?.();
@@ -57,14 +57,14 @@ async function handleSlackShortcut(params: {
   const messageBody = isMessageShortcut ? body : undefined;
   const channelId = messageBody?.channel.id?.trim() || undefined;
   if (isMessageShortcut && !channelId) {
-    params.ctx.runtime.log?.(
+    runtimeContext.runtime.log?.(
       `slack:interaction drop shortcut callback=${callbackId} user=${userId} reason=missing-channel`,
     );
     return;
   }
   const threadTs = messageBody ? resolveMessageThreadTs(messageBody) : undefined;
   const auth = await authorizeSlackSystemEventSender({
-    ctx: params.ctx,
+    ctx: runtimeContext,
     eventScope,
     senderId: userId,
     channelId,
@@ -73,7 +73,7 @@ async function handleSlackShortcut(params: {
     interactiveEvent: true,
   });
   if (!auth.allowed) {
-    params.ctx.runtime.log?.(
+    runtimeContext.runtime.log?.(
       `slack:interaction drop shortcut callback=${callbackId} user=${userId} reason=${auth.reason ?? "unauthorized"}`,
     );
     return;
@@ -103,7 +103,7 @@ async function handleSlackShortcut(params: {
     messageText: messageBody?.message.text,
     responseUrl: messageBody?.response_url,
   };
-  const route = params.ctx.resolveSlackSystemEventRoute({
+  const route = runtimeContext.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId: userId,
@@ -122,7 +122,7 @@ async function handleSlackShortcut(params: {
     .filter(Boolean)
     .join(":");
 
-  params.ctx.runtime.log?.(
+  runtimeContext.runtime.log?.(
     `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
   );
   const queued = enqueueRoutedSystemEvent(params.formatSystemEvent(eventPayload), route, {
@@ -130,7 +130,7 @@ async function handleSlackShortcut(params: {
     deliveryContext: {
       channel: "slack",
       to: deferredTarget.target,
-      accountId: params.ctx.accountId,
+      accountId: runtimeContext.accountId,
       threadId: threadTs,
     },
   });

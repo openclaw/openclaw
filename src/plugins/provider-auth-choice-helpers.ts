@@ -15,6 +15,7 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
 } from "../config/model-input.js";
 import { normalizeProviderConfigForConfigDefaults } from "../config/provider-policy.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -89,12 +90,7 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
     if (BLOCKED_MERGE_KEYS.has(key)) {
       continue;
     }
-    const existing = next[key];
-    if (isPlainRecord(existing) && isPlainRecord(value)) {
-      next[key] = mergeConfigPatch(existing, value);
-    } else {
-      next[key] = sanitizeConfigPatchValue(value);
-    }
+    next[key] = mergeConfigPatch(next[key], value);
   }
   return next as T;
 }
@@ -116,23 +112,15 @@ function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeAgentModelRefForConfig(value);
+  const normalized = normalizeAgentModelSelectionForConfig(value);
+  if (!isPlainRecord(normalized)) {
+    return normalized;
   }
-  if (!isPlainRecord(value)) {
-    return value;
-  }
-
-  const next: Record<string, unknown> = { ...value };
-  if (typeof next.primary === "string") {
-    next.primary = normalizeAgentModelRefForConfig(next.primary);
-  }
-  if (Array.isArray(next.fallbacks)) {
-    next.fallbacks = next.fallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-  }
-  return next;
+  // Provider patches own their model copy even when normalization changes no values.
+  return {
+    ...normalized,
+    ...(Array.isArray(normalized.fallbacks) ? { fallbacks: [...normalized.fallbacks] } : {}),
+  };
 }
 
 function normalizeAgentModelMapForWrite(value: unknown): unknown {
@@ -353,25 +341,34 @@ export function applyProviderAuthConfigPatch(
 }
 
 /**
- * Restore `agents.defaults.model` after a provider auth config merge when the user did not pass
- * `--set-default`, so `applyConfig` patches cannot replace the primary without an explicit opt-in.
+ * Restore `agents.defaults.model`, including its absence, after a provider auth config merge when
+ * the user did not pass `--set-default`.
  */
 export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
   cfg: OpenClawConfig;
   priorAgentsDefaultsModel?: AgentModelConfig;
   setDefault?: boolean;
 }): OpenClawConfig {
-  if (params.setDefault || params.priorAgentsDefaultsModel === undefined) {
+  if (params.setDefault) {
     return params.cfg;
+  }
+  if (
+    params.priorAgentsDefaultsModel === undefined &&
+    params.cfg.agents?.defaults?.model === undefined
+  ) {
+    return params.cfg;
+  }
+  const defaults = { ...params.cfg.agents?.defaults };
+  if (params.priorAgentsDefaultsModel === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = params.priorAgentsDefaultsModel;
   }
   return {
     ...params.cfg,
     agents: {
       ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        model: params.priorAgentsDefaultsModel,
-      },
+      defaults,
     },
   };
 }

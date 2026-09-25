@@ -5,6 +5,7 @@ import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
@@ -77,18 +78,16 @@ export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
 
-function isAbortError(error: unknown): boolean {
-  return (
+export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
+  if (
     error instanceof Error &&
-    (error.name === "AbortError" || error.message === "This operation was aborted")
-  );
-}
-
-function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
-  if (isAbortError(error)) {
+    (error.name === "AbortError" ||
+      error.name === "TimeoutError" ||
+      error.message === "This operation was aborted")
+  ) {
     throw Object.assign(
       new Error(
-        `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,
+        `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
         { cause: error },
       ),
       { code: "ETIMEDOUT" },
@@ -112,7 +111,7 @@ export async function requestXaiWebSearch(params: {
       ...params,
       inputText: params.query,
       tools: [{ type: "web_search" }],
-      reasoningEffort: params.model === XAI_DEFAULT_WEB_SEARCH_MODEL ? "low" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "low"),
       errorLabel: "xAI web search failed",
     },
     (data) =>

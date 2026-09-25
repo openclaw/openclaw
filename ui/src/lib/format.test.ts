@@ -2,14 +2,15 @@
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
+import { formatDurationCompact, formatDurationHuman } from "./format-duration.ts";
 import {
   clampText,
+  createMsFormatter,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
   formatContextTokenCapacity,
-  formatDurationCompact,
-  formatDurationHuman,
   formatMs,
   formatRelativeTimestamp,
   formatTimeAgo,
@@ -158,6 +159,44 @@ describe("formatMs", () => {
   });
 });
 
+describe("createMsFormatter", () => {
+  it("honors explicit timestamp fields and an empty invalid fallback", () => {
+    const options: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    };
+    const format = createMsFormatter(options, "");
+    for (const timestamp of [0, Date.UTC(2026, 0, 2, 15, 4, 55)]) {
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString(i18n.getLocale(), options));
+    }
+    expect(format(Number.NaN)).toBe("");
+    expect(format(8_640_000_000_000_001)).toBe("");
+    expect(createMsFormatter(undefined, "unavailable")(null)).toBe("unavailable");
+  });
+
+  it("uses the locale of the first valid timestamp and refreshes on the next render", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", timeZone: "UTC" };
+    try {
+      await i18n.setLocale("en");
+      const format = createMsFormatter(options, "");
+      expect(format(undefined)).toBe("");
+      await i18n.setLocale("fr");
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString("fr", options));
+      await i18n.setLocale("en");
+      expect(createMsFormatter(options)(timestamp)).toBe(
+        new Date(timestamp).toLocaleString("en", options),
+      );
+    } finally {
+      await restoreI18n();
+    }
+  });
+});
+
 describe("date/time millisecond formatters", () => {
   it("return fallback text for Date-invalid timestamps", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
@@ -190,9 +229,9 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
   });
 
-  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+  it("drops malformed reasoning while preserving the visible suffix spacing", () => {
     expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
-      "Visible answer",
+      " Visible answer",
     );
   });
 
@@ -219,6 +258,23 @@ describe("stripThinkingTags", () => {
 });
 
 describe("formatUnknownText", () => {
+  it.each([
+    { name: "null", value: null, expected: "" },
+    { name: "undefined", value: undefined, expected: "" },
+    { name: "string", value: "agent", expected: "agent" },
+    { name: "number", value: 42, expected: "42" },
+    { name: "boolean", value: false, expected: "false" },
+    { name: "bigint", value: 42n, expected: "42" },
+    { name: "function", value: () => "not source text", expected: "[object Function]" },
+    {
+      name: "function with JSON representation",
+      value: Object.assign(() => undefined, { toJSON: () => ({ ok: true }) }),
+      expected: '{"ok":true}',
+    },
+  ])("preserves $name formatting", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
+  });
+
   it("stringifies plain objects without throwing", () => {
     expect(formatUnknownText({ ok: true })).toBe('{"ok":true}');
   });
@@ -229,8 +285,14 @@ describe("formatUnknownText", () => {
     expect(formatUnknownText(circular)).toBe("[object Object]");
   });
 
-  it("formats symbols without relying on object coercion", () => {
-    expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
+  it.each([
+    { name: "named", value: Symbol("agent"), expected: "Symbol(agent)" },
+    { name: "anonymous", value: Symbol(undefined), expected: "Symbol()" },
+    { name: "empty", value: Symbol(""), expected: "Symbol()" },
+    { name: "registered", value: Symbol.for("会議"), expected: "Symbol(会議)" },
+    { name: "well-known", value: Symbol.iterator, expected: "Symbol(Symbol.iterator)" },
+  ])("formats $name symbols without object coercion", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
   });
 });
 

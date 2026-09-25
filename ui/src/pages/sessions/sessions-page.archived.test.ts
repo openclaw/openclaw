@@ -7,8 +7,10 @@ import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -48,7 +50,7 @@ describe("sessions page archived deletion", () => {
       return {};
     });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(
       createContext(gateway, sessions),
       sessionsResult([target], 1),
@@ -56,6 +58,12 @@ describe("sessions page archived deletion", () => {
     );
     try {
       await sessions.refreshList({ agentId: "main", archivedFilter: "archived" });
+      const checkbox = page.querySelector<HTMLInputElement>(
+        `input[aria-label="Select session: ${target.key}"]`,
+      );
+      expect(checkbox).not.toBeNull();
+      checkbox!.click();
+      await page.updateComplete;
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
       const operation = page.deleteSessionFromMenu(target);
       await vi.waitFor(() =>
@@ -70,6 +78,11 @@ describe("sessions page archived deletion", () => {
       await operation;
       expect(page.result?.sessions.map(({ key }) => key)).toContain(target.key);
       expect(page.error).toContain("cloud cleanup failed");
+      await page.updateComplete;
+      expect(
+        page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`)
+          ?.checked,
+      ).toBe(true);
     } finally {
       page.remove();
       sessions.dispose();
@@ -121,6 +134,7 @@ describe("sessions page archived deletion", () => {
         "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
+      signal: expect.any(AbortSignal),
     });
     expect(sessions.deleteMany).toHaveBeenCalledWith([
       {
@@ -230,6 +244,7 @@ describe("sessions page archived deletion", () => {
         "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
+      signal: expect.any(AbortSignal),
     });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       [...pageOne, ...pageTwo].map((key) => ({
@@ -296,6 +311,7 @@ describe("sessions page archived deletion", () => {
         "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
+      signal: expect.any(AbortSignal),
     });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       keys.map((key) => ({
@@ -411,6 +427,7 @@ describe("sessions page archived deletion", () => {
           "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
         confirmLabel: "Delete",
         danger: true,
+        signal: expect.any(AbortSignal),
       });
       expect(sessions.deleteMany).toHaveBeenCalledWith(
         [linked.key, other.key].map((key) => ({

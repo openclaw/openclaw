@@ -1,12 +1,14 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { moveArrayEntry } from "../array-order.ts";
+import { resolveSessionDisplayKind } from "../session-display.ts";
 import {
   checkoutDisplayName,
   foldWorktreeCheckoutPath,
   sessionActorGroupId,
 } from "./catalog-project-grouping.ts";
-import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
+import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
@@ -33,6 +35,7 @@ export type SessionRowGroup = {
 
 export type SidebarSessionSection<Row> = {
   id:
+    | `agent:${string}`
     | "pinned"
     | "ungrouped"
     | "groups"
@@ -118,44 +121,39 @@ export function normalizeSessionSectionOrder(
   return order;
 }
 
-export function moveSessionSection(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveSessionOrderEntry(order, source, target, position);
-}
+export const moveSessionSection = moveArrayEntry<string>;
 
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
 
-function dateBucketId(updatedAt: number | null | undefined, now: number): string {
-  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
-    return UNGROUPED_ID;
-  }
+function createDateGroupResolver(now: number): (row: GatewaySessionRow) => string {
   const today = new Date(now);
   // Calendar midnights can be 23 or 25 hours apart across daylight-saving changes.
   const startOfDay = (daysAgo: number) =>
     new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo).getTime();
-  if (updatedAt >= startOfDay(0)) {
-    return "today";
-  }
-  if (updatedAt >= startOfDay(1)) {
-    return "yesterday";
-  }
-  if (updatedAt >= startOfDay(6)) {
-    return "week";
-  }
-  return "older";
+  const startOfToday = startOfDay(0);
+  const startOfYesterday = startOfDay(1);
+  const startOfWeek = startOfDay(6);
+  return ({ updatedAt }) => {
+    if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
+      return UNGROUPED_ID;
+    }
+    if (updatedAt >= startOfToday) {
+      return "today";
+    }
+    if (updatedAt >= startOfYesterday) {
+      return "yesterday";
+    }
+    return updatedAt >= startOfWeek ? "week" : "older";
+  };
 }
 
 function sessionRowChannel(row: GatewaySessionRow): string {
   return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
 }
 
-function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, now: number): string {
+function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): string {
   switch (mode) {
     case "category":
       return row.category?.trim() ?? UNGROUPED_ID;
@@ -164,13 +162,11 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, no
     case "channel":
       return sessionRowChannel(row);
     case "kind":
-      return row.kind;
+      return resolveSessionDisplayKind(row);
     case "agent":
       // parseSessionKeyParts only matches channel-style keys; plain agent
       // sessions like "agent:main:main" need the agent:<id>:<rest> parser.
       return parseAgentSessionKey(row.key)?.agentId ?? UNGROUPED_ID;
-    case "date":
-      return dateBucketId(row.updatedAt, now);
     default:
       return UNGROUPED_ID;
   }
@@ -188,9 +184,13 @@ export function groupSessionRows(params: {
   now?: number;
 }): SessionRowGroup[] {
   const now = params.now ?? Date.now();
+  const groupId =
+    params.mode === "date"
+      ? createDateGroupResolver(now)
+      : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
   const byId = new Map<string, GatewaySessionRow[]>();
   for (const row of params.rows) {
-    const id = resolveSessionGroupId(row, params.mode, now);
+    const id = groupId(row);
     const bucket = byId.get(id);
     if (bucket) {
       bucket.push(row);

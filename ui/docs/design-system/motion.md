@@ -56,7 +56,7 @@ Every animation or transition **must** be suppressed when the user has requested
 }
 ```
 
-Light-DOM components get the `.skeleton` primitive and reduced-motion gate from `base.css`. A component rendered inside shadow roots, such as the panel loading skeleton hosted by the terminal, desktop, and browser panels, carries a declaration-identical copy of the primitive plus its own reduced-motion guard. `ui/src/components/panel-loading-skeleton.test.ts` guards the primitive against drift.
+Light-DOM components get the `.skeleton` primitive and reduced-motion gate from `base.css`. Skeleton sweeps use `animation: none` under reduced motion, with the highlight parked offscreen; even a collapsed animation would briefly run during startup. A component rendered inside shadow roots, such as the panel loading skeleton hosted by the terminal, desktop, and browser panels, carries a declaration-identical copy of the primitive plus its own reduced-motion guard. `ui/src/components/panel-loading-skeleton.test.ts` guards the primitive against drift.
 
 Opt-in decorative motion that should vanish entirely, such as text shimmers, belongs inside `@media (prefers-reduced-motion: no-preference)`. Reduced-motion users keep plain static text.
 

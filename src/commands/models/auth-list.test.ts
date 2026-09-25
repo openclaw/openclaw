@@ -1,6 +1,10 @@
 // Model auth-list tests cover provider auth listing and output formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
 import { modelsAuthListCommand } from "./auth-list.js";
@@ -241,29 +245,22 @@ describe("modelsAuthListCommand", () => {
   });
 
   it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:user@example.com": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-secret",
-          refresh: "refresh-secret",
-          expires: 1_800_000_000_000,
-          email: "user@example.com",
-        },
-        "openai:api-key-backup": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-secret",
-        },
-        "anthropic:manual": {
-          type: "token",
-          provider: "anthropic",
-          token: "token-secret",
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:user@example.com": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-secret",
+        refresh: "refresh-secret",
+        expires: 1_800_000_000_000,
+        email: "user@example.com",
       },
-    };
+      "openai:api-key-backup": createApiKeyCredential("openai", "sk-secret"),
+      "anthropic:manual": {
+        type: "token",
+        provider: "anthropic",
+        token: "token-secret",
+      },
+    });
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     const runtime = createRuntime();
 

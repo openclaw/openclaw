@@ -14,11 +14,13 @@ function sessionRow(
   return {
     key,
     label: key,
+    renameValue: "",
     active: false,
     visuallyActive: false,
     hasActiveRun: false,
     modelSelectionLocked: false,
     pinned: false,
+    pinnable: true,
     cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,
@@ -43,7 +45,8 @@ function projectionInput(
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
-    hideEmptyGroups: false,
+    emptyGroupsMode: "filtering",
+    ownerFiltered: false,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",
@@ -376,7 +379,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
     });
   });
 
-  it.each(["ended", "preview-hidden"] as const)(
+  it.each(["ended", "preview-hidden", "error"] as const)(
     "clears held running activity when its run is %s",
     (change) => {
       const projection = new SidebarSessionProjection();
@@ -391,7 +394,19 @@ describe("SidebarSessionProjection running subtitle hold", () => {
           },
         }),
       );
-      const changed = change === "ended" ? sessionRow(running.key) : running;
+      const changed =
+        change === "ended"
+          ? sessionRow(running.key)
+          : change === "error"
+            ? {
+                ...running,
+                attention: {
+                  kind: "error" as const,
+                  reason: "Child validation failed",
+                  childLabel: "Validation",
+                },
+              }
+            : running;
       const showPreview = change !== "preview-hidden";
 
       projection.project(

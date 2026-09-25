@@ -8,46 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* Mode Toggle */
-.config-mode-toggle {
-  display: flex;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  gap: 1px;
-}
-
-:root[data-theme-mode="light"] .config-mode-toggle {
-  background: white;
-}
-
-.config-mode-toggle__btn {
-  flex: 1;
-  padding: 6px 12px;
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-mode-toggle__btn:hover:not(.active) {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.config-mode-toggle__btn.active {
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
 /* ===========================================
    Lead column (toolbar / banner / nav above the form)
    =========================================== */
@@ -61,6 +21,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.session-source__icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 /* Toolbar: mode toggle / section tabs */
@@ -138,7 +104,7 @@
 }
 
 .config-diff[open] .config-diff__chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-diff__content {
@@ -639,7 +605,6 @@
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: none;
 }
 
 .settings-theme-import__external:hover {
@@ -923,33 +888,6 @@
   background: var(--bg-hover);
 }
 
-.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
-  transform: rotate(180deg);
-}
-
-/* Hint tags (searchable via tag: filters). */
-.cfg-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.cfg-tag {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 2px 8px;
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-  background: var(--bg-elevated);
-  white-space: nowrap;
-}
-
-:root[data-theme-mode="light"] .cfg-tag {
-  background: white;
-}
-
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {
@@ -1126,7 +1064,7 @@
 }
 
 .config-accordion-group__chevron--open {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-accordion-group__items {

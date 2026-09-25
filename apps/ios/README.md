@@ -14,12 +14,19 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 - Some node commands require foreground access because of iOS platform limits.
 - Permissions, background behavior, and push delivery are documented below so release and support checks stay explicit.
 
+## Adaptive Navigation
+
+- Navigation uses available window width, not orientation: iPhone and accessibility text sizes use a drawer. On iPad, below 800pt it is a drawer; at 800pt and above it defaults to a persistent sidebar (300pt sidebar plus at least 500pt detail). The sidebar grows only to 320pt.
+- Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
+- The detail view stays mounted across navigation layout changes. On iPad, native Chat messages, composer, and progress content use a centered column capped at 760pt within the remaining detail space. Assistant answers, including streaming output, use this shared column instead of a nested 560pt cap. Detail-pane margins grow from 12pt to 24pt with available width. User bubbles retain their 560pt maximum; iPhone spacing is unchanged.
+
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 26.x
+   - Xcode 26.x or newer with the iOS and watchOS SDKs
    - `pnpm`
    - `xcodegen`
+   - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
    - Apple Development signing set up in Xcode
 2. From repo root:
 
@@ -43,6 +50,54 @@ Generate without opening Xcode:
 pnpm ios:gen
 ```
 
+### Watch companion build requirements
+
+The normal `OpenClaw` iPhone scheme embeds the Watch app, so even an iPhone-only
+build compiles the native Watch WebRTC library. Install the official
+[rustup toolchain manager](https://rustup.rs/), then install the pinned compiler
+and standard-library sources:
+
+```bash
+rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src
+```
+
+Both `rustup` and the rustup-managed `cargo` shim must be on the build's `PATH`.
+If you installed rustup through Homebrew, add its shim directory before running
+a command-line build such as `pnpm ios:build`:
+
+```bash
+export PATH="$(brew --prefix rustup)/bin:$PATH"
+```
+
+On Apple Silicon with the default Homebrew prefix, this directory is
+`/opt/homebrew/opt/rustup/bin`. Having `rustup` in `/opt/homebrew/bin` does not
+mean `cargo` is available. The Watch build phase adds `$HOME/.cargo/bin`,
+`/opt/homebrew/bin`, and `/usr/local/bin`, but not Homebrew's rustup shim directory.
+For GUI-launched Xcode builds, ensure that directory is also in the build
+phase's `PATH`; exporting it in a terminal alone does not configure Xcode.
+Verify the pinned Cargo is reachable from the build environment:
+
+```bash
+cargo +nightly-2026-09-05 --version
+```
+
+`apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with
+`cargo --locked` and `-Z build-std`; it never installs a toolchain or changes the
+global default. Select Xcode through its command-line-tool setting or
+`DEVELOPER_DIR`. The Watch device and simulator slices were verified with the
+watchOS 27 SDK; the app's deployment target remains watchOS 11. See the
+[native Watch module README](../shared/OpenClawWatchRTC/README.md) for supported
+architectures, build output locations, and dependency notices.
+
+Run `OpenClawWatchTests` through the `OpenClawWatchApp` scheme for configuration,
+call lifecycle, and native codec coverage. These tests and signed simulator
+builds do not prove a real Watch microphone/speaker route, background audio,
+wrist-down behavior, Wi-Fi/cellular handoff, or multi-hour battery endurance.
+A native macOS provider roundtrip is interoperability evidence, not Watch
+hardware proof. Validate those behaviors separately through a physical Watch's
+normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
+[Watch setup and limits](https://docs.openclaw.ai/platforms/ios#standalone-voice).
+
 ## App Store Release Flow
 
 Prereqs:
@@ -50,7 +105,8 @@ Prereqs:
 - Xcode 26.x
 - `pnpm`
 - `xcodegen`
-- Ruby 3.4.10 and Bundler 2.6.9 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
+- Ruby 3.4.10 and Bundler 4.0.21 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -64,7 +120,7 @@ Release behavior:
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
-- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES.md` attachment, uploads the IPA, and waits for Apple processing.
+- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES-APPLE.md` attachment, uploads the IPA, and waits for Apple processing.
 - Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only release path. If that command fails, stop and fix the failing screenshot, metadata, archive, validation, or upload step before trying again.
 - Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
@@ -128,7 +184,7 @@ pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-Review and commit the five cutter outputs, then archive and upload to App Store Connect:
+Review all five cutter outputs, commit every changed output, then archive and upload to App Store Connect:
 
 ```bash
 pnpm ios:release:upload
@@ -145,7 +201,7 @@ Use this when a clone is missing local iOS release setup and you want the shorte
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
 ```
 
 2. If auth is missing, bootstrap it once on this Mac:
@@ -177,7 +233,7 @@ pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit the five cutter outputs, then upload:
+5. Review all five cutter outputs, commit every changed output, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -234,7 +290,7 @@ Recommended flow:
 
 1. Run the shared mobile cutter `--prepare` phase for the selected gateway.
 2. Capture `pnpm ios:release:plan -- --json`, then run the cutter `--finalize` phase.
-3. Review and commit all five cutter outputs.
+3. Review all five cutter outputs and commit every changed output.
 4. Run `pnpm ios:release:upload`.
 5. Failed, processing, and complete Apple-visible uploads all advance the next numeric build.
 
@@ -243,7 +299,7 @@ Recommended flow:
 1. Select the target gateway version for `apps/mobile/version.json`.
 2. Add release notes under `## Unreleased`.
 3. Run the shared cutter `--prepare` phase and capture the live iOS plan; released history determines the next revision.
-4. Run the cutter `--finalize` phase, review and commit all five outputs, then run `pnpm ios:release:upload`.
+4. Run the cutter `--finalize` phase, review all five outputs, commit every changed output, then run `pnpm ios:release:upload`.
 5. Keep rerunning the planner-driven upload until the release candidate is ready.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.
@@ -300,6 +356,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
+- Two distinct Watch voice paths: iPhone-relayed **Talk to Claw**, and opt-in **Talk on Watch** with native UDP media and Gateway-owned agent/tool control. Physical-Watch voice and endurance validation remain separate from simulator coverage.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.

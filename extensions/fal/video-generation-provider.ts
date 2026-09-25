@@ -1,6 +1,8 @@
 // Fal provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  readGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -9,7 +11,6 @@ import {
   readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -180,10 +181,6 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function buildPolicy(allowPrivateNetwork: boolean): SsrFPolicy | undefined {
-  return allowPrivateNetwork ? ssrfPolicyFromDangerouslyAllowPrivateNetwork(true) : undefined;
-}
-
 function extractFalVideoEntry(payload: FalVideoResponse) {
   if (normalizeOptionalString(payload.video?.url)) {
     return payload.video;
@@ -204,32 +201,15 @@ async function downloadFalVideo(
   });
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
-    let exceededMaxBytes = false;
-    let buffer: Buffer;
-    try {
-      buffer = await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes: maxBytesLocal }) => {
-          exceededMaxBytes = true;
-          return new Error(`fal generated video download exceeds ${maxBytesLocal} bytes`);
-        },
-      });
-    } catch (error) {
-      if (exceededMaxBytes) {
-        return {
-          url,
-          mimeType,
-          fileName,
-        };
-      }
-      throw error;
-    }
     return {
       url,
-      buffer,
-      mimeType,
-      fileName,
+      ...(await readGeneratedVideoAsset(response, {
+        label: "fal generated video download",
+        maxBytes,
+        validateBinaryResponse: true,
+        overflowUrl: url,
+        readOptions: { chunkTimeoutMs: 0 },
+      })),
     };
   } finally {
     await release();
@@ -635,7 +615,9 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "video" });
       const requestBody = buildFalVideoRequestBody({ req, model });
-      const policy = buildPolicy(allowPrivateNetwork);
+      const policy = allowPrivateNetwork
+        ? ssrfPolicyFromDangerouslyAllowPrivateNetwork(true)
+        : undefined;
       const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);
       const submitted = readFalQueueResponse(
         await fetchFalJson({

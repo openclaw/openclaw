@@ -1,13 +1,14 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createDispatcher,
   emptyConfig,
   hookMocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -37,8 +38,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -96,6 +95,78 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(activeDuringOffRun).toBe(false);
+  });
+
+  it.each([
+    { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
+    { stored: "full", override: "off", expected: [] },
+    { stored: "full", override: "on", expected: ["Tool summary"] },
+  ] as const)(
+    "delivers admitted run verbosity $override instead of stored $stored",
+    async ({ stored, override, expected }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session",
+        updatedAt: 0,
+        verboseLevel: stored,
+      };
+      const dispatcher = createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:telegram:direct:U1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+        replyResolver: async (_ctx, opts) => {
+          opts?.onRunVerbosityResolved?.({
+            verboseLevelOverride: override,
+            resolvedVerboseLevel: override,
+          });
+          await opts?.onToolResult?.({ text: "Tool summary" });
+          await opts?.onToolResult?.({ text: "Tool failure output", isError: true });
+          return undefined;
+        },
+      });
+      expect(
+        vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+      ).toEqual(expected);
+      expect(sessionStoreMocks.currentEntry.verboseLevel).toBe(stored);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears an earlier admitted verbosity override for an inherited queued run", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        opts?.onRunVerbosityResolved?.({
+          verboseLevelOverride: "full",
+          resolvedVerboseLevel: "full",
+        });
+        await opts?.onToolResult?.({ text: "Explicit turn" });
+        opts?.onRunVerbosityResolved?.({ resolvedVerboseLevel: "on" });
+        await opts?.onToolResult?.({ text: "Inherited off" });
+        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        await opts?.onToolResult?.({ text: "Inherited live on" });
+        return { text: "Done" };
+      },
+    });
+    expect(
+      vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+    ).toEqual(["Explicit turn", "Inherited live on"]);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Done" });
   });
 
   it("keeps verbose commentary in the channel draft when that draft owns progress", async () => {
@@ -433,6 +504,8 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
+    // Group policy needs the loaded fixture's conversation grammar.
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -623,51 +696,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
-    setNoAbort();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
-      async (payload: ReplyPayload) => ({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      }),
-    );
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "NO_REPLY",
-        mediaUrls: ["file://attacker/share/probe.mp3"],
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("webchat");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -699,50 +727,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: ls");
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers deterministic exec approval tool payloads in groups", async () => {
-    setNoAbort();
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-        channelData: {
-          execApproval: {
-            approvalId: "117ba06d-1111-2222-3333-444444444444",
-            approvalSlug: "117ba06d",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-        },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const toolPayload = firstToolResultPayload(dispatcher);
-    expect(toolPayload?.text).toBe(
-      "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-    );
-    expect(toolPayload?.channelData).toStrictEqual({
-      execApproval: {
-        approvalId: "117ba06d-1111-2222-3333-444444444444",
-        approvalSlug: "117ba06d",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
   it("sends tool results via dispatcher in DM sessions", async () => {
@@ -884,6 +868,34 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps prepared notes in drafts and the generic receipt in verbose notices", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", ChatType: "direct" }),
+      cfg,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Use **literal** and [label](https://example.com).",
+          explanationFormat: "plain",
+          steps: [],
+        });
+        return { text: "done" };
+      },
+    });
+    expect(firstToolResultPayload(dispatcher)).toMatchObject({
+      text: "Progress updated",
+      isStatusNotice: true,
+    });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
   });
 
   it("sends only one plan status notice per reply run", async () => {
@@ -1356,8 +1368,11 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedOutput);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(firstToolResultPayload(dispatcher)).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("No such file or directory"),
+    });
   });
 
   it("forwards failed command progress in regular verbose mode", async () => {
@@ -1462,8 +1477,6 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const onItemEvent = vi.fn();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",

@@ -12,10 +12,12 @@
  */
 
 import type { AnyChunk, MessageMetadata } from "@slack/types";
-import type { WebClient } from "@slack/web-api";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSlackListenerWriteClient } from "./client.js";
+import { buildSlackMessageIdentityPayload } from "./post-message-identity.js";
 import type { SlackSendIdentity } from "./send.js";
 
 // ---------------------------------------------------------------------------
@@ -29,15 +31,13 @@ export type SlackStreamSession = {
   channel: string;
   /** Thread timestamp (required for streaming). */
   threadTs: string;
-  /** True once stopped locally or by Slack's native Stop event. */
+  /** True once stopped locally, by Slack, or after an ambiguous delivery failure. */
   stopped: boolean;
   /** Slack's native Stop event cancelled this stream, including any buffered tail. */
   stoppedBySlack?: boolean;
   /**
-   * True once any Slack API call (startStream / appendStream) has succeeded.
-   * The SDK buffers appended text locally until the buffer exceeds
-   * `buffer_size` (default 256 chars); only then does it issue a network
-   * call. Until `delivered` flips, nothing has actually reached Slack.
+   * True once Slack acknowledges a start, append, or stop. Short appends can
+   * remain buffered locally; a lost response also leaves delivery unconfirmed.
    */
   delivered: boolean;
   /** Text accepted by the SDK but not yet acknowledged by Slack. */
@@ -46,6 +46,7 @@ export type SlackStreamSession = {
 
 type StartSlackStreamParams = {
   client: WebClient;
+  clientOptions?: WebClientOptions;
   channel: string;
   threadTs: string;
   /** Optional initial markdown text to include in the stream start. */
@@ -175,28 +176,27 @@ export async function startSlackStream(
 ): Promise<SlackStreamSession> {
   const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId, identity } =
     params;
-  const identityPayload = identity?.iconUrl
-    ? { ...(identity.username ? { username: identity.username } : {}), icon_url: identity.iconUrl }
-    : identity?.iconEmoji
-      ? {
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        }
-      : identity?.username
-        ? { username: identity.username }
-        : {};
-
   logVerbose(
     `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
   );
 
-  const streamer = client.chatStream({
+  const writeClient = getSlackListenerWriteClient({
+    listenerClient: client,
+    clientOptions: params.clientOptions,
+    teamId: params.clientOptions?.teamId,
+  });
+  if (!writeClient) {
+    throw new Error(
+      "Slack streaming requires an authenticated client with matching workspace scope",
+    );
+  }
+  const streamer = writeClient.chatStream({
     channel,
     thread_ts: threadTs,
     ...(taskDisplayMode ? { task_display_mode: taskDisplayMode } : {}),
     ...(teamId ? { recipient_team_id: teamId } : {}),
     ...(userId ? { recipient_user_id: userId } : {}),
-    ...identityPayload,
+    ...buildSlackMessageIdentityPayload(identity),
   });
 
   const session: SlackStreamSession = {
@@ -207,48 +207,12 @@ export async function startSlackStream(
     delivered: false,
     pendingText: "",
   };
+  // Stop events carry the listener identity; the derived writer only owns I/O.
   const state = getSlackClientStreams(client);
   state.sessions.add(session);
   stateBySession.set(session, state);
 
-  if (text || chunks?.length) {
-    if (text) {
-      session.pendingText += text;
-    }
-    // Slack SDK ChatStreamer keeps short markdown_text chunks in a local buffer
-    // and returns null until buffer_size is reached. Structured chunks force a
-    // flush. Only a non-null response means Slack acknowledged
-    // startStream/appendStream.
-    try {
-      const result = await streamer.append({
-        ...(text ? { markdown_text: text } : {}),
-        ...(chunks ? { chunks } : {}),
-      });
-      if (result) {
-        session.delivered = true;
-        session.pendingText = "";
-      }
-      applySlackStreamStop(session);
-      logVerbose(
-        `slack-stream: appended initial payload (${text?.length ?? 0} chars, ${
-          chunks?.length ?? 0
-        } chunks, ${result ? "flushed" : "buffered"})`,
-      );
-    } catch (err) {
-      if (applySlackStreamStop(session)) {
-        return session;
-      }
-      releaseSlackStream(session);
-      if (isBenignSlackFinalizeError(err) && session.pendingText) {
-        throw new SlackStreamNotDeliveredError(
-          session.pendingText,
-          extractSlackErrorCode(err) ?? "unknown",
-        );
-      }
-      throw err;
-    }
-  }
-
+  await appendSlackStream({ session, text, chunks });
   return session;
 }
 
@@ -271,8 +235,8 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     session.pendingText += text;
   }
   try {
-    // Same SDK contract as startSlackStream: null means local-only buffer,
-    // non-null means Slack accepted the pending buffer/chunks and it is visible.
+    // Short markdown chunks stay buffered in the SDK until buffer_size is reached;
+    // structured chunks force a flush. Only a non-null response acknowledges delivery.
     const result = await session.streamer.append({
       ...(text ? { markdown_text: text } : {}),
       ...(chunks ? { chunks } : {}),
@@ -292,13 +256,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
       return;
     }
     releaseSlackStream(session);
-    if (isBenignSlackFinalizeError(err) && session.pendingText) {
-      throw new SlackStreamNotDeliveredError(
-        session.pendingText,
-        extractSlackErrorCode(err) ?? "unknown",
-      );
-    }
-    throw err;
+    throwSlackStreamFailure(session, err);
   }
 }
 
@@ -357,8 +315,7 @@ export async function stopSlackStream(
           }
         : undefined,
     );
-    // Accept a Stop racing the SDK's internal start/finalize when ts was unknown;
-    // do not force an extra flush for every short reply just to intercept that window.
+    // Accept a Stop racing the SDK's internal start/finalize when ts was unknown.
     if (applySlackStreamStop(session)) {
       return {};
     }
@@ -374,21 +331,13 @@ export async function stopSlackStream(
       return {};
     }
     const code = extractSlackErrorCode(err) ?? "unknown";
-    const benignFinalizeError = isBenignSlackFinalizeError(err);
-    if (session.pendingText && (benignFinalizeError || code === "missing_scope")) {
-      // stop() can be the first network call for short replies. Recipient or
-      // custom-authorship rejection means nothing landed; preserve the fallback.
-      throw new SlackStreamNotDeliveredError(session.pendingText, code);
+    if (!session.pendingText && session.delivered && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code)) {
+      logVerbose(
+        `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
+      );
+      return {};
     }
-    if (benignFinalizeError) {
-      if (session.delivered) {
-        logVerbose(
-          `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
-        );
-        return {};
-      }
-    }
-    throw err;
+    return throwSlackStreamFailure(session, err);
   } finally {
     releaseSlackStream(session);
   }
@@ -414,13 +363,27 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "team_not_found",
   // DMs that closed between stream start and stop.
   "missing_recipient_user_id",
+  "missing_recipient_team_id",
+  // Slack expires established streams server-side; rejected tails can still post normally.
+  "message_not_in_streaming_state",
   // Channels where Slack accepts ordinary messages but not native streaming.
   "method_not_supported_for_channel_type",
+  "channel_type_not_supported",
+  "enterprise_is_restricted",
 ]);
 
-function isBenignSlackFinalizeError(err: unknown): boolean {
-  const code = extractSlackErrorCode(err);
-  return code !== undefined && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code);
+function throwSlackStreamFailure(session: SlackStreamSession, err: unknown): never {
+  const code = extractSlackErrorCode(err) ?? "unknown";
+  if (
+    session.pendingText &&
+    (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) || code === "missing_scope")
+  ) {
+    throw new SlackStreamNotDeliveredError(session.pendingText, code);
+  }
+  // Slack may have accepted the request despite a lost response. The SDK
+  // retains that buffer; retire it so later append/stop cannot replay it.
+  session.stopped = true;
+  throw err;
 }
 
 function extractSlackErrorCode(err: unknown): string | undefined {

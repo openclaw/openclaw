@@ -2,7 +2,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "./command-catalog.js";
-import { resolveCliExecutionStartupContext } from "./command-execution-startup.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
 function resolvePolicy(params: {
@@ -137,24 +136,17 @@ describe("command-startup-policy", () => {
     }
   });
 
-  it("keeps every route-first command on the same config guard declaration as Commander", () => {
+  it("declares the config guard for every routed command", () => {
     for (const entry of cliCommandCatalog.filter((candidate) => candidate.route)) {
       expect(entry.policy?.configGuard, entry.commandPath.join(" ")).toBeDefined();
       for (const jsonOutputMode of [false, true]) {
         const argv = ["node", "openclaw", ...entry.commandPath];
         const expectedSkip = entry.commandPath.join(" ") !== "config unset";
-        const routed = resolveCliExecutionStartupContext({ argv, jsonOutputMode });
-        const commander = resolveCliExecutionStartupContext({
-          argv,
-          commandPath: [...entry.commandPath],
-          jsonOutputMode,
-        });
-        expect(routed.startupPolicy.skipConfigGuard, entry.commandPath.join(" ")).toBe(
-          commander.startupPolicy.skipConfigGuard,
-        );
-        expect(routed.startupPolicy.skipConfigGuard, entry.commandPath.join(" ")).toBe(
-          expectedSkip,
-        );
+        expect(
+          resolveCliStartupPolicy({ argv, commandPath: [...entry.commandPath], jsonOutputMode })
+            .skipConfigGuard,
+          entry.commandPath.join(" "),
+        ).toBe(expectedSkip);
       }
     }
   });
@@ -386,6 +378,8 @@ describe("command-startup-policy", () => {
   it("reserves stdout for the browser native-host protocol", () => {
     const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
 
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
     expect(policy.hideBanner).toBe(true);
     expect(policy.suppressDoctorStdout).toBe(true);
   });
@@ -399,6 +393,13 @@ describe("command-startup-policy", () => {
     expect(policy.validateConfigOnly).toBe(true);
     expect(policy.skipConfigGuard).toBe(false);
     expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
+  });
+
+  it("keeps managed worktree commands out of shared-state migration preflight", () => {
+    const policy = resolvePolicy({ commandPath: ["worktrees", "gc"] });
+
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
   });
 
   it("isolates cloud worker startup", () => {

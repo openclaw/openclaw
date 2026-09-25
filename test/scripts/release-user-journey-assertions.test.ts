@@ -13,6 +13,7 @@ import {
   waitForClickClackSocket,
 } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
@@ -21,6 +22,7 @@ const CLICKCLACK_PLUGIN_WRITER_SCRIPT =
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
   const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
@@ -39,7 +41,7 @@ function runAssertion(
   args: string[],
   options: { env?: Record<string, string>; timeoutMs?: number } = {},
 ) {
-  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
+  return spawnSync(testNodeExecPath, [ASSERTIONS_SCRIPT, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -67,7 +69,9 @@ async function waitUntil(matches: () => boolean | Promise<boolean>, label: strin
 
 async function reserveTcpPort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const port = (server.address() as AddressInfo).port;
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
@@ -166,26 +170,73 @@ describe("release user journey assertions", () => {
     }
   });
 
-  it("bounds release user journey output assertion diagnostics", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
-    const home = path.join(root, "home");
-    const outputPath = path.join(root, "output.log");
+  it.each(["large output", "missing path", "empty file", "directory"])(
+    "bounds release user journey output assertion diagnostics for %s",
+    (kind) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+      const home = path.join(root, "home");
+      const outputPath = path.join(root, "output.log");
+
+      try {
+        if (kind === "large output") {
+          writeFileSync(
+            outputPath,
+            `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
+            "utf8",
+          );
+        } else if (kind === "empty file") {
+          writeFileSync(outputPath, "", "utf8");
+        } else if (kind === "directory") {
+          mkdirSync(outputPath);
+        }
+
+        const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
+        const message = `${outputPath} did not contain missing. Output tail: `;
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(message);
+        if (kind === "large output") {
+          expect(result.stderr).toContain("recent output tail");
+          expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+        } else {
+          expect(result.stderr).toContain(`${message}\n`);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("uses each file and needle and restores argv after successful and failed dispatch", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const fileA = path.join(root, "a.log");
+    const fileB = path.join(root, "b.log");
+    writeFileSync(fileA, "first marker\n", "utf8");
+    writeFileSync(fileB, "second marker\n", "utf8");
+    const previousArgv = process.argv;
+    const previousArgs = [...previousArgv];
 
     try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
-        "utf8",
-      );
-
-      const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Output tail:");
-      expect(result.stderr).toContain("recent output tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+      for (const [file, needle, shouldReject] of [
+        [fileA, "first marker", false],
+        [fileB, "second marker", false],
+        [fileB, "first marker", true],
+        [fileA, "first marker", false],
+      ] as const) {
+        const assertion = runReleaseUserJourneyAssertion("assert-file-contains", [file, needle]);
+        if (shouldReject) {
+          await expect(assertion).rejects.toThrow(
+            `${file} did not contain ${needle}. Output tail: `,
+          );
+        } else {
+          await expect(assertion).resolves.toBeUndefined();
+        }
+        expect(process.argv).toBe(previousArgv);
+        expect(process.argv).toEqual(previousArgs);
+      }
     } finally {
-      rmSync(root, { force: true, recursive: true });
+      process.argv = previousArgv;
+      previousArgv.splice(0, previousArgv.length, ...previousArgs);
     }
   });
 
@@ -365,7 +416,7 @@ describe("release user journey assertions", () => {
     const statePath = path.join(root, "clickclack.json");
     const port = await reserveTcpPort();
     const token = "clickclack-test-token";
-    const fixture = spawn(process.execPath, [CLICKCLACK_FIXTURE_SCRIPT], {
+    const fixture = spawn(testNodeExecPath, [CLICKCLACK_FIXTURE_SCRIPT], {
       env: {
         ...process.env,
         CLICKCLACK_FIXTURE_PORT: String(port),
@@ -437,7 +488,7 @@ describe("release user journey assertions", () => {
     };
 
     const pluginDir = path.join(tempDirs.make("openclaw-release-clickclack-plugin-"), "plugin");
-    const writer = spawnSync(process.execPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
+    const writer = spawnSync(testNodeExecPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
       encoding: "utf8",
     });
     expect(writer.status, writer.stderr).toBe(0);
@@ -495,7 +546,9 @@ describe("release user journey assertions", () => {
       socket.on("close", () => {
         socketClosed = true;
       });
-      socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nleft-open");
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nleft-open");
+      });
     });
 
     try {

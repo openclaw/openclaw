@@ -59,6 +59,7 @@ export function registerModelsCli(program: Command) {
   models
     .command("list")
     .description("List models (configured by default)")
+    .option("--refresh", "Refresh provider discovery before listing", false)
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
     .option("--provider <id>", "Filter by provider id")
@@ -86,7 +87,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .option(
       "--check",
-      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+      "Check auth/runtime readiness (1=missing/expired/unavailable/incompatible/indeterminate, 2=expiring)",
       false,
     )
     .option("--probe", "Probe configured provider auth (live)", false)
@@ -357,6 +358,19 @@ export function registerModelsCli(program: Command) {
         const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthAddCommand } = await loadModelsAuthCommands();
         await modelsAuthAddCommand({ agent }, defaultRuntime);
+      });
+    });
+
+  auth
+    .command("activate")
+    .description("Test a saved sign-in and use it for this agent")
+    .argument("<profileId>", "Saved sign-in id from models auth list")
+    .option("--agent <id>", "Agent id (default: the only configured agent)")
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthActivateCommand } = await import("../commands/models/auth-activate.js");
+        await modelsAuthActivateCommand({ profileId, agent }, defaultRuntime);
       });
     });
 

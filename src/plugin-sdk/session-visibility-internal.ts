@@ -1,4 +1,5 @@
 /** Core-private spawned-session ownership lookup; not a published plugin SDK subpath. */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
@@ -6,13 +7,12 @@ import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
   isGatewayTransportError,
-  callGateway as defaultCallGateway,
+  type callGateway as defaultCallGateway,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
@@ -350,7 +350,12 @@ export async function listSpawnedSessionKeysWithResult(params: {
       ? Math.max(1, Math.floor(params.limit))
       : undefined;
   try {
-    const list = await (params.callGateway ?? defaultCallGateway)<{
+    const callGateway =
+      params.callGateway ??
+      (await import("../agents/tools/in-process-gateway.js")).bindAgentToolGatewayRequest({
+        hostedOnly: true,
+      });
+    const list = await callGateway<{
       sessions: Array<{ key?: unknown }>;
     }>({
       method: "sessions.list",

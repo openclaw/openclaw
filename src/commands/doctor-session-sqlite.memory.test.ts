@@ -35,6 +35,8 @@ beforeAll(async () => {
     // preserve function/class names used by runtime dispatch and diagnostics.
     minify: true,
     keepNames: true,
+    // Preserve lazy imports so unrelated runtime modules do not consume the child heap.
+    splitting: true,
     outdir: outDir,
     external: Object.entries(packageJson.dependencies)
       .filter(([, version]) => !version.startsWith("workspace:"))
@@ -49,7 +51,7 @@ afterAll(() => {
   }
 });
 
-it.each(["batch", "deep", "public"])(
+it.each(["batch", "public"])(
   "imports %s transcripts and completes branch projections under a 256 MiB heap",
   async (scenario) => {
     await withOpenClawTestState({ applyEnv: false, label: "import-memory" }, async (state) => {

@@ -10,7 +10,10 @@ export function renderCommandLaneRows(
   options: { compact?: boolean } = {},
 ) {
   const rows = diagnostics.lanes.map((lane) => {
-    const saturated = lane.activeCount >= lane.maxConcurrent;
+    const perSession = lane.concurrencyScope === "session";
+    const saturated = perSession
+      ? (lane.saturatedLaneCount ?? 0) > 0
+      : lane.activeCount >= lane.maxConcurrent;
     const queued = lane.queuedCount > 0;
     const classes = [
       "command-lane-row",
@@ -24,11 +27,22 @@ export function renderCommandLaneRows(
       : "";
     return html`
       <tr class=${classes}>
-        <td class="mono command-lane-row__name">${lane.lane}</td>
-        <td class="mono">${lane.activeCount}/${lane.maxConcurrent}</td>
-        <td class="mono">${lane.queuedCount}</td>
-        ${options.compact ? "" : html`<td>${group}</td>`}
-        <td class="mono">${lane.blockedBy ?? "—"}</td>
+        <td class="mono command-lane-row__name" data-label=${t("debug.lanes.lane")}>
+          ${lane.lane}
+        </td>
+        <td class="mono" data-label=${t("debug.lanes.active")}>
+          ${
+            perSession
+              ? t("debug.lanes.activePerSession", {
+                  active: String(lane.activeCount),
+                  limit: String(lane.maxConcurrent),
+                })
+              : `${lane.activeCount}/${lane.maxConcurrent}`
+          }
+        </td>
+        <td class="mono" data-label=${t("debug.lanes.queued")}>${lane.queuedCount}</td>
+        ${options.compact ? "" : html`<td data-label=${t("debug.lanes.group")}>${group}</td>`}
+        <td class="mono" data-label=${t("debug.lanes.blocked")}>${lane.blockedBy ?? "—"}</td>
       </tr>
     `;
   });
@@ -43,13 +57,13 @@ export function renderCommandLaneRows(
       .join(" ");
     rows.push(html`
       <tr class=${classes}>
-        <td class="mono command-lane-row__name">
+        <td class="mono command-lane-row__name" data-label=${t("debug.lanes.lane")}>
           ${t("debug.lanes.sessionLanes", { count: String(dynamic.laneCount) })}
         </td>
-        <td class="mono">${dynamic.activeCount}</td>
-        <td class="mono">${dynamic.queuedCount}</td>
-        ${options.compact ? "" : html`<td></td>`}
-        <td class="mono">—</td>
+        <td class="mono" data-label=${t("debug.lanes.active")}>${dynamic.activeCount}</td>
+        <td class="mono" data-label=${t("debug.lanes.queued")}>${dynamic.queuedCount}</td>
+        ${options.compact ? "" : html`<td data-label=${t("debug.lanes.group")}></td>`}
+        <td class="mono" data-label=${t("debug.lanes.blocked")}>—</td>
       </tr>
     `);
   }

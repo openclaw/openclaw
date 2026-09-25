@@ -1,8 +1,10 @@
 // Synology Chat tests cover webhook handler plugin behavior.
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setSynologyRuntime } from "./runtime.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
@@ -148,6 +150,7 @@ describe("createWebhookHandler", () => {
   let log: TestLog;
 
   beforeEach(() => {
+    setSynologyRuntime(createPluginRuntimeMock());
     resolveLegacyWebhookNameToChatUserId.mockClear();
     resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {
@@ -304,6 +307,27 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res.status).toBe(400);
+  });
+
+  it("returns 400 without admission when the request stream fails", async () => {
+    const receive = vi.fn();
+    const handler = createWebhookHandlerWithIngress({
+      account: makeAccount(),
+      receive,
+      log,
+    });
+
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    const pending = handler(req, res);
+    req.emit("data", Buffer.from(validBody));
+    req.emit("error", new Error("request stream failed"));
+    await pending;
+
+    expect(res.status).toBe(400);
+    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
+    expect(receive).not.toHaveBeenCalled();
   });
 
   it.each([

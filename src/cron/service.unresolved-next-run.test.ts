@@ -1,9 +1,9 @@
 // Next-run regression tests cover unresolved next-run state after service updates.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDefaultIsolatedRunner,
   createIsolatedRegressionJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import * as schedule from "./schedule.js";
@@ -13,12 +13,13 @@ import { saveCronStore } from "./store.js";
 
 const issue66019Fixtures = setupCronRegressionFixtures({ prefix: "cron-66019-" });
 
-function createIssue66019Job(params: { id: string; scheduledAt: number }) {
+function createIssue66019Job(params: { id: string; scheduledAt: number; expr?: string }) {
   return createIsolatedRegressionJob({
     id: params.id,
     name: params.id,
     scheduledAt: params.scheduledAt,
-    schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+    // February 31 has no next occurrence in either the host or maintenance worker.
+    schedule: { kind: "cron", expr: params.expr ?? "0 0 31 2 *", tz: "Asia/Shanghai" },
     payload: { kind: "agentTurn", message: "ping" },
     state: { nextRunAtMs: params.scheduledAt - 1_000 },
   });
@@ -29,13 +30,9 @@ function createIssue66019State(params: {
   nowMs: () => number;
   runIsolatedAgentJob: Parameters<typeof createCronServiceState>[0]["runIsolatedAgentJob"];
 }) {
-  return createCronServiceState({
-    cronEnabled: true,
+  return createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
   });
 }
@@ -77,7 +74,6 @@ describe("#66019 unresolved next-run repro", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
     const runIsolatedAgentJob = createDefaultIsolatedRunner();
-    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
       storePath: store.storePath,
       nowMs: () => now,
@@ -95,7 +91,6 @@ describe("#66019 unresolved next-run repro", () => {
         },
       });
     } finally {
-      nextRunSpy.mockRestore();
       clearCronTimer(state);
     }
   });
@@ -115,7 +110,6 @@ describe("#66019 unresolved next-run repro", () => {
       status: "error",
       error: "synthetic failure",
     });
-    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
       storePath: store.storePath,
       nowMs: () => now,
@@ -133,7 +127,6 @@ describe("#66019 unresolved next-run repro", () => {
         },
       });
     } finally {
-      nextRunSpy.mockRestore();
       clearCronTimer(state);
     }
   });
@@ -146,6 +139,7 @@ describe("#66019 unresolved next-run repro", () => {
     const cronJob = createIssue66019Job({
       id: "cron-66019-error-backoff-floor",
       scheduledAt,
+      expr: "0 7 * * *",
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 

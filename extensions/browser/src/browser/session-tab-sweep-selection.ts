@@ -6,15 +6,8 @@ import {
   volatileTabsBySession,
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
-import {
-  browserSessionTabNativeIdentity,
-  type BrowserSessionTabRecord,
-} from "./session-tab-store.js";
-
-type DurableTab = BrowserSessionTabRecord & {
-  kind: "durable";
-  storageKey: string;
-};
+import { browserSessionTabNativeIdentity } from "./session-tab-store.js";
+import type { DurableTab } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileSessionTab | DurableTab;
 
@@ -68,6 +61,10 @@ export function selectStaleTrackedTabs(params: {
       : tab.lastUsedAt;
 
   for (const tab of params.tabs) {
+    if (tab.kind === "durable" && tab.dashboard) {
+      // The dashboard lifetime reconciler owns these targets, including pending closes.
+      continue;
+    }
     const observedAt =
       tab.kind === "durable" ? observedNativeActivity.get(tab.storageKey) : undefined;
     const isActiveDurable =

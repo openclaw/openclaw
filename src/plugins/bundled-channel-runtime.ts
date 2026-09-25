@@ -1,7 +1,7 @@
 /** Loads bundled channel plugin runtime entries and setup metadata. */
 import path from "node:path";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";
+import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";

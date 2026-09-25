@@ -72,9 +72,10 @@ type StartedTuiPtyFixture = {
   run: PtyRun;
   logPath: string;
   waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
-type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv };
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
   text: string;
@@ -167,7 +168,7 @@ function assertAllowedOsc(body: string) {
   if (
     target === undefined ||
     (target !== "" &&
-      (!/^https?:\/\/\S+$/u.test(target) ||
+      (!/^(?:https?:\/\/|mailto:)\S+$/u.test(target) ||
         ansi.sanitizeForLog(target) !== target ||
         !URL.canParse(target)))
   ) {
@@ -556,6 +557,7 @@ async function exerciseGatewayOutputSafety(
   ];
   const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
+    holdReconnect: true,
     env: {
       OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_ROWS: "18",
@@ -567,22 +569,23 @@ async function exerciseGatewayOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/gateway-status\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
-    await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
-    await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
-    const raw = fixture.run.output();
-    for (const attack of systemAttacks) {
-      expect(raw).not.toContain(attack);
-    }
-    expect(
-      latestFrameHasRow(
-        fixture.run.output(),
-        fixture.run,
-        (row) =>
-          idlePayload.markers.every((marker) => row.includes(marker)) && /\| idle/u.test(row),
-      ),
-    ).toBe(true);
+    // Replay omits zero-width bidi isolates but preserves authenticated cells.
+    // The complete disconnect row must exist before reconnect replaces it.
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      idlePayload,
+      idlePayload.markers,
+      `local runtime stopped: ${idlePayload.expectedLine} | idle`,
+      startupTimeoutMs,
+    );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("(no output)")),
+      startupTimeoutMs,
+    );
+    // Reconnect rebuilds history; release it only after both sanitized outputs were painted.
+    await fixture.releaseReconnect();
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) =>
@@ -590,6 +593,11 @@ async function exerciseGatewayOutputSafety(
         rows.some((row) => row.includes("local ready | idle")),
       startupTimeoutMs,
     );
+    const raw = fixture.run.output();
+    for (const attack of [...systemAttacks, ...idlePayload.attacks]) {
+      expect(raw).not.toContain(attack);
+    }
+    expect(raw).not.toContain("\uFFFD");
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });

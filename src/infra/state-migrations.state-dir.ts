@@ -1,27 +1,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
-import { isWithinDir } from "./path-safety.js";
-import { logStateMigrationResult } from "./state-migrations.messages.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveUserPath } from "./home-dir.js";
 import {
   migrateLegacyInstalledPluginIndex,
   preflightLegacyInstalledPluginIndexMigration,
 } from "./state-migrations.plugin-state.js";
-import { migrateLegacyTaskStateSidecars } from "./state-migrations.storage.js";
 import type { MigrationLogger } from "./state-migrations.types.js";
 
 let autoMigrateStateDirChecked = false;
-let autoMigrateTaskStateSidecarsChecked = false;
 
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
-}
-
-export function resetAutoMigrateLegacyTaskStateSidecarsForTest() {
-  autoMigrateTaskStateSidecarsChecked = false;
 }
 
 type StateDirMigrationResult = {
@@ -43,26 +40,116 @@ function lstatIfPresent(filePath: string): fs.Stats | null {
   }
 }
 
-export function migrateLegacyProfileWorkspace(params: {
+function resolveProfileWorkspaceIdentity(workspace: string): string {
+  try {
+    // Config can own a workspace before it exists, including through dangling aliases.
+    const resolved = resolvePathPrefixSync(workspace);
+    const canonicalPath = path.join(resolved.existingPath, ...resolved.unresolvedSegments);
+    if (
+      resolved.unresolvedSegments.length > 0 &&
+      probePathCaseInsensitiveSync(canonicalPath, { allowTemporaryProbe: false }) === true
+    ) {
+      return path.join(
+        resolved.existingPath,
+        ...resolved.unresolvedSegments.map((segment) =>
+          segment.replace(/[A-Z]/g, (character) => character.toLowerCase()),
+        ),
+      );
+    }
+    return canonicalPath;
+  } catch {
+    return resolveIdentityPathViaExistingAncestorSync(workspace);
+  }
+}
+
+function resolveConfiguredProfileWorkspace(params: {
+  config?: OpenClawConfig;
+  source: string;
+  target: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-}): { changes: string[]; warnings: string[] } {
+}): string | undefined {
+  const agents = params.config?.agents;
+  const workspaces = [
+    agents?.defaults?.workspace,
+    ...Object.values(agents?.entries ?? {}).map((entry) => entry.workspace),
+    ...(agents?.list ?? []).map((entry) => entry.workspace),
+  ].flatMap((workspace) =>
+    workspace?.trim()
+      ? [resolveProfileWorkspaceIdentity(resolveUserPath(workspace, params.env, params.homedir))]
+      : [],
+  );
+  if (workspaces.length === 0) {
+    return undefined;
+  }
+  return [params.source, params.target].find((workspace) =>
+    workspaces.includes(resolveProfileWorkspaceIdentity(workspace)),
+  );
+}
+
+export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { source: string; target: string } | undefined {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return undefined;
+  }
+  const paths = {
+    source: path.join(resolveProfileStateDir("default", env, homedir), `workspace-${profile}`),
+    target: path.join(resolveProfileStateDir(profile, env, homedir), "workspace"),
+  };
+  return resolveConfiguredProfileWorkspace({ ...params, ...paths }) ? undefined : paths;
+}
+
+export function resolvePendingLegacyProfileWorkspaceMigrationPaths(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { source: string; target: string } | undefined {
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths(params);
+  // An occupied target remains pending owner work: execution refuses it, so the
+  // read-only plan must retain both endpoints instead of silently omitting it.
+  return paths && lstatIfPresent(paths.source) ? paths : undefined;
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[]; notices?: string[] } {
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths({
+    env: params.env,
+    homedir: params.homedir,
+  });
+  if (!paths) {
     return { changes: [], warnings: [] };
   }
 
   try {
-    const legacyDir = path.join(
-      resolveProfileStateDir("default", env, homedir),
-      `workspace-${profile}`,
-    );
-    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyDir = paths.source;
+    const targetDir = paths.target;
     const legacyStat = lstatIfPresent(legacyDir);
     if (!legacyStat) {
       return { changes: [], warnings: [] };
+    }
+    const configured = resolveConfiguredProfileWorkspace({ ...params, ...paths });
+    if (configured) {
+      const other = configured === legacyDir ? targetDir : legacyDir;
+      return {
+        changes: [],
+        warnings: [],
+        ...(lstatIfPresent(other)
+          ? {
+              notices: [
+                `Profile workspace: keeping configured workspace at ${configured}; existing workspace at ${other} was left unchanged.`,
+              ],
+            }
+          : {}),
+      };
     }
     if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
       return {
@@ -102,14 +189,6 @@ function resolveSymlinkTarget(linkPath: string): string | null {
 
 function formatStateDirMigration(legacyDir: string, targetDir: string): string {
   return `State dir: ${legacyDir} → ${targetDir} (legacy path now symlinked)`;
-}
-
-function isDirPath(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function isEmptyDirPath(filePath: string): boolean {
@@ -175,6 +254,30 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
     return false;
   }
   return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
+}
+
+export function resolvePendingLegacyStateDirMigrationPaths(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { source: string; target: string } | undefined {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return undefined;
+  }
+  const target = resolveNewStateDir(homedir);
+  const source = resolveLegacyStateDirs(homedir).find((dir) => fs.existsSync(dir));
+  if (!source) {
+    return undefined;
+  }
+  const sourceTarget = resolveSymlinkTarget(source);
+  if (
+    (sourceTarget && path.resolve(sourceTarget) === path.resolve(target)) ||
+    (safeStatSync(target)?.isDirectory() && isLegacyDirSymlinkMirror(source, target))
+  ) {
+    return undefined;
+  }
+  return { source, target };
 }
 
 export async function autoMigrateLegacyStateDir(params: {
@@ -288,7 +391,7 @@ export async function autoMigrateLegacyStateDir(params: {
     return { migrated: false, skipped: false, changes, warnings };
   }
 
-  if (isDirPath(targetDir)) {
+  if (safeStatSync(targetDir)?.isDirectory()) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
       await migratePluginInstallIndex();
       return {
@@ -391,32 +494,5 @@ export async function autoMigrateLegacyStateDir(params: {
     changes,
     warnings,
     ...(notices.length > 0 ? { notices } : {}),
-  };
-}
-
-export async function autoMigrateLegacyTaskStateSidecars(params: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-}> {
-  if (autoMigrateTaskStateSidecarsChecked) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
-  }
-  autoMigrateTaskStateSidecarsChecked = true;
-
-  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
-  const result = await migrateLegacyTaskStateSidecars({ stateDir });
-  logStateMigrationResult(result, params.log);
-  return {
-    migrated: result.changes.length > 0,
-    skipped: false,
-    changes: result.changes,
-    warnings: result.warnings,
   };
 }

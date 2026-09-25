@@ -18,13 +18,29 @@ import {
 export {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
+  parseMarkdownOwnership,
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
 } from "./reasoning-tag-parser.js";
 export type { ReasoningTagTextDelta } from "./reasoning-tag-parser.js";
 
 const MARKDOWN_CONTAINER_LINE_RE = /^(?: {0,3}(?:>|[-+*][\t ]|\d{1,9}[.)][\t ]))/mu;
-const BLANK_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n)[\t ]*(?:\r\n|\r(?!\n)|\n)$/u;
+
+function endsBlankBlock(text: string): boolean {
+  let cursor = text.length - 1;
+  if (text[cursor] === "\n") {
+    cursor -= text[cursor - 1] === "\r" ? 2 : 1;
+  } else if (text[cursor] === "\r") {
+    cursor -= 1;
+  } else {
+    return false;
+  }
+  // Walk only the final blank line; a forward suffix regex rescans growing paragraphs.
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor -= 1;
+  }
+  return text[cursor] === "\n" || text[cursor] === "\r";
+}
 
 type PendingTagProbe = {
   nameResolved: boolean;
@@ -91,6 +107,7 @@ export interface ReasoningTagTextPartitioner {
 export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner {
   const reduction: ReductionState = { depth: 0, visibleEver: false };
   let source = "";
+  let endedBlankBlock = false;
   let blockStart = 0;
   let emitted = 0;
   let holdStart: number | undefined;
@@ -108,6 +125,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
 
   const compactCommittedSource = (retainStart: number) => {
     source = source.slice(retainStart);
+    endedBlankBlock = endsBlankBlock(source);
     blockStart = source.length;
     emitted = source.length;
     holdStart = undefined;
@@ -134,7 +152,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     }
   };
 
-  const emitSafePrefix = (limit: number, output: ReasoningTagTextDelta[]) => {
+  const emitSafePrefix = (limit: number, output: ReasoningTagTextDelta[], appended?: string) => {
     if (strictMode) {
       holdStart ??= emitted;
       return;
@@ -172,10 +190,16 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     if (holdStart !== undefined || emitted >= limit) {
       return;
     }
+    // Reuse the incoming chunk so emitted slices do not retain each growing
+    // flattened source prefix through the caller's accumulated output.
+    const appendedStart = source.length - (appended?.length ?? 0);
+    const useAppended = appended !== undefined && emitted >= appendedStart;
+    const scanSource = useAppended ? appended : source;
+    const scanOffset = useAppended ? appendedStart : 0;
     while (emitted < limit && holdStart === undefined) {
       let special = -1;
       for (let index = emitted; index < limit; index += 1) {
-        const char = source.charAt(index);
+        const char = scanSource.charAt(index - scanOffset);
         if (char === "<" || char === "`") {
           special = index;
           break;
@@ -187,7 +211,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         holdStart = emitted;
         return;
       }
-      const text = source.slice(emitted, end);
+      const text = scanSource.slice(emitted - scanOffset, end - scanOffset);
       if (text) {
         merge(output, [{ kind: "text", text }]);
         if (text.trim()) {
@@ -380,7 +404,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       !final &&
       reduction.depth === 0 &&
       emitted === source.length &&
-      BLANK_BOUNDARY_RE.test(source) &&
+      endedBlankBlock &&
       !MARKDOWN_CONTAINER_LINE_RE.test(source.slice(blockRetainStart ?? 0)) &&
       !blockCodeSpans?.some(([, spanEnd]) => spanEnd === source.length)
     ) {
@@ -391,12 +415,14 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     return true;
   };
 
-  const consume = (chunk: string, strict: boolean, final: boolean) => {
+  const consume = (appended: string, strict: boolean, final: boolean) => {
     strictMode ||= strict;
-    const previousLength = source.length;
-    const previousEndedBlankBlock = BLANK_BOUNDARY_RE.test(source);
-    source += chunk;
-    const appended = source.slice(previousLength);
+    const previousEndedBlankBlock = endedBlankBlock;
+    source += appended;
+    if (appended) {
+      endedBlankBlock =
+        (appended.endsWith("\n") || appended.endsWith("\r")) && endsBlankBlock(source);
+    }
     const appendedBlock = appended.replace(/^(?:\r\n|\r|\n)+/u, "");
     const appendedStartsTopLevelBlock =
       previousEndedBlankBlock &&
@@ -420,7 +446,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     if (final) {
       processBlock(source.length, true, output);
     } else {
-      emitSafePrefix(source.length, output);
+      emitSafePrefix(source.length, output, appended);
       if (!strictMode && holdStart !== undefined && holdStart < source.length) {
         const ownershipStart = heldBacktickStart ?? holdStart;
         const heldLineStart =
@@ -443,10 +469,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
                   ? 2
                   : 1),
             ) === -1);
-        const completedBlankBlock = BLANK_BOUNDARY_RE.test(source);
-        const retainedContainerContext = MARKDOWN_CONTAINER_LINE_RE.test(
-          source.slice(nonFinalRetainStart),
-        );
+        const completedBlankBlock = endedBlankBlock;
         const heldBacktick = heldBacktickStart !== undefined;
         let openingRunEnd = ownershipStart;
         while (source.charAt(openingRunEnd) === "`") {
@@ -468,8 +491,9 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           nonFinalCodeSpansEnd === source.length ? nonFinalCodeSpans : undefined;
         const mayCloseTopLevelBlock =
           completedBlankBlock &&
-          (!retainedContainerContext || appendedStartsTopLevelBlock) &&
-          !nonFinalOpenEndedCode;
+          !nonFinalOpenEndedCode &&
+          (appendedStartsTopLevelBlock ||
+            !MARKDOWN_CONTAINER_LINE_RE.test(source.slice(nonFinalRetainStart)));
         if (
           (shouldTryParser || mayResolveHeldReasoning) &&
           !tableLookaheadPending &&
@@ -498,9 +522,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
             heldBacktick && heldCodeSpan === undefined && completedBlankBlock;
           if ((!heldBacktick && !heldInOpenEndedCode) || stableCode || stableNonDelimiter) {
             let processEnd = source.length;
-            if (stableNonDelimiter) {
-              processEnd = source.length;
-            } else if (mayCloseTopLevelBlock) {
+            if (stableNonDelimiter || mayCloseTopLevelBlock) {
               processEnd = source.length;
             } else if (stableCode && heldCodeSpan) {
               processEnd = heldCodeSpan[1];
@@ -536,7 +558,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         holdStart === undefined &&
         reduction.depth === 0 &&
         emitted === source.length &&
-        BLANK_BOUNDARY_RE.test(source) &&
+        endedBlankBlock &&
         (!MARKDOWN_CONTAINER_LINE_RE.test(source.slice(nonFinalRetainStart)) ||
           appendedStartsTopLevelBlock) &&
         nonFinalFullParses < 1

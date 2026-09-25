@@ -1,5 +1,25 @@
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
+export type ChatAbortTerminalDispatch = {
+  settled: Promise<void>;
+  failure?: { error: unknown };
+};
+const terminalDispatchByEntry = new WeakMap<object, ChatAbortTerminalDispatch>();
 const removalWaitersByEntry = new WeakMap<object, Set<() => void>>();
+
+/** Retain the subscription owner's receipt on the exact captured registration. */
+export function bindChatAbortTerminalDispatch(
+  entries: readonly object[] | undefined,
+  settled: Promise<void>,
+  captured: Pick<ChatAbortTerminalDispatch, "failure"> | undefined,
+): void {
+  if (!entries || !captured) {
+    return;
+  }
+  const dispatch = Object.assign(captured, { settled });
+  for (const entry of entries) {
+    terminalDispatchByEntry.set(entry, dispatch);
+  }
+}
 
 export function markChatAbortTerminalPersistenceError(entry: object, error: unknown): void {
   if (error === undefined) {
@@ -14,6 +34,33 @@ export function notifyChatAbortControllerRemoved(entry: object): void {
   removalWaitersByEntry.delete(entry);
   for (const resolve of waiters ?? []) {
     resolve();
+  }
+}
+
+/** Cancellation joins terminal dispatch before inspecting its write or intentional no-write. */
+export async function waitForChatAbortTerminalPersistence(entry: {
+  projectSessionTerminalPending?: boolean;
+  projectSessionTerminalPersistence?: Promise<void>;
+}): Promise<void> {
+  const dispatch = terminalDispatchByEntry.get(entry);
+  const preparedPersistence = entry.projectSessionTerminalPersistence;
+  if (dispatch) {
+    await dispatch.settled;
+  }
+  // Dispatch can attach persistence lazily. Retain an already accepted write
+  // even if a later terminal event replaces it while this dispatch is pending.
+  const persistence = preparedPersistence ?? entry.projectSessionTerminalPersistence;
+  if (persistence) {
+    await persistence;
+  }
+  if (!persistence && terminalPersistenceErrorByEntry.has(entry)) {
+    throw terminalPersistenceErrorByEntry.get(entry);
+  }
+  if (dispatch?.failure) {
+    throw dispatch.failure.error;
+  }
+  if (!persistence && entry.projectSessionTerminalPending === true) {
+    throw new Error("Session cancellation has no terminal persistence owner");
   }
 }
 

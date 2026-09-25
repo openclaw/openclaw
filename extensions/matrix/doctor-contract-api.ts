@@ -8,10 +8,6 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  requiresExplicitMatrixDefaultAccount,
-  resolveMatrixDefaultOrOnlyAccountId,
-} from "./src/account-selection.js";
 import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
 import {
   hasMatrixStorageMetaStateInStore,
@@ -19,7 +15,7 @@ import {
   openMatrixStorageMetaStoreOptions,
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
-} from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,
@@ -65,6 +61,7 @@ import {
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
+import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
 import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
@@ -100,6 +97,12 @@ async function collectLegacyMatrixCredentialSources(params: {
       }
       return left.name.localeCompare(right.name);
     });
+  if (files.length === 0) {
+    return [];
+  }
+  // Empty-state Doctor scans do not need account topology.
+  const { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } =
+    await import("./src/account-selection.js");
   return files.map((entry) => {
     const match = /^credentials(?:-([a-z0-9._-]+))?\.json$/iu.exec(entry.name);
     const namedAccount = match?.[1];
@@ -138,30 +141,13 @@ async function collectLegacyMatrixStateRoots(
   filename: string,
   options?: { includeMatrixRoot?: boolean },
 ): Promise<string[]> {
-  const matrixRoot = path.join(stateDir, "matrix");
-  const roots: string[] = [];
-  async function visit(dir: string): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === filename) {
-        roots.push(dir);
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      }
-    }
-  }
-  await visit(matrixRoot);
-  return roots
-    .filter((root) => options?.includeMatrixRoot || path.resolve(root) !== path.resolve(matrixRoot))
-    .toSorted();
+  const { entries } = await walkMatrixStateFiles(
+    stateDir,
+    (name, depth) =>
+      name === filename &&
+      (depth === 2 || depth === 4 || (depth === 0 && options?.includeMatrixRoot === true)),
+  );
+  return entries.map((entry) => path.dirname(entry.path)).toSorted();
 }
 
 async function* readLegacyMatrixSyncCaches(stateDir: string) {

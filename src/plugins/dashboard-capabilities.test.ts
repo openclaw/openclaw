@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { resolveBoardWidgetContentKindResourceUrls } from "./board-widget-content-kinds.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -35,7 +36,11 @@ function loadFixture(plugin: TempPlugin) {
 }
 
 describe("plugin dashboard declarations", () => {
-  it("publishes valid runtime board widget content kinds", () => {
+  it.each([
+    ["/__openclaw__/diagram/app.js", "/__openclaw__/diagram/app.js"],
+    ["/mcp-app-sandbox", "/mcp-app-sandbox"],
+    ["/renderer/app.js?v=1#asset", "/renderer/app.js%3Fv=1%23asset"],
+  ])("publishes private renderer path %s through its capability", (resourcePath, resolvedPath) => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "diagram",
@@ -45,7 +50,7 @@ describe("plugin dashboard declarations", () => {
           api.registerBoardWidgetContentKind({
             kind: "diagram",
             label: "Diagram",
-            resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+            resources: { surface: "diagram", paths: [${JSON.stringify(resourcePath)}] },
             validateSource(source) { if (!source.trim()) throw new Error("source required"); },
             composeDocument({ source }) { return "<main>" + source + "</main>"; },
           });
@@ -61,24 +66,27 @@ describe("plugin dashboard declarations", () => {
       pluginKind: "diagram:diagram",
       definition: { kind: "diagram", label: "Diagram" },
     });
+    const registration = registry.boardWidgetContentKinds.get("diagram");
+    expect(
+      registration &&
+        resolveBoardWidgetContentKindResourceUrls(
+          registration,
+          "https://gateway.test/__openclaw__/cap/token",
+        ),
+    ).toEqual({ [resourcePath]: `https://gateway.test/__openclaw__/cap/token${resolvedPath}` });
   });
 
   it("fails plugin load atomically for invalid board widget content kinds", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "invalid-widget-kind",
-      body: `module.exports = {
-        id: "invalid-widget-kind",
-        register(api) {
-          api.registerBoardWidgetContentKind({
-            kind: "html",
-            label: "Invalid",
-            resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
-            validateSource() {},
-            composeDocument() { return ""; },
-          });
-        },
-      };`,
+      registration: `api.registerBoardWidgetContentKind({
+        kind: "html",
+        label: "Invalid",
+        resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
+        validateSource() {},
+        composeDocument() { return ""; },
+      });`,
     });
 
     const registry = loadFixture(plugin);
@@ -94,6 +102,102 @@ describe("plugin dashboard declarations", () => {
       }),
     );
   });
+
+  it.each([
+    "/mcp-app-sandbox",
+    "/renderer/../app.js",
+    "/renderer/%2e%2e/app.js",
+    "/renderer/./app.js",
+    "/renderer/app.js?v=1",
+    "/renderer/app.js#v1",
+    "/renderer\\app.js",
+  ])("rejects an unservable public resource path %s", (resourcePath) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "invalid-renderer-path",
+      body: `module.exports = {
+        id: "invalid-renderer-path",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "diagram",
+            label: "Diagram",
+            resources: {
+              surface: "renderer",
+              paths: [${JSON.stringify(resourcePath)}],
+              async readPublicResource() { return undefined; },
+            },
+            validateSource() {},
+            composeDocument() { return ""; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
+    expect(record?.error).toContain("resource path");
+    expect(registry.boardWidgetContentKinds.size).toBe(0);
+  });
+
+  it.each([
+    { firstPublic: false, secondPublic: true, sharedPath: true },
+    { firstPublic: true, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: true },
+    { firstPublic: false, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: false },
+  ])(
+    "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
+    ({ firstPublic, secondPublic, sharedPath }) => {
+      useNoBundledPlugins();
+      const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
+        const resourceName = kind === "first" || sharedPath ? "shared" : "other";
+        return writePlugin({
+          id: `renderer-${kind}`,
+          body: `module.exports = {
+            id: "renderer-${kind}",
+            register(api) {
+              api.registerBoardWidgetContentKind({
+                kind: "${kind}",
+                label: "Renderer",
+                resources: {
+                  surface: "${kind}",
+                  paths: ["/__openclaw__/renderer/${resourceName}.js"],
+                  ${isPublic ? "async readPublicResource() { return undefined; }," : ""}
+                },
+                validateSource() {},
+                composeDocument() { return ""; },
+              });
+            },
+          };`,
+        });
+      };
+      const firstPlugin = createRenderer(firstPublic, "first");
+      const secondPlugin = createRenderer(secondPublic, "second");
+      const plugins = [firstPlugin, secondPlugin];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: firstPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: plugins.map((plugin) => plugin.file) },
+            allow: plugins.map((plugin) => plugin.id),
+          },
+        },
+        onlyPluginIds: plugins.map((plugin) => plugin.id),
+      });
+      expect(registry.plugins.find((entry) => entry.id === firstPlugin.id)?.status).toBe("loaded");
+      const second = registry.plugins.find((entry) => entry.id === secondPlugin.id);
+      if (sharedPath && (firstPublic || secondPublic)) {
+        expect(second).toMatchObject({ status: "error", failurePhase: "register" });
+        expect(second?.error).toContain("public resource paths must be unique");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first"]);
+      } else {
+        expect(second?.status).toBe("loaded");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first", "second"]);
+      }
+    },
+  );
 
   it("loads the Workboard bindings and dispatch action from its manifest", () => {
     const result = loadPluginManifest(path.join(process.cwd(), "extensions", "workboard"));
@@ -139,16 +243,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-foreign-method",
-      body: `module.exports = {
-        id: "dashboard-foreign-method",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-foreign-method.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-foreign-method.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [{ id: "foreign", method: "sessions.list", description: "Foreign method" }],
@@ -171,16 +270,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-wrong-scope",
-      body: `module.exports = {
-        id: "dashboard-wrong-scope",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-wrong-scope.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-wrong-scope.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [
@@ -209,16 +303,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "sessions",
-      body: `module.exports = {
-        id: "sessions",
-        register(api) {
-          api.registerGatewayMethod(
-            "sessions.pluginWrite",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "sessions.pluginWrite",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       actionVerbs: [
@@ -248,16 +337,11 @@ describe("plugin dashboard declarations", () => {
     const plugin = writePlugin({
       id: "cron.trigger:nightly",
       filename: "cron-trigger-nightly.cjs",
-      body: `module.exports = {
-        id: "cron.trigger:nightly",
-        register(api) {
-          api.registerGatewayMethod(
-            "plugin.nightly.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "plugin.nightly.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [
@@ -280,16 +364,11 @@ describe("plugin dashboard declarations", () => {
     const dataPlugin = writePlugin({
       id: "dashboard",
       filename: "dashboard-data.cjs",
-      body: `module.exports = {
-        id: "dashboard",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(dataPlugin, {
       dataBindings: [
@@ -303,16 +382,11 @@ describe("plugin dashboard declarations", () => {
     const actionPlugin = writePlugin({
       id: "dashboard.segmented",
       filename: "dashboard-segmented-action.cjs",
-      body: `module.exports = {
-        id: "dashboard.segmented",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.segmented.refresh",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.segmented.refresh",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(actionPlugin, {
       actionVerbs: [
@@ -326,16 +400,11 @@ describe("plugin dashboard declarations", () => {
     const literalEscapePlugin = writePlugin({
       id: "dashboard%2Esegmented",
       filename: "dashboard-literal-escape.cjs",
-      body: `module.exports = {
-        id: "dashboard%2Esegmented",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.literal-escape.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.literal-escape.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(literalEscapePlugin, {
       dataBindings: [
@@ -369,21 +438,16 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-valid",
-      body: `module.exports = {
-        id: "dashboard-valid",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-valid.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-          api.registerGatewayMethod(
-            "dashboard-valid.refresh",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-valid.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );
+      api.registerGatewayMethod(
+        "dashboard-valid.refresh",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [{ id: "items", method: "dashboard-valid.items", description: "List items" }],

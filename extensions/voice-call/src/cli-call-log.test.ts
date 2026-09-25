@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -142,7 +143,7 @@ describe("voice-call diagnostic stream ownership", () => {
     });
     const read = vi.spyOn(fs, "readSync");
     await expect(command("tail", "--since", "0")).rejects.toBe(stopped);
-    expect(Buffer.concat(output)).toEqual(Buffer.concat([bytes, Buffer.from("\n")]));
+    assert.deepStrictEqual(Buffer.concat(output), Buffer.concat([bytes, Buffer.from("\n")]));
     expect(read.mock.calls.every(([, buffer]) => buffer.byteLength <= 64 * 1024)).toBe(true);
   });
 
@@ -185,9 +186,12 @@ describe("voice-call diagnostic stream ownership", () => {
     }
     const fd = opened.value;
     expect(fs.fstatSync(fd).isFile()).toBe(true);
+    // The OS can reuse fd before the command continuation resumes; observe the real close.
+    const close = vi.spyOn(fs, "closeSync");
     process.stdout.emit("error", failed);
     expect(await running).toBe(failed);
-    expect(() => fs.fstatSync(fd)).toThrow();
+    expect(close).toHaveBeenCalledExactlyOnceWith(fd);
+    expect(close).toHaveReturnedWith(undefined);
     expect(sleepMock).not.toHaveBeenCalled();
     expect(process.stdout.listenerCount("drain")).toBe(drainListeners);
   });

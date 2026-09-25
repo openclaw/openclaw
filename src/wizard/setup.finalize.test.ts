@@ -10,11 +10,20 @@ import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  expectNoteContains,
+  expectNoteTitleNotCalled,
+  withPlatform,
+  expectNoteNotContains,
+} from "./setup.finalize.test-support.js";
 
 type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
+
+const readPin = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
@@ -66,7 +75,7 @@ const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   })),
 );
 const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
-  vi.fn<() => DefaultModelCatalogFacts>(() => ({ found: true })),
+  vi.fn<() => DefaultModelCatalogFacts>(() => ({})),
 );
 const loadModelCatalog = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
@@ -91,8 +100,6 @@ const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
-    token: undefined,
-    tokenRefConfigured: true,
     warnings: [],
   })),
 );
@@ -395,46 +402,9 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
   return call[argIndex];
 }
 
-function expectNoteContains(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  expected: string,
-  title: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[0].includes(expected) && call[1] === title)).not.toEqual([]);
-}
-
-function expectNoteTitleNotCalled(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  title: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[1] === title)).toEqual([]);
-}
-
-function expectNoteNotContains(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  unexpected: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[0].includes(unexpected))).toEqual([]);
-}
-
-async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: platform,
-  });
-  try {
-    return await fn();
-  } finally {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
-}
-
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
+    readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset();
@@ -515,7 +485,7 @@ describe("finalizeSetupWizard", () => {
       hasAuth: true,
     });
     resolveDefaultModelCatalogFacts.mockReset();
-    resolveDefaultModelCatalogFacts.mockReturnValue({ found: true });
+    resolveDefaultModelCatalogFacts.mockReturnValue({});
     loadModelCatalog.mockReset();
     loadModelCatalog.mockResolvedValue([]);
   });
@@ -840,7 +810,7 @@ describe("finalizeSetupWizard", () => {
       { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" },
     ];
     loadModelCatalog.mockResolvedValueOnce(catalog);
-    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ found: true, observedRoutes });
+    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ observedRoutes });
     const prompter = buildWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -1594,8 +1564,6 @@ describe("finalizeSetupWizard", () => {
       });
       if (failure === "auth") {
         resolveGatewayInstallToken.mockImplementationOnce(async () => ({
-          token: undefined,
-          tokenRefConfigured: true,
           warnings: [],
           unavailableReason: "replacement auth unavailable",
         }));
@@ -1614,48 +1582,68 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
-  it("passes the existing service intact to the reinstall owner", async () => {
-    let installed = true;
-    gatewayServiceIsLoaded.mockImplementation(async () => installed);
-    gatewayServiceUninstall.mockImplementationOnce(async () => {
-      installed = false;
-    });
-    gatewayServiceInstall.mockImplementationOnce(async () => {
-      expect(installed).toBe(true);
-    });
-    const managedDefinition = {
-      programArguments: [
-        "/usr/bin/node",
-        "--max-old-space-size=24576",
-        "--require=/tmp/service-preload.js",
-        "/usr/local/bin/openclaw",
-        "gateway",
-      ],
-      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
-    };
-    const existingCommand = {
-      programArguments: ["/operator/drop-in-wrapper", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
-    gatewayServiceReadCommand.mockResolvedValue(existingCommand);
-    const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
+  it.each([undefined, "node", "bun"] as const)(
+    "passes installed pin intent to the reinstall owner (explicit=%s)",
+    async (daemonRuntime) => {
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const expected = { revision: "pin-version", stored: true, pin };
+      readPin.mockReturnValue(expected);
+      let installed = true;
+      gatewayServiceIsLoaded.mockImplementation(async () => installed);
+      gatewayServiceUninstall.mockImplementationOnce(async () => {
+        installed = false;
+      });
+      gatewayServiceInstall.mockImplementationOnce(async () => {
+        expect(installed).toBe(true);
+      });
+      const managedDefinition = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "--require=/tmp/service-preload.js",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+      };
+      const existingCommand = {
+        programArguments: ["/operator/drop-in-wrapper", "gateway"],
+        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
+      gatewayServiceReadCommand.mockResolvedValue(existingCommand);
+      const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
 
-    const result = await ensureGatewayServiceForOnboarding(
-      createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
-    );
+      const result = await ensureGatewayServiceForOnboarding(
+        createFinalizeArgs("quickstart", {
+          opts: { installDaemon: true, daemonRuntime },
+          prompter,
+        }),
+      );
 
-    expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingCommand,
-      }),
-    );
-    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
-    expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-    expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-  });
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommand,
+        }),
+      );
+      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
+      expect(gatewayServiceInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+        }),
+      );
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: daemonRuntime ?? "bun",
+          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+        }),
+      );
+      expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["skip", "restart"])("does not turn %s into an implicit reinstall", async (action) => {
     gatewayServiceIsLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);
@@ -1669,6 +1657,7 @@ describe("finalizeSetupWizard", () => {
       status: "ready",
       action: action === "restart" ? "restarted" : "reused",
     });
+    expect(readPin).not.toHaveBeenCalled();
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);

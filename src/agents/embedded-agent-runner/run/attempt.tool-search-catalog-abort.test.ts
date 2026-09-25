@@ -8,10 +8,15 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentTool } from "../../runtime/index.js";
+import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
@@ -70,26 +75,30 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   });
 
   it.each([
-    { mode: "direct spawn", toolName: "sessions_spawn", code: undefined },
-    { mode: "direct wait", toolName: "agents_wait", code: undefined },
+    { mode: "direct spawn", toolName: "sessions_spawn", code: undefined, failurePhase: undefined },
+    { mode: "direct wait", toolName: "agents_wait", code: undefined, failurePhase: undefined },
     {
       mode: "raw catalog spawn",
+      failurePhase: "bridge",
       toolName: "sessions_spawn",
       code: 'return await sessions_spawn({ task: "inspect", collect: true });',
     },
     {
       mode: "raw catalog wait",
+      failurePhase: "bridge",
       toolName: "agents_wait",
       code: 'return await agents_wait({ ids: ["child"] });',
     },
     {
       mode: "joined Code Mode",
+      failurePhase: "guest",
       toolName: "sessions_spawn",
       code: 'return await agents.run("inspect");',
     },
   ])(
     "does not enter the original preparer or action through denied $mode",
-    async ({ toolName, code }) => {
+    async ({ toolName, code, failurePhase }) => {
+      const sessionManager = SessionManager.inMemory();
       const execute = vi.fn(async () => ({ content: [], details: {} }));
       const prepare = vi.fn(async (args: unknown) => args);
       const native =
@@ -101,8 +110,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       const source = wrapToolWithBeforeToolCallHook(native);
       expect(getInternalToolExecutionPreparer(source)).toBeDefined();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue([source]);
-      const observed: AssistantMessage["content"][] = [];
-      const outcomes: Array<{ toolName: string; isError: boolean }> = [];
+      const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: "agent:main:main",
@@ -119,6 +127,10 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           let turn = 0;
           const agent = new Agent({
             initialState: { model: options.model, tools: allTools },
+            // AgentSession's result middleware normally classifies structured tool failures.
+            afterToolCall: async ({ result, isError }) => ({
+              isError: isError || isToolResultError(result),
+            }),
             streamFn: () => {
               const content: AssistantMessage["content"] =
                 turn++ === 0
@@ -128,28 +140,20 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                         id: "denied",
                         name: code ? "exec" : toolName,
                         arguments: code
-                          ? { code }
+                          ? { title: "Inspect the denied catalog action", code }
                           : toolName === "sessions_spawn"
                             ? { task: "inspect" }
                             : { ids: ["child"] },
                       },
                     ]
                   : [{ type: "text", text: "Denied as expected." }];
-              observed.push(content);
               const message: AssistantMessage = {
                 role: "assistant",
                 content,
                 api: options.model.api,
                 provider: options.model.provider,
                 model: options.model.id,
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
+                usage: createZeroUsageFixture(),
                 stopReason: turn === 1 ? "toolUse" : "stop",
                 timestamp: Date.now(),
               };
@@ -187,12 +191,45 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         attemptOverrides: {
           disableTools: false,
           toolExecutionAllow: ["read"],
+          sessionManager,
           config: { tools: { codeMode: Boolean(code), toolSearch: false } },
         },
       });
-      expect(observed.length).toBeGreaterThanOrEqual(1);
-      expect(outcomes).toContainEqual(
-        expect.objectContaining({ toolName: code ? "exec" : toolName, isError: true }),
+      const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
+      expect(outcome).toMatchObject({ isError: true });
+      const expectedError =
+        failurePhase === "guest" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE;
+      expect(outcome?.result).toMatchObject({
+        content: [expect.objectContaining({ text: expect.stringContaining(expectedError) })],
+      });
+      if (code) {
+        expect(outcome?.result).toMatchObject({
+          details: {
+            status: "failed",
+            failurePhase,
+            bridgeDispatchStarted: failurePhase === "bridge",
+            error: expect.stringContaining(expectedError),
+          },
+        });
+      }
+      const activities = sessionManager.getEntries().flatMap((entry) => {
+        const activity = entry.type === "message" && readNestedToolActivity(entry.message);
+        return activity ? [activity.details] : [];
+      });
+      expect(activities).toEqual(
+        failurePhase === "bridge"
+          ? [
+              expect.objectContaining({
+                toolName,
+                isError: true,
+                result: expect.objectContaining({
+                  content: [
+                    expect.objectContaining({ text: expect.stringContaining(expectedError) }),
+                  ],
+                }),
+              }),
+            ]
+          : [],
       );
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
@@ -200,39 +237,14 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   );
 
   it.each([
-    {
-      mode: "code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-tools",
-      tools: { toolSearch: { enabled: true, mode: "tools" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-directory",
-      tools: { toolSearch: { enabled: true, mode: "directory" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "cancelled-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: false,
-    },
-    {
-      mode: "timed-out-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: true,
-    },
+    ["code-mode", { codeMode: { enabled: true } }, false, false],
+    ["tool-search-tools", { toolSearch: { enabled: true, mode: "tools" } }, false, false],
+    ["tool-search-directory", { toolSearch: { enabled: true, mode: "directory" } }, false, false],
+    ["cancelled-code-mode", { codeMode: { enabled: true } }, true, false],
+    ["timed-out-code-mode", { codeMode: { enabled: true } }, true, true],
   ] as const)(
-    "clears the $mode run catalog when preparation fails or is cancelled",
-    async ({ mode, tools, cancel, timeout }) => {
+    "clears the %s run catalog when preparation fails or is cancelled",
+    async (mode, tools, cancel, timeout) => {
       const runId = `run-catalog-diagnostics-${mode}`;
       const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
       if (timeout) {

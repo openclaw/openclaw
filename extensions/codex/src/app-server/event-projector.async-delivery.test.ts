@@ -34,6 +34,7 @@ describe("CodexAppServerEventProjector async delivery", () => {
           phase: "final_answer",
           delivery: "async",
           text: "This restricted update must not reach a user.",
+          questions: [{ title: "Should I continue?", options: ["Yes", "No"] }],
         },
       }),
     );
@@ -54,133 +55,179 @@ describe("CodexAppServerEventProjector async delivery", () => {
     ).not.toContain("restricted update");
   });
 
-  it("persists async delivery once without selecting it as the final answer", async () => {
-    const onAgentEvent = vi.fn();
-    const onBlockReply = vi.fn();
-    const params = await createParams();
-    const sessionId = expectDefined(params.sessionId, "Codex async delivery test session");
-    const storePath = `${params.workspaceDir}/openclaw-agent.sqlite`;
-    params.sessionKey = "agent:main:session-1";
-    const sessionTarget = {
-      agentId: "main",
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-    };
-    params.sessionTarget = sessionTarget;
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey: params.sessionKey,
-      storePath,
-      entry: {
-        sessionFile: params.sessionFile,
-        sessionId,
-        updatedAt: Date.now(),
-      },
-    });
-    const projector = await createProjector(
-      {
-        ...params,
-        onAgentEvent,
-        onBlockReply,
-      },
-      {
-        onAsyncDelivery: async (delivery) => {
-          return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
-            params: { ...params, onAgentEvent, onBlockReply },
-            cwd: params.workspaceDir,
-            threadId: "thread-1",
-            turnId: TURN_ID,
-            ...delivery,
-          });
-        },
-      },
-    );
-
+  it.each([
+    {
+      name: "too many options",
+      questions: [{ title: "Pick a format", options: ["A", "B", "C", "D", "E"] }],
+    },
+    { name: "a blank title", questions: [{ title: " " }] },
+    { name: "an oversized title", questions: [{ title: "Q".repeat(4_097) }] },
+  ])("keeps the text fallback for $name", async ({ questions }) => {
+    const onAsyncDelivery = vi.fn().mockResolvedValue("settled");
+    const projector = await createProjector(undefined, { onAsyncDelivery });
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
         item: {
           type: "agentMessage",
-          id: "terminal-answer",
+          id: "fallback-question",
           phase: "final_answer",
-          text: "Finished.",
+          delivery: "async",
+          text: "Complete question and all choices.",
+          questions,
         },
       }),
     );
-    const asyncCompletion = forCurrentTurn("item/completed", {
-      item: {
-        type: "agentMessage",
-        id: "async-update",
-        phase: "final_answer",
-        delivery: "async",
-        text: "Background agent update.",
-      },
-    });
-    await projector.handleNotification(asyncCompletion);
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply).toHaveBeenCalledWith(
-      { text: "Background agent update." },
-      {
-        deliveryIntentId: `block-reply:v1:codex-app-server:thread-1:${TURN_ID}:async-update`,
-      },
-    );
-    await projector.handleNotification(asyncCompletion);
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    await projector.handleNotification(
-      turnCompleted([
+    expect(onAsyncDelivery).toHaveBeenCalledOnce();
+    const delivery = onAsyncDelivery.mock.calls[0]?.[0];
+    expect(delivery.text).toBe("Complete question and all choices.");
+    expect(delivery.message.openclawAsyncDelivery).toEqual({ itemId: "fallback-question" });
+  });
+
+  it.each([
+    { name: "message", questions: undefined },
+    {
+      name: "questions",
+      questions: [
+        { title: "Which format should I use?", options: ["Markdown", "Plain text"] },
+        { title: "Who is the audience?" },
+      ],
+    },
+  ])(
+    "persists async $name once without selecting it as the final answer",
+    async ({ questions }) => {
+      const onAgentEvent = vi.fn();
+      const onBlockReply = vi.fn();
+      const params = await createParams();
+      const sessionId = expectDefined(params.sessionId, "Codex async delivery test session");
+      const storePath = `${params.workspaceDir}/openclaw-agent.sqlite`;
+      params.sessionKey = "agent:main:session-1";
+      const sessionTarget = {
+        agentId: "main",
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      };
+      params.sessionTarget = sessionTarget;
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: params.sessionKey,
+        storePath,
+        entry: {
+          sessionFile: params.sessionFile,
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      });
+      const projector = await createProjector(
         {
+          ...params,
+          onAgentEvent,
+          onBlockReply,
+        },
+        {
+          onAsyncDelivery: async (delivery) => {
+            return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
+              params: { ...params, onAgentEvent, onBlockReply },
+              cwd: params.workspaceDir,
+              threadId: "thread-1",
+              turnId: TURN_ID,
+              ...delivery,
+            });
+          },
+        },
+      );
+
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "agentMessage",
+            id: "terminal-answer",
+            phase: "final_answer",
+            text: "Finished.",
+          },
+        }),
+      );
+      const asyncCompletion = forCurrentTurn("item/completed", {
+        item: {
           type: "agentMessage",
           id: "async-update",
           phase: "final_answer",
           delivery: "async",
           text: "Background agent update.",
+          ...(questions ? { questions } : {}),
         },
+      });
+      await projector.handleNotification(asyncCompletion);
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledWith(
+        { text: "Background agent update." },
         {
-          type: "agentMessage",
-          id: "terminal-answer",
-          phase: "final_answer",
-          text: "Finished.",
+          deliveryIntentId: `block-reply:v1:codex-app-server:thread-1:${TURN_ID}:async-update`,
         },
-      ]),
-    );
-    expect(onBlockReply).toHaveBeenCalledOnce();
+      );
+      await projector.handleNotification(asyncCompletion);
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      await projector.handleNotification(
+        turnCompleted([
+          {
+            type: "agentMessage",
+            id: "async-update",
+            phase: "final_answer",
+            delivery: "async",
+            text: "Background agent update.",
+            ...(questions ? { questions } : {}),
+          },
+          {
+            type: "agentMessage",
+            id: "terminal-answer",
+            phase: "final_answer",
+            text: "Finished.",
+          },
+        ]),
+      );
+      expect(onBlockReply).toHaveBeenCalledOnce();
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["Finished."]);
-    expect(result.currentAttemptAssistant?.content).toEqual([{ type: "text", text: "Finished." }]);
-    const asyncMessages = result.messagesSnapshot.filter(
-      (message) =>
-        (message as { openclawAsyncDelivery?: { itemId?: unknown } }).openclawAsyncDelivery
-          ?.itemId === "async-update",
-    );
-    expect(asyncMessages).toHaveLength(1);
-    expect(asyncMessages[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Background agent update." }],
-      openclawAsyncDelivery: { itemId: "async-update" },
-      __openclaw: { mirrorIdentity: `${TURN_ID}:async:async-update` },
-    });
-    const transcriptMessages = (await readSessionTranscriptEvents(sessionTarget))
-      .map((event) => (event as { message?: unknown }).message)
-      .filter((message): message is Record<string, unknown> => Boolean(message));
-    expect(
-      transcriptMessages.filter(
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual(["Finished."]);
+      expect(result.currentAttemptAssistant?.content).toEqual([
+        { type: "text", text: "Finished." },
+      ]);
+      const asyncMessages = result.messagesSnapshot.filter(
+        (message) =>
+          (message as { openclawAsyncDelivery?: { itemId?: unknown } }).openclawAsyncDelivery
+            ?.itemId === "async-update",
+      );
+      expect(asyncMessages).toHaveLength(1);
+      expect(asyncMessages[0]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Background agent update." }],
+        openclawAsyncDelivery: { itemId: "async-update", ...(questions ? { questions } : {}) },
+        __openclaw: { mirrorIdentity: `${TURN_ID}:async:async-update` },
+      });
+      const transcriptMessages = (await readSessionTranscriptEvents(sessionTarget))
+        .map((event) => (event as { message?: unknown }).message)
+        .filter((message): message is Record<string, unknown> => Boolean(message));
+      const persisted = transcriptMessages.filter(
         (message) =>
           (message.openclawAsyncDelivery as { itemId?: unknown } | undefined)?.itemId ===
           "async-update",
-      ),
-    ).toHaveLength(1);
-    expect(
-      onAgentEvent.mock.calls
-        .map((call) => call[0])
-        .filter(
-          (event) =>
-            event.stream === "item" &&
-            event.data.itemId === "async-update" &&
-            event.data.kind === "answer_candidate",
-        ),
-    ).toEqual([]);
-  });
+      );
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]).toMatchObject({
+        openclawAsyncDelivery: { itemId: "async-update", ...(questions ? { questions } : {}) },
+      });
+      expect(
+        onAgentEvent.mock.calls
+          .map((call) => call[0])
+          .filter(
+            (event) =>
+              event.stream === "item" &&
+              event.data.itemId === "async-update" &&
+              event.data.kind === "answer_candidate",
+          ),
+      ).toEqual([]);
+    },
+  );
 
   it("settles sessionless async delivery once across completion and terminal replay", async () => {
     const params = await createParams();
@@ -293,6 +340,7 @@ describe("CodexAppServerEventProjector async delivery", () => {
         phase: "final_answer",
         delivery: "async",
         text: "Delivered while the client was reconnecting.",
+        questions: [{ title: "What should I do next?", options: null }],
       },
       {
         type: "agentMessage",
@@ -327,6 +375,10 @@ describe("CodexAppServerEventProjector async delivery", () => {
           role: "assistant",
           content: [{ type: "text", text: "Delivered while the client was reconnecting." }],
           __openclaw: { mirrorIdentity: `${TURN_ID}:async:async-reconnect` },
+          openclawAsyncDelivery: {
+            itemId: "async-reconnect",
+            questions: [{ title: "What should I do next?" }],
+          },
         },
       ]);
     }

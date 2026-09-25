@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
-import { createMeetingChromeTransport } from "./chrome-transport.js";
+import {
+  createMeetingChromeTransport,
+  createMeetingChromeTransportWithExternalAudio,
+} from "./chrome-transport.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
 import type {
@@ -125,6 +128,10 @@ const meetingTranscriptLineSchema = z
     text,
   }));
 
+const meetingTranscriptLinesSchema = z
+  .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+  .transform((lines) => lines.filter((line) => line !== null));
+
 const meetingBrowserStatusSchema = z.looseObject({
   inCall: optionalBrowserBoolean,
   micMuted: optionalBrowserBoolean,
@@ -137,11 +144,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   lastCaptionAt: optionalBrowserString,
   lastCaptionSpeaker: optionalBrowserString,
   lastCaptionText: optionalBrowserString,
-  recentTranscript: z
-    .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
-    .transform((lines) => lines.filter((line) => line !== null))
-    .optional()
-    .catch(undefined),
+  recentTranscript: meetingTranscriptLinesSchema.optional().catch(undefined),
   audioInputRouted: optionalBrowserBoolean,
   audioInputDeviceLabel: optionalBrowserString,
   audioInputRouteError: optionalBrowserString,
@@ -267,24 +270,7 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
     typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
       ? Math.max(0, payload.droppedLines)
       : 0;
-  const lines = Array.isArray(payload.lines)
-    ? payload.lines.flatMap((value) => {
-        if (!value || typeof value !== "object") {
-          return [];
-        }
-        const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-        if (typeof line.text !== "string" || !line.text.trim()) {
-          return [];
-        }
-        return [
-          {
-            ...(typeof line.at === "string" ? { at: line.at } : {}),
-            ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
-            text: line.text,
-          },
-        ];
-      })
-    : [];
+  const lines = meetingTranscriptLinesSchema.catch([]).parse(payload.lines);
   return {
     droppedLines,
     ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
@@ -383,6 +369,7 @@ function createMeetingPlatformAdapter<
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
   createPluginChromeTransport: createMeetingPluginChromeTransport,
   createPluginConfigSchema: createMeetingPluginConfigSchema,

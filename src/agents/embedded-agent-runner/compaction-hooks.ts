@@ -4,12 +4,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchIndexConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
+import {
+  estimateCompactedRequestTokens,
+  type CompactionRequestBudget,
+} from "../sessions/compaction/request-budget.js";
 import { log } from "./logger.js";
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
@@ -125,49 +129,9 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
   params.assertActive?.();
 }
 
-/** Narrow adapter over the global hook runner methods used by compaction. */
-type CompactionHookRunner = {
-  hasHooks?: (hookName?: string) => boolean;
-  runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
-    },
-  ) => Promise<void> | void;
-  runAfterCompaction?: (
-    metrics: {
-      messageCount: number;
-      tokenCount?: number;
-      compactedCount: number;
-      sessionFile: string;
-    },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
-    },
-  ) => Promise<void> | void;
-};
-
-/** Converts the global hook runner into the compaction-specific hook shape. */
-export function asCompactionHookRunner(
-  hookRunner: ReturnType<typeof getGlobalHookRunner> | null | undefined,
-): CompactionHookRunner | null {
-  if (!hookRunner) {
-    return null;
-  }
-  return {
-    hasHooks: (hookName?: string) => hookRunner.hasHooks?.(hookName as never) ?? false,
-    runBeforeCompaction: hookRunner.runBeforeCompaction?.bind(hookRunner),
-    runAfterCompaction: hookRunner.runAfterCompaction?.bind(hookRunner),
-  };
-}
+type CompactionHookRunner = Partial<
+  Pick<HookRunner, "hasHooks" | "runBeforeCompaction" | "runAfterCompaction">
+>;
 
 function estimateTokenCountSafe(
   messages: AgentMessage[],
@@ -284,7 +248,14 @@ export function estimateTokensAfterCompaction(params: {
   observedTokenCount?: number;
   fullSessionTokensBefore: number;
   estimateTokensFn: (message: AgentMessage) => number;
+  requestBudget?: CompactionRequestBudget;
 }) {
+  if (params.requestBudget) {
+    return estimateCompactedRequestTokens(params.messagesAfter, {
+      ...params.requestBudget,
+      pendingTokens: 0,
+    });
+  }
   const tokensAfter = estimateTokenCountSafe(params.messagesAfter, params.estimateTokensFn);
   if (tokensAfter === undefined) {
     return undefined;

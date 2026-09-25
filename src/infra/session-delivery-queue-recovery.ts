@@ -1,4 +1,5 @@
 // Recovers queued session deliveries after process crashes.
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -15,6 +16,8 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+} from "./session-delivery-queue-storage.js";
+import {
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -23,15 +26,16 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type SessionDeliverySettledOutcome,
-} from "./session-delivery-queue-storage.js";
+} from "./session-delivery-queue.records.js";
 
 export type DeliverSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
-  context?: { stateDir?: string },
+  context: { queueContext: OpenClawStateWorkerContext },
 ) => Promise<void>;
 export type SettleSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
+  queueContext: OpenClawStateWorkerContext,
 ) => Promise<void> | void;
 
 export interface SessionDeliveryRecoveryLogger {
@@ -49,9 +53,11 @@ async function notifySessionDeliverySettled(params: {
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
+  queueContext: OpenClawStateWorkerContext;
 }): Promise<boolean> {
   try {
-    await params.onSettled?.(params.entry, params.outcome);
+    params.queueContext.admission.assertCurrent();
+    await params.onSettled?.(params.entry, params.outcome, params.queueContext);
     return true;
   } catch (error) {
     params.log.error(
@@ -66,7 +72,7 @@ async function finalizeSessionDeliverySettlement(params: {
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
 }): Promise<boolean> {
   const callbackSettled = await notifySessionDeliverySettled(params);
   if (!callbackSettled) {
@@ -74,9 +80,9 @@ async function finalizeSessionDeliverySettlement(params: {
   }
   try {
     if (params.outcome === "recovered") {
-      await completeSessionDelivery(params.entry.id, params.stateDir);
+      await completeSessionDelivery(params.entry.id, params.queueContext);
     } else {
-      await moveSessionDeliveryToFailed(params.entry.id, params.stateDir);
+      await moveSessionDeliveryToFailed(params.entry.id, params.queueContext);
     }
     return true;
   } catch (error) {
@@ -121,7 +127,7 @@ function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: numbe
 type SessionDeliveryDrainContext = {
   logLabel: string;
   log: SessionDeliveryRecoveryLogger;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
   onSettled?: SettleSessionDeliveryFn;
 };
@@ -141,7 +147,7 @@ async function processPendingSessionDelivery(opts: {
       log: context.log,
       onSettled: context.onSettled,
       outcome: pendingSettlementOutcome,
-      stateDir: context.stateDir,
+      queueContext: context.queueContext,
     });
     return { status: pendingSettlementOutcome, finalized };
   }
@@ -149,13 +155,13 @@ async function processPendingSessionDelivery(opts: {
     !canReconcileStartedAgentAttemptAtRetryLimit(entry) &&
     entry.retryCount >= resolveSessionDeliveryMaxRetries(entry)
   ) {
-    await markSessionDeliverySettlement(entry, "moved-to-failed", context.stateDir);
+    await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
     const finalized = await finalizeSessionDeliverySettlement({
       entry,
       log: context.log,
       onSettled: context.onSettled,
       outcome: "moved-to-failed",
-      stateDir: context.stateDir,
+      queueContext: context.queueContext,
     });
     return { status: "max-retries", finalized };
   }
@@ -175,15 +181,16 @@ async function processPendingSessionDelivery(opts: {
 
   let result: SessionDeliverySettledOutcome;
   try {
-    await context.deliver(entry, { stateDir: context.stateDir });
+    context.queueContext.admission.assertCurrent();
+    await context.deliver(entry, { queueContext: context.queueContext });
     // Keep metadata pending until owner cleanup succeeds. Recovery sees this
     // marker and finalizes without replaying the external side effect.
-    await markSessionDeliverySettlement(entry, "recovered", context.stateDir);
+    await markSessionDeliverySettlement(entry, "recovered", context.queueContext);
     result = "recovered";
   } catch (err) {
     if (err instanceof SessionDeliveryDeadLetteredError) {
       try {
-        await markSessionDeliverySettlement(entry, "moved-to-failed", context.stateDir);
+        await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
       } catch (markError) {
         if (markError instanceof SessionDeliveryAcknowledgementFinalizeError) {
           return { status: "deferred" };
@@ -204,7 +211,7 @@ async function processPendingSessionDelivery(opts: {
         return { status: "failed" };
       }
       try {
-        await failSessionDelivery(entry.id, errMsg, context.stateDir, {
+        await failSessionDelivery(entry.id, errMsg, context.queueContext, {
           releaseAttemptOwnership: err instanceof SessionDeliverySafeRetryError,
         });
       } catch (failErr) {
@@ -223,7 +230,7 @@ async function processPendingSessionDelivery(opts: {
     log: context.log,
     onSettled: context.onSettled,
     outcome: result,
-    stateDir: context.stateDir,
+    queueContext: context.queueContext,
   });
   return { status: result, finalized };
 }
@@ -258,7 +265,7 @@ export async function drainPendingSessionDelivery(
   opts: SessionDeliveryDrainContext & { id: string; bypassBackoff?: boolean },
 ): Promise<QueuedSessionDelivery | null> {
   const claim = await recoveryCoordinator.withClaim(opts.id, async () => {
-    const entry = await loadPendingSessionDelivery(opts.id, opts.stateDir);
+    const entry = await loadPendingSessionDelivery(opts.id, opts.queueContext);
     if (!entry) {
       return null;
     }
@@ -266,11 +273,13 @@ export async function drainPendingSessionDelivery(
     if (result.status === "already-gone" || ("finalized" in result && result.finalized)) {
       return null;
     }
-    return result.status === "backoff" ? entry : loadPendingSessionDelivery(opts.id, opts.stateDir);
+    return result.status === "backoff"
+      ? entry
+      : loadPendingSessionDelivery(opts.id, opts.queueContext);
   });
   if (claim.status === "claimed-by-other-owner") {
     opts.log.info(`${opts.logLabel}: entry ${opts.id} is already being recovered`);
-    return loadPendingSessionDelivery(opts.id, opts.stateDir);
+    return loadPendingSessionDelivery(opts.id, opts.queueContext);
   }
   return claim.value;
 }
@@ -280,11 +289,11 @@ export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
 }): Promise<DeliveryRecoverySummary> {
-  const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
+  const pending = (await loadPendingSessionDeliveries(opts.queueContext)).filter(
     (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
   );
   if (pending.length === 0) {
@@ -311,7 +320,7 @@ export async function recoverPendingSessionDeliveries(opts: {
   };
   await recoveryCoordinator.scan({
     entries: pending,
-    loadEntry: (id) => loadPendingSessionDelivery(id, opts.stateDir),
+    loadEntry: (id) => loadPendingSessionDelivery(id, opts.queueContext),
     deadlineMs: deadline,
     onDeadlineExceeded,
     onEntry: async (currentEntry) => {

@@ -5,7 +5,7 @@ import baseConfig from "./vitest.config.ts";
 import { RepoE2eSequencer } from "./vitest.e2e.sequencer.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
-import { uiE2eRealGatewayTestFiles } from "./vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
 function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
   const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);
@@ -39,6 +39,7 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
     ...base,
     test: {
       ...baseTest,
+      pool: "forks",
       maxWorkers: e2eWorkers,
       reporters: [...sharedVitestConfig.test.reporters, "default"],
       sequence: { sequencer: RepoE2eSequencer },
@@ -57,7 +58,6 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
         "packages/**/*.e2e.test.ts",
         "src/gateway/gateway.test.ts",
         "src/gateway/server.startup-matrix-migration.integration.test.ts",
-        "src/gateway/sessions-history-http.test.ts",
         BUNDLED_PLUGIN_E2E_TEST_GLOB,
       ],
       exclude,

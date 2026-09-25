@@ -35,7 +35,6 @@ import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
-  ackDelivery,
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
@@ -1174,6 +1173,7 @@ describe("delivery-queue recovery", () => {
       channel: "demo-channel-a",
       cfg: baseCfg,
       allowBootstrap: true,
+      assertCurrent: expect.any(Function),
     });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput.channel).toBe("demo-channel-a");
@@ -1332,10 +1332,9 @@ describe("delivery-queue recovery", () => {
       retryCount: 0,
       availableAt: Date.now() - 1,
     });
-    const reconcileUnknownSend = vi
-      .fn()
-      .mockResolvedValue(reconciledSent("reconciled-permanent-message"));
-    installUnknownSendAdapter(reconcileUnknownSend);
+    const reconcileUnknownSend = installUnknownSendResult(
+      reconciledSent("reconciled-permanent-message"),
+    );
     const deliver = vi.fn();
     const { result } = await runRecovery({ deliver });
     expect(result).toMatchObject({ recovered: 1, failed: 0 });
@@ -1751,8 +1750,8 @@ describe("delivery-queue recovery", () => {
       queuePolicy: "best_effort",
       payloads: [{ text: "secret" }],
     });
-    const deliver = vi.fn(async (params: PayloadOutcomeSink) => {
-      await ackDelivery(id, tmpDir());
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      await params.deliveryQueueOwner!.ack();
       reportPayloadFailure(params, new Error("provider rejected send"));
       throw new Error("provider rejected send");
     });

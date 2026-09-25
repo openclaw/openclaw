@@ -132,13 +132,16 @@ function createMarkerSession(options: { existingPage?: boolean; navigateError?: 
       connect: vi.fn(),
     },
     transport: { pid: 123 },
+    closeTransport() {
+      return this.client.close();
+    },
     ready: Promise.resolve(),
     routing: {
       sessionNonce: "000000000001",
       withOperationLock: createSerialLock(),
       targetIdByPageId: new Map<number, string>(),
       nextTargetHandleId: 1,
-      snapshotRefById: new Map(),
+      snapshotsByTarget: new Map(),
       nextSnapshotRefId: 1,
     },
   };

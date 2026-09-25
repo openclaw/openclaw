@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -17,11 +18,7 @@ const sessionId = "93be7617-9d1e-4091-aa0f-33332aff3321";
 
 suite.define(() => {
   it("copies the session ID from the session menu", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
       origin: new URL(suite.server.baseUrl).origin,
     });
@@ -48,7 +45,7 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       await expect.poll(() => row.count()).toBe(1);
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu: Copy session ID proof" }).click();
+      await row.click({ button: "right" });
 
       const menuHost = page.locator("openclaw-session-menu");
       await openSessionMenuSubmenu(page, "Copy");

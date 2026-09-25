@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Proves hosted npm installation plus dedicated-prefix source installation.
 set -euo pipefail
 
@@ -43,7 +47,7 @@ bash /tmp/openclaw-source/scripts/install-cli.sh \
   --version "$OPENCLAW_SOURCE_SHA" \
   --no-git-update \
   --prefix /tmp/openclaw-prefix \
-  --node-version 24.19.0 \
+  --node-version 24.21.0 \
   --no-onboard
 
 prefix_node=/tmp/openclaw-prefix/tools/node/bin/node

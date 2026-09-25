@@ -146,8 +146,13 @@ describe("browser plugin", () => {
     });
   });
 
-  it("initializes the shared durable session-tab registry without loading browser control", () => {
+  it("initializes the durable tab registry without loading browser control or Gateway runtime", () => {
     const { api, openSyncKeyedStore } = createApi();
+    Object.defineProperty(api.runtime, "gateway", {
+      get() {
+        throw new Error("Gateway runtime must stay lazy during Browser registration");
+      },
+    });
     registerBrowserPlugin(api);
 
     expect(openSyncKeyedStore).toHaveBeenCalledWith({
@@ -170,6 +175,9 @@ describe("browser plugin", () => {
         "browser.cdpUrl",
         "browser.noSandbox",
         "browser.extraArgs",
+        "browser.snapshotDefaults",
+        "browser.tabCleanup",
+        "browser.allowSystemProfileImport",
       ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
@@ -501,7 +509,7 @@ describe("browser plugin", () => {
     const { api, registerGatewayMethod } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(registerGatewayMethod).toHaveBeenCalledTimes(2);
     expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
     const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
       method: string;

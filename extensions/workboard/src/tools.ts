@@ -1,20 +1,17 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements tools behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
-import { WorkboardStore } from "./store.js";
+import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   claimTokenField,
   createWorkboardMoveTool,
   strictObject,
+  workspaceField,
 } from "./tools-card-mutations.js";
 import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
@@ -147,12 +144,11 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
   };
 }
 
+// Card payloads stay nested under `card`: the host grades a tool call from
+// reserved keys on `details` (`status`, `ok`, `error`, ...), so a flat card
+// would report every mutation of a blocked card as a failed tool call.
 function redactedCardResult(card: WorkboardCard) {
   return jsonResult({ card: redactClaimToken(card) });
-}
-
-function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(redactClaimToken(card));
 }
 
 function redactedProofResult(card: WorkboardCard) {
@@ -172,11 +168,10 @@ const CardIdSchema = strictObject({
 });
 
 export function createWorkboardTools(params: {
-  api: OpenClawPluginApi;
   context?: OpenClawPluginToolContext;
-  store?: WorkboardStore;
+  store: WorkboardStore;
 }): AnyAgentTool[] {
-  const store = params.store ?? WorkboardStore.openSqlite();
+  const { store } = params;
   const ownerId = contextOwner(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
@@ -202,7 +197,7 @@ export function createWorkboardTools(params: {
     runCardMutation(rawParams, readScopedCardToolParams, mutate);
   const runClaimedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
     runCardMutation(rawParams, readClaimedCardToolParams, mutate);
-  return [
+  const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
       label: "Workboard List",
@@ -265,13 +260,7 @@ export function createWorkboardTools(params: {
         ),
         idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
         skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
-        workspace: Type.Optional(
-          strictObject({
-            kind: Type.String({ description: "scratch, dir, or worktree." }),
-            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-          }),
-        ),
+        workspace: workspaceField(),
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
@@ -358,7 +347,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(
+        return redactedCardResult(
           await store.heartbeat(id, {
             ...scope,
             note: record.note,
@@ -380,7 +369,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(
+        return redactedCardResult(
           await store.releaseClaim(id, {
             ...scope,
             status: record.status,
@@ -399,7 +388,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(await store.addComment(id, { body: record.body }, scope));
+        return redactedCardResult(await store.addComment(id, { body: record.body }, scope));
       },
     },
     {
@@ -555,7 +544,7 @@ export function createWorkboardTools(params: {
       parameters: CardIdSchema,
       execute: async (_toolCallId, rawParams) => {
         const { id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(await store.unblock(id, scope));
+        return redactedCardResult(await store.unblock(id, scope));
       },
     },
     createWorkboardMoveTool({ store, readScopedCardToolParams, redactedCardResult }),
@@ -569,4 +558,9 @@ export function createWorkboardTools(params: {
       redactedCardResult,
     }),
   ];
+  for (const tool of tools) {
+    const execute = tool.execute;
+    tool.execute = (...args) => store.runOperation(() => execute(...args));
+  }
+  return tools;
 }

@@ -19,20 +19,33 @@ import {
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
-const toolPolicyWarningOrder: string[] = [];
+
+/** Provenance travels with the decision; consumers never infer it from log labels. */
+type ToolPolicySource = {
+  kind: "profile" | "config" | "session" | "runtime";
+  path?: string;
+  profile?: string;
+  alsoAllowPath?: string;
+};
+
+export type ConfiguredToolPolicySources = Partial<
+  Record<
+    "profile" | "providerProfile" | "global" | "globalProvider" | "agent" | "agentProvider",
+    ToolPolicySource
+  >
+>;
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = toolPolicyWarningOrder.shift();
+    const oldest = seenToolPolicyWarnings.values().next().value;
     if (oldest) {
       seenToolPolicyWarnings.delete(oldest);
     }
   }
   seenToolPolicyWarnings.add(warning);
-  toolPolicyWarningOrder.push(warning);
   return true;
 }
 
@@ -40,6 +53,7 @@ function rememberToolPolicyWarning(warning: string): boolean {
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
+  source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
@@ -69,6 +83,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   groupPolicy?: ToolPolicyLike;
   senderPolicy?: ToolPolicyLike;
   agentId?: string;
+  sources?: ConfiguredToolPolicySources;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
@@ -78,6 +93,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   return [
     {
       policy: params.profilePolicy,
+      source: params.sources?.profile,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
@@ -85,6 +101,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     },
     {
       policy: params.providerProfilePolicy,
+      source: params.sources?.providerProfile,
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
@@ -95,36 +112,42 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     },
     {
       policy: params.globalPolicy,
+      source: params.sources?.global,
       label: "tools.allow",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
     },
     {
       policy: params.globalProviderPolicy,
+      source: params.sources?.globalProvider,
       label: "tools.byProvider.allow",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
     },
     {
       policy: params.agentPolicy,
+      source: params.sources?.agent,
       label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
     },
     {
       policy: params.agentProviderPolicy,
+      source: params.sources?.agentProvider,
       label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
     },
     {
       policy: params.groupPolicy,
+      source: { kind: "session" },
       label: "group tools.allow",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
     },
     {
       policy: params.senderPolicy,
+      source: { kind: "session" },
       label: "tools.toolsBySender",
       stripPluginOnlyAllowlist: true,
       unavailableCoreToolReason,
@@ -159,10 +182,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    const policy = step.policy;
     const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
         policy,
         pluginGroups,
@@ -185,15 +209,9 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
-        if (
-          shouldWarnAboutUnknownAllowlist({
-            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
-            hasOtherEntries: otherEntries.length > 0,
-          })
-        ) {
+        if (warningEntries.length > 0) {
           const entries = warningEntries.join(", ");
           const suffix = describeUnknownAllowlistSuffix({
-            pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
             hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
             unavailableCoreToolReason: step.unavailableCoreToolReason,
@@ -204,16 +222,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           }
         }
       }
-      policy = resolved.policy;
     }
 
-    const expanded =
-      frozenAllow && policy
-        ? {
-            allow: policy.allow,
-            deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
-          }
-        : expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }
@@ -230,22 +246,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   return filtered;
 }
 
-function shouldWarnAboutUnknownAllowlist(params: {
-  hasGatedCoreEntries: boolean;
-  hasOtherEntries: boolean;
-}): boolean {
-  return params.hasGatedCoreEntries || params.hasOtherEntries;
-}
-
 function describeUnknownAllowlistSuffix(params: {
-  pluginOnlyAllowlist: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
   unavailableCoreToolReason?: string;
 }): string {
-  const preface = params.pluginOnlyAllowlist
-    ? "Allowlist contains only plugin entries; core tools will not be available."
-    : "";
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
   const unavailableCoreDetail = unavailableCoreToolReason
     ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
@@ -253,11 +258,9 @@ function describeUnknownAllowlistSuffix(params: {
   const mixedUnavailableCoreDetail = unavailableCoreToolReason
     ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
     : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
-  const detail =
-    params.hasGatedCoreEntries && params.hasOtherEntries
-      ? mixedUnavailableCoreDetail
-      : params.hasGatedCoreEntries
-        ? unavailableCoreDetail
-        : "These entries won't match any tool unless the plugin is enabled.";
-  return preface ? `${preface} ${detail}` : detail;
+  return params.hasGatedCoreEntries && params.hasOtherEntries
+    ? mixedUnavailableCoreDetail
+    : params.hasGatedCoreEntries
+      ? unavailableCoreDetail
+      : "These entries won't match any tool unless the plugin is enabled.";
 }

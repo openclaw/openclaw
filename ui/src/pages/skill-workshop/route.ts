@@ -3,6 +3,7 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SkillWorkshopRouteData } from "./proposals.ts";
+import { loadSkillWorkshopMode } from "./storage.ts";
 
 export const page = definePage({
   ...routePageSpec("skill-workshop"),
@@ -15,10 +16,11 @@ export const page = definePage({
       `,
     })),
   loader: async (context: ApplicationContext) => {
-    const [{ loadSkillWorkshopPageData }, { createSkillWorkshopState, skillWorkshopRouteData }] =
-      await Promise.all([import("./history-scan-page-controller.ts"), import("./proposals.ts")]);
+    const { loadSkillWorkshopProposals, createSkillWorkshopState, skillWorkshopRouteData } =
+      await import("./proposals.ts");
     const state = createSkillWorkshopState();
-    await loadSkillWorkshopPageData({ state, context, force: true });
+    state.skillWorkshopMode = loadSkillWorkshopMode();
+    await loadSkillWorkshopProposals(state, context, { force: true });
     return skillWorkshopRouteData(state);
   },
 });

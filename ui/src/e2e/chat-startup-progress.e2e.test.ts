@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -21,10 +23,14 @@ suite.define(() => {
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [],
+      deferredMethods: ["exec.approval.list"],
+    });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Inspect this synthetic workspace");
@@ -47,6 +53,12 @@ suite.define(() => {
           args: { command: "pwd" },
         },
       });
+      await gateway.emitGatewayEvent("exec.approval.requested", {
+        id: "synthetic-approval",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: { command: "pwd", agentId: "main", sessionKey, runId },
+      });
       await gateway.emitGatewayEvent("agent", {
         runId,
         sessionKey,
@@ -63,12 +75,21 @@ suite.define(() => {
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
+      // The initial snapshot predates registration; it must retain the newer live approval.
+      await gateway.resolveDeferred("exec.approval.list", []);
+      await expect.poll(() => working.textContent()).toContain("Waiting for approval");
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "preack-pending.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "preack-pending.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
+        );
       }
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "preack-adopted.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "preack-adopted.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
+        );
       }
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
@@ -147,7 +168,10 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.history", { messages: [], sessionInfo, inFlightRun });
       // Capture the observed result before asserting so the red run leaves honest visual evidence.
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "history.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "history.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
+        );
       }
       await expect.poll(() => working.textContent()).not.toContain("Naming worktree…");
       await expect.poll(() => working.textContent()).toContain("Creating worktree…");

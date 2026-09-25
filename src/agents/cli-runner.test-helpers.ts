@@ -16,8 +16,16 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  prepareSystemAgentRunAdmission,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { closeAuthProfileReadPool } from "./auth-profiles/sqlite.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -35,6 +43,27 @@ export type TestCliBackendParams = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   systemPromptWhen?: "first" | "always" | "never";
 };
+
+export function createCliRepositorySkillFixture(dir: string, taskDir: string, managed: boolean) {
+  const canonicalDir = path.join(dir, "canonical", "packages", "app");
+  const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+  );
+  if (managed) {
+    for (const source of [".agents/skills", "skills"]) {
+      const worktreeSkillDir = path.join(taskDir, source, "task-proof");
+      fs.mkdirSync(worktreeSkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(worktreeSkillDir, "SKILL.md"),
+        "---\nname: task-proof\ndescription: Worktree copy\n---\n# Changed instructions\n",
+      );
+    }
+  }
+  return { canonicalDir, skillDir };
+}
 
 export function wrappedPluginSystemContext(text: string) {
   return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
@@ -87,9 +116,7 @@ export function createTestMcpLoopbackClientGrant(params: {
   return { token: "loopback-token", context: structuredClone(params.context) };
 }
 
-export async function createTestMcpLoopbackServer(port = 0) {
-  return { port, close: vi.fn(async () => undefined) };
-}
+export async function createTestMcpLoopbackServer(): Promise<void> {}
 
 export function buildDefaultTestCliBackend(
   params: TestCliBackendParams = {},
@@ -134,6 +161,7 @@ type PreparedCliRunContextOverrides = {
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
+  fastMode?: PreparedCliRunContext["params"]["fastMode"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
@@ -214,6 +242,7 @@ export function buildPreparedCliRunContext(
       provider,
       model,
       thinkLevel: overrides.thinkLevel,
+      fastMode: overrides.fastMode,
       executionMode: overrides.executionMode,
       cliToolAvailability: overrides.cliToolAvailability,
       emitCommentaryText: overrides.emitCommentaryText,
@@ -223,6 +252,7 @@ export function buildPreparedCliRunContext(
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir,
     backendResolved: {
       id: provider,
@@ -327,6 +357,7 @@ export async function expectPathMissing(targetPath: string) {
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
+  const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -366,7 +397,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       return getSession();
     },
     createSession,
-    prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
+    async prepare(overrides: Partial<RunCliAgentParams> = {}) {
       const { dir, sessionFile, sessionTarget } = getSession();
       const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
@@ -381,12 +412,22 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         config: {},
       };
       const prepared = Object.assign(defaults, overrides);
-      return prepareCliRun({
-        ...prepared,
-        ...(prepared.preparedRunAdmission
-          ? {}
-          : { admittedRunContext: createTestAdmittedRunContext(prepared.runId) }),
-      });
+      if (!prepared.preparedRunAdmission && !prepared.admittedRunContext) {
+        const admission = prepareSystemAgentRunAdmission(
+          prepared.config ?? {},
+          prepared.runId,
+          parseAgentSessionKey(prepared.sessionKey)?.agentId ??
+            prepared.agentId ??
+            sessionTarget.agentId,
+          "cli-prepare-fixture",
+        );
+        admissions.push(admission);
+        return prepareCliRun({
+          ...prepared,
+          admittedRunContext: await admission.admit("embedded"),
+        });
+      }
+      return prepareCliRun(prepared);
     },
     appendTranscript(entry: {
       id: string;
@@ -406,12 +447,17 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         throw new Error("Could not append CLI fixture transcript message");
       }
     },
-    cleanup() {
+    async cleanup() {
+      admissions.splice(0).forEach((admission) => admission.close());
       for (const databasePath of databasePaths) {
-        closeOpenClawAgentDatabaseByPath(databasePath);
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
+        closeAuthProfileReadPool({ kind: "root", rootPath: dir });
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+        );
         fs.rmSync(dir, { recursive: true, force: true });
       }
       tempDirs.clear();

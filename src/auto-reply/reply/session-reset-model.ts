@@ -37,8 +37,8 @@ async function loadResetModelCatalog(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ModelCatalogEntry[]> {
-  const { loadPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
-  return loadPreparedModelCatalog({
+  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
+  return readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -74,6 +74,7 @@ async function applySelectionToSession(params: {
       sessionEntry.modelProvider?.trim() ||
       params.defaultProvider,
     selection,
+    explicitDefaultSelection: selection.isDefault,
   });
   let appliedEntry = nextSessionEntry;
   let selectionApplied = true;
@@ -156,7 +157,7 @@ export async function applyResetModelOverride(params: {
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
     agentId: params.agentId,
   });
   const allowedModelKeys = modelPolicy.allowedKeys;

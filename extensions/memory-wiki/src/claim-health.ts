@@ -54,10 +54,6 @@ function parseTimestamp(value?: string): number | null {
   return parseDateStringTimestampMs(value) ?? null;
 }
 
-function clampDaysSinceTouch(daysSinceTouch: number): number {
-  return Math.max(0, daysSinceTouch);
-}
-
 function normalizeClaimTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
@@ -77,25 +73,15 @@ function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date })
       reason: "missing updatedAt",
     };
   }
-  const daysSinceTouch = clampDaysSinceTouch(Math.floor((now.getTime() - timestampMs) / DAY_MS));
-  if (daysSinceTouch >= WIKI_STALE_DAYS) {
-    return {
-      level: "stale",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
-  if (daysSinceTouch >= WIKI_AGING_DAYS) {
-    return {
-      level: "aging",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
+  const daysSinceTouch = Math.max(0, Math.floor((now.getTime() - timestampMs) / DAY_MS));
+  const level =
+    daysSinceTouch >= WIKI_STALE_DAYS
+      ? "stale"
+      : daysSinceTouch >= WIKI_AGING_DAYS
+        ? "aging"
+        : "fresh";
   return {
-    level: "fresh",
+    level,
     reason: `last touched ${params.timestamp}`,
     daysSinceTouch,
     lastTouchedAt: params.timestamp,

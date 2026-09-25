@@ -13,7 +13,7 @@ export function describeBrowserTool(opts: {
     ...(actions.has("profiles")
       ? [
           "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
-          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name. Use only when the task requires an existing session and the user has authorized it.",
+          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name.",
         ]
       : []),
     ...(actions.has("importprofile")
@@ -24,11 +24,16 @@ export function describeBrowserTool(opts: {
     `For Chrome MCP existing-session profiles, omit timeoutMs on act:type, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.${evaluateEnabled ? " act:evaluate supports timeoutMs." : ""}`,
     ...(!opts.capabilities.tabBound
       ? [
-          'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
+          'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
         ]
       : []),
     "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
     "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
+    ...(!opts.capabilities.tabBound
+      ? [
+          'Only create a Browser dashboard when the user asks for a dashboard. Opening the browser sidebar or side panel does not require a widget. For a requested agent-controllable HTTP(S) dashboard, first call tool dashboard with action="widget_put", pluginKind="browser:dashboard", name=<stable widget name>, props={url}, and size="full". Next call tool browser with action="open", dashboard=<that widget name>, and no targetUrl. Then call tool dashboard with action="set_presentation", presentation="expanded". The dashboard tool owns widget authoring and presentation; the browser tool owns page interaction. Use dashboard=<widget name> and omit targetId/profile/route overrides. Administrator dashboards use managed-profile state. Non-admin selectors use an empty isolated context in the configured default local managed profile; supported actions are tabs, focus, navigate, snapshot, screenshot, act, open and close. Session mode is unavailable when a sandbox is required or model selection is locked. Agent and viewer must use the same mode to share page state. Hiding a dashboard preserves its page; resetting a session closes its isolated context. General browser actions retain their configured host/profile access. Call browser with action="close" and dashboard to request stop, or action="open" and dashboard to resume its saved URL. A session:website widget is a lightweight iframe and cannot be controlled through this selector.',
+        ]
+      : []),
     'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
     "Repeated compatible snapshots with stable document identity mark newly appeared ref-bearing elements with [new].",
     `navigate returns the loaded page's compact snapshot inline (efficient interactive tier; use action=snapshot for a full snapshot); do not call snapshot after navigate.${opts.capabilities.actKinds.includes("batch") ? " Batch act results that report a cross-document navigation also include fresh page state;" : ""} After a single act that triggers navigation, snapshot before using refs.`,

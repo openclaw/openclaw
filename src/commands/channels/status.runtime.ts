@@ -218,7 +218,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push("");
   }
   lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
   );
   return lines;
 }

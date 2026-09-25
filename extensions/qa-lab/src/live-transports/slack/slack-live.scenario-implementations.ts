@@ -43,6 +43,7 @@ export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
       expectReply: false,
       input: `reply with only this exact marker: ${token}`,
       matchText: token,
+      noReplyObservationMs: 8_000,
     };
   },
 };
@@ -201,6 +202,7 @@ export const slackQaAllowlistBlockScenario: SlackQaScenarioImplementation = {
       expectReply: false,
       input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
       matchText: token,
+      noReplyObservationMs: 8_000,
     };
   },
 };
@@ -214,6 +216,7 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
       expectReply: false,
       input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
       matchText: marker,
+      noReplyObservationMs: 8_000,
       preserveGatewayDebug: true,
       beforeRun: async ({ gateway }) => {
         const gatewayLogTail = (await gateway.call(
@@ -291,12 +294,14 @@ export const slackQaProgressCommentaryFalseScenario: SlackQaScenarioImplementati
 
 export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementation = {
   configOverrides: {
-    progress: { toolProgress: true },
+    // This proof inspects chat.update history for one editable text draft.
+    // Native and Block Kit cards have separate transport proofs.
+    progress: { style: "compact", toolProgress: true },
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
       commentary: "headline",
-      toolProgress: "absent",
+      toolProgress: "draft",
     }),
 };
 
@@ -322,67 +327,66 @@ export const slackQaProgressCommentaryVerboseFullScenario: SlackQaScenarioImplem
     }),
 };
 
-export const slackQaChartPresentationNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: { messageTool: true },
-  buildRun: (sutUserId) => {
-    const suffix = randomUUID().slice(0, 8).toUpperCase();
-    const summaryText = `SLACK_QA_CHART_SUMMARY_${suffix}`;
-    const finalMarker = `SLACK_QA_CHART_DONE_${suffix}`;
-    const messageToolArgs = buildSlackChartMessageToolArgs(summaryText);
-    return {
-      expectReply: true,
-      input: [
-        `<@${sutUserId}> Slack native chart QA check ${summaryText}.`,
-        `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
-        `After the chart send succeeds, reply with only this exact marker: ${finalMarker}`,
-      ].join(" "),
-      matchText: finalMarker,
-      afterReply: async (_message, context) => {
-        await waitForSlackStoredMessage({
-          channelId: context.channelId,
-          client: context.sutReadClient,
-          description: "message with native chart",
-          matchesMessage: (message) =>
-            isExpectedSlackNativeChartMessage(message, renderSlackChartAccessibleText(summaryText)),
-          oldestTs: context.sentTs,
-          sutIdentity: context.sutIdentity,
-          timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
-        });
-        return "verified native data_visualization block and deterministic accessible text";
-      },
-    };
-  },
-};
+function createSlackNativeDataScenario(kind: "chart" | "table"): SlackQaScenarioImplementation {
+  return {
+    configOverrides: { messageTool: true },
+    buildRun: (sutUserId) => {
+      const suffix = randomUUID().slice(0, 8).toUpperCase();
+      const prefix = kind.toUpperCase();
+      const summaryText = `SLACK_QA_${prefix}_SUMMARY_${suffix}`;
+      const finalMarker = `SLACK_QA_${prefix}_DONE_${suffix}`;
+      const isChart = kind === "chart";
+      const messageToolArgs = isChart
+        ? buildSlackChartMessageToolArgs(summaryText)
+        : buildSlackTableMessageToolArgs(summaryText);
+      // Retain the native write identity per run before final-reply history can evict it.
+      let messageId: string | undefined;
+      return {
+        expectReply: true,
+        input: [
+          `<@${sutUserId}> Slack native ${kind} QA check ${summaryText}.`,
+          `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+          `After the ${kind} send succeeds, reply with only this exact marker: ${finalMarker}`,
+        ].join(" "),
+        matchText: finalMarker,
+        captureBeforeReply: (messages) => {
+          messageId = messages.find((message) => message.text.includes(summaryText))?.ts;
+          return messageId !== undefined;
+        },
+        afterReply: async (_message, context) => {
+          if (!messageId) {
+            throw new Error(`Slack native ${kind} verification did not retain its message id`);
+          }
+          await waitForSlackStoredMessage({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            description: `message with native ${kind}`,
+            matchesMessage: (message) =>
+              isChart
+                ? isExpectedSlackNativeChartMessage(
+                    message,
+                    renderSlackChartAccessibleText(summaryText),
+                  )
+                : isExpectedSlackNativeTableMessage(
+                    message,
+                    renderSlackTableAccessibleText(summaryText),
+                  ),
+            messageId,
+            sutIdentity: context.sutIdentity,
+            timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
+          });
+          return `verified native ${isChart ? "data_visualization" : "data_table"} block and deterministic accessible text`;
+        },
+      };
+    },
+  };
+}
 
-export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: { messageTool: true },
-  buildRun: (sutUserId) => {
-    const suffix = randomUUID().slice(0, 8).toUpperCase();
-    const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
-    const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
-    return {
-      expectReply: true,
-      input: [
-        `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
-        `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
-      ].join(" "),
-      matchText: summaryText,
-      afterReply: async (_message, context) => {
-        await waitForSlackStoredMessage({
-          channelId: context.channelId,
-          client: context.sutReadClient,
-          description: "message with native table",
-          matchesMessage: (message) =>
-            isExpectedSlackNativeTableMessage(message, renderSlackTableAccessibleText(summaryText)),
-          oldestTs: context.sentTs,
-          sutIdentity: context.sutIdentity,
-          timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
-        });
-        return "verified native data_table block and deterministic accessible text";
-      },
-    };
-  },
-};
+export const slackQaChartPresentationNativeScenario: SlackQaScenarioImplementation =
+  createSlackNativeDataScenario("chart");
+
+export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementation =
+  createSlackNativeDataScenario("table");
 
 export const slackQaTableInvalidBlocksFallbackScenario: SlackQaScenarioImplementation = {
   buildRun: () => ({

@@ -2,19 +2,27 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
-import { main as checkEnvVarCount } from "./check-env-var-count.mts";
+import type * as ts from "typescript/unstable/ast";
+import {
+  addEnvVarNames,
+  isCountedSourcePath,
+  main as checkEnvVarCount,
+} from "./check-env-var-count.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetSets,
   listRatchetRenames,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
   reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
+import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -44,38 +52,18 @@ export function isGovernedSourcePath(filePath: string) {
   );
 }
 
-export function collectLintDisableDirectives(source: string, filePath = "source.ts") {
+export function collectLintDisableDirectives(
+  source: string,
+  _filePath: string,
+  sourceFile: ts.SourceFile,
+) {
   if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
     return [];
   }
   const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?=$|\s)([\s\S]*)$/u;
-  const scriptKind = /\.[cm]?[jt]sx$/u.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    scriptKind,
-  );
-  const comments = new Map<number, string>();
-  const addComments = (ranges: readonly ts.CommentRange[] | undefined) => {
-    for (const range of ranges ?? []) {
-      comments.set(range.pos, source.slice(range.pos, range.end));
-    }
-  };
-  const visit = (node: ts.Node) => {
-    addComments(ts.getLeadingCommentRanges(source, node.pos));
-    addComments(ts.getTrailingCommentRanges(source, node.end));
-    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
-    for (const child of node.getChildren(sourceFile)) {
-      visit(child);
-    }
-  };
-  visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
-
   const directives: string[][] = [];
-  for (const text of comments.values()) {
+  for (const range of collectTypeScriptCommentRanges(sourceFile)) {
+    const text = source.slice(range.pos, range.end);
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
     if (!match) {
@@ -91,14 +79,6 @@ export function collectLintDisableDirectives(source: string, filePath = "source.
 
 export function isMaxLinesRule(rule: string) {
   return rule === "max-lines" || rule.endsWith("/max-lines");
-}
-
-export function hasMaxLinesDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.some(isMaxLinesRule));
-}
-
-export function hasAllRuleDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.length === 0);
 }
 
 function baselineWithVerifiedRenames(
@@ -148,8 +128,9 @@ function listStagedSuppressionCandidates(root: string) {
 
 export function collectCurrentSuppressionState(
   root = process.cwd(),
-  options: { staged?: boolean } = {},
+  options: { staged?: boolean; envVarNames?: Map<string, ReadonlySet<string>> } = {},
 ) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const staged = options.staged === true;
   const filePaths = staged
     ? listStagedSuppressionCandidates(root)
@@ -164,21 +145,36 @@ export function collectCurrentSuppressionState(
     .filter(Boolean)
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)));
-  const sources = staged
-    ? [...loadRatchetSources(root, governedPaths)]
-    : governedPaths.map((filePath): [string, string] => [
-        filePath,
-        fs.readFileSync(path.join(root, filePath), "utf8"),
-      ]);
+  const stagedSources = staged ? loadRatchetSources(root, governedPaths) : undefined;
+  const allRules: string[] = [];
+  const explicit: string[] = [];
+  for (const filePath of governedPaths) {
+    const source = stagedSources
+      ? stagedSources.get(filePath)!
+      : fs.readFileSync(path.join(root, filePath), "utf8");
+    if (!staged && options.envVarNames && isCountedSourcePath(filePath)) {
+      const names = new Set<string>();
+      addEnvVarNames(source, names);
+      options.envVarNames.set(filePath, names);
+    }
+    if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
+      continue;
+    }
+    const directives = collectLintDisableDirectives(
+      source,
+      filePath,
+      parser.parseSourceFile(filePath, source),
+    );
+    if (directives.some((rules) => rules.length === 0)) {
+      allRules.push(filePath);
+    }
+    if (directives.some((rules) => rules.some(isMaxLinesRule))) {
+      explicit.push(filePath);
+    }
+  }
   return {
-    allRules: sources
-      .filter(([filePath, source]) => hasAllRuleDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
-    explicit: sources
-      .filter(([filePath, source]) => hasMaxLinesDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
+    allRules: allRules.toSorted(compareStrings),
+    explicit: explicit.toSorted(compareStrings),
   };
 }
 
@@ -186,36 +182,18 @@ function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function envVarCountArgs(argv: string[]) {
-  const args = parseArgs(argv);
+  const args = parseRatchetArgs(argv);
   return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
 }
 
-export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+export function main(
+  root = process.cwd(),
+  argv: string[] = process.argv.slice(2),
+  envVarNames?: Map<string, ReadonlySet<string>>,
+) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }
@@ -229,6 +207,7 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
     const baseline = baselineSource;
     const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
       staged: args.staged,
+      envVarNames,
     });
     const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
     const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
@@ -245,15 +224,27 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
 
     if (
       reportRatchetFailures([
-        { entries: added, title: "New max-lines suppressions are forbidden; split these files:" },
-        {
-          entries: expanded,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-        },
         {
           entries: allRules,
           title: "All-rule lint disables are forbidden; name only the required rules:",
         },
+      ])
+    ) {
+      return 1;
+    }
+
+    if (
+      reportLimitViolations([
+        ...added.map((file) => ({
+          file,
+          title: "New max-lines suppressions are forbidden; split these files:",
+          message: "Remove the new max-lines suppression and split the file.",
+        })),
+        ...expanded.map((file) => ({
+          file: BASELINE_PATH,
+          title: "The max-lines baseline may only shrink; remove these entries:",
+          message: file,
+        })),
       ])
     ) {
       return 1;
@@ -270,19 +261,22 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       return 0;
     }
     if (
-      reportRatchetFailures([
-        {
-          entries: stale,
+      reportLimitViolations(
+        stale.map((file) => ({
+          file: BASELINE_PATH,
           title: "Remove stale max-lines baseline entries (or run with --prune):",
-        },
-      ])
+          message: file,
+        })),
+      )
     ) {
       return 1;
     }
 
-    reportRatchetSuccess(
-      "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-    );
+    if (added.length + expanded.length + stale.length === 0) {
+      reportRatchetSuccess(
+        "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -291,14 +285,18 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
 }
 
 function runBaselineRatchets(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
-  const maxLinesStatus = main(root, argv);
+  // Keep name sets local to this invocation, including files with no matches.
+  const envVarNames = argv.includes("--staged")
+    ? undefined
+    : new Map<string, ReadonlySet<string>>();
+  const maxLinesStatus = main(root, argv, envVarNames);
   if (maxLinesStatus !== 0) {
     return maxLinesStatus;
   }
   try {
     // CI invokes this entry with its frozen fork-point ref. Carry the same snapshot
     // into the env budget so every baseline ratchet judges one tested tree.
-    checkEnvVarCount(envVarCountArgs(argv), root);
+    checkEnvVarCount(envVarCountArgs(argv), root, envVarNames);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -13,10 +13,30 @@ export function runDoctorAgentDatabaseOperation<T>(params: {
   try {
     return { ok: true, value: params.run() };
   } catch (error) {
-    note(
-      `- Agent ${params.agentId} database ${shortenHomePath(params.path)}: ${formatErrorMessage(error)}`,
-      "Doctor warnings",
-    );
+    noteDoctorAgentDatabaseFailure(params, error);
     return { ok: false };
   }
+}
+
+export async function runDoctorAgentDatabaseOperationAsync<T>(params: {
+  agentId: string;
+  path: string;
+  run: () => Promise<T>;
+}): Promise<DoctorAgentDatabaseOperationResult<T>> {
+  try {
+    return { ok: true, value: await params.run() };
+  } catch (error) {
+    noteDoctorAgentDatabaseFailure(params, error);
+    return { ok: false };
+  }
+}
+
+function noteDoctorAgentDatabaseFailure(
+  params: { agentId: string; path: string },
+  error: unknown,
+): void {
+  note(
+    `- Agent ${params.agentId} database ${shortenHomePath(params.path)}: ${formatErrorMessage(error)}`,
+    "Doctor warnings",
+  );
 }

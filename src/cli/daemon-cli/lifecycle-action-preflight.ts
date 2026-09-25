@@ -13,24 +13,18 @@ type ServiceActionPreflightFailure = {
   hints?: string[];
 };
 
-const ACTION_PROSE: Record<DaemonServiceAction, string> = {
-  start: "start the gateway service",
-  restart: "restart the gateway service",
-  stop: "stop the gateway service",
-  uninstall: "uninstall the gateway service",
-};
-
-function formatPluginPackagingRuntimeOutputRecoveryHints(): string[] {
-  return formatPluginPackagingRuntimeOutputRecoveryHint().split("\n");
-}
-
 /** Best-effort validation before a service action mutates runtime state. */
 export async function getServiceActionPreflightFailure(
   action: DaemonServiceAction,
 ): Promise<ServiceActionPreflightFailure | null> {
   let snapshot: ConfigFileSnapshot;
   try {
-    snapshot = await readConfigFileSnapshot({ observe: false });
+    // Stop must remain available before Doctor migrates newly installed plugins.
+    // Core validation and the newer-writer guard still protect service selection.
+    snapshot = await readConfigFileSnapshot({
+      observe: false,
+      pluginValidation: action === "stop" ? "core-only" : undefined,
+    });
     if (snapshot.exists && !snapshot.valid) {
       const message =
         snapshot.issues.length > 0
@@ -39,7 +33,7 @@ export async function getServiceActionPreflightFailure(
       return {
         message,
         ...(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHints() }
+          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHint().split("\n") }
           : {}),
       };
     }
@@ -47,7 +41,10 @@ export async function getServiceActionPreflightFailure(
     return null;
   }
 
-  const futureBlock = resolveFutureConfigActionBlock({ action: ACTION_PROSE[action], snapshot });
+  const futureBlock = resolveFutureConfigActionBlock({
+    action: `${action} the gateway service`,
+    snapshot,
+  });
   if (futureBlock) {
     return { message: futureBlock.message, hints: futureBlock.hints };
   }

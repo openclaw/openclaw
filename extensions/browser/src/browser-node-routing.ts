@@ -1,6 +1,7 @@
+import { resolveNodeIdFromList } from "openclaw/plugin-sdk/agent-harness-runtime";
 /** Shared browser-node selection for agent tools and Gateway requests. */
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
-import { resolveNodeIdFromList } from "./sdk-setup-tools.js";
 
 export type BrowserNodeTarget = {
   nodeId: string;
@@ -12,20 +13,17 @@ export type BrowserNodeTarget = {
   pendingDeclaredCommands?: string[];
 };
 
-type BrowserNodeRoutingPolicy = {
-  mode?: "off" | "auto" | "manual";
-  node?: string;
-};
-
 /** Select the same authorized browser-capable node on every request surface. */
-export function resolveBrowserNodeTarget<T extends BrowserNodeTarget>(params: {
-  nodes: T[];
-  policy?: BrowserNodeRoutingPolicy;
+export async function resolveBrowserNodeTarget<T extends BrowserNodeTarget>(params: {
+  nodes: () => T[] | Promise<T[]>;
+  config: OpenClawConfig;
+  profile?: string;
   requestedNode?: string;
   explicitTarget?: boolean;
   requireConnected?: boolean;
-}): T | null {
-  const mode = params.policy?.mode ?? "auto";
+}): Promise<T | null> {
+  const policy = params.config.gateway?.nodes?.browser;
+  const mode = policy?.mode ?? "auto";
   const explicit = params.explicitTarget || Boolean(params.requestedNode?.trim());
   if (mode === "off") {
     if (explicit) {
@@ -34,12 +32,18 @@ export function resolveBrowserNodeTarget<T extends BrowserNodeTarget>(params: {
     return null;
   }
 
-  const requested = params.requestedNode?.trim() || params.policy?.node?.trim();
+  const requested = params.requestedNode?.trim() || policy?.node?.trim();
   if (mode === "manual" && !explicit && !requested) {
     return null;
   }
+  if (!explicit && !requested) {
+    const { isBrowserHostAvailable } = await import("./browser-host-availability.js");
+    if (await isBrowserHostAvailable(params.config, params.profile)) {
+      return null;
+    }
+  }
 
-  const browserNodes = params.nodes.filter((node) => {
+  const browserNodes = (await params.nodes()).filter((node) => {
     if (params.requireConnected && !node.connected) {
       return false;
     }

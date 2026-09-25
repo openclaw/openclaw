@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Bare package-level plugin lifecycle matrix with resource metrics.
 set -euo pipefail
 
@@ -8,7 +12,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugin-lifecycle-matrix-e2e" OPENCLAW_PLUGIN_LIFECYCLE_MATRIX_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_PLUGIN_LIFECYCLE_MATRIX_E2E_SKIP_BUILD:-0}"
+LIMITS_SUMMARY=""
 cleanup() {
+  if [[ -n "$LIMITS_SUMMARY" ]]; then
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s "$LIMITS_SUMMARY" ]]; then
+      cat "$LIMITS_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    rm -f "$LIMITS_SUMMARY"
+  fi
   docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
 }
 trap cleanup EXIT
@@ -18,6 +29,15 @@ DOCKER_ENV_ARGS=(
   -e OPENCLAW_SKIP_CHANNELS=1
   -e OPENCLAW_SKIP_PROVIDERS=1
 )
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  LIMITS_SUMMARY="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugin-lifecycle-limits.XXXXXX")"
+  chmod 666 "$LIMITS_SUMMARY"
+  DOCKER_ENV_ARGS+=(
+    -e GITHUB_ACTIONS
+    -e GITHUB_STEP_SUMMARY=/tmp/openclaw-limits-summary.md
+    -v "$LIMITS_SUMMARY:/tmp/openclaw-limits-summary.md"
+  )
+fi
 
 append_positive_int_env() {
   local name="$1"

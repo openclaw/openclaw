@@ -1,6 +1,7 @@
 // Restores one verified whole-archive backup into a fresh staging directory.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,7 +14,6 @@ import {
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
-import { isPathWithin } from "./cleanup-utils.js";
 import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
@@ -30,16 +30,8 @@ type BackupRestoreOptions = {
   json?: boolean;
 };
 
-type BackupRestoreResult = {
-  ok: true;
-  archivePath: string;
+type BackupRestoreResult = Awaited<ReturnType<typeof prepareBackupArchive>>["result"] & {
   targetPath: string;
-  archiveRoot: string;
-  createdAt: string;
-  runtimeVersion: string;
-  assetCount: number;
-  entryCount: number;
-  symlinkCount: number;
   warnings: string[];
 };
 
@@ -48,7 +40,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     canonicalizePathForContainment(targetPath),
     canonicalizePathForContainment(resolveStateDir()),
   ]);
-  if (isPathWithin(canonicalTarget, canonicalStateDir)) {
+  if (isPathInside(canonicalStateDir, canonicalTarget)) {
     throw new Error(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
@@ -60,7 +52,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   }
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
-    if (isPathWithin(canonicalTarget, sourcePath)) {
+    if (isPathInside(sourcePath, canonicalTarget)) {
       throw new Error(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );
@@ -102,6 +94,7 @@ async function extractBackupArchive(
   archivePath: string,
   targetPath: string,
   hardlinkTargets: ReadonlyMap<string, string>,
+  symbolicLinkPaths: ReadonlySet<string>,
 ): Promise<void> {
   let extractionError: Error | undefined;
   await tar.x({
@@ -113,6 +106,8 @@ async function extractBackupArchive(
     // Verification catches fatal archive errors; rethrow recoverable warnings after close.
     strict: false,
     preserveOwner: false,
+    // Create links only after file writes finish; never extract through a link.
+    filter: (entryPath) => !symbolicLinkPaths.has(entryPath),
     // node-tar calls this before its path checks and filesystem reservations.
     onReadEntry: (entry) => {
       const target = hardlinkTargets.get(entry.path);
@@ -151,11 +146,28 @@ export async function backupRestoreCommand(
 ): Promise<BackupRestoreResult> {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
-  const { result: verified, hardlinkTargets } = await prepareBackupArchive(options.archive);
+  const {
+    result: verified,
+    hardlinkTargets,
+    symbolicLinks,
+  } = await prepareBackupArchive(options.archive);
   const target = await prepareRestoreTarget(targetPath);
 
   try {
-    await extractBackupArchive(verified.archivePath, targetPath, hardlinkTargets);
+    await extractBackupArchive(
+      verified.archivePath,
+      targetPath,
+      hardlinkTargets,
+      new Set(symbolicLinks.map(({ entryPath }) => entryPath)),
+    );
+    // Materialize all parents before links: filesystem aliases then collide with
+    // directories instead of letting an earlier link redirect a later write.
+    for (const { entryPath } of symbolicLinks) {
+      await fs.mkdir(path.dirname(path.join(targetPath, entryPath)), { recursive: true });
+    }
+    for (const { entryPath, linkpath } of symbolicLinks) {
+      await fs.symlink(linkpath, path.join(targetPath, entryPath));
+    }
   } catch (extractionError) {
     try {
       await cleanupFailedRestore(targetPath, target.created);
@@ -176,7 +188,13 @@ export async function backupRestoreCommand(
   const result: BackupRestoreResult = {
     ...verified,
     targetPath,
-    warnings: [...BACKUP_RESTORE_WARNINGS],
+    warnings: [
+      ...BACKUP_RESTORE_WARNINGS,
+      ...(verified.externalSymbolicLinks ?? []).map(
+        ({ entryPath, linkpath }) =>
+          `External link restored (target not copied through link): ${JSON.stringify(entryPath)} -> ${JSON.stringify(linkpath)}`,
+      ),
+    ],
   };
   if (options.json) {
     writeRuntimeJson(runtime, result);

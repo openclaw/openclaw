@@ -1,5 +1,7 @@
 /** Covers synthetic and external auth provider refs from manifests and active registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 
 type SyntheticAuthRegistrySnapshotResult = {
   source: "persisted" | "provided" | "derived";
@@ -51,6 +53,39 @@ import {
 } from "./synthetic-auth.runtime.js";
 
 describe("synthetic auth runtime refs", () => {
+  it("keeps captured generation auth separate from the ambient registry", () => {
+    const ambient = createEmptyPluginRegistry();
+    ambient.providers.push({
+      pluginId: "ambient",
+      source: "fixture",
+      provider: {
+        id: "ambient-auth",
+        label: "Ambient",
+        auth: [],
+        prepareSyntheticAuth: async () => undefined,
+      },
+    });
+    getPluginRegistryState.mockReturnValue({ activeRegistry: ambient });
+    const captured = createEmptyPluginRegistry();
+    expect(
+      withPluginRuntimeGenerationRegistryScope(captured, resolveRuntimeSyntheticAuthProviderRefs),
+    ).toEqual([]);
+    captured.providers.push({
+      pluginId: "captured",
+      source: "fixture",
+      provider: {
+        id: "captured-auth",
+        label: "Captured",
+        auth: [],
+        prepareSyntheticAuth: async () => undefined,
+      },
+    });
+    expect(
+      withPluginRuntimeGenerationRegistryScope(captured, resolveRuntimeSyntheticAuthProviderRefs),
+    ).toEqual(["captured-auth"]);
+    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual(["ambient-auth"]);
+  });
+
   beforeEach(() => {
     getPluginRegistryState.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset().mockReturnValue({

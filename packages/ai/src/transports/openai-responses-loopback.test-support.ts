@@ -20,9 +20,11 @@ export const responsesLoopbackModel = {
 
 export async function createResponsesLoopbackServer(events: (turn: number) => unknown[]) {
   const requests: Array<Record<string, unknown>> = [];
+  const rawRequests: string[] = [];
   const authorization: Array<string | undefined> = [];
   let connections = 0;
   const eventsForRequest = (body: string) => {
+    rawRequests.push(body);
     requests.push(JSON.parse(body) as Record<string, unknown>);
     return events(requests.length);
   };
@@ -66,19 +68,23 @@ export async function createResponsesLoopbackServer(events: (turn: number) => un
   // oxlint-disable-next-line typescript/unbound-method
   const buildURL = OpenAI.prototype.buildURL;
   // Route only the destination; native eligibility, the SDK, and request bytes stay real.
-  const route = vi
-    .spyOn(OpenAI.prototype, "buildURL")
-    .mockImplementation(function (this: OpenAI, path, query, baseURL) {
-      const url = new URL(buildURL.call(this, path, query, baseURL));
-      expect(url.origin).toBe("https://api.openai.com");
-      expect(url.pathname).toBe("/v1/responses");
-      url.protocol = "http:";
-      url.hostname = "127.0.0.1";
-      url.port = String(address.port);
-      return url.href;
-    });
+  const route = vi.spyOn(OpenAI.prototype, "buildURL").mockImplementation(function (
+    this: OpenAI,
+    path,
+    query,
+    baseURL,
+  ) {
+    const url = new URL(buildURL.call(this, path, query, baseURL));
+    expect(url.origin).toBe("https://api.openai.com");
+    expect(url.pathname).toBe("/v1/responses");
+    url.protocol = "http:";
+    url.hostname = "127.0.0.1";
+    url.port = String(address.port);
+    return url.href;
+  });
   return {
     requests,
+    rawRequests,
     authorization,
     get connections() {
       return connections;

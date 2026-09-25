@@ -21,7 +21,11 @@ export class SessionOwnerFilterController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost & {
-      sessionData: { resetSessionList(): void; refreshSidebarSessions(): Promise<void> };
+      sessionData: {
+        resetSessionList(): void;
+        refreshSidebarSessions(): Promise<void>;
+        scheduleSidebarSessions(): Promise<void>;
+      };
     },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
   ) {
@@ -91,7 +95,8 @@ export class SessionOwnerFilterController implements ReactiveController {
     if (previousScope !== null || this.ownerId || this.involvingMe) {
       this.ownerFacetResolved = false;
       this.ownerOptions = [];
-      const pending = this.refresh();
+      this.host.sessionData.resetSessionList();
+      const pending = this.host.sessionData.scheduleSidebarSessions();
       this.pendingFacetRefresh = pending;
       void pending.finally(() => {
         if (this.pendingFacetRefresh === pending) {

@@ -14,6 +14,90 @@ describe("embedded compaction recovery authority", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["compacted", "failed"] as const)(
+    "shrinks current tool output without replaying archived resets after %s compaction",
+    async (outcome) => {
+      await withRecoveryFixture({ historicalTurns: 4 }, async (fixture) => {
+        const before = await fixture.snapshot();
+        if (outcome === "failed") {
+          fixture.compact.mockRejectedValueOnce(new Error("independent engine failure"));
+        }
+
+        await expect(fixture.recover("overflow", outcome === "compacted")).resolves.toEqual({
+          action: "retry",
+        });
+
+        const after = await fixture.snapshot();
+        expect(after.eventDigests.slice(0, before.eventDigests.length)).toEqual(
+          before.eventDigests,
+        );
+        expect(after.resetCount).toBe(before.resetCount);
+        expect(after.eventDigests.length - before.eventDigests.length).toBeLessThanOrEqual(5);
+        expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
+        fixture.assertActive();
+      });
+    },
+  );
+
+  it("leaves archived tool output untouched when the compacted context needs no truncation", async () => {
+    await withRecoveryFixture({ historicalTurns: 4, oversized: false }, async (fixture) => {
+      const before = await fixture.snapshot();
+
+      await expect(fixture.recover("overflow", true)).resolves.toEqual({ action: "retry" });
+
+      const after = await fixture.snapshot();
+      expect(after.eventDigests.slice(0, before.eventDigests.length)).toEqual(before.eventDigests);
+      expect(after.eventDigests).toHaveLength(before.eventDigests.length + 1);
+      expect(after.resetCount).toBe(before.resetCount);
+      expect(after.toolResultChars).toBe(before.toolResultChars);
+    });
+  });
+
+  it("uses the resolved model budget to recover current output beyond the default reader window", async () => {
+    await withRecoveryFixture(
+      { historicalTurns: 4, contextTokenBudget: 200_000, toolResultText: "x".repeat(1_200_000) },
+      async (fixture) => {
+        const before = await fixture.snapshot();
+        fixture.compact.mockRejectedValueOnce(new Error("independent engine failure"));
+
+        await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+
+        const after = await fixture.snapshot();
+        expect(after.toolResultChars).toBeLessThan(before.toolResultChars);
+        expect(after.resetCount).toBe(before.resetCount);
+        expect(after.eventDigests.slice(0, before.eventDigests.length)).toEqual(
+          before.eventDigests,
+        );
+      },
+    );
+  });
+
+  it.each(
+    (["overflow", "timeout"] as const).flatMap((kind) => [true, false].map((ok) => ({ kind, ok }))),
+  )("settles no-op engine hooks for $kind recovery (ok=$ok)", async ({ kind, ok }) => {
+    await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      const before = await fixture.snapshot();
+      const entry = fixture.loadEntry();
+      fixture.compact.mockResolvedValueOnce({ ok, compacted: false, reason: "proof no-op" });
+
+      await fixture.recover(kind);
+
+      expect(fixture.beforeHook).toHaveBeenCalledTimes(1);
+      expect(fixture.afterHook).toHaveBeenCalledTimes(ok ? 1 : 0);
+      if (ok) {
+        expect(fixture.afterHook).toHaveBeenCalledWith(
+          expect.objectContaining({ compactedCount: 0 }),
+          expect.objectContaining({ sessionKey: fixture.getSessionTarget()?.sessionKey }),
+        );
+      }
+      expect(fixture.maintain).not.toHaveBeenCalled();
+      expect(fixture.getCommittedSuccessor()).toBeUndefined();
+      expect(fixture.recoveryState.autoCompactionCount).toBe(0);
+      expect(fixture.loadEntry()).toEqual(entry);
+      expect(await fixture.snapshot()).toEqual(before);
+    });
+  });
+
   it.each(["overflow", "timeout"] as const)(
     "accepts a healthy declared successor through the host writer (%s)",
     async (kind) => {
@@ -370,7 +454,14 @@ describe("embedded compaction recovery authority", () => {
           if (!recorder) {
             throw new Error("Recovery must attach its private accounting recorder");
           }
-          recorder.recordCompaction(committed.result?.tokensAfter);
+          if (!committed.result) {
+            throw new Error("Fixture compaction must report its committed context usage");
+          }
+          recorder.recordCompaction?.({
+            tokensBefore: committed.result.tokensBefore,
+            tokensAfter: committed.result.tokensAfter,
+            compactionKind: "context-engine",
+          });
           fixture.updates.mockClear();
           childSignal = params.abortSignal;
           if (failure === "throw") {

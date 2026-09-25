@@ -4,11 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
-} from "../infra/system-run-approval-binding.js";
+import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,
@@ -254,10 +252,10 @@ function withScriptOperandPlanFixture<T>(
   return run(fixture, tmp);
 }
 
-const DENIED_RUNTIME_APPROVAL = {
+const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
-  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-} as const;
+  reason: "unsupported-command-shape",
+});
 
 function runNamedCase(name: string, run: () => void) {
   try {

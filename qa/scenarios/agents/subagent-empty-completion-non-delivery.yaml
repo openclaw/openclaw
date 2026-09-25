@@ -87,7 +87,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - assert:
@@ -98,7 +98,7 @@ flow:
           saveAs: requesterAcknowledgements
           args:
             - lambda:
-                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK'); return messages.length > 0 ? messages : undefined; })()"
+                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId && String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK'); return messages.length > 0 ? messages : undefined; })()"
             - 60000
             - 250
         - set: emptyOutboundHistory

@@ -6,8 +6,8 @@ import {
   normalizeSupportedLanguageHint,
 } from "./language-hints.js";
 
-async function normalizeHints(values: readonly string[], options = {}) {
-  return await Promise.all(values.map((value) => normalizeSupportedLanguageHint(value, options)));
+async function normalizeHints(values: readonly string[]) {
+  return await Promise.all(values.map((value) => normalizeSupportedLanguageHint(value)));
 }
 
 describe("normalizeSupportedLanguageHint", () => {

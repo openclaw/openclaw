@@ -2,6 +2,7 @@ import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdo
 import { applyConstructFallbacks } from "../../../packages/markdown-core/src/construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "../../../packages/markdown-core/src/format-capabilities.js";
 import { markdownToIR, type MarkdownIR } from "../../../packages/markdown-core/src/ir.js";
+import { stripHtmlFromMarkdown } from "../../../packages/markdown-core/src/strip-html.js";
 
 type StripMarkdownOptions = {
   /** Mark parsed assistant transcript-role headers in transports without rich text. */
@@ -12,6 +13,8 @@ type StripMarkdownOptions = {
   linkStyle?: "label" | "label-and-url";
   /** Plain-text cleanup target. Speech removes decorative symbol and punctuation runs. */
   mode?: "plain-text" | "speech";
+  /** Omit authored HTML tags and raw-text content while preserving code literals. */
+  stripHtml?: boolean;
 };
 
 type PlainTextInsertion = {
@@ -115,7 +118,7 @@ export function stripMarkdown(
   // The IR parser preserves links when role annotations are enabled so this
   // plain-text projection can still append explicit destinations. Direct rich
   // renderers suppress overlapping active links later at their own boundary.
-  const ir = markdownToIR(text, {
+  const ir = markdownToIR(options.stripHtml ? stripHtmlFromMarkdown(text) : text, {
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders,
     autolink: false,
     blockquotePrefix: "",

@@ -1,4 +1,3 @@
-// Imessage plugin module implements actions behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
@@ -29,6 +28,7 @@ import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
   isIMessageCurrentMessageInChat,
+  isIMessageCurrentMessageInChatAsync,
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
@@ -105,18 +105,18 @@ function resolveIMessageActionTarget(params: {
 
 const IMESSAGE_DELIVERY_TARGET_ALIASES = ["chatGuid", "chatIdentifier", "chatId"];
 
-function matchesIMessageCurrentConversation(params: {
+function currentConversationMatchParams(params: {
   args: Record<string, unknown>;
   accountId: string;
   toolContext: {
     currentMessageId?: string | number;
   };
-}): boolean {
+}) {
   const currentMessageId = params.toolContext.currentMessageId;
   if (currentMessageId === undefined) {
-    return false;
+    return undefined;
   }
-  return isIMessageCurrentMessageInChat({
+  return {
     accountId: params.accountId,
     currentMessageId,
     chatContext: {
@@ -124,7 +124,7 @@ function matchesIMessageCurrentConversation(params: {
       chatIdentifier: readStringParam(params.args, "chatIdentifier"),
       chatId: readPositiveIntegerParam(params.args, "chatId"),
     },
-  });
+  };
 }
 
 function createIMessageTargetAliases(resourceAliases: string[] = []) {
@@ -133,20 +133,29 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
     deliveryTargetAliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES],
     resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
       resolveIMessageDeliveryTarget(args),
-    matchesCurrentConversation: matchesIMessageCurrentConversation,
+    matchesCurrentConversation: (params: Parameters<typeof currentConversationMatchParams>[0]) => {
+      const match = currentConversationMatchParams(params);
+      return match ? isIMessageCurrentMessageInChat(match) : false;
+    },
+    matchesCurrentConversationAsync: async (
+      params: Parameters<typeof currentConversationMatchParams>[0],
+    ) => {
+      const match = currentConversationMatchParams(params);
+      return match ? await isIMessageCurrentMessageInChatAsync(match) : false;
+    },
   };
 }
 
-function rememberOutboundBridgeMessage(params: {
+async function rememberOutboundBridgeMessage(params: {
   accountId: string;
   messageId?: string;
   chatGuid: string;
-}): void {
+}): Promise<void> {
   const messageId = params.messageId?.trim();
   if (!messageId || messageId === "ok" || messageId === "unknown") {
     return;
   }
-  rememberIMessageReplyCache({
+  await rememberIMessageReplyCache({
     accountId: params.accountId,
     messageId,
     chatGuid: params.chatGuid,
@@ -673,7 +682,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: reference.chatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: reference.chatGuid,
@@ -697,7 +706,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         effectId,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -741,20 +750,16 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`iMessage ${action} requires address or participant.`);
       }
       const resolvedChatGuid = await chatGuid();
-      if (action === "addParticipant") {
-        await runtime.addParticipant({
-          chatGuid: resolvedChatGuid,
-          address,
-          options: { ...opts, chatGuid: resolvedChatGuid },
-        });
-        return jsonResult({ ok: true, added: address, chatGuid: resolvedChatGuid });
-      }
-      await runtime.removeParticipant({
+      await runtime[action]({
         chatGuid: resolvedChatGuid,
         address,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      return jsonResult({ ok: true, removed: address, chatGuid: resolvedChatGuid });
+      return jsonResult({
+        ok: true,
+        [action === "addParticipant" ? "added" : "removed"]: address,
+        chatGuid: resolvedChatGuid,
+      });
     }
 
     if (action === "leaveGroup") {
@@ -779,7 +784,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         asVoice: asVoice ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -810,7 +815,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         choices: poll.options,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -885,7 +890,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         optionText: optionText ?? undefined,
         options: { ...opts, chatGuid: pollReference.chatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: pollReference.chatGuid,

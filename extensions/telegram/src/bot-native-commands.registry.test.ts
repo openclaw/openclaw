@@ -8,32 +8,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const retainNativeCatalog = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
-  return {
-    ...actual,
-    createPluginCommandRuntime: () => {
-      const runtime = actual.createPluginCommandRuntime();
-      return {
-        ...runtime,
-        retainNativeCatalog: (provider: string) => {
-          retainNativeCatalog(provider);
-          runtime.retainNativeCatalog(provider);
-        },
-      };
-    },
-  };
-});
-
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
 let deliverReplies: typeof import("./bot-native-commands.menu-test-support.js").deliverReplies;
-let editMessageTelegram: typeof import("./bot-native-commands.menu-test-support.js").editMessageTelegram;
 let resetNativeCommandMenuMocks: typeof import("./bot-native-commands.menu-test-support.js").resetNativeCommandMenuMocks;
 let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-support.js").waitForRegisteredCommands;
 
@@ -76,42 +55,17 @@ let activePluginRegistry: ReturnType<typeof createTelegramPluginRegistry>;
 
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
-  nativeProgressMessages?: { telegram?: string; default?: string };
 }) {
   expect(
     registerPluginCommand("demo-plugin", {
       name: "pair",
       ...(params?.nativeNames ? { nativeNames: params.nativeNames } : {}),
-      ...(params?.nativeProgressMessages
-        ? { nativeProgressMessages: params.nativeProgressMessages }
-        : {}),
       description: "Pair device",
       acceptsArgs: true,
       requireAuth: false,
       handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
     }),
   ).toEqual({ ok: true });
-}
-
-async function registerPairMenu(params: {
-  bot: ReturnType<typeof createCommandBot>["bot"];
-  setMyCommands: ReturnType<typeof createCommandBot>["setMyCommands"];
-  nativeNames?: { telegram?: string; discord?: string };
-  nativeProgressMessages?: { telegram?: string; default?: string };
-}) {
-  registerPairPluginCommand({
-    ...(params.nativeNames ? { nativeNames: params.nativeNames } : {}),
-    ...(params.nativeProgressMessages
-      ? { nativeProgressMessages: params.nativeProgressMessages }
-      : {}),
-  });
-
-  registerTelegramNativeCommands({
-    ...createNativeCommandTestParams({}),
-    bot: params.bot,
-  });
-
-  return await waitForRegisteredCommands(params.setMyCommands);
 }
 
 function requireCommandHandler(
@@ -125,30 +79,10 @@ function requireCommandHandler(
   return handler;
 }
 
-function expectRegisteredCommand(
-  commands: Array<{ command: string; description: string }>,
-  expected: { command: string; description: string },
-): void {
-  expect(
-    commands.some(
-      (command) =>
-        command.command === expected.command && command.description === expected.description,
-    ),
-  ).toBe(true);
-}
-
 function expectLastDeliveredReplyText(text: string): void {
   const calls = deliverReplies.mock.calls as unknown[][];
   const payload = calls.at(-1)?.[0] as { replies?: Array<{ text?: string }> } | undefined;
   expect(payload?.replies?.map((reply) => reply.text)).toEqual([text]);
-}
-
-function mockCall(mock: { mock: { calls: unknown[][] } }, index: number): unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return call;
 }
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
@@ -162,7 +96,6 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       createNativeCommandTestParams,
       createPrivateCommandContext,
       deliverReplies,
-      editMessageTelegram,
       resetNativeCommandMenuMocks,
       waitForRegisteredCommands,
     } = await import("./bot-native-commands.menu-test-support.js"));
@@ -174,121 +107,89 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     setActivePluginRegistry(activePluginRegistry as never);
     clearPluginCommands();
     resetNativeCommandMenuMocks();
-    retainNativeCatalog.mockClear();
   });
 
   afterEach(() => {
     clearPluginCommands();
   });
 
-  it("registers and executes plugin commands through the real plugin registry", async () => {
-    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
-
-    const registeredCommands = await registerPairMenu({ bot, setMyCommands });
-    expectRegisteredCommand(registeredCommands, { command: "pair", description: "Pair device" });
-
-    const handler = requireCommandHandler(commandHandlers, "pair");
-
-    await handler(createPrivateCommandContext({ match: "now" }));
-
-    expectLastDeliveredReplyText("paired:now");
-    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
-  });
-
-  it("keeps a custom menu description while registering the same-name plugin handler", async () => {
-    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
-    registerPairPluginCommand();
+  it("normalizes composed menus without letting custom entries replace native or plugin owners", async () => {
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    registerPairPluginCommand({ nativeNames: { telegram: "Pair-Device" } });
+    const longestName = "p".repeat(32);
+    const oversizedName = `${longestName}x`;
+    for (const name of [longestName, oversizedName]) {
+      expect(
+        registerPluginCommand(`plugin-${name}`, {
+          name,
+          description: "Plugin command",
+          requireAuth: false,
+          handler: async () => ({ text: "Length boundary accepted" }),
+        }),
+      ).toEqual({ ok: true });
+    }
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams(
         {},
         {
           telegramCfg: {
-            customCommands: [{ command: "pair", description: "Configured pair menu" }],
+            customCommands: [
+              { command: "/Custom-Backup", description: "Backup" },
+              { command: "/Pair-Device", description: "Configured pair menu" },
+              { command: "/Export-Session", description: "Custom export must lose" },
+              { command: "custom!bad", description: "Invalid punctuation" },
+              { command: "c".repeat(33), description: "Oversized custom command" },
+            ],
           },
         },
       ),
       bot,
     });
 
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands.filter((command) => command.command === "pair")).toEqual([
-      { command: "pair", description: "Configured pair menu" },
+    const registered = await waitForRegisteredCommands(setMyCommands);
+    const names = registered.map(({ command }) => command);
+    expect(registered.filter(({ command }) => command === "pair_device")).toEqual([
+      { command: "pair_device", description: "Configured pair menu" },
     ]);
+    expect(registered.filter(({ command }) => command === "export_session")).toEqual([
+      expect.objectContaining({ description: expect.not.stringContaining("Custom export") }),
+    ]);
+    expect(names.slice(0, 2)).toEqual(["custom_backup", "pair_device"]);
+    expect(names.indexOf("status")).toBeGreaterThan(names.indexOf("pair_device"));
+    expect(names.indexOf(longestName)).toBeGreaterThan(names.indexOf("status"));
+    expect(names.indexOf("side")).toBeGreaterThan(names.indexOf(longestName));
+    for (const invalid of ["custom!bad", "c".repeat(33), oversizedName]) {
+      expect(names).not.toContain(invalid);
+    }
+    expect(commandHandlers.has("export_session")).toBe(true);
+    expect(commandHandlers.has("export-session")).toBe(false);
+    expect(commandHandlers.has(oversizedName)).toBe(false);
 
     await requireCommandHandler(
       commandHandlers,
-      "pair",
+      "pair_device",
     )(createPrivateCommandContext({ match: "now" }));
-
     expectLastDeliveredReplyText("paired:now");
-    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
-  });
-
-  it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
-    const { bot, commandHandlers, setMyCommands, sendMessage } = createCommandBot();
-
-    await registerPairMenu({
-      bot,
-      setMyCommands,
-      nativeProgressMessages: {
-        telegram:
-          "Running pair now...\n\nI'll edit this message with the final result when it's ready.",
-      },
-    });
-
-    const handler = requireCommandHandler(commandHandlers, "pair");
-
-    await handler(createPrivateCommandContext({ match: "now" }));
-
-    const sendCall = mockCall(sendMessage, 0);
-    expect(sendCall[0]).toBe(100);
-    expect(sendCall[1]).toContain("Running pair now");
-    expect(sendCall[2]).toBeUndefined();
-    const editCall = mockCall(editMessageTelegram, 0);
-    expect(editCall[0]).toBe(100);
-    expect(editCall[1]).toBe(999);
-    expect(editCall[2]).toBe("paired:now");
-    expect((editCall[3] as { accountId?: string }).accountId).toBe("default");
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("round-trips Telegram native aliases through the real plugin registry", async () => {
-    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
-
-    const registeredCommands = await registerPairMenu({
-      bot,
-      setMyCommands,
-      nativeNames: {
-        telegram: "pair_device",
-        discord: "pairdiscord",
-      },
-    });
-    expectRegisteredCommand(registeredCommands, {
-      command: "pair_device",
-      description: "Pair device",
-    });
-
-    const handler = requireCommandHandler(commandHandlers, "pair_device");
-
-    await handler(createPrivateCommandContext({ match: "now", messageId: 2 }));
-
-    expectLastDeliveredReplyText("paired:now");
-    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+    await requireCommandHandler(commandHandlers, longestName)(createPrivateCommandContext());
+    expectLastDeliveredReplyText("Length boundary accepted");
   });
 
   it.each([
-    ["transformed-first", ["foo-bar", "foo_bar"]],
-    ["exact-first", ["foo_bar", "foo-bar"]],
+    ["transformed-first", ["zeta", "foo-bar", "foo_bar", "alpha"]],
+    ["exact-first", ["alpha", "foo_bar", "foo-bar", "zeta"]],
   ] as const)("executes the exact normalized winner with %s discovery", async (_label, names) => {
     const handlers = new Map<string, ReturnType<typeof vi.fn>>();
     for (const name of names) {
-      const handler = vi.fn(async () => ({ text: name }));
+      const handler = vi.fn(async () => ({
+        text: name === "foo_bar" ? "Exact owner ran" : "Other owner ran",
+      }));
       handlers.set(name, handler);
       expect(
         registerPluginCommand(`plugin-${name}`, {
           name,
           description: name,
+          descriptionLocalizations: { ko: name === "foo_bar" ? "정확함" : "다른 명령" },
           channels: ["telegram"],
           requireAuth: false,
           handler,
@@ -299,12 +200,17 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
     const registered = await waitForRegisteredCommands(setMyCommands);
     expect(registered.filter((command) => command.command === "foo_bar")).toEqual([
-      { command: "foo_bar", description: "foo_bar" },
+      { command: "foo_bar", description: "foo_bar", descriptionLocalizations: { ko: "정확함" } },
     ]);
+    const namesInMenu = registered.map(({ command }) => command);
+    expect(namesInMenu.indexOf("alpha")).toBeGreaterThan(namesInMenu.indexOf("status"));
+    expect(namesInMenu.indexOf("foo_bar")).toBeGreaterThan(namesInMenu.indexOf("alpha"));
+    expect(namesInMenu.indexOf("zeta")).toBeGreaterThan(namesInMenu.indexOf("foo_bar"));
+    expect(namesInMenu.indexOf("side")).toBeGreaterThan(namesInMenu.indexOf("zeta"));
 
     await requireCommandHandler(commandHandlers, "foo_bar")(createPrivateCommandContext());
 
-    expectLastDeliveredReplyText("foo_bar");
+    expectLastDeliveredReplyText("Exact owner ran");
     expect(handlers.get("foo_bar")).toHaveBeenCalledOnce();
     expect(handlers.get("foo-bar")).not.toHaveBeenCalled();
   });
@@ -343,7 +249,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     { command: "discord-only", channels: ["discord"], retained: false },
   ])(
     "registers only supported plugin handlers when native menu display is disabled: $command",
-    ({ command, channels, retained }) => {
+    async ({ command, channels, retained }) => {
       const { bot, commandHandlers, setMyCommands } = createCommandBot();
 
       expect(
@@ -351,21 +257,36 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
           name: command,
           description: `${command} command`,
           channels,
+          requireAuth: false,
           handler: async () => ({ text: "ok" }),
         }),
       ).toEqual({ ok: true });
 
       registerTelegramNativeCommands({
-        ...createNativeCommandTestParams({}, { accountId: "default" }),
+        ...createNativeCommandTestParams(
+          {},
+          {
+            accountId: "default",
+            telegramCfg: {
+              customCommands: [
+                { command: "/Custom-Backup", description: "Backup" },
+                { command: "/Login", description: "Custom login must lose" },
+              ],
+            },
+          },
+        ),
         bot,
         nativeEnabled: false,
       });
 
-      expect(setMyCommands).not.toHaveBeenCalled();
-      expect(commandHandlers.has(command)).toBe(retained);
-      expect(retainNativeCatalog).toHaveBeenCalledTimes(retained ? 1 : 0);
+      expect(await waitForRegisteredCommands(setMyCommands)).toEqual([
+        { command: "custom_backup", description: "Backup" },
+      ]);
+      expect(commandHandlers.has(command.replaceAll("-", "_"))).toBe(retained);
+      expect(commandHandlers.has("login")).toBe(false);
       if (retained) {
-        expect(retainNativeCatalog).toHaveBeenCalledWith("telegram");
+        await requireCommandHandler(commandHandlers, command)(createPrivateCommandContext());
+        expectLastDeliveredReplyText("ok");
       }
     },
   );

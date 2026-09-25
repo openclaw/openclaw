@@ -1,4 +1,3 @@
-// Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
@@ -18,11 +17,10 @@ import {
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
-type InlineImageCandidate =
+type InlineImageReference =
   | {
       kind: "data";
-      data: Buffer;
-      contentType?: string;
+      src: string;
       sourceId?: string;
     }
   | {
@@ -33,11 +31,6 @@ type InlineImageCandidate =
       sourceId?: string;
     }
   | { kind: "unavailable"; sourceId?: string };
-
-type InlineImageLimitOptions = {
-  maxInlineBytes?: number;
-  maxInlineTotalBytes?: number;
-};
 
 const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
@@ -309,77 +302,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function canonicalizeInlineBase64Payload(value: string): string | undefined {
-  let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x20) {
-      continue;
-    }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isDataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isDataChar) {
-      return undefined;
-    }
-    cleaned += value[index];
-  }
-  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
-}
-
-function decodeDataImageWithLimits(
-  src: string,
-  opts: { maxInlineBytes?: number },
-): { candidate: InlineImageCandidate | null; estimatedBytes: number } {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-
-  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
-  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (estimatedBytes <= 0) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  if (typeof opts.maxInlineBytes === "number" && estimatedBytes > opts.maxInlineBytes) {
-    return { candidate: null, estimatedBytes };
-  }
-
-  try {
-    const data = Buffer.from(canonicalPayload, "base64");
-    return {
-      candidate: { kind: "data", data, contentType },
-      estimatedBytes,
-    };
-  } catch {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-}
-
 function fileHintFromUrl(src: string): string | undefined {
   try {
     const url = new URL(src);
@@ -390,11 +312,10 @@ function fileHintFromUrl(src: string): string | undefined {
   }
 }
 
-export function extractInlineImageCandidates(
+export function extractInlineImageReferences(
   attachments: MSTeamsAttachmentLike[],
-  limits?: InlineImageLimitOptions,
-): InlineImageCandidate[] {
-  const out: InlineImageCandidate[] = [];
+): InlineImageReference[] {
+  const out: InlineImageReference[] = [];
   const seenReferences = new Set<string>();
   const representedAttachmentIds = new Set(
     attachments.flatMap((attachment) => {
@@ -402,7 +323,6 @@ export function extractInlineImageCandidates(
       return id && !extractHtmlFromAttachment(attachment) ? [id] : [];
     }),
   );
-  let totalEstimatedInlineBytes = 0;
   for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
@@ -414,23 +334,7 @@ export function extractInlineImageCandidates(
       const src = match[1]?.trim();
       if (src) {
         if (src.startsWith("data:")) {
-          const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
-            maxInlineBytes: limits?.maxInlineBytes,
-          });
-          if (decoded) {
-            const nextTotal = totalEstimatedInlineBytes + estimatedBytes;
-            if (
-              typeof limits?.maxInlineTotalBytes === "number" &&
-              nextTotal > limits.maxInlineTotalBytes
-            ) {
-              out.push({ kind: "unavailable" });
-            } else {
-              totalEstimatedInlineBytes = nextTotal;
-              out.push(decoded);
-            }
-          } else {
-            out.push({ kind: "unavailable" });
-          }
+          out.push({ kind: "data", src });
         } else if (!seenReferences.has(src)) {
           seenReferences.add(src);
           if (src.startsWith("cid:")) {
@@ -607,21 +511,16 @@ export function isRedirectStatus(status: number): boolean {
  * - Auto-following redirects to non-allowlisted hosts
  * - DNS rebinding attacks when a lookup function is provided
  */
-async function safeFetch(params: {
+export async function safeFetchWithPolicy(params: {
   url: string;
-  allowHosts: string[];
-  /**
-   * Optional allowlist for forwarding Authorization across redirects.
-   * When set, Authorization is stripped before following redirects to hosts
-   * outside this list.
-   */
-  authorizationAllowHosts?: string[];
+  policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
+  const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -631,17 +530,13 @@ async function safeFetch(params: {
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
-  if (!isUrlAllowed(currentUrl, params.allowHosts)) {
+  if (!isUrlAllowed(currentUrl, allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
   // Authorization is only allowed on explicitly auth-allowlisted hosts, including
   // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(currentUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
@@ -662,10 +557,10 @@ async function safeFetch(params: {
       },
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
-      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      policy: resolveMediaSsrfPolicy(allowHosts),
       lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
-        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(authAllowHosts),
       auditContext: "msteams.attachment",
       timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
@@ -702,42 +597,17 @@ async function safeFetch(params: {
   }
 
   // Validate redirect target against hostname allowlist
-  if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+  if (!isUrlAllowed(redirectUrl, allowHosts)) {
     throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
   }
 
   // Prevent credential bleed: only keep Authorization on redirect hops that
   // are explicitly auth-allowlisted.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(redirectUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
   // A pinned dispatcher is already injected by an upstream guard; let it own
   // redirect handling after this allowlist validation step.
   return res;
-}
-
-export async function safeFetchWithPolicy(params: {
-  url: string;
-  policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-  requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
-  timeoutMs?: number;
-}): Promise<Response> {
-  return await safeFetch({
-    url: params.url,
-    allowHosts: params.policy.allowHosts,
-    authorizationAllowHosts: params.policy.authAllowHosts,
-    fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-    requestInit: params.requestInit,
-    resolveFn: params.resolveFn,
-    timeoutMs: params.timeoutMs,
-  });
 }

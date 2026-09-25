@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
 type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
@@ -10,23 +9,16 @@ type CuaSessionState = import("@trycua/cua-driver").SessionStateOutput;
 type CuaDriverSdk = Pick<
   typeof import("@trycua/cua-driver"),
   | "ActionTarget"
+  | "ClickPosition"
   | "CuaDriver"
-  | "EscalationReason"
+  | "DriverError"
+  | "InputDeliveryMode"
   | "ScrollBy"
   | "SessionPermissionMode"
   | "createTrustedSession"
 >;
 
 export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
-
-export const EscalationReason = {
-  AxTreePixelMismatch: 0 as DriverEscalationReason,
-  BackgroundDeliveryFailed: 1 as DriverEscalationReason,
-  ForegroundIneffective: 2 as DriverEscalationReason,
-  NoWindowTarget: 3 as DriverEscalationReason,
-  Other: 4 as DriverEscalationReason,
-} as const;
-export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
 // These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
@@ -57,7 +49,7 @@ export interface CuaDriverSession {
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
   getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
-  escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
+  getSessionState(signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
   click(
@@ -85,8 +77,7 @@ function asyncOptions(signal?: AbortSignal) {
   return signal ? { signal } : undefined;
 }
 
-class DirectCuaDriverSession implements CuaDriverSession {
-  readonly generation = randomUUID();
+class DirectCuaDriverSession {
   private readonly runtime: CuaDriverLike;
   private readonly session: CuaDriverSessionLike;
   private readonly publicSession = `openclaw-${randomUUID()}`;
@@ -173,7 +164,7 @@ class DirectCuaDriverSession implements CuaDriverSession {
       this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     await this.ensureSessionStarted(signal);
     return await this.session.getSessionState(
       { session: this.publicSession },
@@ -189,10 +180,36 @@ class DirectCuaDriverSession implements CuaDriverSession {
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
-  ) {
-    return await this.invoke(signal, () =>
-      this.session.click({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
-    );
+  ): Promise<CuaToolResult> {
+    return await this.invoke(signal, async () => {
+      // Typed clicks return ActionResult and throw tool refusals; other SDK
+      // actions still use the shared ToolResult envelope.
+      try {
+        const action = await this.session.click(
+          {
+            position: this.sdk.ClickPosition.Coordinates.new({ x: input.x, y: input.y }),
+            deliveryMode: this.sdk.InputDeliveryMode.Foreground,
+            button: input.button,
+            count: input.count,
+            target: this.desktopTarget,
+          },
+          asyncOptions(signal),
+        );
+        return { text: "", images: [], isError: false, degraded: false, rawJson: "{}", action };
+      } catch (error) {
+        if (!this.sdk.DriverError.Tool.instanceOf(error)) {
+          throw error;
+        }
+        return {
+          text: error.inner.message,
+          images: [],
+          isError: true,
+          degraded: false,
+          rawJson: "{}",
+          errorCode: error.inner.errorCode,
+        };
+      }
+    });
   }
   async drag(
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
@@ -297,7 +314,8 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
 }
 
 class LazyCuaDriverSession implements CuaDriverSession {
-  private readonly unloadedGeneration = randomUUID();
+  // The execution owns this generation before and after its lazy runtime loads.
+  readonly generation = randomUUID();
   private runtime: DirectCuaDriverSession | undefined;
   private loadPromise: Promise<DirectCuaDriverSession> | undefined;
   private loadFailure: unknown;
@@ -305,10 +323,6 @@ class LazyCuaDriverSession implements CuaDriverSession {
   private disposed = false;
 
   constructor(private readonly loadSdk: () => CuaDriverSdk | Promise<CuaDriverSdk>) {}
-
-  get generation(): string {
-    return this.runtime?.generation ?? this.unloadedGeneration;
-  }
 
   private resolveRuntime(): DirectCuaDriverSession | undefined {
     if (this.disposed || this.hasLoadFailure || this.loadPromise) {
@@ -398,8 +412,8 @@ class LazyCuaDriverSession implements CuaDriverSession {
   async getCursorPosition(signal?: AbortSignal) {
     return await (await this.requireRuntime()).getCursorPosition(signal);
   }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).escalateScope(reason, signal);
+  async getSessionState(signal?: AbortSignal) {
+    return await (await this.requireRuntime()).getSessionState(signal);
   }
   async getScreenSize(signal?: AbortSignal) {
     return await (await this.requireRuntime()).getScreenSize(signal);

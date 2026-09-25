@@ -23,6 +23,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -43,11 +44,12 @@ import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner
 import {
   buildCliExecLogLine,
   createManagedRun,
+  createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
-import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -110,14 +112,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function mockSuccessfulCliRun(stdout = "ok") {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 50,
+      ...createSuccessfulProcessExit(),
       stdout,
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
     }),
   );
 }
@@ -212,7 +208,9 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).not.toContain("claude-session-secret");
   });
 
-  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+  it("streams a node-placed Claude resume through the normal JSONL parser", async ({
+    onTestFinished,
+  }) => {
     const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
     let toolAvailability: unknown = "unset";
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
@@ -299,6 +297,14 @@ describe("runCliAgent spawn path", () => {
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
 
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      context.params.runId,
+      "main",
+      "cli-node-resume-test",
+    );
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     const output = await executePreparedCliRun(context, "source-node-session");
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
@@ -750,14 +756,8 @@ describe("runCliAgent spawn path", () => {
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -778,38 +778,11 @@ describe("runCliAgent spawn path", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
-  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp",
-      modelDisplay: "claude-cli/sonnet",
-      tools: [],
-      skillsPrompt: [
-        "<available_skills>",
-        "  <skill>",
-        "    <name>weather</name>",
-        "    <description>Use weather tools.</description>",
-        "    <location>/tmp/skills/weather/SKILL.md</location>",
-        "  </skill>",
-        "</available_skills>",
-      ].join("\n"),
-    });
-
-    expect(systemPrompt).toContain("## Skills");
-    expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
-  });
-
   it("pipes Claude prompts over stdin instead of argv", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -861,14 +834,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n";
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-metadata");
@@ -963,14 +930,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n";
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-content");
@@ -1068,14 +1029,9 @@ describe("runCliAgent spawn path", () => {
       label: "parse failure",
       runId: "run-claude-model-call-parse-error",
       exit: {
+        ...createSuccessfulProcessExit(),
         reason: "exit" as const,
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
         stdout: `${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       },
       errorCategory: "unknown",
       failureKind: undefined,
@@ -1122,14 +1078,8 @@ describe("runCliAgent spawn path", () => {
       );
       expect(input.argv).not.toContain("You are a helpful assistant.");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1152,14 +1102,8 @@ describe("runCliAgent spawn path", () => {
       expect(input.argv).toContain("soft-cli-session");
       expect(input.argv?.join(" ")).toContain("/tmp/openclaw-soft-resume-system-prompt.md");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
     const context = buildPreparedCliRunContext({
@@ -1507,19 +1451,17 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("maps Ultra to the strongest generic CLI backend level", async () => {
+  it("passes the prepared native effort for Ultra to the CLI backend", async () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        thinkLevel: "ultra",
-        resolveExecutionArgs,
-      }),
-    );
+    await executePreparedCliRun({
+      ...buildPreparedCliRunContext({ thinkLevel: "ultra", resolveExecutionArgs }),
+      providerThinkingLevel: "high",
+    });
 
     const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
-    expect(resolveArgsInput.thinkingLevel).toBe("max");
+    expect(resolveArgsInput.thinkingLevel).toBe("high");
   });
 
   it("passes prepared backend env to the spawned CLI process", async () => {
@@ -1590,14 +1532,8 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { env?: Record<string, string> };
       expect(input.env?.CLI_SKILL_API_KEY).toBe("skill-secret");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1634,14 +1570,8 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { env?: Record<string, string> };
       expect(input.env?.CLI_SKILL_API_KEY).toBeUndefined();
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1680,14 +1610,8 @@ describe("runCliAgent spawn path", () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -1740,14 +1664,10 @@ describe("runCliAgent spawn path", () => {
   it("returns process diagnostics with byte counts and bounded output hashes", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
+        ...createSuccessfulProcessExit(),
         durationMs: 75,
         stdout: "ok",
         stderr: "warn\n",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -1775,10 +1695,7 @@ describe("runCliAgent spawn path", () => {
   it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout:
           [
             JSON.stringify({
@@ -1795,9 +1712,6 @@ describe("runCliAgent spawn path", () => {
               },
             }),
           ].join("\n") + "\n",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -1827,14 +1741,8 @@ describe("runCliAgent spawn path", () => {
         "utf-8",
       );
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1946,16 +1854,7 @@ describe("runCliAgent spawn path", () => {
           result: "Hello world",
         }) + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -1996,16 +1895,7 @@ describe("runCliAgent spawn path", () => {
           }),
         ].join("\n") + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -2053,16 +1943,7 @@ describe("runCliAgent spawn path", () => {
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({
       provider: "codex-cli",

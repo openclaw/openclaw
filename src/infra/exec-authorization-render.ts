@@ -5,6 +5,8 @@ import type {
   ExecAuthorizationCandidate,
   ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import type { SystemRunMutableFileBinding } from "./system-run-approval-binding.js";
 
 type AuthorizedShellRenderMode = "safeBins" | "enforced";
 
@@ -288,4 +290,94 @@ export function buildAuthorizedShellCommandFromPlan(params: {
     command: params.plan.originalCommand,
     replacements,
   });
+}
+
+/** Pins reviewed dispatches while retaining argument expansion and wrapper semantics. */
+export function buildReviewedShellCommandFromPlan(params: {
+  plan: ExecAuthorizationPlan;
+  binding: SystemRunMutableFileBinding;
+  segmentSatisfiedBy?: readonly ExecSegmentSatisfiedBy[];
+}): AuthorizedShellRenderResult {
+  if (!params.plan.ok) {
+    return { ok: false, reason: params.plan.reason };
+  }
+  if (params.plan.dialect !== "posix-shell") {
+    return { ok: false, reason: "unsupported command dialect" };
+  }
+  const candidates = params.plan.groups.flatMap((group) => group.candidates);
+  if (params.segmentSatisfiedBy && params.segmentSatisfiedBy.length !== candidates.length) {
+    return { ok: false, reason: "segment metadata mismatch" };
+  }
+  const replacements: SourceReplacement[] = [];
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    if (params.segmentSatisfiedBy?.[candidateIndex] === "safeBuiltins") {
+      continue;
+    }
+    const { sourceSegment: segment, sourceStep: step } = candidate;
+    const sourceArgv = segment.sourceArgv ?? segment.argv;
+    const { dispatchChain } = resolveExecWrapperTrustPlan(sourceArgv);
+    if (
+      candidate.transport.kind !== "direct" ||
+      segment.resolution?.policyBlocked ||
+      !dispatchChain
+    ) {
+      return { ok: false, reason: "dispatch chain cannot be rendered" };
+    }
+    if (
+      step.argvSpans?.length !== sourceArgv.length ||
+      step.argv.length !== sourceArgv.length ||
+      !step.argv.every((token, index) => token === sourceArgv[index])
+    ) {
+      return { ok: false, reason: "argument source spans unavailable" };
+    }
+    const stepSpanResult = validateSpan({
+      command: params.plan.originalCommand,
+      span: step.span,
+      expectedText: step.text,
+    });
+    if (!stepSpanResult.ok) {
+      return stepSpanResult;
+    }
+    for (const [index, argv] of dispatchChain.entries()) {
+      const argvIndex = sourceArgv.length - argv.length;
+      const span = step.argvSpans[argvIndex];
+      if (
+        !span ||
+        !argv.every((token, offset) => token === sourceArgv[argvIndex + offset]) ||
+        span.startIndex < step.span.startIndex ||
+        span.endIndex > step.span.endIndex
+      ) {
+        return { ok: false, reason: "dispatch source span mismatch" };
+      }
+      const operandArgv = index === dispatchChain.length - 1 ? segment.argv : argv.slice(0, 1);
+      const operand = params.binding.operands.find(
+        (entry) =>
+          entry.executable === true &&
+          entry.snapshot.argvIndex === 0 &&
+          entry.argv.length === operandArgv.length &&
+          entry.argv.every((token, offset) => token === operandArgv[offset]),
+      );
+      if (!operand?.executable || !operand.invocationPath.startsWith("/")) {
+        return { ok: false, reason: "bound executable unavailable" };
+      }
+      const spanResult = validateSpan({
+        command: params.plan.originalCommand,
+        span,
+        expectedText: sourceStepSlice({ candidate, span }),
+      });
+      if (!spanResult.ok) {
+        return spanResult;
+      }
+      replacements.push({
+        startIndex: span.startIndex,
+        endIndex: span.endIndex,
+        // Quote even ordinary paths: aliases can themselves be named absolute paths.
+        text: shellEscapeSingleArg(operand.invocationPath),
+      });
+    }
+  }
+  if (replacements.length === 0) {
+    return { ok: false, reason: "no dispatches to render" };
+  }
+  return applyReplacements({ command: params.plan.originalCommand, replacements });
 }

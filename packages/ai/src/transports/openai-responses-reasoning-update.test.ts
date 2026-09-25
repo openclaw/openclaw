@@ -44,49 +44,57 @@ afterEach(() => {
 });
 
 describe("cache-preserving Responses reasoning changes", () => {
-  it("keeps the request effort and original update positions through subsequent turns", () => {
-    const first = initial();
-    const second = next();
-    const before = structuredClone({ first, second });
-    const high = resolveResponsesContinuationRequest(first, second);
-    expect(high.request).toMatchObject({
-      previous_response_id: "resp_1",
-      reasoning: { effort: "low" },
-      input: [update("high"), user("second")],
-    });
-    assert(high.fullRequest);
-    expect(high.fullRequest.input).toEqual([user("first"), answer, update("high"), user("second")]);
-    expect({ first, second }).toEqual(before);
-    const third = {
-      ...next("medium"),
-      input: [...second.input, answer, user("third")],
-    };
-    const medium = resolveResponsesContinuationRequest(
-      { ...first, lastRequest: high.fullRequest, lastResponseId: "resp_2" },
-      third,
-    );
-    expect(medium.request).toMatchObject({
-      previous_response_id: "resp_2",
-      reasoning: { effort: "low" },
-      input: [update("medium"), user("third")],
-    });
-    assert(medium.fullRequest);
-    expect(medium.fullRequest.input).toEqual([
-      user("first"),
-      answer,
-      update("high"),
-      user("second"),
-      answer,
-      update("medium"),
-      user("third"),
-    ]);
-    const unchanged = resolveResponsesContinuationRequest(
-      { ...first, lastRequest: medium.fullRequest, lastResponseId: "resp_3" },
-      { ...third, input: [...third.input, answer, user("fourth")] },
-    );
-    expect(unchanged.request.input).toEqual([user("fourth")]);
-    expect(unchanged.request.reasoning).toMatchObject({ effort: "low" });
-  });
+  it.each(["high", "max", "xhigh"])(
+    "keeps the request effort and original update positions through %s turns",
+    (effort) => {
+      const first = initial();
+      const second = next(effort);
+      const before = structuredClone({ first, second });
+      const high = resolveResponsesContinuationRequest(first, second);
+      expect(high.request).toMatchObject({
+        previous_response_id: "resp_1",
+        reasoning: { effort: "low" },
+        input: [update(effort), user("second")],
+      });
+      assert(high.fullRequest);
+      expect(high.fullRequest.input).toEqual([
+        user("first"),
+        answer,
+        update(effort),
+        user("second"),
+      ]);
+      expect({ first, second }).toEqual(before);
+      const third = {
+        ...next("medium"),
+        input: [...second.input, answer, user("third")],
+      };
+      const medium = resolveResponsesContinuationRequest(
+        { ...first, lastRequest: high.fullRequest, lastResponseId: "resp_2" },
+        third,
+      );
+      expect(medium.request).toMatchObject({
+        previous_response_id: "resp_2",
+        reasoning: { effort: "low" },
+        input: [update("medium"), user("third")],
+      });
+      assert(medium.fullRequest);
+      expect(medium.fullRequest.input).toEqual([
+        user("first"),
+        answer,
+        update(effort),
+        user("second"),
+        answer,
+        update("medium"),
+        user("third"),
+      ]);
+      const unchanged = resolveResponsesContinuationRequest(
+        { ...first, lastRequest: medium.fullRequest, lastResponseId: "resp_3" },
+        { ...third, input: [...third.input, answer, user("fourth")] },
+      );
+      expect(unchanged.request.input).toEqual([user("fourth")]);
+      expect(unchanged.request.reasoning).toMatchObject({ effort: "low" });
+    },
+  );
 
   it.each<{
     name: string;
@@ -125,6 +133,20 @@ describe("cache-preserving Responses reasoning changes", () => {
       expect(result.fullRequest).toBeUndefined();
       expect(result.request.reasoning).toMatchObject({ effort: "high" });
     }
+  });
+
+  it.each([
+    { input: [], expectedStatus: "history_shorter" },
+    { input: [user("edited"), answer, user("second")], expectedStatus: "history_changed" },
+    {
+      input: [user("first"), { ...answer, content: [] }, user("second")],
+      expectedStatus: "history_changed",
+    },
+  ])("keeps required-input history validation: $expectedStatus", ({ input, expectedStatus }) => {
+    const request = { ...next(), max_output_tokens: 512, input };
+    const result = resolveResponsesContinuationRequest(initial(), request, "required-input");
+    expect(result).toEqual({ request, continuationStatus: expectedStatus });
+    expect(result.request.previous_response_id).toBeUndefined();
   });
 
   it("replays unstored HTTP input and resets to the chosen effort after cache expiry", () => {

@@ -3,11 +3,13 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -49,6 +51,19 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
   }
   const proofDir = transitionProofDir();
   await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page
+          .locator(
+            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
+          )
+          .first(),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
 }
 
@@ -99,12 +114,19 @@ suite.define(() => {
       });
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect.poll(() => composer.inputValue()).toBe("");
+      await captureProof(page, `background-${label}-running.png`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain(`run this separately on ${label}`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain("Session created");
+      await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
-      await captureProof(page, `background-${label}-running.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }
@@ -136,11 +158,7 @@ suite.define(() => {
   });
 
   it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
     await context.addInitScript(
       ({ key, url }) => {
@@ -175,11 +193,7 @@ suite.define(() => {
   });
 
   it("creates and lists a session with the default mock Gateway", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
     try {
@@ -190,12 +204,20 @@ suite.define(() => {
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "verify the default mock" },
       });
-      const sessionKeys = ["agent:main:mock-created-1", "agent:main:mock-created-2"] as const;
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath(sessionKeys[0]));
+      const firstCreate = await gateway.waitForRequest("sessions.create");
+      const firstParams = firstCreate.params;
+      if (
+        !firstParams ||
+        typeof firstParams !== "object" ||
+        !("key" in firstParams) ||
+        typeof firstParams.key !== "string"
+      ) {
+        throw new Error("Expected the first sessions.create key");
+      }
+      const firstKey = firstParams.key;
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
 
-      await page.getByRole("link", { name: "New session" }).first().click();
+      await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await page.locator(".new-session-page__message").fill("verify another default mock");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -203,10 +225,18 @@ suite.define(() => {
       expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
         params: { agentId: "main", message: "verify another default mock" },
       });
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath(sessionKeys[1]));
-      for (const sessionKey of sessionKeys) {
+      const secondParams = (await gateway.waitForRequest("sessions.create", { after: 1 })).params;
+      if (
+        !secondParams ||
+        typeof secondParams !== "object" ||
+        !("key" in secondParams) ||
+        typeof secondParams.key !== "string"
+      ) {
+        throw new Error("Expected the second sessions.create key");
+      }
+      const secondKey = secondParams.key;
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
+      for (const sessionKey of [firstKey, secondKey]) {
         await expect
           .poll(() =>
             page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
@@ -223,7 +253,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestsBeforeReconnect);
-      for (const sessionKey of sessionKeys) {
+      for (const sessionKey of [firstKey, secondKey]) {
         await expect
           .poll(() =>
             page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
@@ -236,12 +266,8 @@ suite.define(() => {
     }
   });
 
-  it("commits the confirmed session URL before Chat loads and animates only the ready composer", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("keeps the submitted preview while Chat loads and commits the ready session", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const thinkingLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
       id,
@@ -261,7 +287,7 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/chat-page-*.js*", async (route) => {
+    await page.route("**/assets/route-entry-*.js*", async (route) => {
       chatModuleRequested = true;
       await chatModuleBlocked;
       await route.continue();
@@ -341,13 +367,9 @@ suite.define(() => {
         runId: RUN_ID,
         runStarted: true,
       });
-      await gateway.waitForRequest("sessions.list", {
-        after: listRequestsBeforeSubmit,
-        match: rosterMatch,
-      });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
+      expect(new URL(page.url()).pathname).toBe("/new");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       expect(await submittedPrompt.isVisible()).toBe(true);
@@ -382,7 +404,7 @@ suite.define(() => {
             );
           });
           // Record the brief animation in-page before protocol round-trips can miss it.
-          if (frames.transition === null && chatSurfaceReady && routeAnimation) {
+          if (frames.transition === null && chatSurfaceReady) {
             frames.transition = {
               activeViewTransition: Boolean(document.activeViewTransition),
               chatSurfaceReady,
@@ -409,7 +431,7 @@ suite.define(() => {
             return frames.transition;
           }),
         )
-        .toEqual({ activeViewTransition: false, chatSurfaceReady: true, routeAnimation: true });
+        .toMatchObject({ activeViewTransition: false, chatSurfaceReady: true });
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
@@ -421,9 +443,9 @@ suite.define(() => {
         .toBe("xhigh");
       await waitForCommittedChatRoute(page);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
-      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
-        listRequestsBeforeSubmit + 1,
-      );
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
+        .toBe(listRequestsBeforeSubmit + 1);
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       const invalidFrames = await page.evaluate(() => {
         const frames = Reflect.get(
@@ -556,7 +578,7 @@ suite.define(() => {
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
           const announcement = page.locator(
-            '.new-session-page > [role="status"][aria-live="polite"]',
+            '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create > .chat > [role="status"][aria-live="polite"]',
           );
           const draftImage = page.locator(".chat-attachment-thumb").getByRole("img", {
             name: imageFileName,
@@ -596,11 +618,17 @@ suite.define(() => {
             ],
           };
           expect(create.params).toMatchObject(submittedPayload);
+          await page.locator("openclaw-pending-session-create").waitFor();
+          expect(new URL(page.url()).pathname).toBe("/new");
+          expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+          expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
           if (content === "json") {
-            await submittedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(submittedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const pendingJson = submittedPrompt.locator(".chat-text");
+            await pendingJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(pendingJson.locator("pre code")).toBe(submittedMessage);
+            expect(await pendingJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           } else {
             const pendingMarkdown = submittedPrompt.locator(".chat-text");
@@ -714,9 +742,11 @@ suite.define(() => {
               .click();
             await expandedTable.waitFor({ state: "detached" });
           } else {
-            await acceptedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(acceptedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const acceptedJson = acceptedPrompt.locator(".chat-text");
+            await acceptedJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(acceptedJson.locator("pre code")).toBe(submittedMessage);
+            expect(await acceptedJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           }
           await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));

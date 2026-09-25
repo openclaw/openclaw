@@ -14,42 +14,21 @@ import type { createJiti } from "jiti/static";
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxError from "typebox/error";
 import * as bundledTypeboxFormat from "typebox/format";
+import * as bundledTypeboxGuard from "typebox/guard";
+import * as bundledTypeboxSchema from "typebox/schema";
+import * as bundledTypeboxSystem from "typebox/system";
+import * as bundledTypeboxType from "typebox/type";
 import * as bundledTypeboxValue from "typebox/value";
+import * as bundledAgentCore from "../../../plugin-sdk/agent-core.js";
 import * as bundledLlm from "../../../plugin-sdk/llm.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
 } from "../../../plugins/sdk-alias.js";
-import { isBunBinary } from "../../config.js";
-import {
-  Agent,
-  bashExecutionToText,
-  buildSessionContext,
-  calculateContextTokens,
-  collectEntriesForBranchSummaryFromBranches,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
-  generateBranchSummary,
-  generateSummary,
-  getLastAssistantUsage,
-  openClawAgentCoreRuntime,
-  prepareBranchEntries,
-  prepareCompaction,
-  runAgentLoop,
-  serializeConversation,
-  shouldCompact,
-  uuidv7,
-  BRANCH_SUMMARY_PREFIX,
-  BRANCH_SUMMARY_SUFFIX,
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
-  DEFAULT_COMPACTION_SETTINGS,
-} from "../../runtime/index.js";
+import { isBunBinary } from "../../package-metadata.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -68,39 +47,16 @@ import type {
   ToolDefinition,
 } from "./types.js";
 
-/** Modules available to extensions via virtualModules (for compiled Bun binary) */
-const bundledAgentCore = {
-  Agent,
-  bashExecutionToText,
-  buildSessionContext,
-  calculateContextTokens,
-  collectEntriesForBranchSummaryFromBranches,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
-  generateBranchSummary,
-  generateSummary,
-  getLastAssistantUsage,
-  openClawAgentCoreRuntime,
-  prepareBranchEntries,
-  prepareCompaction,
-  runAgentLoop,
-  serializeConversation,
-  shouldCompact,
-  uuidv7,
-  BRANCH_SUMMARY_PREFIX,
-  BRANCH_SUMMARY_SUFFIX,
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
-  DEFAULT_COMPACTION_SETTINGS,
-};
-
+/** Canonical host modules shared by source extensions and compiled binaries. */
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/error": bundledTypeboxError,
   "typebox/format": bundledTypeboxFormat,
+  "typebox/guard": bundledTypeboxGuard,
+  "typebox/schema": bundledTypeboxSchema,
+  "typebox/system": bundledTypeboxSystem,
+  "typebox/type": bundledTypeboxType,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,
@@ -116,7 +72,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 
 const require = createRequire(import.meta.url);
 
-let aliases: Record<string, string> | null = null;
 let createJitiLoaderFactory: typeof createJiti | undefined;
 let nativeExtensionLoadCounter = 0;
 // One cwd slot bounds the process cache. The generation keeps an in-flight
@@ -140,43 +95,6 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   }
   createJitiLoaderFactory = loaded.createJiti;
   return createJitiLoaderFactory;
-}
-
-function resolveExtensionSafeAgentSessionsEntry(): string {
-  const currentDirname = path.dirname(fileURLToPath(import.meta.url));
-  const jsEntry = path.resolve(currentDirname, "..", "extension-sdk.js");
-  return fs.existsSync(jsEntry) ? jsEntry : path.resolve(currentDirname, "..", "extension-sdk.ts");
-}
-
-function getExtensionLoaderAliases(): Record<string, string> {
-  if (aliases) {
-    return aliases;
-  }
-
-  const agentSessionsEntry = resolveExtensionSafeAgentSessionsEntry();
-  const typeboxEntry = require.resolve("typebox");
-  const typeboxCompileEntry = require.resolve("typebox/compile");
-  const typeboxFormatEntry = require.resolve("typebox/format");
-  const typeboxValueEntry = require.resolve("typebox/value");
-  const loaderModulePath = fileURLToPath(import.meta.url);
-
-  aliases = {
-    ...buildPluginLoaderAliasMap(loaderModulePath, process.argv[1], import.meta.url),
-    // The public agent-sessions export includes the resource loader. Extensions
-    // load through the resource loader, so use the cycle-safe SDK barrel here.
-    "openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    "@openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    typebox: typeboxEntry,
-    "typebox/compile": typeboxCompileEntry,
-    "typebox/format": typeboxFormatEntry,
-    "typebox/value": typeboxValueEntry,
-    "@sinclair/typebox": typeboxEntry,
-    "@sinclair/typebox/compile": typeboxCompileEntry,
-    "@sinclair/typebox/format": typeboxFormatEntry,
-    "@sinclair/typebox/value": typeboxValueEntry,
-  };
-
-  return aliases;
 }
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -437,7 +355,7 @@ function createExtensionAPI(
 
     setThinkingLevel(level) {
       runtime.assertActive();
-      runtime.setThinkingLevel(level);
+      return runtime.setThinkingLevel(level);
     },
 
     registerProvider(name: string, config: ProviderConfig) {
@@ -524,15 +442,14 @@ async function loadExtensionSourceTransformModule(
   if (!context.sourceTransformLoader) {
     installOpenClawInternalCorePackageNativeResolver({ moduleUrl: import.meta.url });
     const createJitiLoader = await loadCreateJitiLoaderFactory();
+    const aliases = isBunBinary
+      ? {}
+      : buildPluginLoaderAliasMap(fileURLToPath(import.meta.url), process.argv[1], import.meta.url);
     context.sourceTransformLoader = createJitiLoader(import.meta.url, {
-      ...(isBunBinary
-        ? {
-            ...buildPluginLoaderJitiOptions({}),
-            // Bun binaries need virtual modules because extension SDK files are
-            // bundled into the executable rather than present on disk.
-            virtualModules: VIRTUAL_MODULES,
-          }
-        : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
+      ...buildPluginLoaderJitiOptions(aliases),
+      // Share the host SDK graph; entry-file aliases misresolve package subpaths
+      // and re-evaluate SDK dependencies instead of using their native owners.
+      virtualModules: VIRTUAL_MODULES,
       // Extension entry modules must bypass the native ESM cache so an explicit
       // reload observes edited source. Product modules stay native via nativeModules.
       tryNative: false,

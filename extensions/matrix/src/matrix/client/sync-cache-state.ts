@@ -3,10 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ISyncData, IRooms, IStoredClientOpts } from "matrix-js-sdk/lib/matrix.js";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
 
@@ -17,6 +15,9 @@ const SYNC_CACHE_MAX_CHUNKS = Math.floor((SYNC_CACHE_MAX_ENTRIES - 1) / 2);
 const SYNC_CACHE_STATE_KEY = "current";
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const SYNC_CACHE_CHUNK_BYTES = 24_000;
+
+// A reader must finish its generation before another local writer retires its chunks.
+const syncCacheOperations = new KeyedAsyncQueue();
 
 export type PersistedMatrixSyncStore = {
   version: number;
@@ -45,7 +46,7 @@ export type MatrixSyncCacheRecord = MatrixSyncCacheMeta | MatrixSyncCacheChunk;
 
 type MatrixSyncCacheAsyncStore = Pick<
   PluginStateKeyedStore<MatrixSyncCacheRecord>,
-  "delete" | "entries" | "lookup" | "register"
+  "delete" | "entries" | "lookup" | "lookupMany" | "register"
 >;
 
 function normalizeRoomsData(value: unknown): IRooms | null {
@@ -127,17 +128,37 @@ function normalizeLegacyPersistedStore(value: unknown): PersistedMatrixSyncStore
   };
 }
 
-export function readPersistedStoreFromSyncStore(
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>,
-): PersistedMatrixSyncStore | null {
+export async function readPersistedStoreFromStore(params: {
+  storageRootDir: string;
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">;
+}): Promise<PersistedMatrixSyncStore | null> {
+  const { storageRootDir, store } = params;
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), () => readPersistedStore(store));
+}
+
+async function readPersistedStore(
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">,
+): Promise<PersistedMatrixSyncStore | null> {
   const stateKey = SYNC_CACHE_STATE_KEY;
-  const meta = store.lookup(metaKey(stateKey));
+  const meta = await store.lookup(metaKey(stateKey));
   if (!isSyncCacheMeta(meta)) {
     return null;
   }
+  // Preserve the published host floor where lookupMany is not yet available.
+  const records = await store.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) =>
+      chunkKey(stateKey, meta.generation, index),
+    ),
+  );
   const chunks: string[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = store.lookup(chunkKey(stateKey, meta.generation, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records
+      ? result?.value
+      : await store.lookup(chunkKey(stateKey, meta.generation, index));
     if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
       return normalizePersistedStore({
         version: MATRIX_SYNC_CACHE_VERSION,
@@ -298,30 +319,9 @@ export async function readLegacyMatrixSyncCacheState(
 
 export async function hasMatrixSyncCacheStateInStore(params: {
   storageRootDir: string;
-  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup">;
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">;
 }): Promise<boolean> {
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const meta = await params.store.lookup(metaKey(stateKey));
-  if (!isSyncCacheMeta(meta) || meta.chunkCount <= 0) {
-    return false;
-  }
-  const chunks: string[] = [];
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = await params.store.lookup(chunkKey(stateKey, meta.generation, index));
-    if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
-      return false;
-    }
-    chunks.push(chunk.data);
-  }
-  const syncJson = chunks.join("");
-  if (meta.syncDigest !== digestText(syncJson)) {
-    return false;
-  }
-  try {
-    return toPersistedSyncData(JSON.parse(syncJson)) !== null;
-  } catch {
-    return false;
-  }
+  return Boolean((await readPersistedStoreFromStore(params))?.savedSync);
 }
 
 export async function writeMatrixSyncCacheStateToStore(params: {
@@ -329,17 +329,20 @@ export async function writeMatrixSyncCacheStateToStore(params: {
   payload: PersistedMatrixSyncStore;
   store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
+  const { storageRootDir, store, payload } = params;
   const stateKey = SYNC_CACHE_STATE_KEY;
-  const rows = buildSyncCacheRows(stateKey, params.payload);
-  for (const row of rows.chunks) {
-    await params.store.register(row.key, row.value);
-  }
-  await params.store.register(rows.meta.key, rows.meta.value);
-  for (const row of await params.store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix(stateKey)) && !rows.nextChunkKeys.has(row.key)) {
-      await params.store.delete(row.key);
+  const rows = buildSyncCacheRows(stateKey, payload);
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), async () => {
+    for (const row of rows.chunks) {
+      await store.register(row.key, row.value);
     }
-  }
+    await store.register(rows.meta.key, rows.meta.value);
+    for (const row of await store.entries()) {
+      if (row.key.startsWith(chunkKeyPrefix(stateKey)) && !rows.nextChunkKeys.has(row.key)) {
+        await store.delete(row.key);
+      }
+    }
+  });
 }
 
 export function openMatrixSyncCacheStoreOptions(storageRootDir: string) {
@@ -350,36 +353,18 @@ export function openMatrixSyncCacheStoreOptions(storageRootDir: string) {
   };
 }
 
-export function writeMatrixSyncCacheStateToSyncStore(params: {
-  payload: PersistedMatrixSyncStore;
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>;
-}): void {
-  const rows = buildSyncCacheRows(SYNC_CACHE_STATE_KEY, params.payload);
-  for (const row of rows.chunks) {
-    params.store.register(row.key, row.value);
-  }
-  params.store.register(rows.meta.key, rows.meta.value);
-  for (const row of params.store.entries()) {
-    if (
-      row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY)) &&
-      !rows.nextChunkKeys.has(row.key)
-    ) {
-      params.store.delete(row.key);
-    }
-  }
-}
-
-export async function deleteMatrixSyncCacheStateFromSyncStore(params: {
+export async function deleteMatrixSyncCacheStateFromStore(params: {
   storageRootDir: string;
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>;
+  store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
-  params.store.delete(metaKey(SYNC_CACHE_STATE_KEY));
-  for (const row of params.store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY))) {
-      params.store.delete(row.key);
+  const { storageRootDir, store } = params;
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), async () => {
+    await store.delete(metaKey(SYNC_CACHE_STATE_KEY));
+    for (const row of await store.entries()) {
+      if (row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY))) {
+        await store.delete(row.key);
+      }
     }
-  }
-  await fs
-    .rm(resolveLegacySyncCachePath(params.storageRootDir), { force: true })
-    .catch(() => undefined);
+    await fs.rm(resolveLegacySyncCachePath(storageRootDir), { force: true }).catch(() => undefined);
+  });
 }

@@ -390,11 +390,6 @@
   gap: var(--space-2);
 }
 
-.channels-wizard__link,
-.channels-wizard__link:hover {
-  text-decoration: none;
-}
-
 .channels-wizard__footer {
   display: flex;
   align-items: center;

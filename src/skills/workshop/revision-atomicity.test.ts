@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createOpenClawTestState,
@@ -18,7 +19,9 @@ const revisionFault = vi.hoisted(() => ({
       return;
     }
     this.boundary = undefined;
-    throw new Error(`injected crash at ${boundary}`);
+    throw Object.assign(new Error(`injected crash at ${boundary}`), {
+      code: boundary === "generation file durability sync" ? "EPERM" : undefined,
+    });
   },
 }));
 
@@ -40,30 +43,6 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
             return async (...createArgs: Parameters<typeof target.create>) => {
               await target.create(...createArgs);
               revisionFault.trip("generation exclusive create");
-            };
-          }
-          if (property === "openWritable") {
-            return async (...openArgs: Parameters<typeof target.openWritable>) => {
-              const writable = await target.openWritable(...openArgs);
-              const handle = new Proxy(writable.handle, {
-                get(handleTarget, handleProperty, handleReceiver) {
-                  if (handleProperty === "sync") {
-                    return async () => {
-                      await handleTarget.sync();
-                      revisionFault.trip("generation file durability sync");
-                    };
-                  }
-                  const handleValue = Reflect.get(
-                    handleTarget,
-                    handleProperty,
-                    handleReceiver,
-                  ) as unknown;
-                  return typeof handleValue === "function"
-                    ? handleValue.bind(handleTarget)
-                    : handleValue;
-                },
-              });
-              return { ...writable, handle };
             };
           }
           if (property === "move") {
@@ -111,32 +90,52 @@ vi.mock("../../infra/fs-safe-remove.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./store-sqlite-transition.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store-sqlite-transition.js")>();
+vi.mock("./store-transition.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store-transition.js")>();
   return {
     ...actual,
-    commitPendingSkillProposalTransition: (
+    commitPendingSkillProposalTransition: async (
       ...args: Parameters<typeof actual.commitPendingSkillProposalTransition>
     ) => {
       revisionFault.trip("CAS before commit");
-      const result = actual.commitPendingSkillProposalTransition(...args);
+      const result = await actual.commitPendingSkillProposalTransition(...args);
       revisionFault.trip("CAS after commit");
       return result;
     },
   };
 });
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  evaluateSkillProposal,
-  inspectSkillProposal,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-  reviseSkillProposal,
+  evaluateSkillProposal as evaluateSkillProposalImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposalEvents as listSkillProposalEventsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
 import type { SkillProposalReadResult } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
+const nativeConfig = getFsSafeNativeConfig();
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const evaluateSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof evaluateSkillProposalImpl>[0]>,
+) => evaluateSkillProposalImpl({ config: workshopConfig, ...input });
+const inspectSkillProposal = (
+  proposalId: string,
+  options?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const listSkillProposalEvents = (
+  input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,
+) => listSkillProposalEventsImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
+const reviseSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,
+) => reviseSkillProposalImpl({ config: workshopConfig, ...input });
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({
@@ -146,6 +145,8 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  configureFsSafeNative(nativeConfig);
   revisionFault.boundary = undefined;
   revisionFault.directorySyncOutcome = undefined;
   await tempDirs.cleanup();
@@ -161,6 +162,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "Atomic Revision",
       description: "Keep proposal revisions whole across crashes",
       content: "# Atomic Revision\n\nVersion 1.\n",
@@ -177,6 +179,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     return await reviseSkillProposal({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
       content: `# Atomic Revision\n\nVersion ${version}.\n`,
@@ -193,6 +196,7 @@ describe("Skill Workshop revision generation atomicity", () => {
       evaluateSkillProposal({
         workspaceDir: params.workspaceDir,
         env: testState.env,
+        agentId: "main",
         proposalId: params.proposal.record.id,
         expectedRevisionHash: params.proposal.revisionHash,
       }),
@@ -201,8 +205,8 @@ describe("Skill Workshop revision generation atomicity", () => {
     });
     await expect(
       inspectSkillProposal(params.proposal.record.id, {
-        workspaceDir: params.workspaceDir,
         env: testState.env,
+        agentId: "main",
       }),
     ).resolves.toMatchObject({
       record: { proposedVersion: params.proposal.record.proposedVersion },
@@ -223,16 +227,32 @@ describe("Skill Workshop revision generation atomicity", () => {
   ])("keeps the complete previous generation after a crash at %s", async (boundary) => {
     const { proposal, workspaceDir } = await createProposal();
     revisionFault.boundary = boundary;
+    if (boundary === "generation file durability sync") {
+      configureFsSafeNative({ mode: "off" });
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]).includes(`${path.sep}.staging-`) && (await handle.stat()).isFile()) {
+          const sync = handle.sync.bind(handle);
+          vi.spyOn(handle, "sync").mockImplementation(async () => {
+            revisionFault.trip("generation file durability sync");
+            await sync();
+          });
+        }
+        return handle;
+      });
+    }
 
     await expect(reviseToVersion(proposal, workspaceDir, 2)).rejects.toThrow(
-      `injected crash at ${boundary}`,
+      boundary === "generation file durability sync" ? "EPERM" : `injected crash at ${boundary}`,
     );
     expect(
-      listSkillProposalEvents({
-        workspaceDir,
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created"]);
 
     await expectCompleteVersion({
@@ -248,11 +268,12 @@ describe("Skill Workshop revision generation atomicity", () => {
 
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
-      listSkillProposalEvents({
-        workspaceDir,
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created", "revised"]);
     await expectCompleteVersion({
       proposal: revised,
@@ -267,11 +288,12 @@ describe("Skill Workshop revision generation atomicity", () => {
 
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
-      listSkillProposalEvents({
-        workspaceDir,
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created", "revised"]);
 
     await expectCompleteVersion({

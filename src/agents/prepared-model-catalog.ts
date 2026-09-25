@@ -18,20 +18,19 @@ import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthMaterializations,
   loadPreparedModelRuntimeAuth,
-  setPreparedModelRuntimeAuthMaterializations,
-  setPreparedModelRuntimeAuthLoader,
-  setPreparedModelRuntimeAuthStore,
+  bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquirePreparedModelRuntimeSnapshot,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
-  refreshStalePreparedModelRuntimeCatalog,
+  refreshPreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -39,11 +38,10 @@ import {
   prepareScopedReadOnlyLiveModelCatalog,
   prepareScopedReadOnlyModelCatalog,
 } from "./prepared-model-runtime.scoped-catalog.js";
-import {
-  hasResolvedThinkingCatalogEntry,
-  normalizeThinkingCatalogProviders,
-} from "./thinking-runtime.js";
+import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+
+export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -53,8 +51,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
-  /** Refreshes auth-stale inventory; true also rebuilds a fresh full catalog on writable reads. */
-  refreshFullCatalog?: boolean | "stale";
+  /** Explicitly requests full inventory acquisition; writable reads also replace completed data. */
+  refreshFullCatalog?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -66,25 +64,53 @@ export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
 >;
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
+type PreparedModelCatalogOwner = {
+  snapshot: PreparedModelRuntimeSnapshot;
+  release?: () => void | Promise<void>;
+};
+
+async function preparePublishedCatalogOwner(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelCatalogOwner> {
+  return { snapshot: await prepareModelRuntimeSnapshot(input) };
+}
 
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
   refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
+  providerIds?: readonly string[],
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Inventory reads repair auth-stale content without making turn-path reads start discovery.
-  const staleCatalog =
-    refreshFullCatalog === "stale" || refreshFullCatalog === true
-      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+  // Explicit refresh waits for acquisition; ordinary reads return saved rows during renewal.
+  const inventoryCatalog =
+    refreshFullCatalog === true
+      ? await refreshPreparedModelRuntimeCatalog(snapshot, {
+          refresh: readOnly !== true,
+          ...(providerIds ? { providerIds } : {}),
+        })
       : undefined;
   const modelCatalog =
-    staleCatalog ??
+    inventoryCatalog ??
     (readOnly === true
       ? snapshot.readFullModelCatalog?.()
-      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+      : await snapshot.loadFullModelCatalog({
+          refresh: refreshFullCatalog === true,
+          ...(providerIds ? { providerIds } : {}),
+        }));
+  if (!modelCatalog) {
+    return snapshot;
+  }
+  return materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+}
+
+/** Carries the published catalog and paired auth while expired inventory renews separately. */
+export function materializePreparedModelCatalogOwner(
+  snapshot: PreparedModelRuntimeSnapshot,
+  modelCatalog: ModelCatalogSnapshot | undefined = snapshot.readFullModelCatalog?.(),
+): PreparedModelRuntimeSnapshot {
   if (!modelCatalog) {
     return snapshot;
   }
@@ -97,17 +123,14 @@ async function materializeRequestedModelCatalog(
     authModes: fullAuth.authModes,
     modelCatalog,
   });
-  setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
   // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
   // consume the full worker's paired auth without invoking this loader.
-  setPreparedModelRuntimeAuthLoader(
-    materialized,
-    async (scope) => (await loadPreparedModelRuntimeAuth(snapshot, scope)) ?? fullAuth,
-  );
-  setPreparedModelRuntimeAuthMaterializations(
-    materialized,
-    getPreparedModelRuntimeAuthMaterializations(snapshot),
-  );
+  bindPreparedModelRuntimeAuth(materialized, {
+    store: fullAuth.authStore,
+    labels: fullAuth.providerAuthLabels,
+    load: async (scope) => (await loadPreparedModelRuntimeAuth(snapshot, scope)) ?? fullAuth,
+    materializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+  });
   return materialized;
 }
 
@@ -139,9 +162,8 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
         );
   const agentId =
     explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
-  const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
-    explicitWorkspaceDir ??
+    params.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(config, agentId, params.env) : undefined);
   const full: PreparedModelRuntimeInput = {
     ...(agentId ? { agentId } : {}),
@@ -149,19 +171,38 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     config,
     ...(params.env ? { env: params.env } : {}),
     inheritedAuthDir: resolveLegacyInheritedAuthDir(config, params.env),
-    ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;
-  const activationFull = activationWorkspaceDir
-    ? { ...full, workspaceDir: activationWorkspaceDir }
-    : full;
+  const activationFull =
+    activationWorkspaceDir && activationWorkspaceDir !== full.workspaceDir
+      ? { ...full, workspaceDir: activationWorkspaceDir }
+      : full;
   return {
     exact,
     full,
     activationFull,
-    activationExact: params.readOnly ? { ...activationFull, readOnly: true } : activationFull,
+    activationExact:
+      activationFull === full
+        ? exact
+        : params.readOnly
+          ? { ...activationFull, readOnly: true }
+          : activationFull,
   };
+}
+
+function findPreparedCatalogOwner(
+  candidates: readonly PreparedModelRuntimeInput[],
+  policy: PreparedModelCatalogConfigPolicy,
+): PreparedModelRuntimeSnapshot | undefined {
+  for (const candidate of new Set(candidates)) {
+    const snapshot = getPreparedModelRuntimeSnapshot(candidate);
+    if (snapshot && acceptsPreparedSnapshotConfig(snapshot, candidate, policy)) {
+      return snapshot;
+    }
+  }
+  return undefined;
 }
 
 /** Returns the configured lifecycle owner for the current generation without starting discovery. */
@@ -169,30 +210,7 @@ export function getPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): PreparedModelRuntimeSnapshot | undefined {
   const { activationExact, activationFull, exact, full } = resolveInputs(params);
-  const publishedFull = getPreparedModelRuntimeSnapshot(full);
-  if (publishedFull && preparedModelRuntimeConfigsMatch(publishedFull.config, full.config)) {
-    return publishedFull;
-  }
-  if (activationFull.workspaceDir !== full.workspaceDir) {
-    const activatedFull = getPreparedModelRuntimeSnapshot(activationFull);
-    if (activatedFull && preparedModelRuntimeConfigsMatch(activatedFull.config, full.config)) {
-      return activatedFull;
-    }
-  }
-  if (exact === full) {
-    return undefined;
-  }
-  const publishedExact = getPreparedModelRuntimeSnapshot(exact);
-  if (publishedExact && preparedModelRuntimeConfigsMatch(publishedExact.config, exact.config)) {
-    return publishedExact;
-  }
-  if (activationExact.workspaceDir === exact.workspaceDir) {
-    return undefined;
-  }
-  const activatedExact = getPreparedModelRuntimeSnapshot(activationExact);
-  return activatedExact && preparedModelRuntimeConfigsMatch(activatedExact.config, exact.config)
-    ? activatedExact
-    : undefined;
+  return findPreparedCatalogOwner([full, activationFull, exact, activationExact], "exact");
 }
 
 /**
@@ -203,68 +221,85 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
   params: GetPublishedPreparedModelCatalogOwnerParams = {},
 ): PreparedModelRuntimeSnapshot | undefined {
   const { activationFull, full } = resolveInputs(params);
-  const published = getPreparedModelRuntimeSnapshot(full);
-  if (published) {
-    return published;
-  }
-  if (activationFull.workspaceDir === full.workspaceDir) {
-    return undefined;
-  }
-  return getPreparedModelRuntimeSnapshot(activationFull);
+  return findPreparedCatalogOwner([full, activationFull], "published");
 }
 
-/** Returns the configured catalog for the current generation without starting discovery. */
-export function getPreparedModelCatalogSnapshot(
+/** Requests expiry renewal for an inventory consumer without waiting for discovery. */
+export function refreshExpiredPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): ModelCatalogSnapshot | undefined {
-  return getPreparedModelCatalogOwnerSnapshot(params)?.modelCatalog;
+  const owner = getPreparedModelCatalogOwnerSnapshot(params);
+  owner?.refreshExpiredModelCatalog?.();
+  return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
 }
 
-/** Returns the newest completed catalog for the current generation without starting discovery. */
-export function getAvailablePreparedModelCatalogSnapshot(
+/** Reads accepted inventory without starting acquisition from an observation. */
+export function getPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): ModelCatalogSnapshot | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot(params);
   return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
 }
 
+async function resolveReadOnlyPublishedModelCatalogOwner(
+  params: LoadPreparedModelCatalogParams,
+  configPolicy: PreparedModelCatalogConfigPolicy,
+  preparePublishedOwner = preparePublishedCatalogOwner,
+  selection: "owner" | "completed-inventory" = "owner",
+): Promise<PreparedModelCatalogOwner | undefined> {
+  const { activationFull, full } = resolveInputs(params);
+  for (const candidate of new Set([full, activationFull])) {
+    try {
+      // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
+      const prepared = await preparePublishedOwner(candidate);
+      const matches = acceptsPreparedSnapshotConfig(prepared.snapshot, candidate, configPolicy);
+      if (
+        matches &&
+        (selection === "owner" || isPreparedModelCatalogFull(prepared.snapshot.modelCatalog))
+      ) {
+        return prepared;
+      }
+      await prepared.release?.();
+      if (!matches && selection === "owner") {
+        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+      }
+    } catch (error) {
+      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+        throw error;
+      }
+    }
+  }
+  return undefined;
+}
+
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<PreparedModelRuntimeSnapshot> {
-  const { activationExact, activationFull, exact, full } = resolveInputs(params);
+  preparePublishedOwner = preparePublishedCatalogOwner,
+): Promise<PreparedModelCatalogOwner> {
+  const { activationExact, activationFull, exact } = resolveInputs(params);
   if (params.readOnly) {
-    const fullCandidates =
-      activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
-    for (const candidate of fullCandidates) {
-      try {
-        // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
-        const prepared = await prepareModelRuntimeSnapshot(candidate);
-        if (!acceptsPreparedSnapshotConfig(prepared, candidate, configPolicy)) {
-          throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
-        }
-        return prepared;
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-          throw error;
-        }
-      }
+    const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
+      params,
+      configPolicy,
+      preparePublishedOwner,
+    );
+    if (prepared) {
+      return prepared;
     }
     const lease = await acquireReadOnlyPreparedModelRuntime(activationExact);
-    try {
-      if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
-        throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
-      }
-      return lease.snapshot;
-    } finally {
-      lease.release();
+    if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
+      await using _ = lease;
+      throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
     }
+    return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
   }
   try {
-    const preparedExact = await prepareModelRuntimeSnapshot(exact);
-    if (acceptsPreparedSnapshotConfig(preparedExact, exact, configPolicy)) {
+    const preparedExact = await preparePublishedOwner(exact);
+    if (acceptsPreparedSnapshotConfig(preparedExact.snapshot, exact, configPolicy)) {
       return preparedExact;
     }
+    await preparedExact.release?.();
   } catch (error) {
     if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
       throw error;
@@ -272,9 +307,11 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   }
   // Direct commands own a persistent standalone generation. During gateway lifetime, writable
   // publication belongs exclusively to startup/reload or agent-run admission.
-  const activated = await activateStandalonePreparedModelRuntime(activationExact);
+  const activated = await activateStandalonePreparedModelRuntime(activationExact, {
+    catalogMode: "static",
+  });
   if (activated && acceptsPreparedSnapshotConfig(activated, activationExact, configPolicy)) {
-    return activated;
+    return { snapshot: activated };
   }
   if (activated) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -284,58 +321,64 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   // Gateway pre-run selection can name a spawned workspace before embedded-run admission.
   // Lease a complete exact generation so provider catalog hooks remain visible for this read.
   const lease = await acquireAgentRunPreparedModelRuntime(activationFull);
-  try {
-    if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationFull, configPolicy)) {
-      throw new PreparedModelRuntimeOwnerNotPublishedError(
-        `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
-      );
-    }
-    return lease.snapshot;
-  } finally {
-    lease.release();
+  if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationFull, configPolicy)) {
+    await using _ = lease;
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
+      `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
+    );
   }
+  return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
 }
 
-async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+async function withPreparedModelCatalogOwnerPolicy<T>(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<PreparedModelRuntimeSnapshot> {
-  const publishedReadOnlyOwner = params.readOnly
-    ? getPreparedModelCatalogOwnerSnapshot(params)
+  read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+  preparePublishedOwner = preparePublishedCatalogOwner,
+): Promise<T> {
+  // Ordinary reads return published rows; explicit refresh keeps its writable default.
+  const request = {
+    ...params,
+    readOnly: params.readOnly ?? params.refreshFullCatalog !== true,
+  };
+  const publishedReadOnlyOwner = request.readOnly
+    ? getPreparedModelCatalogOwnerSnapshot(request)
     : undefined;
-  const snapshot = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy);
-  // A fallback read-only lease retires before this projection. Only a published owner can safely
-  // expose its generation cache; the leased snapshot already contains its exact prepared facts.
-  if (params.readOnly && !publishedReadOnlyOwner) {
-    return snapshot;
-  }
-  return await materializeRequestedModelCatalog(
-    snapshot,
-    params.readOnly,
-    params.refreshFullCatalog,
+  const { snapshot, release } = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
+    request,
+    configPolicy,
+    preparePublishedOwner,
   );
+  try {
+    // Only published owners expose generation caches; temporary reads use their prepared facts.
+    const owner =
+      request.readOnly && !publishedReadOnlyOwner
+        ? snapshot
+        : await materializeRequestedModelCatalog(
+            snapshot,
+            request.readOnly,
+            request.refreshFullCatalog,
+            request.providerDiscoveryProviderIds,
+          );
+    // Projection must finish before releasing the selected generation's resources.
+    return await read(owner);
+  } finally {
+    await release?.();
+  }
 }
 
 async function loadScopedReadOnlyModelCatalog(
   params: LoadPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
-  const { activationExact, activationFull, full } = resolveInputs(params);
-  const fullCandidates =
-    activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
-  for (const candidate of fullCandidates) {
-    try {
-      const prepared = await prepareModelRuntimeSnapshot(candidate);
-      if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
-        continue;
-      }
-      if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
-        return prepared.modelCatalog;
-      }
-    } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-        throw error;
-      }
-    }
+  const { activationExact } = resolveInputs(params);
+  const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
+    params,
+    "exact",
+    preparePublishedCatalogOwner,
+    "completed-inventory",
+  );
+  if (prepared) {
+    return prepared.snapshot.modelCatalog;
   }
   const prepareScoped =
     params.scopedLiveProviderDiscovery === true
@@ -345,45 +388,39 @@ async function loadScopedReadOnlyModelCatalog(
 }
 
 /**
- * Turn-path capability reads (thinking levels and similar per-model facts) must stay off a new
- * full catalog build: reuse the published generation, then manifest/scoped read-only metadata,
- * then scoped live discovery only for providers whose models exist solely at runtime.
+ * Missing turn-path capabilities do not authorize another inventory, even without a published
+ * owner. Native harness observations keep their existing owner.
  */
 export async function loadProviderScopedThinkingCatalog(params: {
   config: OpenClawConfig;
   provider: string;
   model: string;
+  /** Concrete runtime selected by the turn owner, including session overrides. */
+  agentRuntime?: string;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   /** Input preparation must resolve modalities for this route, independently of reasoning. */
   requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
-  const scopedParams = {
-    config: params.config,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    readOnly: true,
-    providerDiscoveryProviderIds: [params.provider],
-  } satisfies LoadPreparedModelCatalogParams;
-  const entryResolved = (catalog: readonly ModelCatalogEntry[]) => {
-    if (params.requiredInputRoute === undefined) {
-      return hasResolvedThinkingCatalogEntry({
-        catalog,
-        provider: params.provider,
-        model: params.model,
-      });
-    }
-    const entry = findModelInCatalog(catalog, params.provider, params.model);
-    return (
-      entry?.input !== undefined && modelTransportRoutesMatch(entry, params.requiredInputRoute)
-    );
-  };
-  const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
+  const request = { ...params, readOnly: true };
+  const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
+  const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
+  let snapshot: ModelCatalogSnapshot;
+  if (owner?.loadNativeModelCatalog && params.agentRuntime && params.agentRuntime !== "openclaw") {
+    snapshot = await owner.loadNativeModelCatalog({
+      provider: params.provider,
+      modelId: params.model,
+      runtime: params.agentRuntime,
+    });
+  } else {
+    const catalog = owner
+      ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
+          .modelCatalog
+      : { entries: [], routeVariants: [] };
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
-    const augmented = await augmentModelCatalogWithAgentHarness({
+    snapshot = await augmentModelCatalogWithAgentHarness({
       cfg: params.config,
       agentId,
       agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
@@ -393,53 +430,60 @@ export async function loadProviderScopedThinkingCatalog(params: {
         resolveDefaultAgentWorkspaceDir(),
       defaultProvider: params.provider,
       defaultModel: `${params.provider}/${params.model}`,
-      snapshot,
-    });
-    const entries = normalizeThinkingCatalogProviders(augmented.entries);
-    return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
-  };
-  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
-  if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
-    return await augmentHarnessCatalog(publishedCatalog);
-  }
-  const { loadManifestModelCatalog } = await import("./model-catalog.js");
-  const manifestCatalog = normalizeThinkingCatalogProviders(
-    loadManifestModelCatalog({
-      config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }),
-  );
-  if (entryResolved(manifestCatalog)) {
-    return await augmentHarnessCatalog({
-      entries: manifestCatalog,
-      routeVariants: manifestCatalog,
-      staticEntries: manifestCatalog,
+      agentRuntime: params.agentRuntime,
+      snapshot: catalog,
     });
   }
-  const scopedStatic = await loadPreparedModelCatalogSnapshot(scopedParams);
-  if (entryResolved(scopedStatic.entries)) {
-    return await augmentHarnessCatalog(scopedStatic);
+  let entries = snapshot.entries;
+  if (params.agentRuntime) {
+    const entry = findModelInCatalog(entries, params.provider, params.model);
+    if (entry) {
+      // A logical row may belong to another picker runtime; retain only the selected donor.
+      const { selectModelCatalogRuntimeEntry } = await import("./model-catalog-view.js");
+      const selected = selectModelCatalogRuntimeEntry({
+        entry,
+        routeVariants: snapshot.routeVariants,
+        runtimeId: params.agentRuntime,
+      }).entry;
+      entries = entries.map((candidate) => (candidate === entry ? selected : candidate));
+    }
   }
-  return await augmentHarnessCatalog(
-    await loadPreparedModelCatalogSnapshot({
-      ...scopedParams,
-      scopedLiveProviderDiscovery: true,
-    }),
-  );
+  entries = normalizeThinkingCatalogProviders(entries);
+  if (params.requiredInputRoute !== undefined) {
+    const entry = findModelInCatalog(entries, params.provider, params.model);
+    if (
+      entry?.input === undefined ||
+      !modelTransportRoutesMatch(entry, params.requiredInputRoute)
+    ) {
+      return [];
+    }
+  }
+  return entries;
+}
+
+/** Retains published or temporary catalog resources through an asynchronous read. */
+export async function withPreparedModelCatalogOwner<T>(
+  params: LoadPreparedModelCatalogParams,
+  read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+): Promise<T> {
+  return await withPreparedModelCatalogOwnerPolicy(params, "exact", read, async (input) => {
+    const lease = await acquirePreparedModelRuntimeSnapshot(input);
+    return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
+  });
 }
 
 /** Resolves the lifecycle owner for an exact caller-supplied config. */
 export async function loadPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "exact");
+  return await withPreparedModelCatalogOwnerPolicy(params, "exact", (snapshot) => snapshot);
 }
 
 /** Resolves the currently published owner when Gateway config changes during the read. */
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+  return await withPreparedModelCatalogOwnerPolicy(params, "published", (snapshot) => snapshot);
 }
 
 /** Resolves a complete published owner for long-lived runtime consumers. */
@@ -455,13 +499,14 @@ export async function loadResolvedPublishedModelCatalogOwner(
 export async function loadPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogSnapshot> {
-  if (params.readOnly && params.providerDiscoveryProviderIds) {
-    return loadScopedReadOnlyModelCatalog(params);
+  const readOnly = params.readOnly ?? params.refreshFullCatalog !== true;
+  if (readOnly && params.providerDiscoveryProviderIds) {
+    return loadScopedReadOnlyModelCatalog({ ...params, readOnly });
   }
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
 
-export async function loadPreparedModelCatalog(
+export async function readPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogEntry[]> {
   return (await loadPreparedModelCatalogSnapshot(params)).entries;

@@ -4,11 +4,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -16,29 +17,29 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
 import {
+  captureAbortedPartial,
+  persistAbortedPartials,
+} from "./chat-transcript-persistence.runtime.js";
+import {
+  collectMessagesWithIdempotencyKey,
+  findMessageWithIdempotencyKey,
+  collectAssistantRowsWithText,
+  expectRecord,
+  expectAbortPayload,
+  expectAbortPayloadContainsRunIds,
+  requireLastRespondCall,
+  expectPersistedAbortMessage,
+  type TranscriptLine,
+} from "./chat.abort-persistence.test-helpers.js";
+import {
+  createAbortTestRunState,
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
-
-type TranscriptLine = {
-  message?: Record<string, unknown>;
-};
-
-type TestChatRunRecord =
-  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
-
-function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
-  const state = createChatRunState();
-  for (const [runId, record] of entries) {
-    Object.assign(state.getOrCreate(runId), record);
-  }
-  return state;
-}
 
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
@@ -75,7 +76,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-const { chatHandlers } = await import("./chat.js");
+const { handleDirectExternalChatSend } = await import("./chat-send-external-entry.js");
 
 const transcriptFixtures = new Map<
   string,
@@ -94,104 +95,6 @@ async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLi
     sessionKey: fixture.sessionKey,
     storePath: fixture.storePath,
   })) as TranscriptLine[];
-}
-
-function collectMessagesWithIdempotencyKey(
-  lines: TranscriptLine[],
-  idempotencyKey: string,
-): Record<string, unknown>[] {
-  const messages: Record<string, unknown>[] = [];
-  for (const line of lines) {
-    if (line.message?.idempotencyKey === idempotencyKey) {
-      messages.push(line.message);
-    }
-  }
-  return messages;
-}
-
-function findMessageWithIdempotencyKey(
-  lines: TranscriptLine[],
-  idempotencyKey: string,
-): Record<string, unknown> | undefined {
-  for (const line of lines) {
-    if (line.message?.idempotencyKey === idempotencyKey) {
-      return line.message;
-    }
-  }
-  return undefined;
-}
-
-function collectAssistantRowsWithText(
-  lines: TranscriptLine[],
-  text: string,
-): Record<string, unknown>[] {
-  return lines
-    .map((line) => line.message)
-    .filter(
-      (message): message is Record<string, unknown> =>
-        message?.role === "assistant" &&
-        Array.isArray(message.content) &&
-        message.content.some(
-          (block) =>
-            typeof block === "object" &&
-            block !== null &&
-            (block as { type?: unknown }).type === "text" &&
-            (block as { text?: unknown }).text === text,
-        ),
-    );
-}
-
-function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectAbortPayload(payload: unknown, expected?: { runIds?: string[] }) {
-  const actual = expectRecord(payload, "abort payload");
-  expect(actual.aborted).toBe(true);
-  if (expected?.runIds) {
-    expect(actual.runIds).toEqual(expected.runIds);
-  }
-  return actual;
-}
-
-function expectAbortPayloadContainsRunIds(payload: unknown, runIds: string[]) {
-  const actual = expectAbortPayload(payload);
-  expect(Array.isArray(actual.runIds)).toBe(true);
-  for (const runId of runIds) {
-    expect(actual.runIds as unknown[]).toContain(runId);
-  }
-}
-
-function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
-  const calls = respond.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
-}
-
-function expectPersistedAbortMessage(
-  message: unknown,
-  expected: {
-    idempotencyKey: string;
-    origin: string;
-    runId: string;
-    stopReason?: string;
-  },
-) {
-  const actual = expectRecord(message, "persisted abort message");
-  expect(actual.idempotencyKey).toBe(expected.idempotencyKey);
-  if (expected.stopReason) {
-    expect(actual.stopReason).toBe(expected.stopReason);
-  }
-  const abort = expectRecord(actual.openclawAbort, "persisted abort metadata");
-  expect(abort.aborted).toBe(true);
-  expect(abort.origin).toBe(expected.origin);
-  expect(abort.runId).toBe(expected.runId);
 }
 
 function setMockSessionEntry(params: {
@@ -295,6 +198,67 @@ afterEach(async () => {
 });
 
 describe("chat abort transcript persistence", () => {
+  it("commits an already-cancelled parent partial when revocation fences later worker cancellation", async () => {
+    const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
+      "openclaw-chat-abort-reentrant-",
+    );
+    const revision = "original-generation";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "main", storePath },
+      {
+        sessionId,
+        lifecycleRevision: revision,
+        updatedAt: 1,
+      },
+    );
+    sessionEntryState.lifecycleRevision = revision;
+    let current = true;
+    const parent = createActiveRun("main", { sessionId });
+    parent.controller.signal.addEventListener(
+      "abort",
+      () => {
+        current = false;
+      },
+      { once: true },
+    );
+    const cancelWorker = vi.fn(() => ["parent"]);
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["parent", parent]]),
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        sessionId,
+        ["parent"],
+        cancelWorker,
+      ),
+    });
+    context.chatRunState.getOrCreate("parent").buffer = "Keep the cancelled parent partial";
+    await expect(
+      invokeChatAbortHandler({
+        handler: (options) =>
+          handleChatAbortRequest({ ...options, hasCurrentClientAuthority: () => current }),
+        context,
+        request: { sessionKey: "main" },
+        client: { connect: { scopes: ["operator.admin"] } },
+      }),
+    ).rejects.toThrow("requester authority changed");
+    expect(parent.controller.signal.aborted).toBe(true);
+    expect(cancelWorker).not.toHaveBeenCalled();
+    const lines = await readTranscriptLines(transcriptPath);
+    const committed = collectMessagesWithIdempotencyKey(lines, "parent:assistant");
+    expect(committed).toHaveLength(1);
+    expectPersistedAbortMessage(committed[0], {
+      idempotencyKey: "parent:assistant",
+      origin: "rpc",
+      runId: "parent",
+    });
+    expect(collectAssistantRowsWithText(lines, "Keep the cancelled parent partial")).toHaveLength(
+      1,
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: "main", storePath })).toMatchObject({
+      sessionId,
+      lifecycleRevision: revision,
+    });
+  });
+
   it("publishes one run-owned transcript row for an abandoned placement partial", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-placement-abandon-",
@@ -362,7 +326,7 @@ describe("chat abort transcript persistence", () => {
     if (rejects) {
       await expect(persistence).rejects.toThrow("transcript identity not resolved");
     } else {
-      await expect(persistence).resolves.toBeUndefined();
+      await expect(persistence).resolves.toContain("could not be saved to history");
     }
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript identity not resolved"));
   });
@@ -685,11 +649,7 @@ describe("chat abort transcript persistence", () => {
       idempotencyKey,
       sessionId,
       storePath,
-      message: {
-        role: "user",
-        content: "colliding user key",
-        timestamp: 1,
-      },
+      message: makeUserMessage("colliding user key", 1),
     });
 
     const respond = vi.fn();
@@ -811,10 +771,7 @@ describe("chat abort transcript persistence", () => {
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -864,10 +821,7 @@ describe("chat abort transcript persistence", () => {
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: activeSessionKey, clientRunId: runId }),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: requestedSessionKey,
         message: "stop",
@@ -930,10 +884,7 @@ describe("chat abort transcript persistence", () => {
       getRuntimeConfig: () => cfg,
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "global",
         ...(selectedAgentId === "work" ? { agentId: selectedAgentId } : {}),
@@ -1367,10 +1318,7 @@ describe("chat abort transcript persistence", () => {
       chatAbortControllers: new Map([["run-stop-client-session", active]]),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "other-session",
         sessionId,

@@ -4,18 +4,14 @@ import { isPidAlive } from "../shared/pid-alive.js";
 
 export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
-  // The readiness byte on stderr re-arms the caller's rolling no-output timer,
-  // so the silence window that kills the tree starts only after the forked pid
-  // is on disk; without it, slow spawns under suite load race the first window
-  // and the test reads a missing/empty pid file.
+  // The descendant publishes its PID after installing its keepalive, so callers
+  // can trigger the idle deadline only after a live process tree is ready.
   await fs.writeFile(
     scriptPath,
     [
       "#!/bin/sh",
-      '"$NODE_BINARY" -e "setInterval(() => {}, 1000)" &',
-      'printf "%s" "$!" > "$PID_FILE"',
-      "echo ready >&2",
-      "sleep 30",
+      '"$NODE_BINARY" -e \'setInterval(() => {}, 1000); require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid)); process.stderr.write("ready\\n");\' &',
+      "wait",
     ].join("\n"),
     "utf8",
   );

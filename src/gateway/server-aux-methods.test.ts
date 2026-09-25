@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
+import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
+import type { GatewayRequestHandlers } from "./server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
-describe("aux method handler parity", () => {
-  it("exposes a handler for every advertised aux method", () => {
+describe("core and auxiliary method handler parity", () => {
+  it("wires a dispatchable core or auxiliary handler for every core descriptor", async () => {
+    const fixture = await createOpenClawTestState({ label: "gateway-aux-methods" });
     const aux = createGatewayAuxHandlers({
       log: {},
-      activateRuntimeSecrets: vi.fn(async () => undefined),
-      buildReloadPlan: vi.fn(),
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      getNativeApprovalRouteCoordinator: () => undefined,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
       channelManager: {
@@ -18,11 +27,18 @@ describe("aux method handler parity", () => {
         resolveRuntimeAccountId: (_channel: string, accountId: string) => accountId,
       },
       logChannels: { info: vi.fn() },
-    } as unknown as Parameters<typeof createGatewayAuxHandlers>[0]); // SAFETY: minimal harness; parity only reads extraHandlers.
-    for (const method of GATEWAY_AUX_METHODS) {
-      // Advertising a method without a handler yields runtime "unknown method"
-      // errors that only surface live; keep the list and the map in lockstep.
-      expect(aux.extraHandlers[method], method).toBeDefined();
+    });
+    try {
+      // Check the real construction maps, not an auxiliary exemption list.
+      // Assistant media is served by the separate Control UI handler.
+      const handlers: GatewayRequestHandlers = { ...coreGatewayHandlers, ...aux.extraHandlers };
+      const missing = listCoreGatewayMethodNames()
+        .filter((method) => method !== "assistant.media.get")
+        .filter((method) => typeof handlers[method] !== "function");
+      expect(missing).toEqual([]);
+    } finally {
+      await aux.stopOperatorInteractions();
+      await fixture.cleanup();
     }
   });
 });

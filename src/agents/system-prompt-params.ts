@@ -1,7 +1,7 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +16,6 @@ import {
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -30,6 +29,7 @@ type RuntimeInfoInput = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
+  gitCoauthorPrompt?: string;
   host: string;
   os: string;
   arch: string;
@@ -40,10 +40,7 @@ type RuntimeInfoInput = {
   channel?: string;
   chatType?: ChatType;
   capabilities?: string[];
-  /** Supported message actions for the current channel (e.g., react, edit, unsend) */
-  channelActions?: string[];
   repoRoot?: string;
-  activeProcessSessions?: ActiveProcessSessionReference[];
   activeNode?: string;
 };
 
@@ -56,10 +53,11 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl" | "gitCoauthorPrompt">;
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
 }): SystemPromptRuntimeParams {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
@@ -85,13 +83,13 @@ export function buildSystemPromptParams(params: {
           ? resolveRuntimeAgentName(params.config, params.agentId)
           : undefined,
       ...params.runtime,
+      gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
         sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
           ? sessionUrl
           : undefined,
-      activeNode:
-        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
       repoRoot,
     },
     userTimezone,

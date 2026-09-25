@@ -1,22 +1,26 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   readPairingQrReplyChannelData,
   stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
+import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
+import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
 
@@ -43,7 +47,7 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
           : "\n\n";
     combined += separator + part;
   }
-  return combined.trim();
+  return trimTextPreservingCode(combined);
 }
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
@@ -56,7 +60,7 @@ export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrls?.some((url) => url.trim()));
 }
 
-export function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
+function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
     (payload) =>
       payload.sensitiveMedia === true &&
@@ -95,7 +99,7 @@ export function sanitizeAssistantDisplayText(
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
   const stripped = stripInlineDirectiveTagsForDelivery(normalized);
-  const visible = stripped.text.trim();
+  const visible = trimTextPreservingCode(stripped.text);
   return visible
     ? options?.preserveBoundaries && !stripped.changed
       ? normalized
@@ -103,25 +107,40 @@ export function sanitizeAssistantDisplayText(
     : undefined;
 }
 
-export function extractAssistantDisplayTextFromContent(
+export function prepareAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  return normalized.trim()
+    ? options?.preserveBoundaries
+      ? normalized
+      : trimTextPreservingCode(normalized)
+    : undefined;
+}
+
+export function extractAssistantDisplayText(
   content?: readonly AssistantDisplayContentBlock[] | null,
 ): string | undefined {
   if (!Array.isArray(content) || content.length === 0) {
     return undefined;
   }
-  const parts = content
-    .map((block) => {
-      if (block?.type !== "text" || typeof block.text !== "string") {
-        return "";
-      }
-      return block.text;
-    })
-    .filter(Boolean);
-  const text = combineNonStreamingReplyParts(parts);
-  return text || undefined;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block?.type === "text" && typeof block.text === "string" && block.text) {
+      parts.push(block.text);
+    }
+  }
+  return combineNonStreamingReplyParts(parts) || undefined;
 }
 
-export async function buildAssistantDisplayContentFromReplyPayloads(params: {
+type AssistantReplyContentParams = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
@@ -130,56 +149,109 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   includeSensitiveDisplay?: boolean;
   onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
-}): Promise<AssistantDisplayContentBlock[] | undefined> {
-  const rawTextPayloadCount = params.payloads.filter(
+  transcriptMediaMessage?: Awaited<
+    ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>
+  >;
+};
+
+export function buildAssistantReplyContent(params: AssistantReplyContentParams) {
+  return buildAssistantReplyContentFromInputs({
+    ...params,
+    inputs: params.payloads.map((payload) => ({ kind: "raw", payload })),
+  });
+}
+
+export async function buildAssistantReplyContentFromInputs(
+  params: Omit<AssistantReplyContentParams, "payloads"> & {
+    inputs: readonly ReplyDispatchOperation[];
+  },
+): Promise<{
+  assistantContent: AssistantDisplayContentBlock[] | undefined;
+  persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
+}> {
+  const payloads = params.inputs.map((input) =>
+    input.kind === "raw" ? input.payload : input.plan.payload,
+  );
+  const rawTextPayloadCount = payloads.filter(
     (payload) =>
       payload.isReasoning !== true &&
       typeof payload.text === "string" &&
       payload.text.trim().length > 0,
   ).length;
-  const plan = createOutboundPayloadPlan(params.payloads);
-  if (plan.length === 0) {
-    const failureBlocks = params.payloads.flatMap((payload) =>
-      (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
-        buildManagedMediaFailureBlock,
-      ),
-    );
-    if (failureBlocks.length > 0) {
-      return failureBlocks;
+  const plan = params.inputs.flatMap((input, sourceIndex) => {
+    if (payloads[sourceIndex]?.isReasoning === true) {
+      return [];
     }
-    return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
+    return (input.kind === "raw" ? createOutboundPayloadPlan([input.payload]) : [input.plan]).map(
+      (entry) => Object.assign({}, entry, { sourceIndex }),
+    );
+  });
+  if (plan.length === 0) {
+    const failureBlocks = payloads.flatMap((payload) =>
+      payload.isReasoning === true
+        ? []
+        : (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+            buildManagedMediaFailureBlock,
+          ),
+    );
+    const assistantContent =
+      failureBlocks.length > 0
+        ? failureBlocks
+        : rawTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined;
+    return { assistantContent, persistedAssistantContent: assistantContent };
   }
 
   const preserveTextBoundaries =
     plan.filter(({ payload }) => typeof payload.text === "string" && payload.text.trim()).length >
     1;
-  const content: AssistantDisplayContentBlock[] = [];
+  const content: Array<AssistantDisplayContentBlock | [string, ...string[]]> = [];
+  const persistedContent: AssistantDisplayContentBlock[] = [];
+  const persistSensitiveDisplay = !hasSensitiveMediaPayload(payloads);
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
-    const metadataSource = params.payloads[entry.sourceIndex] ?? payload;
+    const metadataSource = payloads[entry.sourceIndex] ?? payload;
     const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
-    const text = sanitizeAssistantDisplayText(
-      stripReplyMediaFailureFallback(payload.text, mediaFailures),
-      {
-        preserveBoundaries: preserveTextBoundaries,
-      },
-    );
-    if (text) {
-      const previousBlock = content.at(-1);
-      if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
-        previousBlock.text = combineNonStreamingReplyParts([previousBlock.text, text]);
+    const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
+    const statusNotice = isReplyPayloadStatusNotice(payload);
+    const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
+    const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
+      preserveBoundaries: preserveTextBoundaries,
+    });
+    if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
+      if (statusNotice) {
+        content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
-        content.push({ type: "text", text });
+        const previousBlock = content.at(-1);
+        if (Array.isArray(previousBlock)) {
+          previousBlock.push(text);
+        } else {
+          content.push([text]);
+        }
       }
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
+    }
+    // Display text may merge across payloads. Transcript captions and directives
+    // stay attached to their source payload instead of matching display slots.
+    const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
+    if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
+      persistedContent.push({
+        type: "text",
+        text: transcriptText,
+        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+      });
     }
     if (params.includeSensitiveDisplay === true) {
       try {
         const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
         if (pairingQrBlock) {
           content.push(pairingQrBlock);
+          if (persistSensitiveDisplay) {
+            persistedContent.push(pairingQrBlock);
+          }
         }
       } catch (err) {
         params.onSensitiveDisplayPrepareError?.(formatForLog(err));
@@ -189,6 +261,8 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       continue;
     }
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
+      assertCurrent: params.assertCurrent,
+      abortSignal: params.abortSignal,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
@@ -205,54 +279,33 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
         }
       }
     }
-    content.push(...mediaBlocks);
-    content.push(...mediaFailures.map(buildManagedMediaFailureBlock));
+    const mediaContent = [...mediaBlocks, ...mediaFailures.map(buildManagedMediaFailureBlock)];
+    content.push(...mediaContent);
+    persistedContent.push(...mediaContent);
   }
 
-  if (content.length > 0) {
-    return content;
-  }
-  return strippedTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
-}
-
-export function replaceAssistantContentTextBlocks(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-  transcriptMediaMessage: { content: Array<Record<string, unknown>> } | null,
-): AssistantDisplayContentBlock[] | undefined {
-  const transcriptTextBlocks = (transcriptMediaMessage?.content ?? []).filter(
-    (block): block is AssistantDisplayContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string",
-  );
-  if (transcriptTextBlocks.length === 0) {
-    return content ? [...content] : undefined;
-  }
-  if (!content || content.length === 0) {
-    return [...transcriptTextBlocks];
-  }
-  const merged: AssistantDisplayContentBlock[] = [];
-  let transcriptTextIndex = 0;
-  for (const block of content) {
-    if (
-      block?.type === "text" &&
-      typeof block.text === "string" &&
-      transcriptTextIndex < transcriptTextBlocks.length
-    ) {
-      const replacement = expectDefined(
-        transcriptTextBlocks[transcriptTextIndex++],
-        "transcript text blocks entry at transcript text index++",
-      );
-      merged.push(replacement);
-      continue;
-    }
-    merged.push(block);
-  }
-  if (transcriptTextIndex < transcriptTextBlocks.length) {
-    merged.unshift(...transcriptTextBlocks.slice(transcriptTextIndex));
-  }
-  return merged;
+  const assistantContent =
+    content.length > 0
+      ? content.map((block) =>
+          Array.isArray(block)
+            ? {
+                type: "text",
+                text: block.length === 1 ? block[0] : combineNonStreamingReplyParts(block),
+              }
+            : block,
+        )
+      : strippedTextPayloadCount > 0
+        ? [{ type: "text", text: "" }]
+        : undefined;
+  return {
+    assistantContent,
+    persistedAssistantContent:
+      persistedContent.length > 0
+        ? persistedContent
+        : strippedTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined,
+  };
 }
 
 function isManagedOutgoingMediaUrl(value: unknown): boolean {
@@ -291,20 +344,6 @@ export function stripManagedOutgoingAssistantContentBlocks(
     );
   });
   return filtered.length > 0 ? filtered : undefined;
-}
-
-export function extractAssistantDisplayText(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): string | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const text = combineNonStreamingReplyParts(
-    content.map((block) =>
-      block?.type === "text" && typeof block.text === "string" ? block.text : "",
-    ),
-  );
-  return text || undefined;
 }
 
 export function hasAssistantDisplayMediaContent(

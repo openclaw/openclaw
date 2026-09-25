@@ -1,5 +1,20 @@
 const TABLE_CONSTRAINT_KEYWORDS = new Set(["CHECK", "FOREIGN", "PRIMARY", "UNIQUE"]);
 
+/** Select canonical DDL without opening a database or changing its installation lifecycle. */
+export function extractSqliteTableSchema(
+  schema: string,
+  table: string,
+  options: { endMarker?: string; includeEndMarker?: boolean; errorMessage?: string } = {},
+): string {
+  const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+  const endMarker = options.endMarker ?? "\n) STRICT;";
+  const end = schema.indexOf(endMarker, start);
+  if (start < 0 || end < start) {
+    throw new Error(options.errorMessage ?? `Canonical schema markers are missing for ${table}`);
+  }
+  return schema.slice(start, end + (options.includeEndMarker === false ? 0 : endMarker.length));
+}
+
 type SqlToken = {
   end: number;
   keyword: string | null;

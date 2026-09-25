@@ -12,7 +12,7 @@ import {
   resolveApiKeyForProviderCore,
   resolveModelAuthMode,
 } from "./model-auth.js";
-import { hasAuthForModelProvider } from "./model-provider-auth.js";
+import { createProviderAuthChecker } from "./model-provider-auth.js";
 
 async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
   // Creates a trusted workspace plugin manifest with local-file auth evidence
@@ -108,12 +108,11 @@ describe("workspace plugin model auth evidence", () => {
             }),
           ).resolves.toBe(true);
           await expect(
-            hasAuthForModelProvider({
-              provider: "workspace-cloud",
+            createProviderAuthChecker({
               cfg,
               workspaceDir,
-              store,
-            }),
+              agentDir: path.join(stateDir, "agent"),
+            })("workspace-cloud", { modelId: "fixture-model" }),
           ).resolves.toBe(true);
         },
       );

@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,10 @@ import * as nodeSqlite from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as sqliteLocation from "../infra/sqlite-readonly-location.js";
-import { runDatabaseVerifyWorker } from "./openclaw-database-verify.impl.js";
+import {
+  runDatabaseVerifyWorker,
+  terminateDatabaseVerifyWorker,
+} from "./openclaw-database-verify.impl.js";
 import { verifyOpenClawDatabases } from "./openclaw-database-verify.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -99,6 +102,194 @@ describe("database verifier child process entrypoint", () => {
     await expect(importVerifierInUnrelatedFork()).resolves.toEqual([
       { echo: { type: "unrelated" } },
     ]);
+  });
+});
+
+describe("database verifier worker lifetime", () => {
+  function createWorkerFixture(): URL {
+    const fixtureDir = tempDirs.make("openclaw-database-verify-lifetime-");
+    const fixturePath = path.join(fixtureDir, "worker.mjs");
+    fs.writeFileSync(
+      fixturePath,
+      `process.once("message", () => {
+        process.send([], () => process.disconnect());
+      });`,
+    );
+    return pathToFileURL(fixturePath);
+  }
+
+  it("retains a failed IPC worker until exit without losing a concurrent stop waiter", async () => {
+    let worker: ChildProcess | undefined;
+    let releasedWhileAlive: boolean | undefined;
+    const verification = runDatabaseVerifyWorker([], {
+      workerUrl: createWorkerFixture(),
+      onWorker: (current) => {
+        if (current) {
+          worker = current;
+          current.disconnect();
+        } else {
+          releasedWhileAlive = worker?.exitCode === null && worker.signalCode === null;
+        }
+      },
+    }).catch((error: unknown) => error);
+    if (!worker) {
+      throw new Error("verifier did not publish its child");
+    }
+    const child = worker;
+    let stopCompleted = false;
+    void terminateDatabaseVerifyWorker(child).then(() => {
+      stopCompleted = true;
+    });
+
+    await vi.waitFor(() => expect(child.exitCode ?? child.signalCode).not.toBeNull());
+    const error = await verification;
+
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("verifier returned a non-Error IPC failure");
+    }
+    expect(error.message).toMatch(/Channel closed|IPC channel is open/u);
+    expect({ releasedWhileAlive, stopCompleted }).toEqual({
+      releasedWhileAlive: false,
+      stopCompleted: true,
+    });
+  });
+
+  it.each(["not delivered", "throws"])(
+    "waits for native exit when termination %s",
+    async (mode) => {
+      let worker: ChildProcess | undefined;
+      const verification = runDatabaseVerifyWorker([], {
+        workerUrl: createWorkerFixture(),
+        onWorker: (current) => {
+          worker ??= current;
+        },
+      });
+      if (!worker) {
+        throw new Error("verifier did not publish its child");
+      }
+      const child = worker;
+      const kill = vi.spyOn(child, "kill").mockImplementation(() => {
+        if (mode === "throws") {
+          throw Object.assign(new Error("signal unsupported"), { code: "ENOSYS" });
+        }
+        return false;
+      });
+      try {
+        const stoppedWhileAlive = await terminateDatabaseVerifyWorker(child).then(
+          () => child.exitCode === null && child.signalCode === null,
+        );
+        await expect(verification).resolves.toEqual([]);
+        expect(stoppedWhileAlive).toBe(false);
+      } finally {
+        kill.mockRestore();
+        await verification;
+      }
+    },
+  );
+
+  it("preserves a native spawn failure without waiting for an exit event", async () => {
+    const executable = process.execPath;
+    let worker: ChildProcess | undefined;
+    let closed = false;
+    let releasedAfterClose = false;
+    let verification: Promise<unknown>;
+    try {
+      process.execPath = path.join(tempDirs.make("openclaw-verifier-spawn-"), "missing-node");
+      verification = runDatabaseVerifyWorker([], {
+        workerUrl: createWorkerFixture(),
+        onWorker: (current) => {
+          if (current) {
+            worker = current;
+            current.once("close", () => {
+              closed = true;
+            });
+          } else {
+            releasedAfterClose = closed;
+          }
+        },
+      });
+    } finally {
+      process.execPath = executable;
+    }
+
+    await expect(verification).rejects.toMatchObject({ code: "ENOENT" });
+    expect(worker?.pid).toBeUndefined();
+    expect(worker?.exitCode === null || (worker?.exitCode ?? 0) < 0).toBe(true);
+    expect(releasedAfterClose).toBe(true);
+  });
+
+  it("preserves the IPC failure when termination reports a second error", async () => {
+    let worker: ChildProcess | undefined;
+    let restoreKill: (() => void) | undefined;
+    const verification = runDatabaseVerifyWorker([], {
+      workerUrl: createWorkerFixture(),
+      onWorker: (current) => {
+        if (current) {
+          worker = current;
+          const kill = vi.spyOn(current, "kill").mockImplementation(() => {
+            current.emit("error", Object.assign(new Error("signal refused"), { code: "EPERM" }));
+            return false;
+          });
+          restoreKill = () => kill.mockRestore();
+          current.disconnect();
+        }
+      },
+    });
+    try {
+      await expect(verification).rejects.toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
+    } finally {
+      restoreKill?.();
+      await vi.waitFor(() => expect(worker?.exitCode ?? worker?.signalCode).not.toBeNull());
+    }
+  });
+
+  it("keeps stop joined while the native IPC disconnect notification is pending", async () => {
+    let worker: ChildProcess | undefined;
+    let releaseDisconnect: (() => void) | undefined;
+    let restoreEmit: (() => void) | undefined;
+    let verificationCompleted = false;
+    const verification = runDatabaseVerifyWorker([], {
+      workerUrl: createWorkerFixture(),
+      onWorker: (current) => {
+        if (current) {
+          worker = current;
+          const emit = current.emit.bind(current);
+          const spy = vi.spyOn(current, "emit").mockImplementation((event, ...args) => {
+            if (event === "disconnect") {
+              releaseDisconnect = () => {
+                emit(event, ...args);
+              };
+              return true;
+            }
+            return emit(event, ...args);
+          });
+          restoreEmit = () => spy.mockRestore();
+        }
+      },
+    }).then(() => {
+      verificationCompleted = true;
+    });
+    if (!worker) {
+      throw new Error("verifier did not publish its child");
+    }
+    const child = worker;
+    let stopCompleted = false;
+    await vi.waitFor(() => expect(child.exitCode ?? child.signalCode).not.toBeNull());
+    const termination = terminateDatabaseVerifyWorker(child).then(() => {
+      stopCompleted = true;
+    });
+    try {
+      await vi.waitFor(() => expect(releaseDisconnect).toBeTypeOf("function"));
+      expect({ stopCompleted, verificationCompleted }).toEqual({
+        stopCompleted: false,
+        verificationCompleted: false,
+      });
+    } finally {
+      releaseDisconnect?.();
+      restoreEmit?.();
+      await Promise.all([verification, termination]);
+    }
   });
 });
 
@@ -255,6 +446,7 @@ describe("database verifier bounded diagnostics", () => {
     vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockResolvedValueOnce({
       location: ":memory:",
       cleanup,
+      cleanupAsync: async () => cleanup(),
     });
     vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
     if (errcode !== undefined) {

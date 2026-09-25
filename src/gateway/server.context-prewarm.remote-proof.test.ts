@@ -5,23 +5,24 @@ import {
   type PerformanceEntry,
 } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareContextWindowCaches } from "../agents/context-cache-projection.js";
 import { getContextWindowCaches, replaceContextWindowCaches } from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context-runtime-state.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks();
+const repositories = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
   resetContextWindowCacheForTest();
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
+  repositories.cleanup();
 });
 
 describe("Gateway context cache remote proof", () => {
@@ -37,9 +38,10 @@ describe("Gateway context cache remote proof", () => {
         contextWindow: baseWindow + (index % 17),
         maxTokens: 8_192,
       }));
-    const port = await getGatewayTestPort();
     const token = "context-prewarm-proof-token";
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
+    const server = await startTestGatewayServer(portClaim, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
@@ -53,10 +55,13 @@ describe("Gateway context cache remote proof", () => {
       scopes: ["operator.read", "operator.write", "operator.admin"],
     });
     try {
+      const workspaceDir = await initializeManagedWorktreeTestRepository(
+        repositories.make("openclaw-context-prewarm-"),
+      );
       const warmConfig = {
         agents: {
           defaults: {
-            workspace: process.cwd(),
+            workspace: workspaceDir,
             model: { primary: "synthetic-a/shared-model" },
             models: {
               "synthetic-a/shared-model": { agentRuntime: { id: "openclaw" } },
@@ -84,7 +89,7 @@ describe("Gateway context cache remote proof", () => {
       await refreshPreparedModelRuntimeSnapshots(warmConfig, {
         gatewayLifecycle: true,
         catalogMode: "static",
-        defaultWorkspaceDir: process.cwd(),
+        defaultWorkspaceDir: workspaceDir,
         allowGatewaySubagentBinding: true,
       });
       const { getPublishedPreparedModelCatalogOwnerSnapshot } =
@@ -99,7 +104,7 @@ describe("Gateway context cache remote proof", () => {
       await Promise.all([
         client.request("health", { probe: true }),
         client.request("chat.metadata", {}),
-        client.request("worktrees.branches", { repoRoot: process.cwd() }),
+        client.request("worktrees.branches", { repoRoot: workspaceDir }),
       ]);
 
       const contextModule = await import("../agents/context.js");
@@ -175,7 +180,7 @@ describe("Gateway context cache remote proof", () => {
             }),
             probeRpc("healthRpc", "health", { probe: true }),
             probeRpc("metadataRpc", "chat.metadata", {}),
-            probeRpc("branchesRpc", "worktrees.branches", { repoRoot: process.cwd() }),
+            probeRpc("branchesRpc", "worktrees.branches", { repoRoot: workspaceDir }),
           ]);
           if (!probing) {
             break;

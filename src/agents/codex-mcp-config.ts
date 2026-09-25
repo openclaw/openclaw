@@ -4,6 +4,7 @@
  * compatible with Codex's MCP config shape.
  */
 import crypto from "node:crypto";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -94,6 +95,17 @@ export function normalizeCodexMcpServerConfig(
   grants: readonly McpToolGrant[] = [],
 ): Record<string, unknown> {
   const next = normalizeBundleMcpServerConfig(server);
+  const connectionTimeoutMs = clampPositiveTimerTimeoutMs(server.connectionTimeoutMs);
+  const requestTimeoutMs = clampPositiveTimerTimeoutMs(server.requestTimeoutMs);
+  if (connectionTimeoutMs !== undefined) {
+    next.startup_timeout_sec = connectionTimeoutMs / 1_000;
+  }
+  if (requestTimeoutMs !== undefined) {
+    next.tool_timeout_sec = requestTimeoutMs / 1_000;
+  }
+  if (typeof server.supportsParallelToolCalls === "boolean") {
+    next.supports_parallel_tool_calls = server.supportsParallelToolCalls;
+  }
   applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveProjectedMcpCodexToolApprovalMode(name, server);
   if (defaultToolsApprovalMode) {
@@ -227,9 +239,9 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfigCore(
+export async function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
-): CodexBundleMcpThreadConfig {
+): Promise<CodexBundleMcpThreadConfig> {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
@@ -286,7 +298,7 @@ export function loadCodexBundleMcpThreadConfigCore(
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
   const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
-  const grants = params.agentId ? loadMcpToolGrants(params.agentId) : [];
+  const grants = params.agentId ? await loadMcpToolGrants(params.agentId) : [];
   const configuredGrants = grants.filter((grant) => {
     const server = Object.hasOwn(configuredMcp, grant.server)
       ? configuredMcp[grant.server]

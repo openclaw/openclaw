@@ -2,6 +2,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -19,6 +20,7 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
+import { setTelegramRuntime } from "./runtime.js";
 
 describe("Telegram supergroup ingress with a stalled Bot API response body", () => {
   const liveSockets = new Set<Socket>();
@@ -29,6 +31,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
   let resolveGetChatHeaders: (() => void) | undefined;
 
   beforeAll(async () => {
+    setTelegramRuntime(createPluginRuntimeMock());
     server = createServer((request, response) => {
       if (!request.url?.endsWith("/getChat")) {
         response.writeHead(404);
@@ -94,7 +97,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       accountId: "default",
       ownerAgentId: "main",
       bot,
-      cfg: {},
+      cfg: { messages: { inbound: { debounceMs: 0 } } },
       mediaMaxBytes: 1,
       opts: { token: "123456:integration-token", botInfo },
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
@@ -127,7 +130,8 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
           }),
         effectiveDmAllow: emptyAllow,
         context: {
-          cfg: {},
+          commandAuthorizedByConfig: false,
+          cfg: params.cfg,
           telegramCfg: {},
           allowFrom: [],
           dmPolicy: "open" as const,
@@ -153,7 +157,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         me: context.me,
         getFile: context.getFile.bind(context),
       }),
-      resolveTelegramSessionState: () => ({
+      resolveTelegramSessionState: async () => ({
         agentId: "integration",
         sessionEntry: undefined,
         sessionKey: "integration",

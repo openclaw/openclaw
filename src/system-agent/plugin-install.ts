@@ -32,6 +32,7 @@ export async function executePluginInstall(
           opts: {},
           runtime: createNoExitRuntime(ctx.runtime),
           allowInstallPolicyWarningPrompt: false,
+          applyRuntime: ctx.deps?.applyPluginRuntime,
           ...(ctx.assertPersistentApply
             ? { beforePersistentApply: ctx.assertPersistentApply }
             : {}),
@@ -40,8 +41,5 @@ export async function executePluginInstall(
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-  }
   return result;
 }

@@ -8,6 +8,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeMainKey,
+} from "@openclaw/session-url-contract";
 import type { ChatType } from "../channels/chat-type.js";
 import {
   isCronRunSessionKey,
@@ -15,8 +20,9 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
-import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import "../shared/incognito-session-key.js";
 import { normalizeAccountId } from "./account-id.js";
+export { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 export {
   isCronSessionKey,
@@ -27,7 +33,6 @@ export {
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
-export { isIncognitoSessionKey };
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -39,12 +44,8 @@ export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 export const LEGACY_IMPLICIT_AGENT_ID = "main";
 /** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
 export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
-export const DEFAULT_MAIN_KEY = "main";
+export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY, normalizeMainKey };
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
-
-function normalizeToken(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
 
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
@@ -87,10 +88,6 @@ export function resolveEventSessionKey(
     return "global";
   }
   return buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey });
-}
-
-export function normalizeMainKey(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value) || DEFAULT_MAIN_KEY;
 }
 
 export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
@@ -203,15 +200,6 @@ export function sanitizeAgentId(value: string | undefined | null): string {
   return normalizeAgentId(value);
 }
 
-export function buildAgentMainSessionKey(params: {
-  agentId: string;
-  mainKey?: string | undefined;
-}): string {
-  const agentId = normalizeAgentId(params.agentId);
-  const mainKey = normalizeMainKey(params.mainKey);
-  return `agent:${agentId}:${mainKey}`;
-}
-
 export function buildAgentPeerSessionKey(params: {
   agentId: string;
   mainKey?: string | undefined;
@@ -284,20 +272,10 @@ export function resolveLinkedDirectPeerId(params: {
   if (!peerId) {
     return null;
   }
-  const candidates = new Set<string>();
-  const rawCandidate = normalizeToken(peerId);
-  if (rawCandidate) {
-    candidates.add(rawCandidate);
-  }
-  const channel = normalizeToken(params.channel);
+  const candidates = new Set([normalizeLowercaseStringOrEmpty(peerId)]);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   if (channel) {
-    const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
-    if (scopedCandidate) {
-      candidates.add(scopedCandidate);
-    }
-  }
-  if (candidates.size === 0) {
-    return null;
+    candidates.add(normalizeLowercaseStringOrEmpty(`${channel}:${peerId}`));
   }
   for (const [canonical, ids] of Object.entries(identityLinks)) {
     const canonicalName = canonical.trim();
@@ -308,7 +286,7 @@ export function resolveLinkedDirectPeerId(params: {
       continue;
     }
     for (const id of ids) {
-      const normalized = normalizeToken(id);
+      const normalized = normalizeLowercaseStringOrEmpty(id);
       if (normalized && candidates.has(normalized)) {
         return canonicalName;
       }
@@ -323,7 +301,7 @@ export function buildGroupHistoryKey(params: {
   peerKind: "group" | "channel";
   peerId: string;
 }): string {
-  const channel = normalizeToken(params.channel) || "unknown";
+  const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
   const peerId =
     normalizeSessionPeerId({

@@ -47,9 +47,10 @@ function validateGatewayUrl(gatewayUrl: string): void {
 }
 
 function validateResumeHandoffFields(sessionKey: string, gatewayUrl: string): void {
+  // The handoff contract counts graphemes, independently of JSON Schema maxLength.
   if (
     sessionKey.length === 0 ||
-    !Guard.IsMaxLength(sessionKey, CHAT_SEND_SESSION_KEY_MAX_LENGTH) ||
+    Guard.GraphemeCount(sessionKey) > CHAT_SEND_SESSION_KEY_MAX_LENGTH ||
     hasTerminalControl(sessionKey) ||
     parseAgentSessionKey(sessionKey) === null
   ) {

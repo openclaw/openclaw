@@ -40,6 +40,7 @@ function createTool(params: {
   requests?: CallGatewayRequest[];
   sessionLinkBase?: string;
   indexing?: boolean;
+  archivedTranscriptsExcluded?: number;
   truncated?: boolean;
 }) {
   const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
@@ -94,6 +95,9 @@ function createTool(params: {
           (row) => Array.isArray(sessionKeys) && sessionKeys.includes(row.sessionKey),
         ),
         ...(params.indexing ? { indexing: true } : {}),
+        ...(params.archivedTranscriptsExcluded
+          ? { archivedTranscriptsExcluded: params.archivedTranscriptsExcluded }
+          : {}),
         ...(params.truncated ? { truncated: true } : {}),
       } as T;
     },
@@ -149,22 +153,41 @@ describe("sessions_search tool", () => {
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
-  it("warns that indexing makes search results incomplete", async () => {
-    const result = await createTool({
-      results: [hit()],
-      indexing: true,
-    }).execute("indexing-warning", { query: "text" });
+  it.each([
+    { indexing: true, archivedTranscriptsExcluded: undefined },
+    { indexing: false, archivedTranscriptsExcluded: 2 },
+    { indexing: true, archivedTranscriptsExcluded: 2 },
+  ])(
+    "reports incomplete search with $archivedTranscriptsExcluded archived transcripts and indexing=$indexing",
+    async (state) => {
+      const result = await createTool({
+        results: [hit()],
+        ...state,
+      }).execute("indexing-warning", { query: "text" });
 
-    expect(result.details).toMatchObject({
-      indexing: true,
-      warning:
-        "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
-    });
-  });
+      expect(result.details).toMatchObject({
+        ...(state.indexing ? { indexing: true } : {}),
+        ...(state.archivedTranscriptsExcluded ? { archivedTranscriptsExcluded: 2 } : {}),
+        warning: [
+          ...(state.indexing
+            ? [
+                "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+              ]
+            : []),
+          ...(state.archivedTranscriptsExcluded
+            ? [
+                "Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
+              ]
+            : []),
+        ].join(" "),
+      });
+      expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
+    },
+  );
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});

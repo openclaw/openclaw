@@ -9,7 +9,7 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   type QaProviderMode,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
 import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
 import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";
@@ -53,6 +53,7 @@ type QaScriptEvidenceWriterOptions = {
   maxLogBytes?: number;
   packageSource?: QaEvidencePackageSource;
   primaryModel: string;
+  providerId?: string;
   providerMode: QaProviderMode;
   repoRoot: string;
   target: QaScriptEvidenceTarget;
@@ -212,6 +213,7 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
       generatedAt: new Date().toISOString(),
       packageSource: options.packageSource,
       primaryModel: options.primaryModel,
+      providerId: options.providerId,
       providerMode: options.providerMode,
       repoRoot: options.repoRoot,
       runner: "script",

@@ -2,12 +2,17 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -17,6 +22,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
+const metadataUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.cliStartupMetadata);
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const DEFAULT_COMMAND_HELP_NAMES = [
   "browser",
@@ -107,21 +113,6 @@ async function waitForProcessExit(
     });
   }
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
-}
-
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("write-cli-startup-metadata", () => {
@@ -215,7 +206,9 @@ describe("write-cli-startup-metadata", () => {
       });
 
       await rootHelpStarted;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(startedCommands).toEqual([]);
 
       releaseRootHelp();
@@ -338,7 +331,9 @@ describe("write-cli-startup-metadata", () => {
       });
       const deadline = Date.now() + 1_000;
       while (children.length < COMMAND_HELP_RENDER_CONCURRENCY && Date.now() < deadline) {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
       expect(children.map((child) => child.commandName)).toEqual(
         DEFAULT_COMMAND_HELP_NAMES.slice(0, COMMAND_HELP_RENDER_CONCURRENCY),
@@ -426,7 +421,9 @@ describe("write-cli-startup-metadata", () => {
             tasks: "Usage: openclaw tasks\n",
           }),
         });
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         child.stderr.write("primary browser failure\n");
         child.emit("close", 7, null);
 
@@ -673,9 +670,7 @@ describe("write-cli-startup-metadata", () => {
         tempRoot,
         "runner.mjs",
         [
-          `const { testing } = await import(${JSON.stringify(
-            pathToFileURL(path.resolve("scripts/write-cli-startup-metadata.ts")).href,
-          )});`,
+          `const { testing } = await import(${JSON.stringify(metadataUrl.href)});`,
           "const { writeFileSync } = await import('node:fs');",
           "const renderCommand = (commandPath, failureMessage) => (context, taskContext) => {",
           "  if (!taskContext) throw new Error('missing render task context');",
@@ -710,10 +705,14 @@ describe("write-cli-startup-metadata", () => {
         ].join("\n"),
       );
 
-      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        cwd: process.cwd(),
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1), runnerPath],
+        {
+          cwd: process.cwd(),
+          stdio: "ignore",
+        },
+      );
       let grandchildPid = 0;
 
       try {
@@ -737,10 +736,12 @@ describe("write-cli-startup-metadata", () => {
 
         runner.kill("SIGTERM");
 
-        await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
-        });
+        await expect(waitForChildClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS)).resolves.toEqual(
+          {
+            code: null,
+            signal: "SIGTERM",
+          },
+        );
         await waitForProcessExit(grandchildPid);
         const renderStateDir = readFileSync(renderStatePath, "utf8");
         expect(existsSync(renderStateDir)).toBe(false);
@@ -755,82 +756,173 @@ describe("write-cli-startup-metadata", () => {
     },
   );
 
-  it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+  it.each(["new", "existing", "symlinked parent"] as const)(
+    "writes complete startup metadata with %s output and source-rendered help",
+    async (outputKind) => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-");
+      const distDir = path.join(tempRoot, "dist");
+      const outputDir =
+        outputKind === "symlinked parent" ? path.join(tempRoot, "dist-link") : distDir;
+      const extensionsDir = path.join(tempRoot, "extensions");
+      const outputPath = path.join(outputDir, "cli-startup-metadata.json");
 
-    mkdirSync(distDir, { recursive: true });
-    mkdirSync(path.join(extensionsDir, "matrix"), { recursive: true });
-    writeFileSync(
-      path.join(extensionsDir, "matrix", "package.json"),
-      JSON.stringify({
-        openclaw: {
-          channel: {
-            id: "matrix",
-            order: 120,
-            label: "Matrix",
+      mkdirSync(distDir, { recursive: true });
+      if (outputKind === "symlinked parent") {
+        fs.symlinkSync(distDir, outputDir, "junction");
+      }
+      if (outputKind === "existing") {
+        writeFileSync(outputPath, '{"rootHelpText":"old help"}\n');
+        fs.chmodSync(outputPath, 0o640);
+      }
+      fs.chmodSync(distDir, 0o750);
+      mkdirSync(path.join(extensionsDir, "matrix"), { recursive: true });
+      writeFileSync(
+        path.join(extensionsDir, "matrix", "package.json"),
+        JSON.stringify({
+          openclaw: {
+            channel: {
+              id: "matrix",
+              order: 120,
+              label: "Matrix",
+            },
           },
-        },
-      }),
-      "utf8",
-    );
+        }),
+        "utf8",
+      );
 
-    await testing.writeCliStartupMetadata({
-      distDir,
-      outputPath,
-      extensionsDir,
-      renderSourceRootHelpText: () => "Usage: openclaw\n",
-      renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-      renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-      renderSourceSubcommandHelpTextRecord: () => ({
-        config: "Usage: openclaw config\n",
-        doctor: "Usage: openclaw doctor\n",
-        gateway: "Usage: openclaw gateway\n",
-        models: "Usage: openclaw models\n",
-        plugins: "Usage: openclaw plugins\n",
-        sessions: "Usage: openclaw sessions\n",
-        tasks: "Usage: openclaw tasks\n",
-      }),
-    });
+      await testing.writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        renderSourceRootHelpText: () => "Usage: openclaw\n",
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      browserHelpText: string;
-      channelOptions: string[];
-      generatorSignature: string;
-      nodesHelpText: string;
-      rootHelpText: string;
-      secretsHelpText: string;
-      subcommandHelpText: {
-        config: string;
-        doctor: string;
-        gateway: string;
-        models: string;
-        plugins: string;
-        sessions: string;
-        tasks: string;
+      const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+        browserHelpText: string;
+        channelOptions: string[];
+        generatorSignature: string;
+        nodesHelpText: string;
+        rootHelpText: string;
+        secretsHelpText: string;
+        subcommandHelpText: {
+          config: string;
+          doctor: string;
+          gateway: string;
+          models: string;
+          plugins: string;
+          sessions: string;
+          tasks: string;
+        };
       };
-    };
-    expect(written.channelOptions).toContain("matrix");
-    expect(written.generatorSignature).toMatch(/^[a-f0-9]{40}$/u);
-    expect(written.browserHelpText).toContain("Usage:");
-    expect(written.browserHelpText).toContain("openclaw browser");
-    expect(written.secretsHelpText).toContain("Usage:");
-    expect(written.secretsHelpText).toContain("openclaw secrets");
-    expect(written.nodesHelpText).toContain("Usage:");
-    expect(written.nodesHelpText).toContain("openclaw nodes");
-    expect(written.rootHelpText).toContain("Usage:");
-    expect(written.rootHelpText).toContain("openclaw");
-    expect(written.subcommandHelpText.config).toContain("openclaw config");
-    expect(written.subcommandHelpText.doctor).toContain("openclaw doctor");
-    expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
-    expect(written.subcommandHelpText.models).toContain("openclaw models");
-    expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
-    expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
-    expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
-  });
+      expect(written.channelOptions).toContain("matrix");
+      expect(written.generatorSignature).toMatch(/^[a-f0-9]{40}$/u);
+      expect(written.browserHelpText).toContain("Usage:");
+      expect(written.browserHelpText).toContain("openclaw browser");
+      expect(written.secretsHelpText).toContain("Usage:");
+      expect(written.secretsHelpText).toContain("openclaw secrets");
+      expect(written.nodesHelpText).toContain("Usage:");
+      expect(written.nodesHelpText).toContain("openclaw nodes");
+      expect(written.rootHelpText).toContain("Usage:");
+      expect(written.rootHelpText).toContain("openclaw");
+      expect(written.subcommandHelpText.config).toContain("openclaw config");
+      expect(written.subcommandHelpText.doctor).toContain("openclaw doctor");
+      expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
+      expect(written.subcommandHelpText.models).toContain("openclaw models");
+      expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
+      expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
+      expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
+      expect(fs.readdirSync(distDir)).toEqual(["cli-startup-metadata.json"]);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(distDir).mode & 0o777).toBe(0o750);
+        expect(fs.statSync(outputPath).mode & 0o777).toBe(
+          outputKind === "existing" ? 0o640 : 0o666 & ~process.umask(),
+        );
+      }
+    },
+  );
+
+  it.each(["partial write", "rename"] as const)(
+    "preserves the prior startup metadata after a failed %s",
+    async (failurePhase) => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-publication-");
+      const distDir = path.join(tempRoot, "dist");
+      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      writeStartupMetadataSourceSignatureFixture(tempRoot);
+      mkdirSync(distDir);
+      let revision = "before";
+      const options = {
+        distDir,
+        outputPath,
+        extensionsDir: path.join(tempRoot, "extensions"),
+        sourceRootDir: tempRoot,
+        renderSourceRootHelpText: () => `Usage: openclaw ${revision}\n`,
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      };
+      await testing.writeCliStartupMetadata(options);
+      const previous = readFileSync(outputPath, "utf8");
+      revision = "after";
+      const failure = Object.assign(new Error(`publication ${failurePhase} failed`), {
+        code: failurePhase === "partial write" ? "ENOSPC" : "EACCES",
+      });
+      const realWrite = fs.writeFileSync.bind(fs);
+      const realRename = fs.renameSync.bind(fs);
+      const write = vi
+        .spyOn(fs, "writeFileSync")
+        .mockImplementation((target, data, writeOptions) => {
+          if (
+            failurePhase === "partial write" &&
+            typeof data === "string" &&
+            data.includes('"generatedBy": "scripts/write-cli-startup-metadata.ts"')
+          ) {
+            realWrite(target, data.slice(0, 32), writeOptions);
+            throw failure;
+          }
+          realWrite(target, data, writeOptions);
+        });
+      const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (
+          failurePhase === "rename" &&
+          path.basename(String(destination)) === path.basename(outputPath)
+        ) {
+          throw failure;
+        }
+        realRename(source, destination);
+      });
+      try {
+        syncBuiltinESMExports();
+        await expect(testing.writeCliStartupMetadata(options)).rejects.toBe(failure);
+        expect(readFileSync(outputPath, "utf8")).toBe(previous);
+        expect(fs.readdirSync(distDir)).toEqual([path.basename(outputPath)]);
+      } finally {
+        write.mockRestore();
+        rename.mockRestore();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   it("does not source-fallback a bundled root resource failure", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-root-resource-failure-");
@@ -876,52 +968,58 @@ describe("write-cli-startup-metadata", () => {
     expect(existsSync(outputPath)).toBe(false);
   });
 
-  it("selects the root-help bundle that exports the renderer", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-bundle-selection-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
-    const renderSourceRootHelpText = vi.fn(() => "Usage: source fallback\n");
+  it.each([
+    { rendererExtension: "js", helperExtension: "mjs" },
+    { rendererExtension: "mjs", helperExtension: "js" },
+  ])(
+    "selects the .$rendererExtension root-help renderer beside a .$helperExtension helper",
+    async ({ rendererExtension, helperExtension }) => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-bundle-selection-");
+      const distDir = path.join(tempRoot, "dist");
+      const extensionsDir = path.join(tempRoot, "extensions");
+      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      const renderSourceRootHelpText = vi.fn(() => "Usage: source fallback\n");
 
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(tempRoot, "package.json", '{"type":"module"}\n');
-    writeFixtureFile(
-      distDir,
-      "root-help-live-config-fixture.js",
-      "async function loadRootHelpRenderOptionsForConfigSensitivePlugins() { return null; }\nexport { loadRootHelpRenderOptionsForConfigSensitivePlugins };\n",
-    );
-    writeFixtureFile(
-      distDir,
-      "root-help-renderer-fixture.js",
-      "async function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n",
-    );
+      writeStartupMetadataSourceSignatureFixture(tempRoot);
+      writeFixtureFile(tempRoot, "package.json", '{"type":"module"}\n');
+      writeFixtureFile(
+        distDir,
+        `root-help-live-config-fixture.${helperExtension}`,
+        "async function loadRootHelpRenderOptionsForConfigSensitivePlugins() { return null; }\nexport { loadRootHelpRenderOptionsForConfigSensitivePlugins };\n",
+      );
+      writeFixtureFile(
+        distDir,
+        `root-help-renderer-fixture.${rendererExtension}`,
+        `import "./root-help-live-config-fixture.${helperExtension}";\nasync function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n`,
+      );
 
-    await testing.writeCliStartupMetadata({
-      distDir,
-      outputPath,
-      extensionsDir,
-      sourceRootDir: tempRoot,
-      renderSourceRootHelpText,
-      renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-      renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-      renderSourceSubcommandHelpTextRecord: () => ({
-        config: "Usage: openclaw config\n",
-        doctor: "Usage: openclaw doctor\n",
-        gateway: "Usage: openclaw gateway\n",
-        models: "Usage: openclaw models\n",
-        plugins: "Usage: openclaw plugins\n",
-        sessions: "Usage: openclaw sessions\n",
-        tasks: "Usage: openclaw tasks\n",
-      }),
-    });
+      await testing.writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderSourceRootHelpText,
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      rootHelpText: string;
-    };
-    expect(written.rootHelpText).toBe("Usage: bundled renderer\n");
-    expect(renderSourceRootHelpText).not.toHaveBeenCalled();
-  });
+      const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+        rootHelpText: string;
+      };
+      expect(written.rootHelpText).toBe("Usage: bundled renderer\n");
+      expect(renderSourceRootHelpText).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders independent startup help snapshots concurrently", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-concurrency-");
@@ -1029,7 +1127,9 @@ describe("write-cli-startup-metadata", () => {
         for (const suffix of ["", "-shm", "-wal"]) {
           writeFileSync(path.join(sqliteDir, `openclaw.sqlite${suffix}`), "fixture", "utf8");
         }
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         if (failRender) {
           throw new Error("browser help failed");
         }

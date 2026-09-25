@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   MemoryEntryProvenance,
@@ -13,6 +12,7 @@ import {
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { inspectWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import type { SessionEntryOrigin } from "./session-ingestion.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
@@ -61,9 +61,12 @@ function mergeRecallProvenance(
   };
 }
 
-async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+async function shortTermRecallSourceIsFile(
+  workspaceDir: string,
+  sourcePath: string,
+): Promise<boolean> {
   try {
-    const stat = await fs.stat(sourcePath);
+    const stat = await inspectWorkspaceFile(workspaceDir, sourcePath);
     return stat.isFile();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -88,7 +91,7 @@ export async function filterLiveShortTermRecallEntries(params: {
     if (existing) {
       return existing;
     }
-    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(workspaceDir, sourcePath));
     sourceFileChecks.set(sourcePath, check);
     return check;
   };
@@ -293,6 +296,10 @@ export async function recordShortTermRecalls(params: {
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
+      const userQueryHashes =
+        signalType === "recall"
+          ? mergeRecentDistinct(existing?.userQueryHashes ?? [], queryHash, MAX_QUERY_HASHES)
+          : existing?.userQueryHashes;
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
       // Workspace-file hits without explicit provenance retain the index's
@@ -338,6 +345,7 @@ export async function recordShortTermRecalls(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt,
         queryHashes,
+        ...(userQueryHashes ? { userQueryHashes } : {}),
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,

@@ -21,7 +21,7 @@ const leafConfigs = new Set([
     "extension-codex",
     "live",
     "e2e",
-    "package-docker",
+    "package-contract",
     "ui-e2e",
   ].map((name) => `test/vitest/vitest.${name}.config.ts`),
 ]);

@@ -117,8 +117,8 @@ on:
         required: false
         default: false
         type: boolean
-      advisory:
-        description: Treat package Telegram failures as advisory for the caller
+      allow_frozen_target_scenario_omissions:
+        description: Allow source-qualified omission of current-only default scenarios
         required: false
         default: false
         type: boolean
@@ -129,8 +129,13 @@ on:
         type: string
   workflow_call:
     inputs:
-      advisory:
-        description: Treat package Telegram failures as advisory for the caller
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
+      allow_frozen_target_scenario_omissions:
+        description: Allow source-qualified omission of current-only default scenarios
         required: false
         default: false
         type: boolean
@@ -265,13 +270,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ (inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
@@ -289,7 +293,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
         with:
           cache-key: scripts/e2e/Dockerfile
 
@@ -319,8 +323,33 @@ jobs:
         run: |
           set -euo pipefail
           pnpm build qaRuntime
+          test -f dist/plugin-sdk/qa-channel-protocol.js
           test -f dist/plugin-sdk/qa-runtime.js
           test -f dist/extensions/qa-lab/runtime-api.js
+
+      - name: Checkout frozen package source capabilities
+        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.package_source_sha }}
+          path: .artifacts/frozen-telegram-target
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            extensions/telegram/src/bot-message-dispatch.ts
+            extensions/telegram/src/draft-stream.ts
+            qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
+            qa/scenarios/channels/telegram-progress-tool-visibility.yaml
+            qa/scenarios/channels/telegram-queue-invalid-mode.yaml
+            qa/scenarios/channels/telegram-rich-inline-composition.yaml
+            qa/scenarios/channels/telegram-repeated-command-authorization.yaml
+            src/agents/embedded-agent-subscribe.ts
+
+      - name: Resolve frozen package Telegram scenarios
+        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        env:
+          OPENCLAW_SELECTED_SHA: ${{ inputs.package_source_sha }}
+        run: node --import tsx scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts .artifacts/frozen-telegram-target
 
       - name: Validate inputs and secrets
         env:
@@ -784,7 +813,6 @@ jobs:
       - name: Summarize Telegram attempt
         if: always()
         env:
-          ADVISORY: ${{ inputs.advisory }}
           LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
         run: |
@@ -793,10 +821,9 @@ jobs:
             echo "## Package Telegram attempt"
             echo
             echo "- Telegram attempt: ${LANE_OUTCOME}"
-            echo "- Advisory: ${ADVISORY}"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$ADVISORY" == "true" && "$LANE_OUTCOME" != "success" ]]; then
-            echo "::warning::Package Telegram attempt: ${LANE_OUTCOME}; release testing is best effort."
+          if [[ "$LANE_OUTCOME" != "success" ]]; then
+            echo "::error::Package Telegram attempt: ${LANE_OUTCOME}"
           fi
 
       - name: Upload npm Telegram E2E artifacts
@@ -807,3 +834,16 @@ jobs:
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs:
+      - run_package_telegram_e2e
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: npmTelegram
+      target_sha: ${{ inputs.harness_ref }}

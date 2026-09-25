@@ -40,23 +40,21 @@ type PreparedTelegramOutbound = {
 type PreparedTelegramOutboundWithMessageId<T> = PreparedTelegramOutbound &
   (T extends string | number ? { messageId: number } : { messageId?: undefined });
 
-export async function reportTelegramProviderDelivery(params: {
+export function buildTelegramProviderDeliveryResult(params: {
   message: TelegramOutboundPromptContextMessage;
   messageId: string | number;
   fallbackChatId: string | number;
   successfulSendThread?: TelegramThreadSpec;
   kind?: MessageReceiptPartKind;
   meta?: TelegramSendResult["meta"];
-  onPrepared?: (delivery: TelegramSendResult) => void;
-  onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-}): Promise<TelegramSendResult> {
+}): TelegramSendResult {
   const messageId = String(params.messageId);
   const chatId = String(params.message.chat?.id ?? params.fallbackChatId);
   const providerThreadId = resolveTelegramProviderObservedThreadId({
     message: params.message,
     successfulSendThread: params.successfulSendThread,
   });
-  const delivery: TelegramSendResult = {
+  return {
     messageId,
     chatId,
     ...(providerThreadId !== undefined
@@ -70,6 +68,15 @@ export async function reportTelegramProviderDelivery(params: {
       : {}),
     ...(params.meta ? { meta: params.meta } : {}),
   };
+}
+
+export async function reportTelegramProviderDelivery(
+  params: Parameters<typeof buildTelegramProviderDeliveryResult>[0] & {
+    onPrepared?: (delivery: TelegramSendResult) => void;
+    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
+  },
+): Promise<TelegramSendResult> {
+  const delivery = buildTelegramProviderDeliveryResult(params);
   params.onPrepared?.(delivery);
   await params.onDeliveryResult?.(delivery);
   try {
@@ -79,7 +86,7 @@ export async function reportTelegramProviderDelivery(params: {
     });
   } catch (error) {
     throw createChannelPartialDeliveryError(error, {
-      messageIds: [messageId],
+      messageIds: [delivery.messageId],
       ...(delivery.receipt ? { receipt: delivery.receipt } : {}),
       visibleReplySent: true,
     });
@@ -174,7 +181,7 @@ export async function finalizeTelegramOutbound(params: {
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
-  recordSentMessage(params.prepared.chatId, messageId, cfg, {
+  await recordSentMessage(params.prepared.chatId, messageId, cfg, {
     accountId: account.accountId,
     agentId: ownerAgentId,
   });
@@ -188,21 +195,30 @@ export async function finalizeTelegramOutbound(params: {
   const projection = params.promptContextProjectionPlan?.cursor.take(
     params.promptContextProjectionPlan.finalPart,
   );
-  const recorded = await recordOutboundMessageForPromptContext({
-    cfg,
-    ownerAgentId,
-    account,
-    botUserId: params.botUserId,
-    chatId: params.prepared.chatId,
-    message: params.result,
-    messageId,
-    text: params.text,
-    messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
-    successfulSendThread: params.prepared.threadSpec,
-    promptContextProjection: projection,
-  });
-  if (projection && !recorded) {
+  try {
+    const recorded = await recordOutboundMessageForPromptContext({
+      cfg,
+      ownerAgentId,
+      account,
+      botUserId: params.botUserId,
+      chatId: params.prepared.chatId,
+      message: params.result,
+      messageId,
+      text: params.text,
+      messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
+      successfulSendThread: params.prepared.threadSpec,
+      promptContextProjection: projection,
+    });
+    if (projection && !recorded) {
+      params.promptContextProjectionPlan?.cursor.invalidate();
+    }
+  } catch (error) {
     params.promptContextProjectionPlan?.cursor.invalidate();
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: [resultIds.messageId],
+      ...(resultIds.receipt ? { receipt: resultIds.receipt } : {}),
+      visibleReplySent: true,
+    });
   }
   params.beforeActivity?.(resultIds);
   recordChannelActivity({

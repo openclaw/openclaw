@@ -1,13 +1,14 @@
 /**
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
-import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
+  splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -32,6 +33,7 @@ import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { prependRuntimeContextForModel } from "./run/runtime-context-prompt.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 // CachedContent metadata responses are tiny (name + expireTime); cap the read so
@@ -88,7 +90,6 @@ type PrepareGooglePromptCacheStreamFnParams = {
   sessionManager: GooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
-  systemPrompt?: string;
 };
 
 type GooglePromptCacheDeps = {
@@ -104,17 +105,6 @@ function resolveGooglePromptCacheRefreshWindowMs(cacheRetention: CacheRetention)
   return cacheRetention === "long"
     ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
     : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
-}
-
-function digestSystemPrompt(systemPrompt: string): string {
-  return crypto.createHash("sha256").update(systemPrompt).digest("hex");
-}
-
-function resolveManagedSystemPrompt(systemPrompt: string | undefined): string | undefined {
-  const stripped =
-    typeof systemPrompt === "string" ? stripSystemPromptCacheBoundary(systemPrompt) : "";
-  const sanitized = sanitizeTransportPayloadText(stripped);
-  return sanitized.trim() ? sanitized : undefined;
 }
 
 function resolveExplicitCachedContent(
@@ -293,43 +283,23 @@ function buildManagedGooglePromptCacheConfig(
   };
 }
 
-function buildManagedContextForCachedContent(context: GooglePromptCacheContext) {
-  if (!context.systemPrompt && !context.tools?.length) {
-    return context;
-  }
-  return {
-    ...context,
-    systemPrompt: undefined,
-    tools: undefined,
-  };
-}
-
 function resolveGooglePromptCacheAuthHeaders(params: {
   apiKey: string;
   provider: string;
 }): Record<string, string> {
-  if (!looksLikeSecretSentinel(params.apiKey)) {
-    const headers = parseGeminiAuth(params.apiKey).headers;
-    if (!isSecretValueRegisteredForRedaction(params.apiKey)) {
-      return headers;
-    }
-    return Object.fromEntries(
-      Object.entries(headers).map(([name, value]) => [
-        name,
-        name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key"
-          ? mintSecretSentinel(value, { label: `model-auth:${params.provider}` })
-          : value,
-      ]),
-    );
-  }
-  const resolved = resolveSecretSentinel(params.apiKey);
-  if (resolved === undefined) {
+  const sentinel = looksLikeSecretSentinel(params.apiKey);
+  const apiKey = sentinel ? resolveSecretSentinel(params.apiKey) : params.apiKey;
+  if (apiKey === undefined) {
     throw new Error(
       `Secret sentinel ${params.apiKey} is not registered in this process; refusing Google prompt-cache auth`,
     );
   }
+  const headers = parseGeminiAuth(apiKey).headers;
+  if (!sentinel && !isSecretValueRegisteredForRedaction(params.apiKey)) {
+    return headers;
+  }
   return Object.fromEntries(
-    Object.entries(parseGeminiAuth(resolved).headers).map(([name, value]) => {
+    Object.entries(headers).map(([name, value]) => {
       const isCredentialHeader =
         name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key";
       return [
@@ -457,7 +427,7 @@ async function ensureGooglePromptCache(
   if (now === undefined) {
     return null;
   }
-  const systemPromptDigest = digestSystemPrompt(params.systemPrompt);
+  const systemPromptDigest = sha256Hex(params.systemPrompt);
   const matchKey = buildGooglePromptCacheMatchKey({
     provider: params.provider,
     modelId: params.model.id,
@@ -467,6 +437,16 @@ async function ensureGooglePromptCache(
     cacheConfigDigest: params.cacheConfigDigest,
   });
   const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
+  const entryMetadata = {
+    timestamp: now,
+    provider: params.provider,
+    modelId: params.model.id,
+    modelApi: params.model.api,
+    baseUrl,
+    systemPromptDigest,
+    cacheConfigDigest: params.cacheConfigDigest,
+    cacheRetention: params.cacheRetention,
+  };
 
   if (
     latestEntry?.status === "failed" &&
@@ -476,6 +456,16 @@ async function ensureGooglePromptCache(
   }
 
   const fetchImpl = (deps.buildGuardedFetch ?? buildGuardedModelFetch)(params.model);
+  const requestOptions = {
+    apiKey: params.apiKey,
+    baseUrl,
+    cacheRetention: params.cacheRetention,
+    fetchImpl,
+    headers: params.model.headers,
+    model: params.model,
+    now,
+    signal: params.signal,
+  };
   const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
   const cachedContent =
     latestEntry?.status === "ready" ? readGooglePromptCacheName(latestEntry.cachedContent) : null;
@@ -487,27 +477,13 @@ async function ensureGooglePromptCache(
         return cachedContent;
       }
       const refreshed = await requestGooglePromptCache({
-        apiKey: params.apiKey,
-        baseUrl,
-        cacheRetention: params.cacheRetention,
+        ...requestOptions,
         cachedContent,
-        fetchImpl,
-        headers: params.model.headers,
-        model: params.model,
-        now,
-        signal: params.signal,
       });
       if (refreshed) {
         await appendGooglePromptCacheEntry(params.sessionManager, {
           status: "ready",
-          timestamp: now,
-          provider: params.provider,
-          modelId: params.model.id,
-          modelApi: params.model.api,
-          baseUrl,
-          systemPromptDigest,
-          cacheConfigDigest: params.cacheConfigDigest,
-          cacheRetention: params.cacheRetention,
+          ...entryMetadata,
           cachedContent,
           expireTime: refreshed.expireTime,
         });
@@ -518,15 +494,8 @@ async function ensureGooglePromptCache(
   }
 
   const created = await requestGooglePromptCache({
-    apiKey: params.apiKey,
-    baseUrl,
-    cacheRetention: params.cacheRetention,
-    fetchImpl,
-    headers: params.model.headers,
-    model: params.model,
+    ...requestOptions,
     modelId: params.model.id,
-    now,
-    signal: params.signal,
     systemPrompt: params.systemPrompt,
     tools: params.tools,
     toolConfig: params.toolConfig,
@@ -534,14 +503,7 @@ async function ensureGooglePromptCache(
   if (!created) {
     await appendGooglePromptCacheEntry(params.sessionManager, {
       status: "failed",
-      timestamp: now,
-      provider: params.provider,
-      modelId: params.model.id,
-      modelApi: params.model.api,
-      baseUrl,
-      systemPromptDigest,
-      cacheConfigDigest: params.cacheConfigDigest,
-      cacheRetention: params.cacheRetention,
+      ...entryMetadata,
       retryAfter:
         resolveExpiresAtMsFromDurationMs(GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS, { nowMs: now }) ?? 0,
     });
@@ -550,14 +512,7 @@ async function ensureGooglePromptCache(
 
   await appendGooglePromptCacheEntry(params.sessionManager, {
     status: "ready",
-    timestamp: now,
-    provider: params.provider,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    baseUrl,
-    systemPromptDigest,
-    cacheConfigDigest: params.cacheConfigDigest,
-    cacheRetention: params.cacheRetention,
+    ...entryMetadata,
     cachedContent: created.cachedContent,
     expireTime: created.expireTime,
   });
@@ -586,14 +541,20 @@ export async function prepareGooglePromptCacheStreamFn(
   if (resolvedRetention !== "short" && resolvedRetention !== "long") {
     return undefined;
   }
-  const systemPrompt = resolveManagedSystemPrompt(params.systemPrompt);
   const apiKey = params.apiKey?.trim();
-  if (!systemPrompt || !apiKey) {
+  if (!apiKey) {
     return undefined;
   }
 
   const inner = params.streamFn;
   return async (model, context, options) => {
+    const split = splitSystemPromptCacheBoundary(context.systemPrompt ?? "");
+    const systemPrompt = sanitizeTransportPayloadText(
+      stripSystemPromptCacheBoundary(split?.stablePrefix ?? ""),
+    );
+    if (!split || !systemPrompt.trim()) {
+      return inner(model, context, options);
+    }
     const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
     const cachedContent = await ensureGooglePromptCache(
       {
@@ -620,7 +581,17 @@ export async function prepareGooglePromptCacheStreamFn(
     return streamWithPayloadPatch(
       inner,
       model,
-      buildManagedContextForCachedContent(context),
+      {
+        ...context,
+        systemPrompt: undefined,
+        tools: undefined,
+        // Only a ready cache owns the stable system instructions. Keep fallback
+        // requests intact, and never persist this per-request suffix projection.
+        messages: prependRuntimeContextForModel(
+          context.messages,
+          sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(split.dynamicSuffix)),
+        ),
+      },
       options,
       (payload) => {
         payload.cachedContent = cachedContent;

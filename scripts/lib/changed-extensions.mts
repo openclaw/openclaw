@@ -11,16 +11,12 @@ type ChangedExtensionParams = Partial<Record<"base" | "cwd" | "head", string>> &
   unavailableBaseBehavior?: "all" | "empty" | "error";
 };
 
-function runGit(args: string[]) {
+function runGit(args: string[], cwd = repoRoot) {
   return execFileSync("git", args, {
-    cwd: repoRoot,
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
-}
-
-function normalizeRelative(inputPath: string) {
-  return inputPath.split(path.sep).join("/");
 }
 
 function hasGitCommit(ref: string | undefined) {
@@ -69,21 +65,16 @@ function listChangedPaths(base: string, head = "HEAD") {
     throw new Error("A git base revision is required to list changed extensions.");
   }
 
-  return runGit(["diff", "--name-only", base, head])
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return runGit(["diff", "--name-only", "-z", base, head]).split("\0").filter(Boolean);
 }
 
-function listAvailableExtensionIdsFromGit() {
-  const packageFiles = runGit([
-    "ls-files",
-    "--",
-    `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`,
-  ])
-    .split("\n")
-    .map((line) => normalizeRelative(line.trim()))
-    .filter((line) => line.length > 0);
+function listAvailableExtensionIdsFromGit(cwd: string) {
+  const packageFiles = runGit(
+    ["ls-files", "-z", "--", `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`],
+    cwd,
+  )
+    .split("\0")
+    .filter(Boolean);
   return packageFiles
     .flatMap((file) => {
       const match = file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/package\\.json$`));
@@ -92,8 +83,8 @@ function listAvailableExtensionIdsFromGit() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function listAvailableExtensionIdsFromDirectory() {
-  const extensionsDir = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
+function listAvailableExtensionIdsFromDirectory(cwd: string) {
+  const extensionsDir = path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR);
   if (!fs.existsSync(extensionsDir)) {
     return [];
   }
@@ -103,17 +94,17 @@ function listAvailableExtensionIdsFromDirectory() {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((extensionId) =>
-      fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
+      fs.existsSync(path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }
 
 /** List bundled extension ids available in git or the local extensions directory. */
-export function listAvailableExtensionIds() {
+export function listAvailableExtensionIds(cwd = repoRoot) {
   try {
-    return listAvailableExtensionIdsFromGit();
+    return listAvailableExtensionIdsFromGit(cwd);
   } catch {
-    return listAvailableExtensionIdsFromDirectory();
+    return listAvailableExtensionIdsFromDirectory(cwd);
   }
 }
 
@@ -122,8 +113,7 @@ export function detectChangedExtensionIds(changedPaths: string[]) {
   const availableExtensionIds = new Set(listAvailableExtensionIds());
   const extensionIds = new Set<string>();
 
-  for (const rawPath of changedPaths) {
-    const relativePath = normalizeRelative(rawPath.trim());
+  for (const relativePath of changedPaths) {
     if (!relativePath) {
       continue;
     }

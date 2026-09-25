@@ -3,6 +3,7 @@
  * plugin-owned apps can be exposed to a native Codex thread.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { findCodexAppById } from "./app-identity.js";
 import type {
   CodexAppInventoryCache,
   CodexAppInventoryCacheRead,
@@ -97,6 +98,7 @@ type ReadCodexPluginInventoryParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  appInventoryCacheKey?: string;
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
@@ -249,13 +251,26 @@ export async function readCodexPluginInventory(
         (unavailableByMarketplacePolicy || !summary.installed || !summary.enabled),
       authRequired: apps.some((app) => app.needsAuth || !app.accessible),
       appOwnership,
-      ownedAppIds,
+      ownedAppIds: Array.from(new Set([...ownedAppIds, ...apps.map((app) => app.id)])).toSorted(),
       apps,
     });
   }
 
+  // Saved configuration is a discovery request, not proof of a runtime plugin.
+  const missingKeys = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.code === "plugin_missing" || diagnostic.code === "marketplace_missing") {
+      if (diagnostic.plugin) {
+        missingKeys.add(diagnostic.plugin.configKey);
+      }
+      embeddedAgentLog.error(diagnostic.message, { code: diagnostic.code });
+    }
+  }
   const inventory = {
-    policy,
+    policy: {
+      ...policy,
+      pluginPolicies: policy.pluginPolicies.filter((plugin) => !missingKeys.has(plugin.configKey)),
+    },
     records,
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
@@ -428,7 +443,7 @@ function readCachedAppInventory(
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
     (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
   return params.appCache.read({
-    key: params.appCacheKey,
+    key: params.appInventoryCacheKey ?? params.appCacheKey,
     request,
     nowMs: params.nowMs,
     suppressRefresh: params.suppressAppInventoryRefresh,
@@ -508,12 +523,11 @@ function resolveOwnedApps(params: {
     });
     return [];
   }
-  const appInfoById = new Map(
-    (params.appInventory?.snapshot?.apps ?? []).map((app) => [app.id, app] as const),
-  );
+  const appInfos = params.appInventory?.snapshot?.apps ?? [];
+  const installedApps = params.appInventory?.snapshot?.installedApps ?? [];
   return detailApps
     .map((app) => {
-      const info = appInfoById.get(app.id);
+      const info = findCodexAppById(appInfos, app.id);
       if (!info) {
         return {
           id: app.id,
@@ -525,13 +539,13 @@ function resolveOwnedApps(params: {
       }
       return Object.assign(
         {
-          id: app.id,
+          id: info.id,
           name: app.name,
-          accessible: info.isAccessible,
-          enabled: info.isEnabled,
+          accessible: true,
+          enabled: findCodexAppById(installedApps, info.id)?.enabled ?? false,
           // Modern plugin summaries carry no auth bit; account-authorized
           // app/read metadata is the canonical connector access proof.
-          needsAuth: !info.isAccessible,
+          needsAuth: false,
         },
         resolveOwnedAppApprovalOverrideKeys(info),
       );
@@ -541,7 +555,7 @@ function resolveOwnedApps(params: {
 
 /** Returns current tool keys whose overrides could bypass the requested reviewer. */
 export function resolveOwnedAppApprovalOverrideKeys(
-  app: v2.AppInfo,
+  app: Pick<CodexAppServerRequestResult<"app/read">["apps"][number], "name" | "toolSummaries">,
 ): Pick<CodexPluginOwnedApp, "approvalOverrideToolConfigKeys"> {
   if (!app.toolSummaries) {
     return {};
@@ -646,7 +660,7 @@ function pluginNameFromPluginId(pluginId: string, marketplaceName: string): stri
   return withoutMarketplaceSuffix.split("/").at(-1)?.trim() || undefined;
 }
 
-function marketplaceRef(
+export function marketplaceRef(
   marketplace: v2.PluginMarketplaceEntry,
   name: CodexPluginMarketplaceName,
 ): CodexPluginMarketplaceRef {

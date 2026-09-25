@@ -3,17 +3,19 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   bindBrowserRequestClient,
   type BrowserRequestClient,
-  isBrowserEvaluateDisabledError,
-  isBrowserNavigationBlockedError,
-  readBrowserPageMetrics,
   type BrowserPageMetrics,
   type BrowserPanelTab,
+  type BrowserDashboardTarget,
 } from "./browser-client.ts";
-import type { BrowserRoute } from "./browser-target.ts";
+import type { BrowserRoute, BrowserTabTarget } from "./browser-target.ts";
 
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   readonly client: GatewayBrowserClient | null;
+  readonly sessionKey: string;
   readonly available: boolean;
+  readonly remoteAvailable?: boolean;
+  readonly fixedTab?: BrowserTabTarget;
+  readonly dashboardTarget?: BrowserDashboardTarget;
   readonly resourceBasePath: string;
   readonly authToken: string | null;
   readonly isConnected: boolean;
@@ -36,7 +38,11 @@ export type BrowserPanelSnapshotOutcome = "accepted" | "rejected" | "failed";
 export class BrowserPanelOperationOwnership {
   private lifecycleEpoch = 0;
   route?: BrowserRoute;
-  private scope?: { gateway: GatewayBrowserClient; client: BrowserRequestClient };
+  private scope?: {
+    gateway: GatewayBrowserClient;
+    client: BrowserRequestClient;
+    dashboardKey: string | undefined;
+  };
   private requestedMutation = 0;
   private requestedSnapshot = 0;
   private acceptedSnapshot = 0;
@@ -61,26 +67,29 @@ export class BrowserPanelOperationOwnership {
 
   captureClient(): BrowserRequestClient | null {
     const gateway = this.host.client;
+    const dashboardKey = JSON.stringify(this.host.dashboardTarget);
     if (
-      !this.host.available ||
+      !(this.host.remoteAvailable ?? this.host.available) ||
       !gateway ||
       !this.host.isConnected ||
       !this.host.browserPanelIsOpen()
     ) {
       return null;
     }
-    if (this.scope?.gateway !== gateway) {
+    if (this.scope?.gateway !== gateway || this.scope.dashboardKey !== dashboardKey) {
       const client = bindBrowserRequestClient(
         gateway,
         this.route,
         () =>
           this.scope?.client === client &&
           this.scope.gateway === this.host.client &&
-          this.host.available &&
+          JSON.stringify(this.host.dashboardTarget) === dashboardKey &&
+          (this.host.remoteAvailable ?? this.host.available) &&
           this.host.isConnected &&
           this.host.browserPanelIsOpen(),
+        this.host.dashboardTarget,
       );
-      this.scope = { gateway, client };
+      this.scope = { gateway, client, dashboardKey };
     }
     return this.scope.client;
   }
@@ -97,6 +106,7 @@ export class BrowserPanelOperationOwnership {
       this.host.available &&
       this.host.browserPanelIsOpen() &&
       this.lifecycleEpoch === epoch &&
+      this.scope?.dashboardKey === JSON.stringify(this.host.dashboardTarget) &&
       (client === undefined ||
         (this.scope?.gateway === this.host.client && this.scope.client === client))
     );
@@ -157,10 +167,6 @@ export class BrowserPanelOperationOwnership {
       this.navigationCommits.set(client, commits);
     }
     commits.add(targetId);
-  }
-
-  markNavigationReconciled(client: BrowserRequestClient, targetId: string): void {
-    this.forgetNavigation(client, targetId);
   }
 
   forgetNavigation(client: BrowserRequestClient, targetId: string): void {
@@ -312,29 +318,5 @@ export class BrowserPanelOperationOwnership {
     const inspectionId = ++this.requestedInspection;
     return () =>
       this.isLive(epoch, client) && inspectionId === this.requestedInspection && isTargetCurrent();
-  }
-}
-
-/** A stale gateway must not disable evaluation on the replacement browser. */
-export async function readBrowserPanelOwnedMetrics(
-  client: BrowserRequestClient,
-  targetId: string,
-  evaluateUnavailable: boolean,
-  current: () => boolean,
-  markEvaluateUnavailable: () => void,
-): Promise<BrowserPageMetrics | null> {
-  if (evaluateUnavailable || !current()) {
-    return null;
-  }
-  try {
-    return await readBrowserPageMetrics(client, targetId);
-  } catch (error) {
-    if (current() && isBrowserNavigationBlockedError(error)) {
-      throw error;
-    }
-    if (current() && isBrowserEvaluateDisabledError(error)) {
-      markEvaluateUnavailable();
-    }
-    return null;
   }
 }

@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -98,7 +100,7 @@ async function clearCompanion(clearButton: Locator): Promise<void> {
 }
 
 suite.define(() => {
-  it("shows a reset failure without clearing the thread, then clears after a successful retry", async () => {
+  it("preserves the thread on reset failure and a newer draft after a successful retry", async () => {
     await withCompanion(async ({ clearButton, companion, gateway, page }) => {
       await clearCompanion(clearButton);
       await gateway.waitForRequest("sessions.companion.reset");
@@ -107,29 +109,153 @@ suite.define(() => {
       await alert.waitFor({ state: "visible" });
       await companion.getByText(answer, { exact: true }).waitFor();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "reset-failure.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "reset-failure.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [alert, companion]),
+        );
       }
 
       await alert.getByRole("button", { name: "Dismiss error" }).click();
       await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
+      await gateway.deferNext("sessions.companion.reset");
       await clearCompanion(clearButton);
 
       await expect
         .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
         .toBe(2);
+      const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+      await input.fill("Keep the question I typed after Clear");
+      await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
       await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+      expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
       expect(await page.getByRole("alert").count()).toBe(0);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "reset-success.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "reset-success.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [clearButton]),
+        );
       }
     });
   });
+
+  it("retains a question sent after Clear while its answer is pending", async () => {
+    await withCompanion(async ({ clearButton, companion, gateway }) => {
+      await gateway.deferNext("sessions.companion.reset");
+      await clearCompanion(clearButton);
+      await gateway.waitForRequest("sessions.companion.reset");
+      await gateway.deferNext("sessions.companion.ask");
+      const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+      await input.fill("Answer the question sent after Clear");
+      await input.press("Enter");
+      const request = await gateway.waitForRequest("sessions.companion.ask");
+      expect(request.params).toMatchObject({ question: "Answer the question sent after Clear" });
+      await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
+      await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+      await companion.getByText("Answer the question sent after Clear", { exact: true }).waitFor();
+      await gateway.resolveDeferred("sessions.companion.ask", {
+        answer: "New answer retained",
+        ts: 2,
+      });
+      await companion.getByText("New answer retained", { exact: true }).waitFor();
+      expect(await input.inputValue()).toBe("");
+    });
+  });
+
+  it.each(["pending", "completed"])(
+    "retires a pre-Clear %s image without cancelling a newer image",
+    async (oldRead) => {
+      await withCompanion(async ({ clearButton, companion, gateway, page }) => {
+        const reads = await page.evaluateHandle(() => {
+          const NativeFileReader = FileReader;
+          const pending = new Map<string, () => Promise<void>>();
+          const aborted: string[] = [];
+          globalThis.FileReader = class extends NativeFileReader {
+            fileName = "";
+            override readAsDataURL(blob: Blob): void {
+              this.fileName = (blob as File).name;
+              pending.set(
+                this.fileName,
+                () =>
+                  new Promise<void>((resolve) => {
+                    this.addEventListener("loadend", () => resolve(), { once: true });
+                    super.readAsDataURL(blob);
+                  }),
+              );
+            }
+            override abort(): void {
+              aborted.push(this.fileName);
+              super.abort();
+            }
+          };
+          return {
+            aborted,
+            finish: async (name: string) => {
+              const read = pending.get(name);
+              if (!read) {
+                throw new Error(`No held read for ${name}`);
+              }
+              pending.delete(name);
+              await read();
+            },
+          };
+        });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        const paste = (name: string) =>
+          input.evaluate((element, fileName) => {
+            const canvas = document.createElement("canvas");
+            canvas.width = canvas.height = 1;
+            const content = canvas.toDataURL("image/png").split(",")[1]!;
+            const transfer = new DataTransfer();
+            transfer.items.add(
+              new File([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], fileName, {
+                type: "image/png",
+              }),
+            );
+            element.dispatchEvent(
+              new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: transfer,
+              }),
+            );
+            return content;
+          }, name);
+        await input.fill("Old draft cleared even when an old image completes");
+        await paste("old.png");
+        await companion.getByRole("button", { name: "Remove old.png", exact: true }).waitFor();
+        await gateway.deferNext("sessions.companion.reset");
+        await clearCompanion(clearButton);
+        await gateway.waitForRequest("sessions.companion.reset");
+        if (oldRead === "completed") {
+          await reads.evaluate((proof) => proof.finish("old.png"));
+          await companion.getByRole("img", { name: "old.png", exact: true }).waitFor();
+        }
+        const newImage = await paste("new.png");
+        await companion.getByRole("button", { name: "Remove new.png", exact: true }).waitFor();
+        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
+        await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+        expect(await input.inputValue()).toBe("");
+        expect(await reads.evaluate((proof) => proof.aborted)).toEqual(
+          oldRead === "pending" ? ["old.png"] : [],
+        );
+        if (oldRead === "pending") {
+          await reads.evaluate((proof) => proof.finish("old.png"));
+        }
+        await reads.evaluate((proof) => proof.finish("new.png"));
+        await companion.getByRole("img", { name: "new.png", exact: true }).waitFor();
+        expect(
+          await companion.getByRole("button", { name: "Remove old.png", exact: true }).count(),
+        ).toBe(0);
+        await input.fill("Send only the image added after Clear");
+        await input.press("Enter");
+        const request = await gateway.waitForRequest("sessions.companion.ask");
+        expect(request.params).toMatchObject({
+          attachments: [{ fileName: "new.png", content: newImage }],
+        });
+        expect((request.params as { attachments: unknown[] }).attachments).toHaveLength(1);
+      });
+    },
+  );
 
   it("does not publish a delayed reset rejection into a newly selected session", async () => {
     await withCompanion(async ({ clearButton, gateway, page }) => {
@@ -146,10 +272,12 @@ suite.define(() => {
       const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
       expect(await visiblePane.getByRole("alert").filter({ hasText: resetError }).count()).toBe(0);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "stale-reset-error-suppressed.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "stale-reset-error-suppressed.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            visiblePane.locator(".agent-chat__composer-combobox textarea"),
+          ]),
+        );
       }
 
       await navigateToControlUiSession(page, initiatingSessionKey);
@@ -162,10 +290,12 @@ suite.define(() => {
         .getByText(answer, { exact: true })
         .waitFor();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "initiating-thread-preserved.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "initiating-thread-preserved.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            initiatingPane.locator("openclaw-chat-session-rail").getByText(answer, { exact: true }),
+          ]),
+        );
       }
     });
   });

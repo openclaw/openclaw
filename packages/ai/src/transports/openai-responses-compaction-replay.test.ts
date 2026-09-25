@@ -6,12 +6,14 @@ import type {
   ProviderReplayState,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
-import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
+import { stringifyRedactedEvent, summarizeResponsesPayload } from "./openai-responses-debug.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -40,14 +42,7 @@ function createOutput(): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -761,23 +756,9 @@ describe("OpenAI Responses compaction replay", () => {
           { role: "user", content: "prefix user", timestamp: 1 },
           createAssistant([{ type: "text", text: "prefix assistant" }]),
           prefixCall,
-          {
-            role: "toolResult",
-            toolCallId: "call_prefix|fc_prefix",
-            toolName: "lookup",
-            content: [{ type: "text", text: "prefix tool result" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_prefix|fc_prefix", "lookup", "prefix tool result", false, 2),
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_after|fc_after",
-            toolName: "lookup",
-            content: [{ type: "text", text: "after tool result" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_after|fc_after", "lookup", "after tool result", false, 3),
           { role: "user", content: "later user", timestamp: 4 },
           laterAssistant,
           { role: "user", content: "active current user prompt", timestamp: 5 },
@@ -828,14 +809,7 @@ describe("OpenAI Responses compaction replay", () => {
       const input = convert({
         messages: [
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_before|fc_before",
-            toolName: "lookup",
-            content: [{ type: "text", text: "before output" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_before|fc_before", "lookup", "before output", false, 1),
         ],
       });
 
@@ -1067,8 +1041,19 @@ describe("OpenAI Responses compaction replay", () => {
     const secret = "opaque-preview-compaction";
     const value = { input: [{ type: "compaction", encrypted_content: secret }] };
 
-    expect(stringifyRedactedPayload(value)).not.toContain(secret);
-    expect(stringifyRedactedEvent(value)).not.toContain(secret);
-    expect(stringifyRedactedPayload(value)).toContain("<opaque data omitted>");
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const payload = summarizeResponsesPayload(value);
+      expect(payload).not.toContain(secret);
+      expect(stringifyRedactedEvent(value)).not.toContain(secret);
+      expect(payload).toContain("<opaque data omitted>");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
   });
 });

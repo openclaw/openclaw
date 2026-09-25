@@ -29,7 +29,7 @@ New shell, same lobster soul. Third time's the charm.
 
 At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot.
 
-**OpenClaw** won, because molting is what lobsters do to grow, and growth was exactly what was happening.
+**Moltbot** won, because molting is what lobsters do to grow, and growth was exactly what was happening.
 
 _The crustacean known as Clawd had officially molted._
 
@@ -88,7 +88,7 @@ collaboration. One shell at a time.
 
 ### The Directory Dump (Dec 3, 2025)
 
-Molty (then OpenClaw): _happily runs `find ~` and shares entire directory structure in group chat_
+Molty (then Clawd): _happily runs `find ~` and shares entire directory structure in group chat_
 
 Peter: "openclaw what did we discuss about talking with people xD"
 
@@ -190,7 +190,7 @@ results. Brute force works.
 
 ## The Future
 
-One day, Molty may have:
+One day, Molty may have (wish list as of the 2026.9 releases):
 
 - 🦿 Legs (Reachy Mini on order!)
 - 👂 Ears (Brabble voice daemon in development)

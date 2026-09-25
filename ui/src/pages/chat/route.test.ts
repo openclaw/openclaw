@@ -1,8 +1,15 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { createApplicationRouter } from "../../app-routes.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
+import { pages } from "./route.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:main:dashboard:${keyUuid}`;
@@ -18,69 +25,148 @@ function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   };
 }
 
-function result(
-  sessions: GatewaySessionRow[],
-  options: Pick<SessionsListResult, "hasMore" | "nextOffset" | "offset"> = {},
-): SessionsListResult {
-  return {
-    ts: 1,
-    path: "sessions.json",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-    ...options,
-  };
-}
-
-function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
+  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
     if (method === "sessions.resolve") {
-      const shortId = typeof params.shortId === "string" ? params.shortId.toLowerCase() : "";
-      const matches =
-        listResult?.sessions.filter((session) =>
-          session.key.toLowerCase().replaceAll("-", "").includes(shortId),
-        ) ?? [];
-      return matches.length === 1 && matches[0]
-        ? {
-            ok: true,
-            key: matches[0].key,
-            agentId: matches[0].agentId ?? matches[0].key.split(":")[1],
-            displayName: matches[0].displayName,
-            boardFace: matches[0].boardFace,
-          }
-        : {
-            ok: false,
-            ...(matches.length > 1
-              ? {
-                  candidates: matches.map((session) => ({
-                    key: session.key,
-                    agentId: session.agentId ?? session.key.split(":")[1],
-                    displayName: session.displayName,
-                    boardFace: session.boardFace,
-                  })),
-                }
-              : {}),
-          };
+      return resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
   const client = { request };
-  const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
   const context = {
     basePath: "",
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
+    router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },
       subscribe: vi.fn(() => () => undefined),
+      subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list },
   } as unknown as ApplicationContext;
-  return { context, list, request };
+  const sessions = createChatPageSessions(context.gateway);
+  const list = vi.spyOn(sessions, "list");
+  return { context: { ...context, sessions }, list, request };
 }
 
 describe("loadChatRoute", () => {
+  it.each(["connection", "profile"])(
+    "does not carry an established key into a new %s scope",
+    async (replacement) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      context.gateway.snapshot.selfUser = { id: "first" };
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const route = router.getRoute("chat")!;
+      const component = vi.spyOn(route, "component").mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: "/chat/main/deploy-monitor-12345678", search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      if (replacement === "connection") {
+        Object.defineProperty(context.gateway, "connectionRevision", { value: 1 });
+      } else {
+        context.gateway.snapshot.selfUser = { id: "second" };
+      }
+      const nextKey = "agent:main:dashboard:12345678-0000-4000-8000-000000000001";
+      request.mockImplementation(async (_method, params) =>
+        params.shortId ? { ok: true, ...row({ key: nextKey }), agentId: "main" } : { ok: false },
+      );
+      // The router retains its old active match while a different-deps match loads.
+      const loaded = await route.loader!(scopedContext, {
+        location,
+        deps: route.loaderDeps!(scopedContext, location),
+        cause: "revalidate",
+        revalidating: true,
+        shouldRun: () => true,
+        signal: new AbortController().signal,
+      });
+      expect(loaded).toMatchObject({ kind: "session", sessionKey: nextKey });
+    },
+  );
+
+  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
+    "keeps a disconnected exact revalidation retryable for %s",
+    async (reference) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const component = vi
+        .spyOn(router.getRoute("chat")!, "component")
+        .mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      const pending = createDeferredCore<SessionsResolveResult>();
+      request.mockReturnValueOnce(pending.promise);
+      const revalidation = router
+        .revalidate(scopedContext, "chat")
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      context.gateway.snapshot.phase = "reconnecting";
+      pending.resolve({ ok: false });
+      await revalidation;
+      expect(router.getState().matches[0]?.status).toBe("error");
+      context.gateway.snapshot.phase = "connected";
+      request.mockResolvedValue({ ok: false });
+      await router.revalidate(scopedContext, "chat");
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+    },
+  );
+
+  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
+    "keeps revalidation bound to the established session when %s is reassigned",
+    async (reference) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const component = vi
+        .spyOn(router.getRoute("chat")!, "component")
+        .mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
+      request.mockImplementation(async (_method, params) =>
+        params.reference &&
+        typeof params.reference === "object" &&
+        "key" in params.reference &&
+        params.reference.key === sessionKey
+          ? { ok: false }
+          : {
+              ok: true,
+              ...row({ key: "agent:main:dashboard:12345678-0000-4000-8000-000000000001" }),
+              agentId: "main",
+            },
+      );
+      await router.revalidate(scopedContext, "chat");
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.resolve",
+        expect.objectContaining({ reference: { key: sessionKey } }),
+      );
+    },
+  );
+
+  it("revalidates an exact slug-shaped key instead of trusting a retained roster row", async () => {
+    const { context, request } = contextFor();
+    const key = "agent:main:research";
+    context.sessions.state.result = sessionsResult([row({ key })], 1);
+    const location = { pathname: "/chat/main/research", search: "", hash: "" };
+    await expect(
+      loadChatRoute(context, location, "chat", new AbortController().signal),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: key });
+    expect(request).not.toHaveBeenCalled();
+    await expect(
+      loadChatRoute(context, location, "chat", new AbortController().signal, {}),
+    ).resolves.toMatchObject({ kind: "missing-session" });
+    expect(request).toHaveBeenCalledOnce();
+  });
   it("leaves a bare namespace unresolved instead of inventing a main session", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     const loaded = await loadChatRoute(
       context,
       { pathname: "/chat", search: "", hash: "" },
@@ -93,19 +179,7 @@ describe("loadChatRoute", () => {
   });
 
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
-    const { context, list, request } = contextFor(result([row()]));
-    request.mockImplementation(async (method) => {
-      if (method === "sessions.resolve") {
-        return {
-          ok: true,
-          key: sessionKey,
-          agentId: "main",
-          displayName: "Deploy Monitor",
-          boardFace: undefined,
-        };
-      }
-      throw new Error(`Unexpected gateway request: ${method}`);
-    });
+    const { context, list, request } = contextFor({ ok: true, ...row(), agentId: "main" });
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
       context,
@@ -115,7 +189,9 @@ describe("loadChatRoute", () => {
     );
     expect(redirected).toEqual({
       kind: "session",
+      routeLoadingSkeleton: true,
       sessionKey,
+      agentId: "main",
       draft: "ship",
       face: "chat",
       canonicalLocation: {
@@ -137,13 +213,19 @@ describe("loadChatRoute", () => {
         "chat",
         signal,
       ),
-    ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey,
+      agentId: "main",
+      draft: "ship",
+      face: "chat",
+    });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     for (const [pathname, expectedKey] of [
       ["/chat/main/telegram/12345", "agent:main:telegram:12345"],
       ["/chat/ops/signal/direct/%2B15551212", "agent:ops:signal:direct:+15551212"],
@@ -168,7 +250,7 @@ describe("loadChatRoute", () => {
 
   it("passes longer disambiguation prefixes directly to the gateway resolver", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list, request } = contextFor(result([target]));
+    const { context, list, request } = contextFor({ ok: true, ...target, agentId: "main" });
     await expect(
       loadChatRoute(
         context,
@@ -179,6 +261,8 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey: target.key,
+      routeLoadingSkeleton: true,
+      agentId: "main",
       draft: undefined,
       face: "chat",
       shortId: "123456780a",
@@ -200,7 +284,15 @@ describe("loadChatRoute", () => {
         displayName: "Deploy Monitor Two",
       }),
     ];
-    const { context } = contextFor(result(rows));
+    const { context, request } = contextFor({
+      ok: false,
+      candidates: rows.map((session) => ({
+        key: session.key,
+        agentId: session.key.split(":")[1]!,
+        displayName: session.displayName ?? undefined,
+        boardFace: session.boardFace ?? undefined,
+      })),
+    });
     const ambiguous = await loadChatRoute(
       context,
       {
@@ -223,6 +315,7 @@ describe("loadChatRoute", () => {
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
       (entry, index) => [entry, rows[index]] as const,
     )) {
+      request.mockResolvedValueOnce({ ok: true, ...expectedRow!, agentId: candidate.agentId });
       await expect(
         loadChatRoute(
           context,
@@ -237,6 +330,8 @@ describe("loadChatRoute", () => {
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
+        routeLoadingSkeleton: true,
+        agentId: candidate.agentId,
         draft: "ship",
         focusComposer: true,
         face: "dashboard",
@@ -246,7 +341,7 @@ describe("loadChatRoute", () => {
   });
 
   it("loads an agent main session without a search request", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -264,7 +359,7 @@ describe("loadChatRoute", () => {
   });
 
   it("carries expanded dashboard presentation into route data", async () => {
-    const { context } = contextFor(result([]));
+    const { context } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -347,7 +442,7 @@ describe("loadChatRoute", () => {
   });
 
   it("treats a configured main key as a reserved literal", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     await expect(
       loadChatRoute(
         context,
@@ -367,7 +462,7 @@ describe("loadChatRoute", () => {
   });
 
   it("canonicalizes a literal configured-main route when defaults are warm", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     await expect(
       loadChatRoute(
         context,
@@ -514,7 +609,7 @@ describe("loadChatRoute", () => {
   });
 
   it("loads a specific synthetic catalog thread from its URL target", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -537,7 +632,7 @@ describe("loadChatRoute", () => {
   });
 
   it("preserves the path agent for synthetic catalog sessions", async () => {
-    const { context } = contextFor(result([]));
+    const { context } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -557,7 +652,7 @@ describe("loadChatRoute", () => {
   });
 
   it("loads synthetic catalog sessions in the dashboard namespace", async () => {
-    const { context } = contextFor(result([]));
+    const { context } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -576,5 +671,43 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "dashboard",
     });
+  });
+});
+
+describe("session route cache ownership", () => {
+  it.each(pages)("isolates $id loader results across connection owners", (page) => {
+    const { context } = contextFor();
+    let snapshot = context.gateway.snapshot;
+    let revision = 0;
+    const gateway = {
+      ...context.gateway,
+      get snapshot() {
+        return snapshot;
+      },
+      get connectionRevision() {
+        return revision;
+      },
+    };
+    const scopedContext = { ...context, gateway };
+    const location = { pathname: `/${page.id}/main`, search: "", hash: "" };
+    const cacheKey = () => page.loaderDeps!(scopedContext, location);
+    const initial = cacheKey();
+
+    snapshot = { ...snapshot, selfUser: { id: "first-user" } };
+    expect(cacheKey()).toBe(initial);
+    snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+    expect(cacheKey()).toBe(initial);
+    snapshot = { ...snapshot, phase: "connected", selfUser: { id: "first-user" } };
+    expect(cacheKey()).toBe(initial);
+
+    snapshot = { ...snapshot, selfUser: { id: "second-user" } };
+    const replacementUser = cacheKey();
+    expect(replacementUser).not.toBe(initial);
+    revision += 1;
+    const replacementCredentials = cacheKey();
+    expect(replacementCredentials).not.toBe(replacementUser);
+    expect(page.loaderDeps!({ ...scopedContext, gateway: { ...gateway } }, location)).not.toBe(
+      replacementCredentials,
+    );
   });
 });

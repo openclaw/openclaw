@@ -1,13 +1,16 @@
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ChannelApprovalKind,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -15,12 +18,11 @@ import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./acco
 import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   buildGoogleChatApprovalActionParameters,
-  createGoogleChatApprovalToken,
+  googleChatApprovalControls,
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
-  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
@@ -101,14 +103,6 @@ function buildMetadataText(metadata: readonly { label: string; value: string }[]
     .join("<br>");
 }
 
-function formatDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
-}
-
 function buildMainTextWidget(text: string) {
   return {
     textParagraph: {
@@ -125,68 +119,43 @@ function buildHtmlTextWidget(text: string) {
   };
 }
 
-function buildExecPendingSections(view: PendingApprovalView) {
-  if (view.approvalKind !== "exec") {
-    return [];
+function buildPendingSections(view: PendingApprovalView) {
+  if (view.approvalKind === "exec") {
+    return [
+      { header: "Command", widgets: [buildMainTextWidget(view.commandText)] },
+      ...(view.commandPreview && view.commandPreview !== view.commandText
+        ? [{ header: "Preview", widgets: [buildMainTextWidget(view.commandPreview)] }]
+        : []),
+    ];
   }
-  return [
-    {
-      header: "Command",
-      widgets: [buildMainTextWidget(view.commandText)],
-    },
-    ...(view.commandPreview && view.commandPreview !== view.commandText
-      ? [
-          {
-            header: "Preview",
-            widgets: [buildMainTextWidget(view.commandPreview)],
-          },
-        ]
-      : []),
-  ];
-}
-
-function buildPluginPendingSections(view: PendingApprovalView) {
-  if (view.approvalKind !== "plugin") {
-    return [];
+  if (view.approvalKind === "plugin") {
+    return [
+      {
+        header: "Request",
+        widgets: [
+          buildHtmlTextWidget(
+            `<b>${escapeGoogleChatText(view.title)}</b>${
+              view.description ? `<br>${escapeGoogleChatText(view.description)}` : ""
+            }`,
+          ),
+        ],
+      },
+    ];
   }
-  return [
-    {
-      header: "Request",
-      widgets: [
-        buildHtmlTextWidget(
-          `<b>${escapeGoogleChatText(view.title)}</b>${
-            view.description ? `<br>${escapeGoogleChatText(view.description)}` : ""
-          }`,
-        ),
-      ],
-    },
-  ];
-}
-
-function buildSystemAgentPendingSections(view: PendingApprovalView) {
-  if (view.approvalKind !== "system-agent") {
-    return [];
-  }
-  return [
-    {
-      header: "Change",
-      widgets: [buildMainTextWidget(view.operationSummary)],
-    },
-  ];
+  return [{ header: "Change", widgets: [buildMainTextWidget(view.operationSummary)] }];
 }
 
 function buildMetadataSection(
   view: PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView,
 ) {
-  const metadata = [{ label: "Approval ID", value: view.approvalId }, ...view.metadata];
-  return metadata.length > 0
-    ? [
-        {
-          header: "Details",
-          widgets: [buildHtmlTextWidget(buildMetadataText(metadata))],
-        },
-      ]
-    : [];
+  return {
+    header: "Details",
+    widgets: [
+      buildHtmlTextWidget(
+        buildMetadataText([{ label: "Approval ID", value: view.approvalId }, ...view.metadata]),
+      ),
+    ],
+  };
 }
 
 function buildActionSection(params: { actionFunction: string; view: PendingApprovalView }): {
@@ -195,7 +164,7 @@ function buildActionSection(params: { actionFunction: string; view: PendingAppro
 } {
   const { actionFunction, view } = params;
   const actionTokens = view.actions.map((action) => ({
-    token: createGoogleChatApprovalToken(),
+    token: googleChatApprovalControls.createToken(),
     decision: action.decision,
   }));
   return {
@@ -245,13 +214,7 @@ function buildPendingPayload(params: {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
       header: { title, subtitle },
-      sections: [
-        ...buildExecPendingSections(view),
-        ...buildPluginPendingSections(view),
-        ...buildSystemAgentPendingSections(view),
-        ...buildMetadataSection(view),
-        actionSection,
-      ],
+      sections: [...buildPendingSections(view), buildMetadataSection(view), actionSection],
     },
   };
   return {
@@ -273,56 +236,27 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
     : GOOGLECHAT_APPROVAL_ACTION;
 }
 
-function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
-  const resolvedBy = normalizeOptionalString(view.resolvedBy);
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : formatDecision(view.decision);
-  const card: GoogleChatCardV2 = {
-    cardId: GOOGLECHAT_APPROVAL_CARD_ID,
-    card: {
-      header: {
-        title: `${
-          view.approvalKind === "plugin"
-            ? "Plugin"
-            : view.approvalKind === "system-agent"
-              ? "OpenClaw Change"
-              : "Exec"
-        } Approval: ${decisionLabel}`,
-        subtitle: resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
-      },
-      sections: buildMetadataSection(view),
-    },
-  };
+function buildFinalPayload(
+  view: ResolvedApprovalView | ExpiredApprovalView,
+  outcome: string,
+  subtitle: string,
+): GoogleChatFinalDelivery {
+  const kindLabel =
+    view.approvalKind === "plugin"
+      ? "Plugin"
+      : view.approvalKind === "system-agent"
+        ? "OpenClaw Change"
+        : "Exec";
   return {
-    cardsV2: [card],
-  };
-}
-
-function buildExpiredPayload(view: ExpiredApprovalView): GoogleChatFinalDelivery {
-  const card: GoogleChatCardV2 = {
-    cardId: GOOGLECHAT_APPROVAL_CARD_ID,
-    card: {
-      header: {
-        title: `${
-          view.approvalKind === "plugin"
-            ? "Plugin"
-            : view.approvalKind === "system-agent"
-              ? "OpenClaw Change"
-              : "Exec"
-        } Approval Expired`,
-        subtitle: "This approval request expired before it was resolved.",
+    cardsV2: [
+      {
+        cardId: GOOGLECHAT_APPROVAL_CARD_ID,
+        card: {
+          header: { title: `${kindLabel} Approval${outcome}`, subtitle },
+          sections: [buildMetadataSection(view)],
+        },
       },
-      sections: buildMetadataSection(view),
-    },
-  };
-  return {
-    cardsV2: [card],
+    ],
   };
 }
 
@@ -347,8 +281,25 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
         nowMs,
         view,
       }),
-    buildResolvedResult: ({ view }) => ({ kind: "update", payload: buildResolvedPayload(view) }),
-    buildExpiredResult: ({ view }) => ({ kind: "update", payload: buildExpiredPayload(view) }),
+    buildResolvedResult: ({ view }) => {
+      const resolvedBy = normalizeOptionalString(view.resolvedBy);
+      return {
+        kind: "update",
+        payload: buildFinalPayload(
+          view,
+          `: ${formatChannelApprovalResolvedLabel(view)}`,
+          resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
+        ),
+      };
+    },
+    buildExpiredResult: ({ view }) => ({
+      kind: "update",
+      payload: buildFinalPayload(
+        view,
+        " Expired",
+        "This approval request expired before it was resolved.",
+      ),
+    }),
   },
   transport: {
     prepareTarget: ({ plannedTarget }) => ({
@@ -435,10 +386,10 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       return tokens.length > 0 ? tokens : null;
     },
     unbindPending: ({ binding }) => {
-      unregisterGoogleChatApprovalCardBindings(binding);
+      googleChatApprovalControls.unregister(binding);
     },
     cancelDelivered: ({ entry }) => {
-      unregisterGoogleChatApprovalCardBindings(
+      googleChatApprovalControls.unregister(
         entry.actionTokens.map((actionToken) => actionToken.token),
       );
     },

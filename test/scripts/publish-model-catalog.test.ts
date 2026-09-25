@@ -2,15 +2,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { RemoteModelCatalogBundle } from "@openclaw/model-catalog-core";
+import {
+  parseRemoteModelCatalogBundle,
+  type RemoteModelCatalogBundle,
+} from "@openclaw/model-catalog-core";
 import {
   LITELLM_PRICING_URL,
+  MODELS_DEV_CATALOG_URL,
   OPENROUTER_MODELS_URL,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
   enrichModelCatalogPricing,
+  hydrateModelCatalogFromModelsDev,
   MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
@@ -36,17 +41,43 @@ afterEach(() => {
   }
 });
 
-function fixtureProvider(
-  prefix: string,
-  count: number,
-): {
-  models: Array<{ id: string; cost?: { input: number; output: number } }>;
-} {
+type FixtureModel = RemoteModelCatalogBundle["providers"][string]["models"][number];
+
+function fixtureProvider(prefix: string, count: number): { models: FixtureModel[] } {
   return { models: Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}` })) };
 }
 
 function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
+type ModelsDevFixtureModel = { id: string } & Record<string, unknown>;
+
+function modelsDevModel(
+  id: string,
+  overrides: Record<string, unknown> = {},
+): ModelsDevFixtureModel {
+  return {
+    id,
+    name: `Feed ${id}`,
+    reasoning: true,
+    tool_call: true,
+    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    limit: { context: 128000, output: 32000 },
+    cost: { input: 1, output: 2, cache_read: 0.1, cache_write: 0.2 },
+    ...overrides,
+  };
+}
+
+function modelsDevCatalog(
+  providers: Record<string, ModelsDevFixtureModel[]>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(providers).map(([id, models]) => [
+      id,
+      { id, models: Object.fromEntries(models.map((model) => [model.id, model])) },
+    ]),
+  );
 }
 
 function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
@@ -66,7 +97,9 @@ function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: stri
       checked_at: bundle.generatedAt,
     }),
   });
+  // These bundles are v1 output; clients read v1 only from a configured mirror.
   const config: OpenClawConfig = {
+    models: { catalogRefresh: { url: "https://catalog.openclaw.ai/models/v1/catalog.json" } },
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
   };
   return { config, agentDir, provider };
@@ -199,6 +232,9 @@ describe("publish model catalog", () => {
           })),
         });
       }
+      if (url === MODELS_DEV_CATALOG_URL) {
+        return Response.json({});
+      }
       expect(url).toBe(LITELLM_PRICING_URL);
       return Response.json({
         absent: {
@@ -215,7 +251,7 @@ describe("publish model catalog", () => {
       cacheRead: 0.2,
       cacheWrite: 0,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
     for (const id of ["qualified", "absent"]) {
       const model = bundle.providers.deepinfra?.models.find((row) => row.id === id);
       expect(model).toMatchObject({ name: `Fixture ${id}`, contextWindow: 123456 });
@@ -340,30 +376,346 @@ describe("publish model catalog", () => {
     ).rejects.toThrow();
   });
 
+  it("hydrates missing models and fills only undefined manifest metadata", async () => {
+    const anthropic = fixtureProvider("claude", 100);
+    anthropic.models[0] = {
+      id: "manifest-owned",
+      name: "Manifest name",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 999,
+      maxTokens: 888,
+    };
+    anthropic.models[1] = { id: "manifest-partial" };
+    const openai = fixtureProvider("gpt", 100);
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: {
+            providers: { anthropic, openai },
+            modelsDev: { anthropic: "upstream-anthropic" },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
+      return Response.json(
+        modelsDevCatalog({
+          "upstream-anthropic": [
+            modelsDevModel("manifest-owned", {
+              name: "Feed name",
+              reasoning: true,
+              modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+              limit: { context: 128000, output: 32000 },
+            }),
+            modelsDevModel("manifest-partial"),
+            modelsDevModel("new-model"),
+          ],
+        }),
+      );
+    });
+
+    await expect(
+      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
+    ).resolves.toEqual({ anthropic: { added: 1, filled: 1, skipped: 0 } });
+    const models = bundle.providers.anthropic?.models ?? [];
+    expect(models[0]?.id).toBe("manifest-owned");
+    expect(models[1]?.id).toBe("manifest-partial");
+    expect(models.find((model) => model.id === "manifest-owned")).toEqual({
+      id: "manifest-owned",
+      name: "Manifest name",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 999,
+      maxTokens: 888,
+    });
+    expect(models.find((model) => model.id === "manifest-partial")).toEqual({
+      id: "manifest-partial",
+      name: "Feed manifest-partial",
+      reasoning: true,
+      input: ["text", "image", "document"],
+      contextWindow: 128000,
+      maxTokens: 32000,
+    });
+    expect(models.find((model) => model.id === "new-model")).toEqual({
+      id: "new-model",
+      name: "Feed new-model",
+      reasoning: true,
+      input: ["text", "image", "document"],
+      contextWindow: 128000,
+      maxTokens: 32000,
+    });
+    const hydratedKeys = new Set([
+      "id",
+      "name",
+      "reasoning",
+      "input",
+      "contextWindow",
+      "maxTokens",
+    ]);
+    expect(
+      Object.keys(models.find((model) => model.id === "new-model") ?? {}).every((key) =>
+        hydratedKeys.has(key),
+      ),
+    ).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("skips rows without tool calls or text output, suppressions, and unmapped providers", async () => {
+    const anthropic = fixtureProvider("claude", 100);
+    const openai = fixtureProvider("gpt", 100);
+    const featherless = { models: [{ id: "existing-featherless" }] };
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai", "featherless"],
+          modelCatalog: {
+            providers: { anthropic, openai, featherless },
+            modelsDev: { openai: "openai" },
+            suppressions: [
+              { provider: "openai", model: "suppressed-model" },
+              {
+                provider: "openai",
+                model: "endpoint-model",
+                when: { baseUrlHosts: ["api.openai.example"] },
+              },
+            ],
+          },
+        },
+      },
+      {
+        pluginId: "unrelated",
+        manifestPath: "unrelated.json",
+        manifest: {
+          providers: [],
+          modelCatalog: { suppressions: [{ provider: "openai", model: "allowed-model" }] },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const result = await hydrateModelCatalogFromModelsDev({
+      bundle,
+      manifests,
+      fetchImpl: async (input) => {
+        expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
+        return Response.json({
+          openai: {
+            id: "openai",
+            models: {
+              "image-model": modelsDevModel("image-model", {
+                modalities: { input: ["text"], output: ["image"] },
+              }),
+              "embedding-model": modelsDevModel("embedding-model", { tool_call: false }),
+              "suppressed-model": modelsDevModel("suppressed-model"),
+              "endpoint-model": modelsDevModel("endpoint-model"),
+              "deprecated-model": modelsDevModel("deprecated-model", { status: "deprecated" }),
+              "malformed-model": { id: "malformed-model" },
+              "allowed-model": modelsDevModel("allowed-model"),
+            },
+          },
+          featherless: {
+            id: "featherless",
+            models: { "feed-model": modelsDevModel("feed-model") },
+          },
+        });
+      },
+    });
+    expect(result.openai).toEqual({ added: 2, filled: 0, skipped: 5 });
+    expect(bundle.providers.openai?.models.map((model) => model.id)).toEqual([
+      ...fixtureProvider("gpt", 100).models.map((model) => model.id),
+      "endpoint-model",
+      "allowed-model",
+    ]);
+    expect(bundle.providers.featherless?.models.map((model) => model.id)).toEqual([
+      "existing-featherless",
+    ]);
+  });
+
+  it("skips providers whose manifest rows pick a transport per model", async () => {
+    const anthropic = fixtureProvider("claude", 100);
+    anthropic.models[0] = { id: "manifest-anthropic", api: "anthropic-messages" };
+    const openai = fixtureProvider("gpt", 100);
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: { providers: { anthropic, openai }, modelsDev: { anthropic: "anthropic" } },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const previous = serializeModelCatalogBundle(bundle);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = await hydrateModelCatalogFromModelsDev({
+        bundle,
+        manifests,
+        fetchImpl: async () =>
+          Response.json(modelsDevCatalog({ anthropic: [modelsDevModel("new-model")] })),
+      });
+      expect(result.anthropic).toBeUndefined();
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(serializeModelCatalogBundle(bundle)).toBe(previous);
+  });
+
+  it.each(["fetch failure", "malformed feed"])(
+    "rejects models.dev %s before changing the bundle",
+    async (scenario) => {
+      const manifests = [
+        {
+          pluginId: "fixture",
+          manifestPath: "fixture.json",
+          manifest: {
+            providers: ["anthropic", "openai"],
+            modelCatalog: {
+              modelsDev: { anthropic: "anthropic" },
+              providers: {
+                anthropic: fixtureProvider("claude", 100),
+                openai: fixtureProvider("gpt", 100),
+              },
+            },
+          },
+        },
+      ];
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture-sha",
+      });
+      const previous = serializeModelCatalogBundle(bundle);
+      await expect(
+        hydrateModelCatalogFromModelsDev({
+          bundle,
+          manifests,
+          fetchImpl: async () => {
+            if (scenario === "fetch failure") {
+              throw new Error("fixture outage");
+            }
+            return Response.json(scenario === "malformed feed" ? [] : {});
+          },
+        }),
+      ).rejects.toThrow("models.dev");
+      expect(serializeModelCatalogBundle(bundle)).toBe(previous);
+    },
+  );
+
+  it("publishes a provider unhydrated when its models.dev source disappears", async () => {
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: {
+            modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" },
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+            },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture-sha",
+    });
+    const openaiBefore = JSON.stringify(bundle.providers.openai);
+    const warnings: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      warnings.push(String(value));
+      return true;
+    });
+    const result = await hydrateModelCatalogFromModelsDev({
+      bundle,
+      manifests,
+      fetchImpl: async () =>
+        Response.json({
+          anthropic: {
+            id: "anthropic",
+            models: { "hydrated-claude": modelsDevModel("hydrated-claude") },
+          },
+        }),
+    }).finally(() => stderr.mockRestore());
+    expect(result.anthropic).toEqual({ added: 1, filled: 0, skipped: 0 });
+    expect(result.openai).toBeUndefined();
+    expect(JSON.stringify(bundle.providers.openai)).toBe(openaiBefore);
+    expect(bundle.providers.anthropic?.models.map((model) => model.id)).toContain(
+      "hydrated-claude",
+    );
+    expect(warnings.join("")).toContain("renamed-upstream");
+  });
+
+  it.each(["absent", "unowned", "without provider catalog"])(
+    "does not fetch models.dev with source declaration: %s",
+    async (scenario) => {
+      const modelsDev = scenario === "absent" ? undefined : { other: "upstream-other" };
+      const manifests = [
+        {
+          pluginId: "fixture",
+          manifestPath: "fixture.json",
+          manifest: {
+            providers:
+              scenario === "unowned" ? ["anthropic", "openai"] : ["anthropic", "openai", "other"],
+            modelCatalog: {
+              modelsDev,
+              providers: {
+                anthropic: fixtureProvider("claude", 100),
+                openai: fixtureProvider("gpt", 100),
+                ...(scenario === "unowned" ? { other: fixtureProvider("other", 1) } : {}),
+              },
+            },
+          },
+        },
+      ];
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture-sha",
+      });
+      const fetchImpl = vi.fn<typeof fetch>();
+      await expect(
+        hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
+      ).resolves.toEqual({});
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
   it("parses supported CLI arguments and rejects missing output", () => {
     expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toEqual({
       dryRun: true,
       pricing: false,
       out: "ignored.json",
     });
+    expect(parsePublishModelCatalogArgs(["--pricing", "--dry-run"])).toEqual({
+      dryRun: true,
+      pricing: true,
+    });
     expect(() => parsePublishModelCatalogArgs([])).toThrow("provide --out");
-  });
-
-  it("dry-runs the repository manifests without writing output", () => {
-    const root = process.cwd();
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-smoke-"));
-    tempDirs.push(tempDir);
-    const out = path.join(tempDir, "catalog.json");
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/publish-model-catalog.mts", "--dry-run", "--out", out],
-      { cwd: root, encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const stats = /dry-run schemaVersion=1 providers=[1-9]\d* models=(\d+)/u.exec(result.stdout);
-    expect(stats).not.toBeNull();
-    expect(Number(stats?.[1])).toBeGreaterThanOrEqual(MODEL_CATALOG_MIN_MODELS);
-    expect(fs.existsSync(out)).toBe(false);
   });
 
   it("enriches catalog models and emits unmatched hosted pricing keys", async () => {
@@ -448,6 +800,9 @@ describe("publish model catalog", () => {
           ],
         });
       }
+      if (url === MODELS_DEV_CATALOG_URL) {
+        return Response.json({});
+      }
       expect(url).toBe(LITELLM_PRICING_URL);
       return Response.json({
         "gpt-special": {
@@ -488,25 +843,26 @@ describe("publish model catalog", () => {
     };
 
     await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
-      modelsEnriched: 2,
-      pricingEntries: 11,
+      modelsEnriched: 1,
+      pricingEntries: 10,
     });
-    expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
+    // OpenRouter's feed is OpenRouter's billing: its `anthropic/…` row never prices Anthropic.
+    expect(bundle.providers.anthropic?.models[0]?.cost).toBeUndefined();
     const tieredPricing = [
       { input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [0, 1001] },
       { input: 7, output: 4, cacheRead: 0.5, cacheWrite: 2.5, range: [1001] },
     ];
+    // OpenAI's own row takes OpenAI's listed rate from LiteLLM, not OpenRouter's schedule.
     expect(bundle.providers.openai?.models[0]?.cost).toEqual({
       input: 3,
       output: 4,
-      cacheRead: 0.5,
-      cacheWrite: 2.5,
-      tieredPricing,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tieredPricing: [{ input: 5, output: 6, cacheRead: 0, cacheWrite: 0, range: [1000] }],
     });
     expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
     expect(bundle.pricing).toEqual({
-      "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "custom/external-model": { input: 7, output: 8 },
       "custom/secondary-wins": { input: 11, output: 12 },
       "external-model": { input: 7, output: 8 },
@@ -524,14 +880,15 @@ describe("publish model catalog", () => {
       "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
     });
+    expect(bundle.pricing).not.toHaveProperty("anthropic/claude-3.5-sonnet");
     expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
     expect(bundle.pricing).not.toHaveProperty("mapped/wrong-source");
     expect(bundle.pricing).not.toHaveProperty("gpt-special");
     expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
       models: 200,
-      costModels: 3,
-      pricingEntries: 11,
+      costModels: 2,
+      pricingEntries: 10,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
@@ -614,7 +971,8 @@ describe("publish model catalog", () => {
         },
       });
       const published = bundle.providers.openai!.models[0]!.cost;
-      if (tierSource === "flat") {
+      // OpenRouter's schedule is OpenRouter's billing and never replaces OpenAI's own row.
+      if (tierSource !== "liteLLM") {
         expect(published).toEqual(declared);
       } else {
         expect(published).toMatchObject({ input: 2, output: 3 });
@@ -749,6 +1107,9 @@ describe("publish model catalog", () => {
           return Response.json({
             data: [{ id: `${provider}/priced-fixture`, pricing: { prompt: "1", completion: "1" } }],
           });
+        }
+        if (request === MODELS_DEV_CATALOG_URL) {
+          return Response.json({});
         }
         expect(request).toBe(LITELLM_PRICING_URL);
         return Response.json({});
@@ -921,7 +1282,10 @@ describe("publish model catalog", () => {
         if (request === OPENROUTER_MODELS_URL) {
           return Response.json({ data: [] });
         }
-        if (request === LITELLM_PRICING_URL) {
+        if (
+          request === LITELLM_PRICING_URL ||
+          (request === MODELS_DEV_CATALOG_URL && url !== MODELS_DEV_CATALOG_URL)
+        ) {
           return Response.json({});
         }
         expect(request).toBe(url);
@@ -974,12 +1338,16 @@ describe("publish model catalog", () => {
           generatedAt: Date.now(),
           sourceCommit: "fixture",
         });
-        const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-          expect(requestUrl(input)).not.toBe(url);
-          return Response.json({ data: [] });
-        });
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ data: [] }));
         await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
-        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        const urls = fetchImpl.mock.calls.map(([input]) => requestUrl(input));
+        // OpenCode's native feed shares models.dev's URL, which the default source reads once.
+        expect(urls.filter((fetched) => fetched === url)).toHaveLength(
+          url === MODELS_DEV_CATALOG_URL ? 1 : 0,
+        );
+        expect(urls.toSorted()).toEqual(
+          [LITELLM_PRICING_URL, MODELS_DEV_CATALOG_URL, OPENROUTER_MODELS_URL].toSorted(),
+        );
       },
     );
   });
@@ -1051,7 +1419,25 @@ describe("publish model catalog", () => {
   });
 
   it.each([
-    { source: "OpenCode", scenario: "unreachable" },
+    ...[
+      "transient metadata outage",
+      "transient metadata outage without pricing",
+      "malformed metadata",
+      "shared response",
+      "metadata without pricing",
+      "dry run",
+      "blank model id",
+      "blank model id without pricing",
+      "blank model id dry run without pricing",
+      "colliding model id",
+      "colliding model id without pricing",
+      "colliding model id dry run without pricing",
+      "trimmed model id",
+      "trimmed model id without pricing",
+    ].map((scenario) => ({
+      source: "models.dev",
+      scenario,
+    })),
     ...["unreachable", "malformed body", "invalid price"].map((scenario) => ({
       source: "DeepInfra",
       scenario,
@@ -1060,21 +1446,30 @@ describe("publish model catalog", () => {
       source: "Venice",
       scenario,
     })),
-  ])(
-    "leaves published output untouched when $source pricing is $scenario",
-    ({ source, scenario }) => {
-      const root = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-failure-")),
-      );
-      tempDirs.push(root);
-      const out = path.join(root, "catalog.json");
-      const preload = path.join(root, "offline.mjs");
-      fs.writeFileSync(out, "previous published catalog\n");
-      fs.writeFileSync(
-        preload,
-        `const manifests = ${JSON.stringify(readModelCatalogManifests().map((entry) => entry.manifest))};
+  ])("publishes only verified source data: $source $scenario", ({ source, scenario }) => {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-failure-")),
+    );
+    tempDirs.push(root);
+    const out = path.join(root, "catalog.json");
+    const preload = path.join(root, "offline.mjs");
+    const discoveredIds = scenario.startsWith("blank model id")
+      ? [" "]
+      : scenario.startsWith("colliding model id")
+        ? ["fixture-discovered-model", " fixture-discovered-model "]
+        : scenario.startsWith("trimmed model id")
+          ? [" fixture-discovered-model "]
+          : ["fixture-discovered-model"];
+    fs.writeFileSync(out, "previous published catalog\n");
+    fs.writeFileSync(
+      preload,
+      `const manifests = ${JSON.stringify(readModelCatalogManifests().map((entry) => entry.manifest))};
 const openCode = {};
 for (const manifest of manifests) {
+  for (const [provider, id] of Object.entries(manifest.modelCatalog?.modelsDev ?? {})) {
+    const models = manifest.modelCatalog?.providers?.[provider]?.models ?? [];
+    openCode[id] = { id, models: Object.fromEntries(models.map((model) => [model.id, { id: model.id, tool_call: true, modalities: { input: ["text"], output: ["text"] }, limit: { context: 128000, output: 32000 }, cost: { input: 1, output: 2 } }])) };
+  }
   for (const [provider, policy] of Object.entries(manifest.modelPricing?.providers ?? {})) {
     if (!policy.openCode) continue;
     const id = policy.openCode.provider ?? provider;
@@ -1082,9 +1477,21 @@ for (const manifest of manifests) {
     openCode[id] = { id, models: Object.fromEntries(models.map((model) => [model.id, { id: model.id, cost: { input: 1, output: 2 } }])) };
   }
 }
+Object.assign(openCode.anthropic.models, ${JSON.stringify(Object.fromEntries(discoveredIds.map((id) => [id, modelsDevModel(id)])))});
+let metadataFetched = false;
 globalThis.fetch = async (url) => {
-  if (${JSON.stringify(source)} === "OpenCode") throw new Error("fixture outage");
-  if (url === ${JSON.stringify(OPENCODE_PRICING_URL)}) return Response.json(openCode);
+  if (url === ${JSON.stringify(OPENCODE_PRICING_URL)}) {
+    if (${JSON.stringify(source)} === "models.dev") {
+      if (!metadataFetched) {
+        metadataFetched = true;
+        if (${JSON.stringify(scenario)}.startsWith("transient metadata outage")) throw new Error("fixture transient metadata outage");
+        if (${JSON.stringify(scenario)} === "malformed metadata") return Response.json([]);
+      } else if (${JSON.stringify(scenario)} === "shared response") {
+        throw new Error("metadata and pricing fetched different source snapshots");
+      }
+    }
+    return Response.json(openCode);
+  }
   if (${JSON.stringify(source)} === "DeepInfra") {
     if (url === "https://api.deepinfra.com/models/list") {
       if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
@@ -1100,29 +1507,56 @@ globalThis.fetch = async (url) => {
     if (${JSON.stringify(scenario)} === "malformed body") return Response.json({});
     if (${JSON.stringify(scenario)} === "invalid price") return Response.json({ data: manifests.flatMap((manifest) => (manifest.modelCatalog?.providers?.venice?.models ?? []).map((model) => ({ id: model.id, type: "text", model_spec: { pricing: { input: { usd: -1 }, output: { usd: 2 } } } }))) });
   }
+  if (url === "https://api.deepinfra.com/models/list") return Response.json([{ model_name: "fixture/chat", pricing: { type: "tokens", cents_per_input_token: 0.0002, cents_per_output_token: 0.001 } }]);
+  if (url === "https://llm.chutes.ai/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: 2, completion: 10 } }] });
+  if (url === "https://api.cerebras.ai/public/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: "0.000002", completion: "0.00001" } }] });
+  if (url === ${JSON.stringify(VENICE_PRICING_URL)}) return Response.json(${JSON.stringify(scenario)} === "missing model" ? { data: [] } : { data: [{ id: "fixture/chat", type: "text", model_spec: { pricing: { input: { usd: 2 }, output: { usd: 10 } } } }] });
   return Response.json({ data: [] });
 };`,
-      );
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--import",
-          preload,
-          "scripts/publish-model-catalog.mts",
-          "--pricing",
-          "--out",
-          out,
-        ],
-        { cwd: process.cwd(), encoding: "utf8" },
-      );
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(`${source} pricing`);
-      expect(result.stderr.trim().split("\n").at(-1)).toBe(
-        "[publish-model-catalog] FAILED (exit 1)",
-      );
-      expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
-    },
-  );
+    );
+    const runtimeArgs = process.versions.bun ? [] : ["--import", "tsx"];
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...runtimeArgs,
+        "--import",
+        preload,
+        "scripts/publish-model-catalog.mts",
+        ...(scenario.endsWith("without pricing") ? [] : ["--pricing"]),
+        ...(scenario.includes("dry run") ? ["--dry-run"] : []),
+        "--out",
+        out,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    if (
+      ["shared response", "metadata without pricing", "dry run"].includes(scenario) ||
+      scenario.startsWith("trimmed model id")
+    ) {
+      expect(result.status, result.stderr).toBe(0);
+      if (scenario === "dry run") {
+        expect(result.stdout).toContain("dry-run schemaVersion=1");
+        expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
+      } else {
+        const published = JSON.parse(fs.readFileSync(out, "utf8"));
+        parseRemoteModelCatalogBundle(published);
+        expect(published.providers.anthropic.models).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: "fixture-discovered-model" })]),
+        );
+      }
+      return;
+    }
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(
+      scenario.startsWith("blank model id")
+        ? "Too small"
+        : scenario.startsWith("colliding model id")
+          ? "duplicate model id"
+          : source === "models.dev"
+            ? "models.dev"
+            : `${source} pricing`,
+    );
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[publish-model-catalog] FAILED (exit 1)");
+    expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
+  });
 });

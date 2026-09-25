@@ -4,12 +4,64 @@
  * Updates account enabled state and detects configured secret-like values.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveAccountKey,
+  resolveChannelAccountKey,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
   accounts?: Record<string, Record<string, unknown>>;
   enabled?: boolean;
 };
+
+/** Replace one section; undefined removes it and prunes an empty channels object. */
+export function writeChannelSection(
+  cfg: OpenClawConfig,
+  channelKey: string,
+  section: Record<string, unknown> | undefined,
+): OpenClawConfig {
+  if (section !== undefined) {
+    return { ...cfg, channels: { ...cfg.channels, [channelKey]: section } };
+  }
+  const channels = { ...cfg.channels };
+  delete channels[channelKey];
+  const next = { ...cfg };
+  if (Object.keys(channels).length > 0) {
+    next.channels = channels;
+  } else {
+    delete next.channels;
+  }
+  return next;
+}
+
+export function setTopLevelChannelEnabledInConfigSection(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  enabled: boolean;
+}): OpenClawConfig {
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...params.cfg.channels?.[params.sectionKey],
+    enabled: params.enabled,
+  });
+}
+
+export function clearTopLevelChannelConfigFields(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  clearBaseFields: string[];
+}): OpenClawConfig {
+  const section = params.cfg.channels?.[params.sectionKey];
+  if (!section) {
+    return params.cfg;
+  }
+  const nextSection = { ...section };
+  for (const field of params.clearBaseFields) {
+    delete nextSection[field];
+  }
+  return writeChannelSection(params.cfg, params.sectionKey, nextSection);
+}
 
 function isConfiguredSecretValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -25,45 +77,36 @@ export function setAccountEnabledInConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   enabled: boolean;
   allowTopLevel?: boolean;
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const storedAccountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+    { allowMissing: true },
+  );
   const hasAccounts = Boolean(base?.accounts);
-  if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
+  if (params.allowTopLevel && storedAccountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...base,
-          enabled: params.enabled,
-        },
-      },
-    } as OpenClawConfig;
+    return setTopLevelChannelEnabledInConfigSection(params);
   }
 
   const baseAccounts = base?.accounts ?? {};
-  const existing = baseAccounts[accountKey] ?? {};
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: {
-        ...base,
-        accounts: {
-          ...baseAccounts,
-          [accountKey]: {
-            ...existing,
-            enabled: params.enabled,
-          },
-        },
-      },
+  const existing = baseAccounts[storedAccountKey] ?? {};
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...base,
+    accounts: {
+      ...baseAccounts,
+      [storedAccountKey]: { ...existing, enabled: params.enabled },
     },
-  } as OpenClawConfig;
+  });
 }
 
 /**
@@ -73,36 +116,45 @@ export function deleteAccountFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   clearBaseFields?: string[];
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const storedAccountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+  );
   if (!base) {
     return params.cfg;
   }
 
-  const baseAccounts =
-    base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : undefined;
-
-  if (accountKey !== DEFAULT_ACCOUNT_ID) {
-    const accounts = baseAccounts ? { ...baseAccounts } : {};
-    delete accounts[accountKey];
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...base,
-          accounts: Object.keys(accounts).length ? accounts : undefined,
-        },
-      },
-    } as OpenClawConfig;
+  const accounts = base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : {};
+  if (accountId === DEFAULT_ACCOUNT_ID && Object.keys(accounts).length === 0) {
+    return writeChannelSection(params.cfg, params.sectionKey, undefined);
   }
 
-  if (baseAccounts && Object.keys(baseAccounts).length > 0) {
-    delete baseAccounts[accountKey];
-    const baseRecord = { ...(base as Record<string, unknown>) };
+  if (storedAccountKey !== undefined) {
+    delete accounts[storedAccountKey];
+    const remainingKey = resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.sectionKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    );
+    if (remainingKey !== undefined) {
+      throw new Error(
+        `Cannot delete account "${accountId}": stored keys "${storedAccountKey}" and "${remainingKey}" resolve to the same account. Resolve the collision before deleting.`,
+      );
+    }
+  }
+  const baseRecord = { ...(base as Record<string, unknown>) };
+  if (accountId === DEFAULT_ACCOUNT_ID) {
     // Deleting the default account can also clear root-level credential fields that represented
     // the legacy default account.
     for (const field of params.clearBaseFields ?? []) {
@@ -110,27 +162,11 @@ export function deleteAccountFromConfigSection(params: {
         baseRecord[field] = undefined;
       }
     }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...baseRecord,
-          accounts: Object.keys(baseAccounts).length ? baseAccounts : undefined,
-        },
-      },
-    } as OpenClawConfig;
   }
-
-  const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg } as OpenClawConfig;
-  if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as OpenClawConfig["channels"];
-  } else {
-    delete nextCfg.channels;
-  }
-  return nextCfg;
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...baseRecord,
+    accounts: Object.keys(accounts).length ? accounts : undefined,
+  });
 }
 
 /**
@@ -138,7 +174,9 @@ export function deleteAccountFromConfigSection(params: {
  */
 export function clearAccountEntryFields<TAccountEntry extends object>(params: {
   accounts?: Record<string, TAccountEntry>;
+  channelId?: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   fields: string[];
   isValueSet?: (value: unknown) => boolean;
   markClearedOnFieldPresence?: boolean;
@@ -147,10 +185,19 @@ export function clearAccountEntryFields<TAccountEntry extends object>(params: {
   changed: boolean;
   cleared: boolean;
 } {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountKey = params.channelId
+    ? resolveChannelAccountKey(
+        params.accounts,
+        accountId,
+        params.channelId,
+        (id) => id,
+        params.accountKeyPolicy,
+      )
+    : resolveAccountKey(params.accounts, accountId, (id) => id, params.accountKeyPolicy);
   const baseAccounts =
     params.accounts && typeof params.accounts === "object" ? { ...params.accounts } : undefined;
-  if (!baseAccounts || !(accountKey in baseAccounts)) {
+  if (!baseAccounts || accountKey === undefined) {
     return { nextAccounts: baseAccounts, changed: false, cleared: false };
   }
 
@@ -197,6 +244,7 @@ export function clearAccountFieldsFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   fields: string[];
   markClearedOnFieldPresence?: boolean;
 }): { nextConfig: OpenClawConfig; changed: boolean; cleared: boolean } {
@@ -217,6 +265,8 @@ export function clearAccountFieldsFromConfigSection(params: {
   }
   const accountCleanup = clearAccountEntryFields({
     accounts: nextSection.accounts,
+    channelId: params.sectionKey,
+    accountKeyPolicy: params.accountKeyPolicy,
     accountId: params.accountId,
     fields: params.fields,
     markClearedOnFieldPresence: params.markClearedOnFieldPresence,
@@ -231,17 +281,10 @@ export function clearAccountFieldsFromConfigSection(params: {
       delete nextSection.accounts;
     }
   }
-  const nextChannels = { ...params.cfg.channels };
-  if (Object.keys(nextSection).length > 0) {
-    nextChannels[params.sectionKey] = nextSection;
-  } else {
-    delete nextChannels[params.sectionKey];
-  }
-  const nextConfig = { ...params.cfg };
-  if (Object.keys(nextChannels).length > 0) {
-    nextConfig.channels = nextChannels;
-  } else {
-    delete nextConfig.channels;
-  }
+  const nextConfig = writeChannelSection(
+    params.cfg,
+    params.sectionKey,
+    Object.keys(nextSection).length > 0 ? nextSection : undefined,
+  );
   return { nextConfig, changed: true, cleared: clearedRoot || accountCleanup.cleared };
 }

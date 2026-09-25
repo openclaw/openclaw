@@ -26,7 +26,9 @@ function createAdapter(id: string): EmbeddingProviderAdapter {
 
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previous);
+  });
   stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 });
 

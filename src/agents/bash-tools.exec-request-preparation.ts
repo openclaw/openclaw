@@ -14,7 +14,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
-import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import { OPENCLAW_CLI_ENV_VAR, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -366,11 +366,11 @@ export function resolvePreparedExecEnvironment(params: {
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
+  subagentExecution?: boolean;
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
-  secretEgressEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
   managedLocalIdentity?: boolean;
@@ -381,9 +381,6 @@ export function resolvePreparedExecEnvironment(params: {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
   const inheritedBaseEnv = coerceEnv(process.env);
-  if (params.secretEgressEnv) {
-    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
-  }
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
   const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
@@ -521,9 +518,6 @@ export function resolvePreparedExecEnvironment(params: {
       }
     }
   }
-  if (params.secretEgressEnv) {
-    Object.assign(env, params.secretEgressEnv);
-  }
   const preparedEnv = {
     ...params.localProcessEnv,
     ...params.credentialScrubEnv,
@@ -532,10 +526,17 @@ export function resolvePreparedExecEnvironment(params: {
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
   Object.assign(env, preparedEnv);
 
+  const forwardedEnv = params.subagentExecution
+    ? { ...requestedEnv, [SUBAGENT_EXEC_ENV_VAR]: "1" }
+    : requestedEnv;
+  if (params.subagentExecution) {
+    env[SUBAGENT_EXEC_ENV_VAR] = "1";
+  }
+
   return {
     env,
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
-      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
-      : { requestedEnv }),
+      ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
+      : { requestedEnv: forwardedEnv }),
   };
 }

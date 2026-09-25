@@ -23,6 +23,7 @@ import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { validatePackageSourceDir } from "./package-source-preflight.mjs";
@@ -385,10 +386,10 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
-      child.stdout?.on("data", (chunk: Buffer) => {
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
         stdout = appendBoundedTail(stdout, chunk, COMMAND_STDOUT_CAPTURE_MAX_CHARS);
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
         stderr = appendBoundedTail(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
     }
@@ -819,32 +820,6 @@ async function moveNewestPackedTarball(outputDir: string, packOutput: string, ou
 }
 
 export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
-
-async function cleanPackedOpenClawTarballs(outputDir: string) {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(outputDir);
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") {
-      entries = [];
-    } else {
-      throw error;
-    }
-  }
-  await Promise.all(
-    entries
-      .filter((entry) => {
-        try {
-          return resolvePackedOpenClawTarballFilename(entry) === entry;
-        } catch {
-          return false;
-        }
-      })
-      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
-  );
-}
-
-export const cleanPackedOpenClawTarballsForTest = cleanPackedOpenClawTarballs;
 
 function normalizeUrlHostname(hostname: string): string {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();

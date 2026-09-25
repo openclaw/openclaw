@@ -40,13 +40,12 @@ export function appendBoardEventNotice(params: {
   agentId?: string;
   widget: string;
   payload: unknown;
-  now?: number;
 }): boolean {
   const summary = serializePayload(params.payload);
   if (Buffer.byteLength(summary, "utf8") > BOARD_EVENT_MAX_BYTES) {
     throw new BoardEventPayloadError(`board event payload exceeds ${BOARD_EVENT_MAX_BYTES} bytes`);
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   // Global session keys and widget names can coincide across different owners.
   const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.widget}`;
   const recent = recentNotices.get(key);

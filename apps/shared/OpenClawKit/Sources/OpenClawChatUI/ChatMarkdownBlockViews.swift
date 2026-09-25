@@ -108,14 +108,7 @@ private struct ChatMathPlatformView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MTMathUILabel, context: Context) {
-        view.displayErrorInline = false
-        view.labelMode = .display
-        view.textAlignment = .center
-        view.fontSize = self.fontSize
-        view.textColor = NSColor(self.textColor)
-        if view.latex != self.latex {
-            view.latex = self.latex
-        }
+        self.configure(view)
     }
 
     /// SwiftMath reports fittingSize on macOS; SwiftUI's default bridge can collapse it in split views.
@@ -137,19 +130,21 @@ private struct ChatMathPlatformView: UIViewRepresentable {
     func updateUIView(_ view: MTMathUILabel, context: Context) {
         self.configure(view)
     }
+}
+#endif
 
+extension ChatMathPlatformView {
     private func configure(_ view: MTMathUILabel) {
         view.displayErrorInline = false
         view.labelMode = .display
         view.textAlignment = .center
         view.fontSize = self.fontSize
-        view.textColor = UIColor(self.textColor)
+        view.textColor = MTColor(self.textColor)
         if view.latex != self.latex {
             view.latex = self.latex
         }
     }
 }
-#endif
 
 @MainActor
 struct ChatMarkdownTableView: View {

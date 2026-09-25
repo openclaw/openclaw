@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const readFileSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -11,15 +12,21 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return { ...actual, readFileSync: readFileSyncMock };
+});
+
 import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
+  readFileSyncMock.mockReset();
 });
 
-function usePsOutput(stdout: string): void {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+function usePsOutput(stdout: string, platform: NodeJS.Platform = "linux"): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   spawnSyncMock.mockReturnValue({ status: 0, stdout });
 }
 
@@ -69,8 +76,8 @@ describe("POSIX process tree metrics", () => {
     expect(readProcessTreeCpuMs(106)).toBeNull();
   });
 
-  it("parses ps RSS KiB values as bytes", () => {
-    usePsOutput(["100 0 1024", "101 0 1.5"].join("\n"));
+  it("parses macOS ps RSS KiB values as bytes", () => {
+    usePsOutput(["100 0 1024", "101 0 1.5"].join("\n"), "darwin");
 
     expect(readProcessTreeRssBytes(100)).toBe(1_048_576);
     expect(readProcessTreeRssBytes(101)).toBe(1_536);
@@ -82,12 +89,91 @@ describe("POSIX process tree metrics", () => {
     });
   });
 
-  it("rejects malformed ps RSS values", () => {
-    usePsOutput(["101 0 nope", "102 0 -1", "103 0 0x10"].join("\n"));
+  it("rejects malformed macOS ps RSS values", () => {
+    usePsOutput(["101 0 nope", "102 0 -1", "103 0 0x10"].join("\n"), "darwin");
 
     expect(readProcessTreeRssBytes(100)).toBeNull();
     expect(readProcessTreeRssBytes(101)).toBeNull();
     expect(readProcessTreeRssBytes(102)).toBeNull();
     expect(readProcessTreeRssBytes(103)).toBeNull();
+  });
+});
+
+describe("Linux process tree RSS", () => {
+  it("sums explicit VmRSS for the root and descendants without reading unrelated processes", () => {
+    usePsOutput(["100 0 0", "101 100 0", "102 101 0", "200 0 0"].join("\n"));
+    const statuses: Record<string, string> = {
+      "/proc/100/status": "VmRSS:\t1024 kB\n",
+      "/proc/101/status": "VmRSS:\t2048 kB\n",
+      "/proc/102/status": "VmRSS:\t0 kB\n",
+    };
+    readFileSyncMock.mockImplementation((path: string) => {
+      const status = statuses[path];
+      if (status === undefined) {
+        throw new Error("unexpected process read");
+      }
+      return status;
+    });
+
+    expect(readProcessTreeRssBytes(100)).toBe(3 * 1024 * 1024);
+    expect(readFileSyncMock.mock.calls.map(([path]) => path)).toEqual([
+      "/proc/100/status",
+      "/proc/101/status",
+      "/proc/102/status",
+    ]);
+    expect(readProcessTreeRssBytes(102)).toBe(0);
+  });
+
+  it("reports unavailable RSS when a zombie leader still has live threads", () => {
+    usePsOutput("100 0 0");
+    readFileSyncMock.mockReturnValue("State:\tZ (zombie)\nThreads:\t2\n");
+
+    expect(readProcessTreeRssBytes(100)).toBeNull();
+  });
+
+  it.each(["100 0 0\n101 100 0", "100 0 0\n101 100 nope", "100 0 0\n101 100"])(
+    "keeps unavailable child memory in the tree: %s",
+    (stdout) => {
+      usePsOutput(stdout);
+      readFileSyncMock.mockImplementation((path: string) =>
+        path === "/proc/100/status" ? "VmRSS:\t1024 kB\n" : "Threads:\t2\n",
+      );
+
+      expect(readProcessTreeRssBytes(100)).toBeNull();
+      expect(readFileSyncMock).toHaveBeenCalledWith("/proc/101/status", "utf8");
+    },
+  );
+
+  it("keeps descendants when ps omits an intermediate metric", () => {
+    usePsOutput("100 0 0\n101 100\n102 101 0");
+    readFileSyncMock.mockReturnValue("VmRSS:\t1024 kB\n");
+
+    expect(readProcessTreeRssBytes(100)).toBe(3 * 1024 * 1024);
+  });
+
+  it.each(["ENOENT", "EACCES"])("reports unreadable process memory as unavailable: %s", (code) => {
+    usePsOutput("100 0 0");
+    readFileSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error("status unavailable"), { code });
+    });
+
+    expect(readProcessTreeRssBytes(100)).toBeNull();
+  });
+
+  it.each(["", "VmRSS: -1 kB\n", "VmRSS: 1.5 kB\n", "VmRSS: 0x10 kB\n", "VmRSS: 1 MB\n"])(
+    "rejects missing or malformed VmRSS: %s",
+    (status) => {
+      usePsOutput("100 0 0");
+      readFileSyncMock.mockReturnValue(status);
+
+      expect(readProcessTreeRssBytes(100)).toBeNull();
+    },
+  );
+
+  it("does not read process status when the root is absent from the snapshot", () => {
+    usePsOutput("101 0 0");
+
+    expect(readProcessTreeRssBytes(100)).toBeNull();
+    expect(readFileSyncMock).not.toHaveBeenCalled();
   });
 });

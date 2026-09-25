@@ -23,9 +23,14 @@ import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
-const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
+const createToolsMcpServerMock = vi.hoisted(() =>
+  vi.fn<typeof import("./tools-stdio-server.js").createToolsMcpServer>(),
+);
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
-const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
+);
+const releasePluginToolsMock = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 
@@ -49,14 +54,36 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
   return {
     ...actual,
-    ensureStandalonePluginToolRegistryLoaded: ensureStandalonePluginToolRegistryLoadedMock,
-    resolvePluginTools: resolvePluginToolsMock,
+    acquireStandalonePluginToolRegistry: acquireStandalonePluginToolRegistryMock,
   };
 });
 
-vi.mock("./tools-stdio-server.js", () => ({
-  connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock,
-  createToolsMcpServer: createToolsMcpServerMock,
+vi.mock("./tools-stdio-server.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools-stdio-server.js")>();
+  createToolsMcpServerMock.mockImplementation(actual.createToolsMcpServer);
+  const serve: typeof actual.serveRegisteredToolsMcpServer = async (params) => {
+    const { LegacyPluginSdkResourceHost } = await import("../plugins/legacy-sdk-resource-host.js");
+    const host = new LegacyPluginSdkResourceHost();
+    const acquisition = await host.run(params.acquireRegistry);
+    const server = params.createServer(acquisition.resolveTools(), host);
+    try {
+      await connectToolsMcpServerToStdioMock(server);
+    } finally {
+      await server.close();
+      await acquisition.release();
+      await host.close();
+    }
+  };
+  return {
+    ...actual,
+    createToolsMcpServer: createToolsMcpServerMock,
+    serveRegisteredToolsMcpServer: serve,
+  };
+});
+
+acquireStandalonePluginToolRegistryMock.mockImplementation(async () => ({
+  resolveTools: resolvePluginToolsMock,
+  release: releasePluginToolsMock,
 }));
 
 afterEach(() => {
@@ -64,7 +91,11 @@ afterEach(() => {
   callGatewayTool.mockReset();
   connectToolsMcpServerToStdioMock.mockReset();
   createToolsMcpServerMock.mockClear();
-  ensureStandalonePluginToolRegistryLoadedMock.mockReset();
+  acquireStandalonePluginToolRegistryMock.mockReset().mockImplementation(async () => ({
+    resolveTools: resolvePluginToolsMock,
+    release: releasePluginToolsMock,
+  }));
+  releasePluginToolsMock.mockClear();
   getRuntimeConfigMock.mockClear();
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
@@ -98,46 +129,51 @@ describe("plugin tools MCP server", () => {
   ])(
     "passes $agentSessionKey owner into plugin tool factories",
     async ({ agentSessionKey, agentId, owner }) => {
-      const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+      const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
       const runtimeRegistry = createMockPluginRegistry([]);
-      ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+      acquireStandalonePluginToolRegistryMock.mockResolvedValue({
+        registry: runtimeRegistry,
+        resolveTools: resolvePluginToolsMock,
+        release: releasePluginToolsMock,
+      });
       const config = { plugins: { enabled: true } } as never;
 
-      resolvePluginToolsForMcp({
-        config,
-        agentSessionKey,
-        agentId,
-      });
+      const acquisition = await acquirePluginToolsForMcp({ config, agentSessionKey, agentId });
+      acquisition.resolveTools();
+      await acquisition.release();
 
       const expectedContext = {
         config,
         agentId: owner,
         sessionKey: agentSessionKey,
       };
-      expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith({
         context: expectedContext,
+        suppressNameConflicts: true,
       });
-      expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expectedContext, runtimeRegistry }),
-      );
+      expect(resolvePluginToolsMock).toHaveBeenCalledOnce();
     },
   );
 
   it("rejects a non-agent session identity from the managed bridge", async () => {
-    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+    const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
 
-    expect(() =>
-      resolvePluginToolsForMcp({
+    await expect(
+      acquirePluginToolsForMcp({
         config: { plugins: { enabled: true } } as never,
         agentSessionKey: "research-session",
       }),
-    ).toThrow("must be a canonical agent session key");
+    ).rejects.toThrow("must be a canonical agent session key");
   });
 
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);
-    ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+    acquireStandalonePluginToolRegistryMock.mockResolvedValue({
+      registry: runtimeRegistry,
+      resolveTools: resolvePluginToolsMock,
+      release: releasePluginToolsMock,
+    });
     resolvePluginToolsMock.mockReturnValue([
       {
         name: "memory_recall",
@@ -151,14 +187,12 @@ describe("plugin tools MCP server", () => {
     await servePluginToolsMcp();
 
     expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
-    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+    expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith({
       context: { config: { plugins: { enabled: true } } },
+      suppressNameConflicts: true,
     });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeRegistry }),
-    );
-    expect(ensureStandalonePluginToolRegistryLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(acquireStandalonePluginToolRegistryMock.mock.invocationCallOrder[0]).toBeLessThan(
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );
     expect(routeLogsToStderrMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -179,12 +213,9 @@ describe("plugin tools MCP server", () => {
 
     await servePluginToolsMcp();
 
-    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    const loadPolicy = requireToolPolicyParams(acquireStandalonePluginToolRegistryMock);
     expect(loadPolicy.toolAllowlist).toContain("memory_search");
     expect(loadPolicy.toolDenylist).toEqual(["memory_forget"]);
-    const resolvePolicy = requireToolPolicyParams(resolvePluginToolsMock);
-    expect(resolvePolicy.toolAllowlist).toContain("memory_search");
-    expect(resolvePolicy.toolDenylist).toEqual(["memory_forget"]);
   });
 
   it("enforces global and managed-agent plugin tool policy", async () => {
@@ -210,9 +241,9 @@ describe("plugin tools MCP server", () => {
         execute: deniedExecute,
       },
     ] as unknown as AnyAgentTool[]);
-    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+    const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
 
-    const tools = resolvePluginToolsForMcp({
+    const acquisition = await acquirePluginToolsForMcp({
       config: {
         plugins: { enabled: true },
         tools: {
@@ -230,30 +261,29 @@ describe("plugin tools MCP server", () => {
       } as never,
       agentSessionKey: "agent:research:acp:session-1",
     });
-    const handlers = createPluginToolsMcpHandlers(tools);
+    const handlers = createPluginToolsMcpHandlers(acquisition.resolveTools());
 
-    await expect(handlers.listTools()).resolves.toMatchObject({
-      tools: [{ name: "plugin_allowed" }],
-    });
-    await expect(handlers.callTool({ name: "plugin_denied" })).resolves.toMatchObject({
-      isError: true,
-      content: [{ text: "Unknown tool: plugin_denied" }],
-    });
-    expect(deniedExecute).not.toHaveBeenCalled();
+    try {
+      await expect(handlers.listTools()).resolves.toMatchObject({
+        tools: [{ name: "plugin_allowed" }],
+      });
+      await expect(handlers.callTool({ name: "plugin_denied" })).resolves.toMatchObject({
+        isError: true,
+        content: [{ text: "Unknown tool: plugin_denied" }],
+      });
+      expect(deniedExecute).not.toHaveBeenCalled();
 
-    await expect(handlers.callTool({ name: "plugin_allowed" })).resolves.toMatchObject({
-      content: [{ text: "allowed executor ran" }],
-    });
-    expect(allowedExecute).toHaveBeenCalledOnce();
+      await expect(handlers.callTool({ name: "plugin_allowed" })).resolves.toMatchObject({
+        content: [{ text: "allowed executor ran" }],
+      });
+      expect(allowedExecute).toHaveBeenCalledOnce();
 
-    for (const policyMock of [
-      ensureStandalonePluginToolRegistryLoadedMock,
-      resolvePluginToolsMock,
-    ]) {
-      expect(requireToolPolicyParams(policyMock)).toMatchObject({
+      expect(requireToolPolicyParams(acquireStandalonePluginToolRegistryMock)).toMatchObject({
         toolAllowlist: ["plugin_allowed", "plugin_denied"],
         toolDenylist: ["plugin_globally_denied", "plugin_denied"],
       });
+    } finally {
+      await acquisition.release();
     }
   });
 

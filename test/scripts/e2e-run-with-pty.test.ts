@@ -6,11 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function runPtyProbe(
   logPath: string,
@@ -23,7 +25,7 @@ function runPtyProbe(
   input = "abc\n",
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, logPath, ...command], {
+    const child = spawn(testNodeExecPath, [scriptPath, logPath, ...command], {
       env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -92,7 +94,7 @@ describe("run-with-pty", () => {
       const result = await runPtyProbe(
         logPath,
         { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
-        [process.execPath, "-e", "process.stdout.write('x'.repeat(2048))"],
+        [testNodeExecPath, "-e", "process.stdout.write('x'.repeat(2048))"],
         "",
       );
       const log = await readFile(logPath, "utf8");
@@ -114,7 +116,7 @@ describe("run-with-pty", () => {
       const result = await runPtyProbe(
         tempRoot,
         {},
-        [process.execPath, "-e", "console.log('ready')"],
+        [testNodeExecPath, "-e", "console.log('ready')"],
         "",
       );
 
@@ -143,8 +145,8 @@ console.log("ready");
 setInterval(() => {}, 1000);
 `;
     const child = spawn(
-      process.execPath,
-      [scriptPath, logPath, process.execPath, "-e", probeCode],
+      testNodeExecPath,
+      [scriptPath, logPath, testNodeExecPath, "-e", probeCode],
       {
         env: {
           ...process.env,

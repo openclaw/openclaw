@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 command_name="${1:?command is required}"
@@ -113,7 +117,7 @@ gh_api_get_with_retry() {
       is_transient_gh_api_get_error "$(cat "$error_file")" "$not_found_policy"; then
       retry_delay=$((attempt * 2))
       printf \
-        'warning: %s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
+        '::warning::%s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
         "$label" "$attempt" "$retry_delay" >&2
       cat "$error_file" >&2
       sleep "$retry_delay"

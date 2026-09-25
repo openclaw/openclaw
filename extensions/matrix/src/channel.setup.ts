@@ -1,9 +1,12 @@
-// Matrix plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixChannelConfigSchema } from "./config-schema.js";
-import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./matrix/accounts.js";
+import {
+  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
+  type ResolvedMatrixAccount,
+} from "./matrix/accounts.js";
 import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
@@ -31,7 +34,7 @@ export const matrixPluginBase = {
     threads: true,
     media: true,
   },
-  reload: { configPrefixes: ["channels.matrix"] },
+  reload: { configPrefixes: ["channels.matrix"], noopPrefixes: ["messages.ackReactionScope"] },
   configSchema: MatrixChannelConfigSchema,
   config: {
     ...matrixConfigAdapter,
@@ -52,5 +55,7 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   config: {
     ...matrixPluginBase.config,
     hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
+    hasConfiguredStateAsync: async ({ cfg, env }) =>
+      (await resolveMatrixAccountAsync({ cfg, env })).configured,
   },
 };

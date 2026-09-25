@@ -6,6 +6,7 @@ import {
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import { buildCerebrasCatalogModels } from "./api.js";
 import plugin from "./index.js";
 import { applyCerebrasConfig, CEREBRAS_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -39,6 +40,7 @@ function createCatalogContext(overrides: Partial<CatalogContext> = {}): CatalogC
     resolveProviderApiKey: () => ({
       apiKey: "fixture-cerebras-key",
       discoveryApiKey: "fixture-discovery-key",
+      profileId: "cerebras:fixture-profile",
     }),
     resolveProviderAuth: () => ({
       apiKey: "fixture-cerebras-key",
@@ -138,21 +140,24 @@ describe("Cerebras onboarding", () => {
       throw new Error("expected Cerebras non-interactive auth method");
     }
 
-    const result = await method.runNonInteractive({
-      authChoice: "cerebras-api-key",
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
-          },
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
         },
       },
+    };
+
+    const result = await method.runNonInteractive({
+      authChoice: "cerebras-api-key",
+      config,
+      baseConfig: config,
       opts: {},
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+      runtime: createRuntimeSpies(),
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
       toApiKeyCredential: vi.fn(() => null),
-    } as never);
+    });
 
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -298,12 +303,13 @@ describe("Cerebras native catalog", () => {
     expect(glm).not.toHaveProperty("replacedBy");
   });
 
-  it("falls back offline after discovery failure and retries on the next request", async () => {
+  it("reports unavailable discovery and recovers on the next request", async () => {
     mockCatalogResponse({ error: "unavailable" }, { status: 503 });
-    const fallback = await runCerebrasCatalog();
-    expect(fallback.models.map((model) => model.id)).toEqual(
-      manifest.modelCatalog.providers.cerebras.models.map((model) => model.id),
-    );
+    const provider = await registerSingleProviderPlugin(plugin);
+    await expect(provider.catalog?.run(createCatalogContext())).resolves.toEqual({
+      providers: {},
+      outcomes: [{ provider: "cerebras", status: "unavailable" }],
+    });
 
     mockCatalogResponse({ data: [NATIVE_TEXT_MODEL] });
     const recovered = await runCerebrasCatalog();

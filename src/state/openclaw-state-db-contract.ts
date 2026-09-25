@@ -1,6 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
+export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
+
+// v19 preserves original channel-owner authorization across recovery.
+// v18 binds shared GitHub publication to its original requesting authority.
+// v17 records one-use prepared worker capacity and node workspace ownership.
+// v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
 // v15 removes redundant agent/session projections from conversation bindings.
 // v14 retains unknown creator namespaces on historical cron jobs.
 // v13 keeps cron jobs and subagent runs canonical in JSON, removing unused projections.
@@ -12,24 +19,36 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 15;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 19;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
+// Absence records lost history; only Doctor may reconstruct these on existing state.
+export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "user_profile_identities",
+  "local_workspace_projections",
+  "update_runs",
+  "session_repository_workspaces",
+  "github_repository_publication_requests",
+  "github_publication_session_lifecycles",
   "skill_library_entries",
   "skill_library_revisions",
   "skill_library_events",
   "skill_library_uploads",
   "github_personal_publication_requests",
   "cron_job_runtime_authorities",
+  "cron_run_trigger_state_retirements",
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
+  "node_worker_launch_cleanup",
   "node_worker_launches",
+  "node_worker_prepared_workspaces",
   "node_worker_turns",
   "operator_approval_execution_identities",
   "operator_approval_standing_grants",
+  "operator_approval_standing_grant_generations",
   "web_push_approval_deliveries",
   "execution_decision_facts",
   "execution_owner_lifecycle_bindings",
@@ -37,6 +56,12 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_user_profile_identities_profile_id",
+  "idx_user_profile_identities_authorization",
+  "idx_update_runs_created",
+  "idx_update_runs_active",
+  "idx_github_repository_publication_shared_request",
+  "idx_github_repository_publication_personal_request",
   "idx_github_personal_publication_owner_session",
   "idx_github_personal_publication_pending",
   "idx_node_worker_launches_terminal_completed",
@@ -60,6 +85,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "config_revision_keys",
   "secret_store_entries",
   "projects",
+  "worktree_templates",
   "user_preferences",
   "device_pair_setup_completions",
   "github_publication_requests",
@@ -76,11 +102,12 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
-  "idx_skill_workshop_collection_reviews_workspace_time",
   "secret_store_entries_live_idx",
+  "idx_skill_workshop_collection_reviews_owner_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
+export const STATE_WAL_COORDINATOR_WAIT_MS = 350;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */
 export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
   "https://docs.openclaw.ai/reference/database-schemas";
@@ -91,12 +118,27 @@ export type OpenClawStateDatabase = {
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
+export type StateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path"> &
+  Partial<Pick<OpenClawStateDatabase, "walMaintenance">> & {
+    afterClose?: () => undefined;
+  };
+export type OpenClawStateDatabaseCloseOptions = NonNullable<
+  Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0]
+> & { busyTimeoutMs?: number };
+export type OpenClawStateDatabaseLifecycleEvent =
+  | { kind: "opened"; database: OpenClawStateDatabase; identity: DatabasePathIdentity }
+  | { kind: "closed"; path: string; identity: DatabasePathIdentity }
+  | { kind: "failure-cleared"; path: string; identity?: DatabasePathIdentity }
+  | { kind: "terminal-failure"; path: string; identity?: DatabasePathIdentity; error: Error }
+  | { kind: "open-error"; path: string; identity?: DatabasePathIdentity; error: unknown };
 /** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
   database?: OpenClawStateDatabase;
   readOnly?: boolean;
+  /** Additional known agent stores can only make first-use classification more conservative. */
+  initializationAgentPaths?: readonly string[];
 };
 export type OpenClawStateDatabaseSchemaMigration = {
   kind:
@@ -111,6 +153,9 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "state-consolidation-v13"
     | "creator-namespace-v14"
     | "conversation-binding-targets-v15"
+    | "skill-workshop-directory-ownership-v16"
+    | "prepared-worker-ownership-v17"
+    | "github-publication-requester-authority-v18"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

@@ -1,4 +1,3 @@
-// Discord plugin module implements client behavior.
 import type { APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";

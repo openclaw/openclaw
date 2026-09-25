@@ -1,8 +1,8 @@
 // Scheduled work must use free shared-admission slots across timer ticks (#119083).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -10,20 +10,21 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { stop } from "./service/ops-lifecycle.js";
-import { createCronServiceState } from "./service/state.js";
+import { observeCronTimerAdmissions } from "./service/run-recovery.test-support.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
-  type CronRunReceiptHandle,
 } from "./store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -71,13 +72,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -157,13 +154,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -279,13 +272,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => t0,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -321,6 +310,84 @@ describe("cron service cross-tick bounded admission", () => {
     stop(state);
   });
 
+  it("retires an empty tick when a receipt conflict leaves the same jobs due", async () => {
+    const store = fixtures.makeStorePath();
+    const t0 = Date.parse("2026-02-06T10:07:00.000Z");
+    const conflicted = createDueIsolatedJob({
+      id: "unchanged-conflict",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    const pending = createDueIsolatedJob({
+      id: "after-unchanged-conflict",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [conflicted, pending] });
+    const prepared = prepareCronRunReceiptClaim({
+      storePath: store.storePath,
+      job: conflicted,
+      agentId: conflicted.agentId ?? "main",
+      startedAtMs: t0,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      claimCronRunReceiptInDatabase({
+        database: db,
+        prepared,
+        resolveAgentId: (job) => job.agentId ?? "main",
+      }),
+    );
+    let peakTicks = 0;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state: ReturnType<typeof createCronRegressionState> = createCronRegressionState({
+      storePath: store.storePath,
+      nowMs: () => {
+        peakTicks = Math.max(peakTicks, state.activeTimerTicks);
+        // A timer cannot stop a microtask livelock; bound the pre-fix failure here.
+        if (peakTicks >= 5) {
+          stop(state);
+        }
+        return t0;
+      },
+      runIsolatedAgentJob,
+    });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+
+    const unrelated = tryBeginGatewayIndependentRootWorkAdmission("test:concurrent-request");
+    expect(unrelated).not.toBeNull();
+    const admissions = observeCronTimerAdmissions(state);
+
+    try {
+      await onTimer(state);
+
+      expect(peakTicks).toBe(1);
+      expect(state.stopped).toBe(false);
+      expect(state.activeTimerTicks).toBe(0);
+      await admissions.expectReleased(1);
+      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+      expect(state.queuedRunReservationsByJobId.size).toBe(0);
+      expect(state.timer).not.toBeNull();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await onTimer(state);
+
+      // The resumed tick rechecks capacity to run the second due job.
+      await admissions.expectReleased(3);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      expect(state.activeTimerTicks).toBe(0);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.every(
+          (job) => job.state.lastRunStatus === "ok",
+        ),
+      ).toBe(true);
+    } finally {
+      unrelated!.release();
+      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      stop(state);
+    }
+  });
+
   it("rechecks a partial batch immediately when its only reservation conflicts", async () => {
     const store = fixtures.makeStorePath();
     const t0 = Date.parse("2026-02-06T10:07:30.000Z");
@@ -349,10 +416,8 @@ describe("cron service cross-tick bounded admission", () => {
       expect(job.id).toBe(pending.id);
       return { status: "ok" as const, summary: "pending done" };
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => {
         nowCalls += 1;
         // The third scheduler time read occurs after due-job collection and
@@ -376,8 +441,6 @@ describe("cron service cross-tick bounded admission", () => {
         }
         return t0;
       },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
@@ -442,13 +505,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => Date.now(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;

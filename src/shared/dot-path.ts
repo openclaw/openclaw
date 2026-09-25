@@ -129,8 +129,8 @@ function findBracketPathClose(path: string, open: number): number {
   return -1;
 }
 
-/** Retains quoted numeric-key provenance alongside the public concrete path tokens. */
-export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+/** Reads diagnostic path identity without applying object-mutation key restrictions. */
+export function tokenizeConcreteConfigPath(raw: string): ParsedConcreteConfigPath {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Path is empty.");
@@ -207,12 +207,18 @@ export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcre
   if (current) {
     parts.push(current.trim());
   }
-  for (const segment of parts) {
+  return { tokens: parts, quotedNumericSegments };
+}
+
+/** Retains quoted numeric-key provenance while rejecting unsafe object-key segments. */
+export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+  const parsed = tokenizeConcreteConfigPath(raw);
+  for (const segment of parsed.tokens) {
     if (typeof segment === "string" && isBlockedObjectKey(segment)) {
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
-  return { tokens: parts, quotedNumericSegments };
+  return parsed;
 }
 
 /** Parses one concrete path while keeping explicit array brackets distinct from quoted keys. */

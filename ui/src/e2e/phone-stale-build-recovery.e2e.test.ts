@@ -32,6 +32,7 @@ const proofBuildId = proofIdentity.expectedRevisionSha
   : "phone-proof-local-artifact";
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
+  startServer: () => startPhoneProofServer(proofBuildId),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
@@ -52,9 +53,7 @@ suite.define(() => {
   ] as const)(
     "rearms one bounded build recovery after the visible refresh action with $serviceWorker service-worker state",
     async ({ serviceWorker, serviceWorkers }) => {
-      const proofServer = await startPhoneProofServer(proofBuildId);
-      await using proofServerCleanup = phoneProofCleanup(() => proofServer.close());
-      void proofServerCleanup;
+      const proofServer = suite.server;
       const context = await suite.browser.newContext({
         hasTouch: true,
         isMobile: true,
@@ -104,7 +103,8 @@ suite.define(() => {
       );
       const retainedImageRequestUrls: string[] = [];
       let blockedUnticketedRequestCount = 0;
-      await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      // The service worker owns the network request when it controls the page.
+      await context.route("**/api/chat/media/outgoing/**", async (route) => {
         const requestUrl = new URL(route.request().url());
         if (requestUrl.searchParams.get("mediaTicket") !== "phone-proof") {
           blockedUnticketedRequestCount += 1;

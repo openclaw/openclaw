@@ -1,4 +1,3 @@
-// Discord plugin module implements command behavior.
 import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,
@@ -14,10 +13,15 @@ import {
 } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
+import {
+  createDiscordLivePolicyReader,
+  type DiscordLivePolicyReader,
+} from "../monitor/live-policy.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
+import { isVoiceChannel } from "./session.js";
 import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
@@ -32,6 +36,7 @@ export const DISCORD_VOICE_COMMAND_SPEC = {
 } satisfies NativeCommandSpec;
 
 type VoiceCommandContext = {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
@@ -79,13 +84,18 @@ async function authorizeVoiceCommand(
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
-  const voiceAccess = resolveDiscordVoiceAccess(params);
+  const policy = await params.readPolicy?.();
+  if (policy?.isCurrent() === false) {
+    return { ok: false, message: "Access policy changed. Try this interaction again." };
+  }
+  const currentParams = { ...params, ...policy };
+  const voiceAccess = resolveDiscordVoiceAccess(currentParams);
   const access = await authorizeDiscordVoiceIngress({
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    accountId: params.accountId,
-    groupPolicy: params.groupPolicy,
-    useAccessGroups: params.useAccessGroups,
+    cfg: currentParams.cfg,
+    discordConfig: currentParams.discordConfig,
+    accountId: currentParams.accountId,
+    groupPolicy: currentParams.groupPolicy,
+    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,
@@ -134,28 +144,22 @@ async function resolveVoiceCommandRuntimeContext(
   return { guildId, manager };
 }
 
-async function ensureVoiceCommandAccess(params: {
-  interaction: CommandInteraction;
-  context: VoiceCommandContext;
-  channelOverride?: VoiceCommandChannelOverride;
-}): Promise<boolean> {
-  const access = await authorizeVoiceCommand(params.interaction, params.context, {
-    channelOverride: params.channelOverride,
-  });
-  if (access.ok) {
-    return true;
-  }
-  await params.interaction.reply({
-    content: access.message ?? "Not authorized.",
-    ephemeral: true,
-  });
-  return false;
-}
-
-export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandWithSubcommands {
-  const resolveSessionChannelId = (manager: DiscordVoiceManager, guildId: string) =>
-    manager.status().find((entry) => entry.guildId === guildId)?.channelId;
-
+export function createDiscordVoiceCommand(
+  startupParams: VoiceCommandContext,
+): CommandWithSubcommands {
+  const params = {
+    ...startupParams,
+    readPolicy:
+      startupParams.readPolicy ??
+      createDiscordLivePolicyReader({
+        ...startupParams,
+        discordConfig: { ...startupParams.discordConfig, groupPolicy: startupParams.groupPolicy },
+        resolvedAllowlist: {
+          guildEntries: startupParams.discordConfig.guilds,
+          allowFrom: startupParams.discordConfig.allowFrom,
+        },
+      }),
+  };
   class JoinCommand extends Command {
     override name = "join";
     override description = "Join a voice channel";
@@ -188,7 +192,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         await interaction.reply({ content: access.message ?? "Not authorized.", ephemeral: true });
         return;
       }
-      if (!isVoiceChannelType(channel.type)) {
+      if (!isVoiceChannel(channel.type)) {
         await interaction.reply({ content: "That is not a voice channel.", ephemeral: true });
         return;
       }
@@ -215,39 +219,16 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     }
   }
 
-  class LeaveCommand extends Command {
-    override name = "leave";
-    override description = "Leave the current voice channel";
+  class SessionCommand extends Command {
     override defer = true;
     override ephemeral = params.ephemeralDefault;
+    override description: string;
 
-    async run(interaction: CommandInteraction) {
-      const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
-      if (!runtimeContext) {
-        return;
-      }
-      const sessionChannelId = resolveSessionChannelId(
-        runtimeContext.manager,
-        runtimeContext.guildId,
-      );
-      const authorized = await ensureVoiceCommandAccess({
-        interaction,
-        context: params,
-        channelOverride: sessionChannelId ? { id: sessionChannelId } : undefined,
-      });
-      if (!authorized) {
-        return;
-      }
-      const result = await runtimeContext.manager.leave({ guildId: runtimeContext.guildId });
-      await interaction.reply({ content: result.message, ephemeral: true });
+    constructor(override name: "leave" | "status") {
+      super();
+      this.description =
+        name === "leave" ? "Leave the current voice channel" : "Show active voice sessions";
     }
-  }
-
-  class StatusCommand extends Command {
-    override name = "status";
-    override description = "Show active voice sessions";
-    override defer = true;
-    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -258,12 +239,16 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         .status()
         .filter((entry) => entry.guildId === runtimeContext.guildId);
       const sessionChannelId = sessions[0]?.channelId;
-      const authorized = await ensureVoiceCommandAccess({
-        interaction,
-        context: params,
+      const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: sessionChannelId ? { id: sessionChannelId } : undefined,
       });
-      if (!authorized) {
+      if (!access.ok) {
+        await interaction.reply({ content: access.message ?? "Not authorized.", ephemeral: true });
+        return;
+      }
+      if (this.name === "leave") {
+        const result = await runtimeContext.manager.leave({ guildId: runtimeContext.guildId });
+        await interaction.reply({ content: result.message, ephemeral: true });
         return;
       }
       if (sessions.length === 0) {
@@ -271,7 +256,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         return;
       }
       const lines = sessions.map(
-        (entry) => `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})`,
+        (entry) =>
+          `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})${entry.warning ? `\n${entry.warning}` : ""}`,
       );
       await interaction.reply({ content: lines.join("\n"), ephemeral: true });
     }
@@ -280,10 +266,6 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   return new (class extends CommandWithSubcommands {
     override name = DISCORD_VOICE_COMMAND_SPEC.name;
     override description = DISCORD_VOICE_COMMAND_SPEC.description;
-    subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
+    subcommands = [new JoinCommand(), new SessionCommand("leave"), new SessionCommand("status")];
   })();
-}
-
-function isVoiceChannelType(type: DiscordChannelType) {
-  return type === DiscordChannelType.GuildVoice || type === DiscordChannelType.GuildStageVoice;
 }

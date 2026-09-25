@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { wrapGuardedBodyStream } from "./guarded-body-stream.js";
+import { readResponseWithLimit } from "../http-body.js";
+import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 describe("wrapGuardedBodyStream", () => {
   it("releases the source reader lock after downstream cancellation", async () => {
@@ -121,5 +122,44 @@ describe("wrapGuardedBodyStream", () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(source.locked).toBe(false);
+  });
+});
+
+describe("responseWithAbortSignal", () => {
+  it("preserves response metadata across clones", async () => {
+    const source = new Response("payload");
+    Object.defineProperties(source, {
+      url: { value: "https://example.test/final" },
+      redirected: { value: true },
+      type: { value: "cors" },
+    });
+    const wrapped = responseWithAbortSignal(source, new AbortController().signal);
+    const clone = wrapped.clone();
+
+    expect(clone.url).toBe("https://example.test/final");
+    expect(clone.redirected).toBe(true);
+    expect(clone.type).toBe("cors");
+    expect((await readResponseWithLimit(clone, 32)).toString("utf8")).toBe("payload");
+    await wrapped.body?.cancel();
+  });
+
+  it("attaches the abort listener only when body consumption starts", async () => {
+    const controller = new AbortController();
+    const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+    const wrapped = responseWithAbortSignal(
+      new Response(new ReadableStream<Uint8Array>()),
+      controller.signal,
+    );
+
+    expect(addEventListener).not.toHaveBeenCalled();
+    const reader = wrapped.body!.getReader();
+    const read = reader.read();
+    await vi.waitFor(() =>
+      expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true }),
+    );
+    const reason = new Error("caller stopped");
+    controller.abort(reason);
+    await expect(read).rejects.toBe(reason);
+    reader.releaseLock();
   });
 });

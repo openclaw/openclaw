@@ -14,6 +14,7 @@ import { prepareOwnedPluginLoadContext } from "../prepared-model-runtime.plugin-
 import {
   createAgentRuntimeMetadataPluginIdScope,
   resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
 } from "./runtime-plugin-load-plan.js";
 import {
   ensureSelectedAgentHarnessPlugin,
@@ -51,6 +52,31 @@ function installedProviderRecord(
     },
     compat: [],
   };
+}
+
+function createMemoryPlanMetadataSnapshot() {
+  const manifestRegistry = makeRegistry(
+    ["memory-core", "memory-lancedb"].map((id) => ({
+      id,
+      channels: [],
+      origin: "bundled" as const,
+    })),
+  );
+  for (const plugin of manifestRegistry.plugins) {
+    plugin.kind = "memory";
+  }
+  const snapshot = createPluginMetadataSnapshot({ manifestRegistry });
+  snapshot.index.plugins = manifestRegistry.plugins.map((plugin) =>
+    Object.assign(installedProviderRecord(plugin.id), {
+      origin: plugin.origin,
+      rootDir: plugin.rootDir,
+      manifestPath: plugin.manifestPath,
+      manifestHash: plugin.id,
+      enabled: true,
+      startup: { sidecar: false, memory: true, agentHarnesses: [] },
+    }),
+  );
+  return restorePluginMetadataSnapshot(snapshot);
 }
 
 function attachPreparedPluginFacts(
@@ -118,14 +144,27 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
-  it("carries the missing Codex owner reason and remediation into the turn guard", async () => {
+  it.each([
+    { name: "runtime override", selection: { agentHarnessRuntimeOverride: "codex" } },
+    { name: "session pin", selection: { agentHarnessId: "codex" } },
+    {
+      name: "model policy",
+      selection: {
+        config: {
+          agents: {
+            defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      },
+    },
+  ])("keeps a missing explicit Codex $name fatal with remediation", async ({ selection }) => {
     const pluginRegistry = createEmptyPluginRegistry();
     attachPreparedPluginFacts(pluginRegistry, {}, makeRegistry([]));
 
     const error = await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
-      agentHarnessRuntimeOverride: "codex",
+      ...selection,
       workspaceDir: "/tmp/workspace",
       pluginRegistry,
     }).catch((cause: unknown) => cause);
@@ -425,6 +464,7 @@ describe("harness runtime plugins", () => {
 
   it("force-activates a default-disabled harness owner selected for a run", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: {},
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
@@ -434,10 +474,50 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
   });
 
+  it("includes the configured picker harness in metadata and activation preparation", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6-sol",
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
+          },
+        },
+      },
+      plugins: { slots: { memory: "none" } },
+    };
+    const selections = [{ provider: "openai", modelId: "gpt-5.6-sol", runtime: "openclaw" }];
+    const scope = createAgentRuntimeMetadataPluginIdScope({
+      config,
+      workspaceDir: "/tmp/workspace",
+      selections,
+    });
+    const codexRecord = {
+      ...installedProviderRecord("codex"),
+      startup: { sidecar: false, memory: false, agentHarnesses: ["codex"] },
+    };
+    expect(
+      scope.resolve({
+        index: {
+          plugins: [installedProviderRecord("openai", { providers: ["openai"] }), codexRecord],
+        } as never,
+      }),
+    ).toEqual(["codex", "openai"]);
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config,
+      workspaceDir: "/tmp/workspace",
+      selections: resolveAgentRuntimePluginSelections(config, selections),
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
+    });
+    expect(plan.pluginIds).toContain("codex");
+    expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
+  });
+
   it("includes the selected provider owner for the default runtime", () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["openai"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
@@ -537,6 +617,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["openai"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5" }],
@@ -548,6 +629,7 @@ describe("harness runtime plugins", () => {
 
   it("includes and enables the context-engine owner in the prepared load plan", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: [],
@@ -558,6 +640,39 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.allow).toEqual(["custom-context-engine"]);
     expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
   });
+
+  it.each([
+    { basePluginIds: [], allowed: ["catalog-provider"], expected: [] },
+    {
+      basePluginIds: ["catalog-provider"],
+      allowed: ["catalog-provider"],
+      expected: ["catalog-provider"],
+    },
+    { basePluginIds: ["memory-core"], allowed: ["memory-core"], expected: ["memory-core"] },
+    { basePluginIds: ["catalog-provider"], allowed: ["other-provider"], expected: [] },
+  ])(
+    "keeps catalog scope $basePluginIds within allowlist $allowed",
+    ({ basePluginIds, allowed, expected }) => {
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: [...allowed, "memory-lancedb", "custom-context-engine", "codex"],
+          slots: { memory: "memory-lancedb", contextEngine: "custom-context-engine" },
+        },
+      };
+      const plan = resolveAgentRuntimePluginLoadPlan({
+        metadataSnapshot: createMemoryPlanMetadataSnapshot(),
+        config,
+        workspaceDir: "/tmp/workspace",
+        basePluginIds,
+        selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+        purpose: "model-catalog",
+      });
+
+      expect(plan.pluginIds).toEqual(expected);
+      expect(plan.config?.plugins?.entries).toBeUndefined();
+      expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
+    },
+  );
 
   const memorySelectionCases: Array<{
     name: string;
@@ -611,6 +726,7 @@ describe("harness runtime plugins", () => {
       const plan = resolveAgentRuntimePluginLoadPlan({
         config,
         workspaceDir: "/tmp/workspace",
+        metadataSnapshot: createMemoryPlanMetadataSnapshot(),
         selections: [],
       });
 
@@ -665,6 +781,7 @@ describe("harness runtime plugins", () => {
 
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: {
         plugins: {
           entries: { "custom-context-engine": { enabled: true } },
@@ -686,6 +803,7 @@ describe("harness runtime plugins", () => {
       entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
     });
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["custom-harness-plugin"] } },
       workspaceDir: "/tmp/workspace",
       selections: [
@@ -699,6 +817,7 @@ describe("harness runtime plugins", () => {
 
   it("preserves startup-scoped plugins when selected owners synthesize an allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { slots: { memory: "memory-core" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
@@ -711,6 +830,7 @@ describe("harness runtime plugins", () => {
 
   it("does not restore stale startup plugins excluded by a restrictive reload allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["codex"] } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
@@ -725,6 +845,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["codex"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],

@@ -33,7 +33,8 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 }
 
 function sendJson(response: ServerResponse, result: unknown): void {
-  response.writeHead(200, { "content-type": "application/json" });
+  // Same-process model selection can stall past the loopback socket's idle timeout.
+  response.writeHead(200, { "content-type": "application/json", connection: "close" });
   response.end(JSON.stringify({ ok: true, result }));
 }
 
@@ -197,7 +198,7 @@ describe("Telegram model callback loopback", () => {
         processMessageWithReplyChain: async () => {
           throw new Error("model callback must not enter generic callback dispatch");
         },
-        resolveTelegramSessionState: () => ({
+        resolveTelegramSessionState: async () => ({
           agentId: "main",
           sessionEntry: undefined,
           sessionKey: "agent:main:telegram:direct:1234",

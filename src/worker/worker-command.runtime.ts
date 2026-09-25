@@ -3,6 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { toErrorObject } from "../infra/errors.js";
+import { createBoundedLineFramer } from "../process/bounded-line-framer.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { parseWorkerProcessRequest, type WorkerProcessResult } from "./worker-process-protocol.js";
@@ -34,8 +35,10 @@ async function runManagedWorkerCommand(
   let active: { turnId: string; controller: AbortController } | undefined;
   let running: Promise<void> | undefined;
   let closed = false;
-  let chunks: Buffer[] = [];
-  let byteLength = 0;
+  const framer = createBoundedLineFramer(
+    WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+    "managed worker request exceeds the protocol payload limit",
+  );
   let removeListeners = () => {};
 
   try {
@@ -143,12 +146,17 @@ async function runManagedWorkerCommand(
           }
           await new Promise<void>((resolveWrite, rejectWrite) => {
             const onClose = () => rejectWrite(new Error("managed worker result output closed"));
+            // A failed write reports through both the callback and the stream. The callback owns
+            // the result; retain one listener to consume the matching runtime error event.
+            const onError = () => {};
             options.output.once("close", onClose);
+            options.output.once("error", onError);
             options.output.write(`${JSON.stringify(response)}\n`, (error) => {
               options.output.off("close", onClose);
               if (error) {
                 rejectWrite(error);
               } else {
+                options.output.off("error", onError);
                 resolveWrite();
               }
             });
@@ -173,26 +181,11 @@ async function runManagedWorkerCommand(
           if (!chunk) {
             throw new Error("managed worker input must be bytes");
           }
-          let offset = 0;
-          while (offset < chunk.length) {
+          for (const line of framer.push(chunk)) {
+            onLine(line);
             if (closed) {
               break;
             }
-            const newline = chunk.indexOf(10, offset);
-            const end = newline === -1 ? chunk.length : newline;
-            byteLength += end - offset;
-            if (byteLength > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
-              throw new Error("managed worker request exceeds the protocol payload limit");
-            }
-            chunks.push(chunk.subarray(offset, end));
-            if (newline === -1) {
-              break;
-            }
-            const line = Buffer.concat(chunks, byteLength);
-            chunks = [];
-            byteLength = 0;
-            onLine(line);
-            offset = newline + 1;
           }
         } catch (error) {
           finish(error);
@@ -221,7 +214,7 @@ async function runManagedWorkerCommand(
       }
     });
   } finally {
-    chunks = [];
+    framer.clear();
     try {
       await running;
       await environment?.close();

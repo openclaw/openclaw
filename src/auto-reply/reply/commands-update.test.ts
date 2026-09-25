@@ -1,29 +1,53 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleUpdateCommand } from "./commands-update.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
-const { dispatch, callGatewayTool, readChannelContextGatewayContextResolver, host } = vi.hoisted(
-  () => ({
+const { getRun, dispatch, callGatewayTool, readChannelContextGatewayContextResolver, host } =
+  vi.hoisted(() => ({
+    getRun: vi.fn(),
     dispatch: vi.fn(),
     callGatewayTool: vi.fn(),
     readChannelContextGatewayContextResolver: vi.fn(),
     host: { context: {} as GatewayRequestContext | undefined },
-  }),
-);
+  }));
+vi.mock("../../infra/update-run-ledger.js", () => ({ getUpdateRun: getRun }));
 vi.mock("../../agents/tools/gateway.js", () => ({ callGatewayTool }));
 vi.mock("../../channels/message-access/admission-evidence.js", () => ({
   readChannelContextGatewayContextResolver,
 }));
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: dispatch,
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
-  hasInProcessGatewayContext: (resolve?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolve ? resolve() : host.context),
 }));
 vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
+
+const runId = "6631ecee-adbf-41e8-a0e3-1b88b28b0a59";
+function updateRun(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
+  return {
+    runId,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    trigger: "chat",
+    phase: "requested",
+    status: "running",
+    reason: null,
+    origin: {},
+    target: {},
+    before: {},
+    after: {},
+    steps: [],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: null,
+    downtimeMs: null,
+    ...patch,
+  };
+}
 
 function updateCommandParams(): HandleCommandsParams {
   return {
@@ -58,6 +82,7 @@ function updateCommandParams(): HandleCommandsParams {
 describe("handleUpdateCommand", () => {
   beforeEach(() => {
     dispatch.mockReset();
+    getRun.mockReset().mockReturnValue(updateRun());
     callGatewayTool.mockReset();
     readChannelContextGatewayContextResolver.mockReset();
     host.context = {} as GatewayRequestContext;
@@ -108,8 +133,18 @@ describe("handleUpdateCommand", () => {
   it("relays owner recovery instructions when the gateway revokes an admitted owner", async () => {
     const message =
       "Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:owner\"]'` in a terminal.";
+    getRun.mockReturnValue(
+      updateRun({
+        phase: "finished",
+        status: "failed",
+        reason: "owner_required",
+        origin: { nextAction: message },
+        finishedAtMs: 2,
+      }),
+    );
     dispatch.mockResolvedValueOnce({
       ok: false,
+      runId,
       message,
       result: { status: "error", reason: "owner_required" },
     });
@@ -128,7 +163,7 @@ describe("handleUpdateCommand", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("hands off an owner update with session routing and a 20-minute timeout", async () => {
+  it("hands off an owner update with session routing and only a request watchdog", async () => {
     const params = updateCommandParams();
     const order: string[] = [];
     const onAdopted = vi.fn(async () => {
@@ -143,6 +178,8 @@ describe("handleUpdateCommand", () => {
       order.push("update");
       return {
         ok: true,
+        runId,
+        ackDelivered: true,
         result: { status: "skipped", reason: "managed-service-handoff-started", steps: [] },
         handoff: { status: "started", command: "openclaw update" },
       };
@@ -150,14 +187,12 @@ describe("handleUpdateCommand", () => {
 
     expect(await handleUpdateCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: { text: "⬆️ Updating OpenClaw. Back in a few minutes; I'll confirm here." },
     });
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "update.run",
       {
         sessionKey: params.sessionKey,
         note: "/update",
-        timeoutMs: 1_200_000,
         requester: { channel: "telegram", senderId: "owner", accountId: undefined },
       },
       {
@@ -166,6 +201,7 @@ describe("handleUpdateCommand", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         syntheticScopes: ["operator.admin"],
+        syntheticScopeMode: "minimum",
       },
     );
     expect(order).toEqual(["adopt", "update"]);
@@ -189,9 +225,19 @@ describe("handleUpdateCommand", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("includes known before and after versions in the acknowledgment", async () => {
+  it("does not repeat an outcome already owned by gateway notices", async () => {
+    getRun.mockReturnValue(
+      updateRun({
+        status: "succeeded",
+        phase: "finished",
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.2" },
+      }),
+    );
     dispatch.mockResolvedValueOnce({
       ok: true,
+      runId,
+      ackDelivered: true,
       result: {
         status: "ok",
         before: { version: "2026.9.1" },
@@ -200,18 +246,42 @@ describe("handleUpdateCommand", () => {
       },
     });
 
-    expect((await handleUpdateCommand(updateCommandParams(), true))?.reply?.text).toBe(
-      "⬆️ Updating OpenClaw (2026.9.1 → 2026.9.2). Back in a few minutes; I'll confirm here.",
-    );
+    expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
+      shouldContinue: false,
+    });
   });
+
+  it.each([true, false])(
+    "preserves queued ack custody without a duplicate reply (%s)",
+    async (ackQueued) => {
+      const acknowledgement = "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2.";
+      dispatch.mockResolvedValueOnce({
+        ok: true,
+        runId,
+        ackDelivered: false,
+        ackQueued,
+        acknowledgement,
+        result: { status: "skipped", reason: "managed-service-handoff-started" },
+        handoff: { status: "started" },
+      });
+      expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
+        shouldContinue: false,
+        ...(!ackQueued ? { reply: { text: acknowledgement } } : {}),
+      });
+    },
+  );
 
   it.each([
     { status: "skipped", reason: "managed-service-handoff-unavailable" },
     { status: "error", reason: "managed-service-handoff-failed" },
   ])("reports $status with the exact manual command", async ({ status, reason }) => {
     const command = "openclaw update --channel stable";
+    getRun.mockReturnValue(
+      updateRun({ status: status === "error" ? "failed" : "skipped", phase: "finished", reason }),
+    );
     dispatch.mockResolvedValueOnce({
       ok: false,
+      runId,
       result: { status, reason, steps: [] },
       handoff: {
         status: "unavailable",
@@ -226,7 +296,6 @@ describe("handleUpdateCommand", () => {
     expect(result?.reply?.text).toContain(reason);
     expect(result?.reply?.text).toContain(command);
     expect(result?.reply?.text).not.toContain("I'll confirm here");
-    expect(result?.reply?.text).not.toContain("\n");
   });
 
   it("reports missing hosting context without contacting a remote gateway", async () => {

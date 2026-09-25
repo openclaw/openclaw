@@ -279,7 +279,7 @@ describe("worker launch capabilities", () => {
           : primary === "overload"
             ? ({ reason: "overloaded", status: 503 } as const)
             : primary === "http-507"
-              ? ({ reason: "timeout", status: 507 } as const)
+              ? ({ reason: "server_error", status: 507 } as const)
               : undefined;
       const primaryError = providerFailure
         ? primary === "http-507"
@@ -326,8 +326,11 @@ describe("worker launch capabilities", () => {
       });
       const reconcileWorkspace = vi.fn(
         async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           order.push("reconcile");
-          request.journal.commit(MANIFEST_REF);
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

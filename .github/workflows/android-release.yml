@@ -49,7 +49,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   publish_signed_android_apk:
@@ -82,6 +82,12 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.release_publish_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Validate release approval and target
         id: release_approval

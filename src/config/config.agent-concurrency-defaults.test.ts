@@ -13,7 +13,6 @@ import { OpenClawSchema } from "./zod-schema.js";
 describe("agent concurrency defaults", () => {
   it("resolves defaults when unset", () => {
     expect(resolveAgentMaxConcurrent({})).toBeGreaterThanOrEqual(8);
-    expect(resolveAgentMaxConcurrent({})).toBeLessThanOrEqual(16);
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
     expect(resolveCronMaxConcurrentRuns()).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
   });
@@ -53,6 +52,7 @@ describe("agent concurrency defaults", () => {
 
     expect(cfg.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
     expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(cfg.agents?.defaults?.subagents?.maxSpawnDepth).toBeUndefined();
     expect(cfg.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
       DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
     );

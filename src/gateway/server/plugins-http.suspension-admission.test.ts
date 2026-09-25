@@ -1,7 +1,9 @@
 // Proves plugin HTTP and upgrade handlers participate in Gateway suspension admission.
+import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
@@ -14,6 +16,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
@@ -24,14 +27,6 @@ import {
 
 const ROUTE_PATH = "/plugin/suspension-proof";
 let rateLimitEpochMs = Date.now();
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function createRoute(
   params: Partial<PluginHttpRouteRegistration> & Pick<PluginHttpRouteRegistration, "handler">,
@@ -81,16 +76,9 @@ function prepareWithRootOnly(requestId: string) {
 }
 
 function createMockUpgradeSocket() {
-  const socket = {
-    chunks: [] as string[],
-    destroyed: false,
-    write(chunk: string) {
-      socket.chunks.push(chunk);
-    },
-    destroy() {
-      socket.destroyed = true;
-    },
-  } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
+  const chunks: string[] = [];
+  const socket = Object.assign(new PassThrough(), { chunks });
+  socket.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
   return socket;
 }
 
@@ -127,8 +115,8 @@ afterEach(() => {
 
 describe("plugin HTTP suspension admission", () => {
   it("keeps an in-flight ordinary route visible to suspension preparation", async () => {
-    const started = deferred();
-    const finish = deferred();
+    const started = createDeferred();
+    const finish = createDeferred();
     const handler = createRequestHandler([
       createRoute({
         handler: async () => {
@@ -246,6 +234,7 @@ describe("plugin HTTP suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      trackExecution: trackAsyncWork,
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
@@ -315,8 +304,8 @@ describe("plugin HTTP suspension admission", () => {
 
 describe("plugin upgrade suspension admission", () => {
   it("keeps an in-flight upgrade visible to suspension preparation", async () => {
-    const started = deferred();
-    const finish = deferred();
+    const started = createDeferred();
+    const finish = createDeferred();
     const handler = createUpgradeHandler([
       createRoute({
         handler: () => false,
@@ -352,10 +341,12 @@ describe("plugin upgrade suspension admission", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     const socket = createMockUpgradeSocket();
+    const closed = once(socket, "close");
 
     await expect(
       handler({ url: ROUTE_PATH } as IncomingMessage, socket, Buffer.alloc(0)),
     ).resolves.toBe(true);
+    await closed;
 
     expect(upgrade).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(true);

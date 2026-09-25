@@ -3,27 +3,19 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
-  getCachedLiveProviderModelRows,
-  LiveModelCatalogHttpError,
-  readLiveModelCatalogBooleanField,
-  readLiveModelCatalogPositiveSafeIntegerField,
-  readLiveModelCatalogStringField,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import {
+  buildFamilyForwardCompatModel,
   buildManifestModelProviderConfig,
-  type ProviderCatalogOutcome,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
-  resolveFamilyForwardCompatModel,
-  type ModelDefinitionConfig,
-  type ModelProviderConfig,
-  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -54,7 +46,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
-  OPENAI_GPT_6_ASTRA_MODEL_ID,
+  OPENAI_GPT_6_MODEL_IDS,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -70,12 +62,23 @@ import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
-  buildOpenAISyntheticCatalogEntry,
   findCatalogTemplate,
   matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+import {
+  isSIWCAuthFlow,
+  TOKEN_SHARING_AUTH_FLOW,
+  TOKEN_SHARING_RESOURCE,
+} from "./token-sharing.js";
+
+type OpenAILiveModelReaders = Pick<
+  typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
+  | "readLiveModelCatalogBooleanField"
+  | "readLiveModelCatalogPositiveSafeIntegerField"
+  | "readLiveModelCatalogStringField"
+>;
 
 const PROVIDER_ID = "openai";
 
@@ -93,7 +96,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.153.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.155.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -157,15 +160,10 @@ type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl?: string;
   discoveryApiKey?: string;
-  rejectionScope?: "catalog";
   env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
-
-function shouldFetchOpenAILiveModels(baseUrl: string): boolean {
-  return isOpenAIHttpsApiBaseUrl(baseUrl);
-}
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
   return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
@@ -238,6 +236,18 @@ type OpenAILiveProviderCatalog = {
   outcome?: ProviderCatalogOutcome;
 };
 
+function buildOpenAIStaticPlatformProviderConfig(
+  apiKey?: string,
+  baseUrl = resolveOpenAIDefaultBaseUrl(),
+): ModelProviderConfig {
+  return {
+    baseUrl,
+    api: "openai-responses",
+    ...(apiKey ? { apiKey } : {}),
+    models: buildOpenAIManifestModelsForBaseUrl(baseUrl),
+  };
+}
+
 function scopeOpenAICatalogOutcome(
   catalog: OpenAILiveProviderCatalog,
   profileId: string | undefined,
@@ -254,16 +264,22 @@ async function buildOpenAILiveProviderConfig(
 ): Promise<OpenAILiveProviderCatalog> {
   const baseUrl =
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
-  const models = buildOpenAIManifestModelsForBaseUrl(baseUrl);
-  const fallback: ModelProviderConfig = {
-    baseUrl,
-    api: "openai-responses",
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-    models,
-  };
-  if (!shouldFetchOpenAILiveModels(baseUrl)) {
+  const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
+  const models = fallback.models;
+  if (!isOpenAIHttpsApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
+  const [
+    { getCachedLiveProviderModelRows, LiveModelCatalogHttpError },
+    { isNonSecretApiKeyMarker },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
+    import("openclaw/plugin-sdk/provider-auth"),
+  ]);
+  const rejectionScope =
+    params.apiKey && !params.discoveryApiKey && isNonSecretApiKeyMarker(params.apiKey)
+      ? "catalog"
+      : undefined;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
@@ -313,7 +329,7 @@ async function buildOpenAILiveProviderConfig(
         provider: { ...fallback, models: [] },
         outcome: {
           provider: PROVIDER_ID,
-          ...(params.rejectionScope ? { rejectionScope: "catalog" } : {}),
+          ...(rejectionScope ? { rejectionScope } : {}),
           status: "auth-rejected",
         },
       };
@@ -368,7 +384,8 @@ function readCodexModelRows(body: unknown): readonly unknown[] {
   return models;
 }
 
-function shouldIncludeCodexModelRow(row: unknown): boolean {
+function shouldIncludeCodexModelRow(row: unknown, readers: OpenAILiveModelReaders): boolean {
+  const { readLiveModelCatalogStringField, readLiveModelCatalogBooleanField } = readers;
   const visibility = normalizeLowercaseStringOrEmpty(
     readLiveModelCatalogStringField(row, "visibility") ?? "",
   );
@@ -445,8 +462,12 @@ function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | und
   return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
-function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
-  if (!shouldIncludeCodexModelRow(row)) {
+function buildOpenAICodexModelFromLiveRow(
+  row: unknown,
+  readers: OpenAILiveModelReaders,
+): ModelDefinitionConfig | undefined {
+  const { readLiveModelCatalogStringField, readLiveModelCatalogPositiveSafeIntegerField } = readers;
+  if (!shouldIncludeCodexModelRow(row, readers)) {
     return undefined;
   }
   const modelId =
@@ -529,10 +550,9 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
       if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
         return [];
       }
-      // Offline hints cover established subscription routes. Astra's phased
-      // rollout and other GPT-5.6 tiers require successful account discovery.
+      // New model availability comes from successful account discovery.
       if (
-        modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+        OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
         (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID)
       ) {
         return [];
@@ -548,6 +568,8 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
+  const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+  const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
@@ -572,7 +594,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       ],
     });
     const models = rows
-      .map(buildOpenAICodexModelFromLiveRow)
+      .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
@@ -606,15 +628,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 
 function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
-}
-
-function resolveOpenAICatalogRejectionScope(auth: {
-  apiKey?: string;
-  discoveryApiKey?: string;
-}): "catalog" | undefined {
-  return auth.apiKey && !auth.discoveryApiKey && isNonSecretApiKeyMarker(auth.apiKey)
-    ? "catalog"
-    : undefined;
 }
 
 function resolveOpenAICatalogBaseUrl(ctx: {
@@ -797,7 +810,7 @@ function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
 
 const OPENAI_GPT_FORWARD_COMPAT_CASES = [
   {
-    match: [OPENAI_GPT_6_ASTRA_MODEL_ID],
+    match: OPENAI_GPT_6_MODEL_IDS,
     templateIds: [OPENAI_GPT_56_SOL_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
   },
   {
@@ -838,14 +851,14 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
     match: [OPENAI_GPT_54_NANO_MODEL_ID],
     templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
   },
-] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
+] satisfies Parameters<typeof buildFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
-    modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+    OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
@@ -859,7 +872,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const catalogModel = OPENAI_MANIFEST_PROVIDER.models.find(
     ({ id }) => id === (modelId === OPENAI_GPT_56_MODEL_ID ? OPENAI_GPT_56_SOL_MODEL_ID : modelId),
   );
-  return resolveFamilyForwardCompatModel({
+  return buildFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
     cases: OPENAI_GPT_FORWARD_COMPAT_CASES,
@@ -907,7 +920,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
     wizard: apiKeyDefinition.wizard,
   });
   for (const method of providerDefinition.auth) {
+    if (method.id === "siwc") {
+      method.starterModel = OPENAI_DEFAULT_MODEL;
+      method.run = async (ctx) =>
+        (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);
+      continue;
+    }
     if (method.id === "oauth" || method.id === "device-code") {
+      method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
       method.run = chatGPTAuthRuns[method.id];
       continue;
     }
@@ -931,53 +951,138 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        try {
-          const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
-            await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth = await resolveApiKeyForProvider({
-            provider: PROVIDER_ID,
-            cfg: ctx.config,
-            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-            ...(auth.profileId
-              ? {
-                  profileId: auth.profileId,
-                  lockedProfile: true,
-                }
-              : {}),
-          });
-          if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-            const metadata = resolveProviderAuthProfileMetadata({
+        if (isSIWCAuthFlow(auth.authFlow)) {
+          // Token sharing authorizes Responses, not either model-discovery endpoint.
+          const sharing = auth.authFlow === TOKEN_SHARING_AUTH_FLOW;
+          const provider = buildOpenAIStaticPlatformProviderConfig(
+            undefined,
+            TOKEN_SHARING_RESOURCE,
+          );
+          return {
+            providers: {
+              [PROVIDER_ID]: {
+                ...provider,
+                models: sharing
+                  ? provider.models.filter((model) => model.api === "openai-responses")
+                  : [],
+              },
+            },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: sharing ? ("unavailable" as const) : ("auth-rejected" as const),
+              },
+            ],
+          };
+        }
+        if (auth.preparationFailed) {
+          return null;
+        }
+        const [
+          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata },
+          { isNonSecretApiKeyMarker },
+        ] = await Promise.all([
+          import("openclaw/plugin-sdk/provider-auth-runtime"),
+          import("openclaw/plugin-sdk/provider-auth"),
+        ]);
+        let runtimeAuth: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;
+        if (auth.profileId || auth.mode === "none") {
+          try {
+            runtimeAuth = await resolveApiKeyForProvider({
               provider: PROVIDER_ID,
               cfg: ctx.config,
               ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-              ...((runtimeAuth.profileId ?? auth.profileId)
-                ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+              ...(auth.profileId
+                ? {
+                    profileId: auth.profileId,
+                    lockedProfile: true,
+                  }
                 : {}),
             });
-            const catalog = scopeOpenAICatalogOutcome(
-              await buildOpenAICodexLiveProviderConfig({
-                discoveryApiKey: runtimeAuth.apiKey,
-                accountId: metadata.accountId,
-              }),
-              runtimeAuth.profileId ?? auth.profileId,
-            );
+          } catch {
+            runtimeAuth = undefined;
+          }
+        }
+        if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
+          const metadata = resolveProviderAuthProfileMetadata({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...((runtimeAuth.profileId ?? auth.profileId)
+              ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+              : {}),
+          });
+          const catalog = scopeOpenAICatalogOutcome(
+            await buildOpenAICodexLiveProviderConfig({
+              discoveryApiKey: runtimeAuth.apiKey,
+              accountId: metadata.accountId,
+            }),
+            runtimeAuth.profileId ?? auth.profileId,
+          );
+          return {
+            providers: { [PROVIDER_ID]: catalog.provider },
+            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+          };
+        }
+        if (!auth.profileId && isCodexCatalogAuthMode(auth.mode) && auth.apiKey) {
+          const discoveryApiKey =
+            auth.discoveryApiKey ??
+            (isNonSecretApiKeyMarker(auth.apiKey) ? undefined : auth.apiKey);
+          if (!discoveryApiKey) {
             return {
-              providers: { [PROVIDER_ID]: catalog.provider },
-              ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+              providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+              outcomes: [{ provider: PROVIDER_ID, status: "unavailable" }],
             };
           }
-        } catch {
-          // OAuth discovery is advisory; fall through so configured API-key
-          // auth can still publish the standard OpenAI catalog.
+          const catalog = await buildOpenAICodexLiveProviderConfig({
+            discoveryApiKey,
+          });
+          return {
+            providers: { [PROVIDER_ID]: catalog.provider },
+            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+          };
+        }
+        if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
+          return {
+            providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: "unavailable",
+              },
+            ],
+          };
         }
         if (auth.mode === "api_key" && auth.apiKey) {
+          const discoveryApiKey =
+            auth.discoveryApiKey ??
+            (runtimeAuth?.mode === "api-key" ? runtimeAuth.apiKey : undefined);
+          if (!discoveryApiKey && isNonSecretApiKeyMarker(auth.apiKey)) {
+            return {
+              providers: {
+                [PROVIDER_ID]: buildOpenAIStaticPlatformProviderConfig(
+                  auth.apiKey,
+                  resolveOpenAICatalogBaseUrl(ctx),
+                ),
+              },
+              outcomes: [
+                {
+                  provider: PROVIDER_ID,
+                  ...(auth.profileId ? { profileId: auth.profileId } : {}),
+                  rejectionScope: "catalog",
+                  status: "unavailable",
+                },
+              ],
+            };
+          }
           const catalog = scopeOpenAICatalogOutcome(
             await buildOpenAILiveProviderConfig({
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-              discoveryApiKey: auth.discoveryApiKey,
-              rejectionScope: resolveOpenAICatalogRejectionScope(auth),
+              discoveryApiKey,
             }),
             auth.profileId,
           );
@@ -986,20 +1091,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
           };
         }
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!apiKey.apiKey) {
-          return null;
-        }
-        const catalog = await buildOpenAILiveProviderConfig({
-          apiKey: apiKey.apiKey,
-          baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-          discoveryApiKey: apiKey.discoveryApiKey,
-          rejectionScope: resolveOpenAICatalogRejectionScope(apiKey),
-        });
-        return {
-          providers: { [PROVIDER_ID]: catalog.provider },
-          ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
-        };
+        return null;
       },
     },
     staticCatalog: {
@@ -1047,6 +1139,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     ...responsesHooks,
     prepareExtraParams: (ctx) => {
+      if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+        return {
+          ...ctx.extraParams,
+          transport: "sse",
+          store: false,
+          responsesServerCompaction: false,
+        };
+      }
       const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
       const useCodexTransport =
         shouldUseCodexResponsesHooks({
@@ -1061,7 +1161,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
-    refreshOAuth: codexHooks.refreshOAuth,
+    refreshOAuth: async (credential) =>
+      isSIWCAuthFlow(credential.authFlow)
+        ? (await import("./token-sharing-oauth.runtime.js")).refreshTokenSharingCredential(
+            credential,
+          )
+        : codexHooks.refreshOAuth(credential),
     buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),
     buildMissingAuthMessage: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
@@ -1076,71 +1181,50 @@ export function buildOpenAIProvider(): ProviderPlugin {
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat }) =>
+    resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat, thinkingLevelMap }) =>
       normalizeProviderId(provider) === PROVIDER_ID
-        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat, api)
+        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat, api, thinkingLevelMap)
         : null,
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
-      const openAiGpt55ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54Template = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54MiniTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54NanoTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-      });
-      return [
-        buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
+      const models = [
+        {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
           contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
+        },
+        {
           id: OPENAI_GPT_54_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54ProTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54MiniTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_MINI_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54NanoTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_NANO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
-        }),
-      ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+        },
+      ];
+      return models.flatMap(({ templateIds, ...model }) => {
+        const template = findCatalogTemplate({
+          entries: ctx.entries,
+          providerId: PROVIDER_ID,
+          templateIds,
+        });
+        const input: ("text" | "image")[] = ["text", "image"];
+        return template ? [{ ...template, ...model, name: model.id, reasoning: true, input }] : [];
+      });
     },
   };
 }

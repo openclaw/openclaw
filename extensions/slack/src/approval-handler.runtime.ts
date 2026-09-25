@@ -1,30 +1,31 @@
-// Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  PluginApprovalExpiredView,
-  PluginApprovalPendingView,
-  PluginApprovalResolvedView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type PluginApprovalExpiredView,
+  type PluginApprovalPendingView,
+  type PluginApprovalResolvedView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { SLACK_APPROVAL_HEADER_BLOCK_ID } from "./approval-actions.js";
+import { runSlackApprovalMessageUpdate } from "./approval-message-updates.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
+import { getSlackListenerWriteClient } from "./client.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
-import type { SlackEventScope } from "./monitor/event-scope.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 import { setSlackSessionStatus } from "./session-status.js";
@@ -107,16 +108,8 @@ function formatSlackApprover(resolvedBy?: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function formatSlackMetadataLine(label: string, value: string): string {
-  return `*${label}:* ${value}`;
-}
-
 function buildSlackMetadataLines(metadata: readonly SlackMetadataItem[]): string[] {
-  const lines: string[] = [];
-  for (const item of metadata) {
-    lines.push(formatSlackMetadataLine(item.label, item.value));
-  }
-  return lines;
+  return metadata.map(({ label, value }) => `*${label}:* ${value}`);
 }
 
 function buildSlackMetadataContextElements(metadata: readonly SlackMetadataItem[]) {
@@ -155,35 +148,12 @@ function buildSlackMetadataContextBlocks(metadata: readonly SlackMetadataItem[])
     : [];
 }
 
-function resolveSlackApprovalDecisionLabel(
-  decision: "allow-once" | "allow-always" | "deny",
-): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
-}
-
 function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataItem[] {
   return [{ label: "Approval ID", value: view.approvalId }, ...view.metadata];
 }
 
 function resolveSlackPluginDescription(view: SlackPluginApprovalView): string {
   return normalizeOptionalString(view.description) ?? "A plugin action needs your approval.";
-}
-
-function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Request*\n${truncateSlackMrkdwn(view.title, 2600)}`,
-      },
-    },
-    ...buildSlackMetadataContextBlocks(buildSlackPluginMetadata(view)),
-  ];
 }
 
 type SlackApprovalRenderInput =
@@ -207,14 +177,7 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
           ? "An OpenClaw change needs your approval."
           : "A command needs your approval.";
   } else if (phase === "resolved") {
-    const decisionLabel =
-      isSystemAgent && view.terminalStatus === "cancelled"
-        ? "Cancelled"
-        : isSystemAgent && view.applicationStatus === "applied"
-          ? "Applied"
-          : isSystemAgent && view.applicationStatus === "not-applied"
-            ? "Not applied"
-            : resolveSlackApprovalDecisionLabel(view.decision);
+    const decisionLabel = formatChannelApprovalResolvedLabel(view);
     heading = `*${approvalName} approval: ${decisionLabel}*`;
     const resolvedBy = formatSlackApprover(view.resolvedBy);
     description = resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.";
@@ -247,18 +210,18 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
         text: `${heading}\n${headerDescription}`,
       },
     },
-    ...(view.approvalKind === "plugin"
-      ? buildSlackPluginRequestBlocks(view)
-      : [
-          {
-            type: "section" as const,
-            text: {
-              type: "mrkdwn" as const,
-              text: `${bodyLabel}\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-            },
-          },
-          ...(phase === "pending" ? buildSlackMetadataContextBlocks(view.metadata) : []),
-        ]),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${bodyLabel}\n${
+          isPlugin
+            ? truncateSlackMrkdwn(view.title, 2600)
+            : buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))
+        }`,
+      },
+    },
+    ...(includeMetadata ? buildSlackMetadataContextBlocks(metadata) : []),
   ];
   if (phase === "pending") {
     blocks.push(
@@ -273,18 +236,21 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
 
 async function updateMessage(params: {
   client: WebClient;
+  accountId: string;
   channelId: string;
   messageTs: string;
   text: string;
   blocks: SlackBlock[];
 }): Promise<void> {
   try {
-    await params.client.chat.update({
-      channel: params.channelId,
-      ts: params.messageTs,
-      text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
-      blocks: params.blocks,
-    });
+    await runSlackApprovalMessageUpdate(params, () =>
+      params.client.chat.update({
+        channel: params.channelId,
+        ts: params.messageTs,
+        text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
+        blocks: params.blocks,
+      }),
+    );
   } catch (err) {
     logError(`slack approvals: failed to update message: ${String(err)}`);
   }
@@ -359,7 +325,17 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       }
       const client = resolveApprovalClient(resolved.context, preparedTarget.teamId);
       const to = await resolveApprovalChannel(client, preparedTarget.to, preparedTarget.teamId);
-      const eventScope = resolveApprovalEventScope(client, preparedTarget.teamId);
+      const eventScope = preparedTarget.teamId
+        ? {
+            teamId: preparedTarget.teamId,
+            client,
+            writeClient: getSlackListenerWriteClient({
+              listenerClient: client,
+              teamId: preparedTarget.teamId,
+              clientOptions: resolved.context.app.webClientOptions,
+            }),
+          }
+        : undefined;
       const message = await sendMessageSlack(to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
@@ -389,6 +365,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       const client = resolveApprovalClient(resolved.context, entry.teamId);
       await updateMessage({
         client,
+        accountId: resolved.accountId,
         channelId: entry.channelId,
         messageTs: entry.messageTs,
         text: payload.text,
@@ -421,19 +398,6 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
     throw new Error("Slack Enterprise Grid approval client is unavailable");
   }
   return client;
-}
-
-function resolveApprovalEventScope(
-  client: WebClient,
-  teamId?: string,
-): SlackEventScope | undefined {
-  if (!teamId) {
-    return undefined;
-  }
-  return {
-    teamId,
-    client,
-  };
 }
 
 async function resolveApprovalChannel(client: WebClient, target: string, teamId?: string) {

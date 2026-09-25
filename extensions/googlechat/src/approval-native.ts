@@ -1,9 +1,6 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type {
-  ChannelApprovalKind,
-  ChannelApprovalNativeRuntimeAdapter,
-} from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -51,38 +48,18 @@ type ChannelApprovalForwardTarget = Parameters<
 
 const DEFAULT_APPROVAL_FORWARDING_MODE = "session";
 
-function isGoogleChatAccountConfigured(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
+function isGoogleChatApprovalTransportEnabled(params: {
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   const account = resolveGoogleChatAccount(params);
   return (
     account.enabled &&
     account.credentialSource !== "none" &&
-    account.tokenStatus !== "configured_unavailable"
+    account.tokenStatus !== "configured_unavailable" &&
+    Boolean(normalizeOptionalString(account.config.audience)) &&
+    (account.config.audienceType === "project-number" || account.config.audienceType === "app-url")
   );
-}
-
-function hasGoogleChatWebhookApprovalAuthConfig(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
-  accountId?: string | null;
-}): boolean {
-  const account = resolveGoogleChatAccount(params).config;
-  const audience = normalizeOptionalString(account.audience);
-  if (!audience) {
-    return false;
-  }
-  if (account.audienceType === "project-number") {
-    return true;
-  }
-  return account.audienceType === "app-url";
-}
-
-function isGoogleChatApprovalTransportEnabled(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
-  accountId?: string | null;
-}): boolean {
-  return isGoogleChatAccountConfigured(params) && hasGoogleChatWebhookApprovalAuthConfig(params);
 }
 
 function normalizeGoogleChatForwardTarget(
@@ -236,13 +213,13 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
     resolveOriginTarget: resolveGoogleChatOriginTarget,
     resolveApproverDmTargets: resolveGoogleChatApproverDmTargets,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+      capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
       shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
         shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .googleChatApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+        (await import("./approval-handler.runtime.js")).googleChatApprovalNativeRuntime,
     }),
   });

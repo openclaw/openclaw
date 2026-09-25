@@ -1,8 +1,8 @@
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -18,7 +18,6 @@ import {
   syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -42,15 +41,9 @@ import {
   type ApplicationUpdateOverlayHooks,
 } from "./overlays-updates.ts";
 
-function isGatewayEvent(value: unknown): value is GatewayEventFrame {
-  return Boolean(value && typeof value === "object" && "event" in value);
-}
-
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
-  hooks: ApplicationUpdateOverlayHooks & {
-    connectionBootstrap?: ConnectionBootstrapCoordinator;
-  } = {},
+  hooks: ApplicationUpdateOverlayHooks = {},
 ): ApplicationOverlays {
   const updates = createApplicationUpdateOverlays(gateway, publish, hooks);
   const runConnectionBootstrap = (key: string, task: () => Promise<unknown>) =>
@@ -217,12 +210,11 @@ export function createApplicationOverlays(
     }
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      if (operatorAccess.canReviewApprovals) {
-        void runConnectionBootstrap("approvals", () =>
-          refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
-        ).catch(() => undefined);
-      }
-    } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
+    }
+    if (
+      (connectedSourceChanged || accessTransition.reviewChanged) &&
+      operatorAccess.canReviewApprovals
+    ) {
       void runConnectionBootstrap("approvals", () =>
         refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
       ).catch(() => undefined);
@@ -231,7 +223,7 @@ export function createApplicationOverlays(
   const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (disposed || !isGatewayEvent(event)) {
+    if (disposed) {
       return;
     }
     if (event.event === "device.pair.setup.completed") {
@@ -256,6 +248,10 @@ export function createApplicationOverlays(
       updates.handleUpdateAvailable(
         event.payload as GatewayUpdateAvailableEventPayload | undefined,
       );
+      return;
+    }
+    if (event.event === GATEWAY_EVENT_UPDATE_RUN_CHANGED) {
+      updates.handleUpdateRunChanged(event.payload);
       return;
     }
     if (
@@ -287,8 +283,11 @@ export function createApplicationOverlays(
       return () => listeners.delete(listener);
     },
     refreshUpdateStatus: updates.refreshUpdateStatus,
+    acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
+    diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
+    reportUpdateFailure: updates.reportUpdateFailure,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??

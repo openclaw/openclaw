@@ -584,6 +584,18 @@ describe("Claude migration provider", () => {
       }),
     );
     await writeFile(path.join(source, ".claude", "commands", "commit.md"), "Commit $ARGUMENTS\n");
+    await writeFile(
+      path.join(source, ".claude", "commands", "team", "review.md"),
+      "Review $ARGUMENTS\n",
+    );
+    await writeFile(path.join(source, ".claude", "commands", "ignored.MD"), "Not a command\n");
+    const linkedCommands = path.join(root, "linked-commands");
+    await writeFile(path.join(linkedCommands, "outside.md"), "Outside command\n");
+    await fs.symlink(
+      linkedCommands,
+      path.join(source, ".claude", "commands", "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await writeFile(path.join(source, ".claude", "skills", "Review", "SKILL.md"), "# Review\n");
     await writeFile(path.join(source, ".claude", "agents", "reviewer.md"), "# Reviewer\n");
 
@@ -598,6 +610,11 @@ describe("Claude migration provider", () => {
       "config",
     );
     expect(planItemById(plan.items, "skill:claude-command-commit").action).toBe("create");
+    expect(
+      plan.items
+        .filter((item) => item.id.startsWith("skill:claude-command-"))
+        .map((item) => item.id),
+    ).toEqual(["skill:claude-command-commit", "skill:claude-command-team-review"]);
     expect(planItemById(plan.items, "skill:review").action).toBe("copy");
     expect(planItemById(plan.items, "archive:CLAUDE.local.md").action).toBe("archive");
     expect(planItemById(plan.items, "archive:project-agents").action).toBe("archive");
@@ -677,10 +694,8 @@ describe("Claude migration provider", () => {
     expect(generatedSkill.split("\n").find((line) => line.startsWith("description: "))).toBe(
       `description: ${JSON.stringify(commandDescriptionPrefix)}`,
     );
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md")),
-    ).resolves.toBeUndefined();
-    await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
+    await fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md"));
+    await fs.access(path.join(reportDir, "summary.md"));
   });
 
   it("backs up the whole generated skill directory before overwriting it", async () => {

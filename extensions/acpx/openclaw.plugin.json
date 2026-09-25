@@ -1,5 +1,6 @@
 {
   "id": "acpx",
+  "categories": ["agent-runtimes"],
   "backupResources": [
     {
       "disposition": "regenerable",
@@ -14,15 +15,49 @@
   ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "acpx-runtime-state-to-plugin-state" },
+      {
+        "id": "acpx-session-owner-resources",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onAgentHarnesses": ["acp-opencode", "acp-qwen", "acp-pi", "acp-kilocode", "acp-copilot"]
   },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "skills": ["./skills"],
+  "configGroups": [
+    {
+      "id": "agent-runtime",
+      "title": "Agent runtime",
+      "order": 10,
+      "properties": ["cwd", "stateDir", "probeAgent", "agents", "timeoutSeconds", "nativeAgents"]
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions",
+      "order": 20,
+      "properties": ["permissionMode", "nonInteractivePermissions"]
+    },
+    {
+      "id": "tools-and-mcp-servers",
+      "title": "Tools and MCP servers",
+      "order": 30,
+      "properties": ["pluginToolsMcpBridge", "openClawToolsMcpBridge", "mcpServers"]
+    },
+    {
+      "id": "pi-sessions",
+      "title": "Pi sessions",
+      "order": 40,
+      "properties": ["piSessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -92,6 +127,17 @@
           "required": ["command"]
         }
       },
+      "nativeAgents": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "opencode": { "type": "boolean" },
+          "qwen": { "type": "boolean" },
+          "pi": { "type": "boolean" },
+          "kilocode": { "type": "boolean" },
+          "copilot": { "type": "boolean" }
+        }
+      },
       "agents": {
         "type": "object",
         "additionalProperties": {
@@ -157,6 +203,10 @@
       "label": "MCP Servers",
       "help": "Named MCP server definitions to inject into embedded ACP session bootstrap. Each entry needs a command and can include args and env.",
       "advanced": true
+    },
+    "nativeAgents": {
+      "label": "Native agents",
+      "help": "Choose which installed agents can be used for new chat turns. Missing flags are enabled. Running turns and classic ACP sessions are unchanged."
     },
     "agents": {
       "label": "Agent Commands",

@@ -234,7 +234,7 @@ describe("runQaCharacterEval", () => {
     const judgeParams = requireRunJudgeParams(runJudge);
     expect(judgeParams.judgeModel).toBe("openai/gpt-5.6-luna");
     expect(judgeParams.judgeThinkingDefault).toBe("xhigh");
-    expect(judgeParams.judgeFastMode).toBe(false);
+    expect(judgeParams.judgeFastMode).toBe(true);
     expect(judgeParams.timeoutMs).toBe(300_000);
     expect(result.judgments).toHaveLength(1);
     expect(result.judgments[0]?.rankings.map((ranking) => ranking.model)).toEqual([
@@ -516,7 +516,7 @@ describe("runQaCharacterEval", () => {
     ]);
     expect(runJudge).toHaveBeenCalledTimes(2);
     expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
-      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
       "anthropic/claude-opus-4-8",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([

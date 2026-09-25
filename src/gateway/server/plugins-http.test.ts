@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -52,6 +53,10 @@ function createMockUpgradeSocket() {
     destroyed: false,
     write(chunk: string) {
       socket.chunks.push(chunk);
+    },
+    end(chunk: string, callback: () => void) {
+      socket.write(chunk);
+      callback();
     },
     destroy() {
       socket.destroyed = true;
@@ -179,6 +184,26 @@ async function invokeCanvasGatewayUpgrade(params: { gatewayAuthSatisfied: boolea
 describe("createGatewayPluginRequestHandler", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("fences an identity-preserved route after its plugin instance retires", async () => {
+    const instance = new PluginInstance("identity-route");
+    const routeHandler = instance.adopt(vi.fn(async () => true));
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [createRoute({ path: "/identity", handler: routeHandler })],
+      }),
+      log,
+    });
+    await instance.dispose();
+
+    const { res } = makeMockHttpResponse();
+    await expect(handler({ url: "/identity" } as IncomingMessage, res)).resolves.toBe(true);
+    expect(routeHandler).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Plugin identity-route was reloaded or disabled"),
+    );
   });
 
   it("keeps unauthenticated plugin routes off operator runtime scopes", async () => {

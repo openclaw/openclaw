@@ -12,6 +12,7 @@ import {
   sanitizeForPlainText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
@@ -22,6 +23,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageMessageActions } from "./actions.js";
 import {
@@ -67,6 +69,44 @@ type IMessageMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
   conversationReadOrigin?: "delegated" | "direct-operator";
 };
+
+type IMessageOutboundContext = Omit<
+  Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
+  "onDeliveryResult"
+>;
+type IMessageOutboundOptions = Pick<
+  Parameters<Awaited<ReturnType<typeof loadIMessageChannelRuntime>>["sendIMessageOutbound"]>[0],
+  "conversationReadOrigin" | "onDeliveryResult"
+>;
+
+async function sendIMessageOutbound(
+  ctx: IMessageOutboundContext,
+  kind: "text" | "media",
+  options: IMessageOutboundOptions = {},
+) {
+  return await (
+    await loadIMessageChannelRuntime()
+  ).sendIMessageOutbound({
+    cfg: ctx.cfg,
+    to: ctx.to,
+    text: ctx.text,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+    replyToId: ctx.replyToId ?? undefined,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    ...options,
+    ...(kind === "media"
+      ? {
+          mediaUrl: ctx.mediaUrl,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
+          audioAsVoice: ctx.audioAsVoice,
+        }
+      : {}),
+  });
+}
 
 function toIMessageMessageSendResult(
   result: {
@@ -125,7 +165,7 @@ async function registerDeliveredIMessageApprovalPayload(
     payload: params.payload,
     results: params.results,
   });
-  (
+  await (
     await loadIMessageApprovalReactionsModule()
   ).registerIMessageApprovalReactionTargetForDeliveredPayload({
     accountId,
@@ -147,35 +187,14 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
   },
   send: {
     text: async (ctx) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
+      const result = await sendIMessageOutbound(ctx, "text", {
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
       });
       return toIMessageMessageSendResult(result, "text", ctx.replyToId);
     },
     media: async (ctx) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaAccess: ctx.mediaAccess,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        audioAsVoice: ctx.audioAsVoice,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
+      const result = await sendIMessageOutbound(ctx, "media", {
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
         ...(ctx.onDeliveryResult
@@ -359,9 +378,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             if (!chatType) {
               return null;
             }
+            const parsed = parseIMessageTarget(to);
+            const display =
+              parsed.kind === "handle" &&
+              !isCanonicalIMessageDirectHandle(parsed.to, normalizeIMessageHandle(parsed.to))
+                ? parsed.to.trim()
+                : undefined;
             return {
               to,
               kind: chatType === "direct" ? "user" : "group",
+              ...(display ? { display } : {}),
               source: "normalized" as const,
             };
           },
@@ -417,12 +443,49 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     pairing: {
       text: {
         idLabel: "imessageSenderId",
-        message: "OpenClaw: your access has been approved.",
-        notify: async ({ id, cfg }) =>
-          await (await loadIMessageChannelRuntime()).notifyIMessageApproval({ id, cfg }),
+        message: PAIRING_APPROVED_MESSAGE,
+        notify: async (params) => {
+          await (
+            await loadIMessageChannelRuntime()
+          ).sendIMessageOutbound({
+            ...params,
+            to: params.id,
+            text: params.message,
+          });
+        },
       },
     },
     security: imessageSecurityAdapter,
+    threading: {
+      resolveReplyTransport: ({
+        cfg,
+        accountId,
+        replyToId,
+        currentMessageId,
+        replyToCurrent,
+        replyToIsExplicit,
+        replyDelivery,
+      }) => {
+        const account = resolveIMessageAccount({ cfg, accountId });
+        if (account.config.actions?.reply === false) {
+          return { replyToId: null };
+        }
+        const existingReplyToId = normalizeOptionalString(replyToId);
+        const explicitCurrentReply = replyToIsExplicit === true && replyToCurrent === true;
+        // Queued replies carry the originating message separately from explicit reply targets.
+        const implicitReplyToId =
+          replyToCurrent === false ||
+          (replyDelivery?.replyToMode === "off" && !explicitCurrentReply)
+            ? undefined
+            : normalizeOptionalString(currentMessageId);
+        return {
+          replyToId: existingReplyToId ?? implicitReplyToId ?? null,
+          ...(!existingReplyToId && !explicitCurrentReply && implicitReplyToId
+            ? { replyToIdSource: "implicit" as const }
+            : {}),
+        };
+      },
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
@@ -460,61 +523,27 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       attachedResults: {
         channel: "imessage",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
-          await (
-            await loadIMessageChannelRuntime()
-          ).sendIMessageOutbound({
-            cfg,
-            to,
-            text,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId: replyToId ?? undefined,
-          }),
-        sendMedia: async ({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          audioAsVoice,
-          accountId,
-          deps,
-          replyToId,
-          onDeliveryResult,
-        }) =>
-          await (
-            await loadIMessageChannelRuntime()
-          ).sendIMessageOutbound({
-            cfg,
-            to,
-            text,
-            mediaUrl,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            audioAsVoice,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId: replyToId ?? undefined,
-            ...(onDeliveryResult
+        sendText: (ctx) => sendIMessageOutbound(ctx, "text"),
+        sendMedia: (ctx) =>
+          sendIMessageOutbound(
+            ctx,
+            "media",
+            ctx.onDeliveryResult
               ? {
                   onDeliveryResult: async (result) => {
-                    await onDeliveryResult({
+                    await ctx.onDeliveryResult?.({
                       channel: "imessage",
                       ...toIMessageMessageSendResult(
                         result,
-                        audioAsVoice ? "voice" : "media",
-                        replyToId,
+                        ctx.audioAsVoice ? "voice" : "media",
+                        ctx.replyToId,
                       ),
                       messageId: result.messageId,
                     });
                   },
                 }
-              : {}),
-          }),
+              : {},
+          ),
       },
     },
   });

@@ -1,10 +1,8 @@
 // Codex plugin module implements command handlers behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { refreshCodexPluginRuntimeState } from "./app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
@@ -15,7 +13,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
+import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
@@ -70,6 +70,7 @@ import {
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
+import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
 export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
@@ -113,6 +114,23 @@ export async function handleCodexSubcommand(
     return { text: sandboxBlock };
   }
   if (normalized === "plugins") {
+    // Account-wide hosted refresh does not require plugin-management configuration IO.
+    if (rest[0]?.toLowerCase() === "refresh") {
+      if (rest.length !== 1) {
+        return {
+          text: "Usage: /codex plugins refresh — refresh hosted app inventory for the current Codex account/runtime.",
+        };
+      }
+      if (!canMutateCodexHost(ctx)) {
+        return {
+          text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
+        };
+      }
+      return await withCodexPluginCommandContext(
+        { deps, ctx, pluginConfig: options.pluginConfig },
+        (context) => refreshCodexHostedApps(context),
+      );
+    }
     if (!deps.codexPluginsManagementIo) {
       return {
         text:
@@ -124,6 +142,8 @@ export async function handleCodexSubcommand(
     const getAppServerScope = () =>
       (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
     return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
+      withContext: (run) =>
+        withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
       workspaceDir: async () => {
         const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
         const workspaceDir =
@@ -145,7 +165,11 @@ export async function handleCodexSubcommand(
           options.pluginConfig,
           CODEX_CONTROL_METHODS.installPlugin,
           requestParams,
-          { ...scope, config: ctx.config },
+          {
+            ...scope,
+            config: ctx.config,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+          },
         )) as v2.PluginInstallResponse;
       },
       refresh: async (workspaceDir) => {
@@ -181,7 +205,6 @@ export async function handleCodexSubcommand(
             appServerVersion: client.getServerVersion(),
             runtimeIdentity: client.getRuntimeIdentity(),
           });
-          defaultCodexPluginMetadataCache.invalidate(appCacheKey);
           return await refreshCodexPluginRuntimeState({
             configCwd: workspaceDir,
             appCache: defaultCodexAppInventoryCache,
@@ -258,11 +281,11 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex stop" };
     }
-    return { text: await stopConversationTurn(deps, ctx, options.pluginConfig) };
+    return { text: await stopConversationTurn(deps, ctx) };
   }
   if (normalized === "steer") {
     return {
-      text: await steerConversationTurn(deps, ctx, options.pluginConfig, rest.join(" ")),
+      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
     };
   }
   if (normalized === "model") {
@@ -367,6 +390,7 @@ export async function handleCodexSubcommand(
         await readCodexAccountAuthOverview({
           ctx,
           agentDir: scope.agentDir,
+          authProfileId: scope.authProfileId,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -381,11 +405,7 @@ export async function handleCodexSubcommand(
 function resolvePluginRuntimeRefreshMethod(method: string) {
   const supported = [
     CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.listSkills,
-    CODEX_CONTROL_METHODS.listHooks,
-    CODEX_CONTROL_METHODS.reloadMcpServers,
     CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.listApps,
     CODEX_CONTROL_METHODS.readApps,
   ] as const;
   const recognized = supported.find((candidate) => candidate === method);

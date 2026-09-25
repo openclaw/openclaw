@@ -42,14 +42,6 @@ type OpenRouterAudioStreamAccumulator = {
   maxBytes: number;
 };
 
-function resolveOpenRouterMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
-}
-
-function outputFormatToMimeType(format: "mp3" | "wav" | undefined): string {
-  return format === "mp3" ? "audio/mpeg" : "audio/wav";
-}
-
 function imageToContentPart(image: MusicGenerationSourceImage): {
   type: "image_url";
   image_url: { url: string };
@@ -93,7 +85,7 @@ function buildOpenRouterMessageContent(
   if (images.length === 0) {
     return prompt;
   }
-  return [{ type: "text", text: prompt }, ...images.map((image) => imageToContentPart(image))];
+  return [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
 }
 
 function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
@@ -151,11 +143,7 @@ function appendDecodedOpenRouterMusicAudio(
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
   }
   const buffer = Buffer.from(canonicalAudio, "base64");
-  const nextBytes = result.audioBytes + buffer.byteLength;
-  if (nextBytes > result.maxBytes) {
-    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
-  }
-  result.audioBytes = nextBytes;
+  result.audioBytes += buffer.byteLength;
   result.audioBuffers.push(buffer);
 }
 
@@ -240,9 +228,6 @@ async function readOpenRouterStreamChunk(
         }, timeoutMs);
       }),
     ]);
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -269,9 +254,8 @@ async function readOpenRouterAudioStream(
     maxBytes,
   };
   const maxEventBytes = resolveOpenRouterSseEventMaxBytes(maxBytes);
-  let buffer = "";
+  const lineFragments: string[] = [];
   let pendingBytes = 0;
-  let doneSeen = false;
   try {
     for (;;) {
       const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
@@ -286,38 +270,39 @@ async function readOpenRouterAudioStream(
           );
         }
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/u);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
+      const chunk = decoder.decode(value, { stream: true });
+      let start = 0;
+      // Audio events can span many chunks; scan only new text and join each line once.
+      for (let end = chunk.indexOf("\n"); end !== -1; end = chunk.indexOf("\n", start)) {
+        let line = chunk.slice(start, end);
+        start = end + 1;
+        if (lineFragments.length > 0) {
+          lineFragments.push(line);
+          line = lineFragments.join("");
+          lineFragments.length = 0;
+        }
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          // Once [DONE] is observed, the generated result is authoritative.
-          // Cancellation is cleanup and must not replace it with a transport error.
-          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
           };
         }
       }
+      if (start < chunk.length) {
+        lineFragments.push(chunk.slice(start));
+      }
     }
     resolveOpenRouterStreamRemainingMs(deadline);
-    buffer += decoder.decode();
+    lineFragments.push(decoder.decode());
+    const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
     if (pendingBytes > maxEventBytes) {
       throw new Error(
         `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
       );
     }
-    if (buffer.trim()) {
-      for (const line of buffer.split(/\r?\n/u)) {
-        if (processOpenRouterSseLine(line.trim(), result)) {
-          doneSeen = true;
-        }
-      }
-    }
-    if (!doneSeen) {
+    if (!processOpenRouterSseLine(buffer.trim(), result)) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
     flushOpenRouterMusicAudio(result);
@@ -325,10 +310,10 @@ async function readOpenRouterAudioStream(
       audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
       transcript: result.transcriptChunks.join(""),
     };
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
   } finally {
+    // A capture tee can keep cancellation pending until its sibling finishes.
+    // Release the reader without waiting so the request owner can abort transport.
+    void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {}
@@ -376,7 +361,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           capability: "audio",
           jsonContentType: true,
         });
-      const model = resolveOpenRouterMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
       const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
       const streamDeadline = createProviderOperationDeadline({
@@ -414,7 +399,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           tracks: [
             {
               buffer: streamResult.audioBuffer,
-              mimeType: outputFormatToMimeType(format),
+              mimeType: format === "mp3" ? "audio/mpeg" : "audio/wav",
               fileName: `track-1.${format}`,
             },
           ],

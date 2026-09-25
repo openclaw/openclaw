@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -27,6 +28,18 @@ const messages = [
     __openclaw: { senderName: "Sam", senderId: "sam@example.invalid" },
     content: "I will verify the build.",
   },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "build-check",
+        name: "exec",
+        arguments: { command: "synthetic-check" },
+      },
+    ],
+  },
+  { role: "toolResult", toolCallId: "build-check", content: "  Build verification passed.\n" },
   {
     role: "assistant",
     senderLabel: "Review assistant",
@@ -84,13 +97,25 @@ suite.define(() => {
           } else {
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
-            await row.getByRole("button", { name: "Open session menu: Release planning" }).click();
+            await row.click({ button: "right" });
             await openSessionMenuSubmenu(page, "Copy");
-            await captureUiProof(suite, page, "copy-menu.png");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",
               exact: true,
             });
+            if (captureUiProofEnabled) {
+              await waitForControlUiProofSurface(
+                page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+                [page.getByRole("menuitem", { name: "Copy", exact: true })],
+              );
+            }
+            await captureUiProof(
+              suite,
+              page,
+              "copy-menu.png",
+              page.getByRole("menuitem", { name: "Copy", exact: true }).locator('[part="submenu"]'),
+              [copy],
+            );
             await copy.click({ trial: true });
             await activateSelfRemovingControl(copy);
             await expect.poll(() => page.locator(".app-toast").textContent()).toContain("Copied");
@@ -101,13 +126,27 @@ suite.define(() => {
             await writeFile(path.join(suite.artifactDir, `${action}.md`), markdown);
             const preview = await context.newPage();
             await preview.goto(`data:text/plain;charset=utf-8,${encodeURIComponent(markdown)}`);
-            await captureUiProof(suite, preview, `${action}-markdown.png`);
+            await captureUiProof(
+              suite,
+              preview,
+              `${action}-markdown.png`,
+              preview.locator("body"),
+              [preview.locator("pre")],
+            );
             await preview.close();
           }
-          expect(markdown.match(/^## .+$/gm)).toEqual(["## Alex", "## Sam", "## Review assistant"]);
+          expect(markdown.match(/^## .+$/gm)).toEqual([
+            "## Alex",
+            "## Sam",
+            "## Tool",
+            "## Review assistant",
+          ]);
           for (const message of messages) {
-            expect(markdown).toContain(message.content);
+            if (typeof message.content === "string") {
+              expect(markdown).toContain(message.content);
+            }
           }
+          expect(markdown).not.toContain("synthetic-check");
         },
       );
     },

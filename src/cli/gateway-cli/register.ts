@@ -7,10 +7,7 @@ import { colorize, isRich, theme } from "../../../packages/terminal-core/src/the
 import type { HealthSummary } from "../../commands/health.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import type {
-  DiagnosticStabilityBundle,
-  ReadDiagnosticStabilityBundleResult,
-} from "../../logging/diagnostic-stability-bundle.js";
+import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
 import type {
   DiagnosticStabilityEventRecord,
   DiagnosticStabilitySnapshot,
@@ -147,12 +144,13 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
+  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),
-    `${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
+    `${cachePrefix}${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
   ];
 
   if (summary.totals.missingCostEntries > 0) {
@@ -277,26 +275,6 @@ function normalizeStabilityBundleTarget(raw: unknown): string | null {
   return value === "" ? "latest" : value;
 }
 
-function formatBundleError(result: ReadDiagnosticStabilityBundleResult): string {
-  if (result.status === "missing") {
-    return `No stability bundles found in ${result.dir}`;
-  }
-  if (result.status === "failed") {
-    return result.error instanceof Error ? result.error.message : String(result.error);
-  }
-  return "Unexpected stability bundle read result";
-}
-
-async function readStabilityBundleTarget(
-  bundleTarget: string,
-): Promise<ReadDiagnosticStabilityBundleResult> {
-  const { readDiagnosticStabilityBundleFileSync, readLatestDiagnosticStabilityBundleSync } =
-    await loadStabilityBundleModule();
-  return bundleTarget === "latest"
-    ? readLatestDiagnosticStabilityBundleSync()
-    : readDiagnosticStabilityBundleFileSync(bundleTarget);
-}
-
 function renderStabilityBundleSummary(params: {
   bundle: DiagnosticStabilityBundle;
   path: string;
@@ -393,7 +371,7 @@ function resolveSupportExportRpcOptions(
 }
 
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(raw);
@@ -489,6 +467,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("call")
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
+      .option(
+        "--expect-url <url>",
+        "Fail if the resolved Gateway URL differs; preserves configured authentication",
+      )
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
@@ -701,9 +683,21 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               return;
             }
             if (bundleTarget) {
-              const result = await readStabilityBundleTarget(bundleTarget);
-              if (result.status !== "found") {
-                throw new Error(formatBundleError(result));
+              const {
+                readDiagnosticStabilityBundleFileSync,
+                readLatestDiagnosticStabilityBundleSync,
+              } = await loadStabilityBundleModule();
+              const result =
+                bundleTarget === "latest"
+                  ? readLatestDiagnosticStabilityBundleSync()
+                  : readDiagnosticStabilityBundleFileSync(bundleTarget);
+              if (result.status === "missing") {
+                throw new Error(`No stability bundles found in ${result.dir}`);
+              }
+              if (result.status === "failed") {
+                throw new Error(
+                  result.error instanceof Error ? result.error.message : String(result.error),
+                );
               }
               const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
               if (rpcOpts.json) {
@@ -831,15 +825,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
         async () => {
           const [
             { readSourceConfigBestEffort },
-            { discoverGatewayBeacons },
+            { discoverGatewayBeacons, resolveGatewayDiscoveryEndpoint },
             { resolveWideAreaDiscoveryDomain },
-            {
-              dedupeBeacons,
-              parseDiscoverTimeoutMs,
-              pickBeaconHost,
-              pickGatewayPort,
-              renderBeaconLines,
-            },
+            { dedupeBeacons, renderBeaconLines },
             { withProgress },
           ] = await Promise.all([
             loadConfigModule(),
@@ -852,7 +840,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           const wideAreaDomain = resolveWideAreaDiscoveryDomain({
             configDomain: cfg.discovery?.wideArea?.domain,
           });
-          const timeoutMs = parseDiscoverTimeoutMs(opts.timeout, 2000);
+          const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 2000, {
+            invalidType: "error",
+          });
           const domains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
           const beacons = await withProgress(
             {
@@ -869,12 +859,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           );
 
           if (opts.json) {
-            const enriched = deduped.map((b) => {
-              const host = pickBeaconHost(b);
-              const port = pickGatewayPort(b);
-              const scheme = b.gatewayTls === true ? "wss" : "ws";
-              return { ...b, wsUrl: host ? `${scheme}://${host}:${port}` : null };
-            });
+            const enriched = deduped.map((beacon) => ({
+              ...beacon,
+              wsUrl: resolveGatewayDiscoveryEndpoint(beacon)?.wsUrl ?? null,
+            }));
             defaultRuntime.writeJson({
               timeoutMs,
               domains,

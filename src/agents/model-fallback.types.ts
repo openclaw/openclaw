@@ -1,10 +1,7 @@
-/**
- * Shared candidate and attempt types for model fallback execution.
- */
 import type { FailoverReason } from "./failover/signal.js";
 
-// Shared model fallback record types used by selection, observation, and retry
-// reporting.
+export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
+
 export type ModelCandidate = {
   provider: string;
   model: string;

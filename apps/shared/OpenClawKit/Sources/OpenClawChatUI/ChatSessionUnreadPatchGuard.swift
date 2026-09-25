@@ -122,6 +122,7 @@ final class ChatSessionUnreadMutationQueue {
         routeLease: Task<OpenClawChatSessionMutationRouteLease?, Never>,
         queueKey: String,
         routeKey: String,
+        agentID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
         unread: Bool) -> Task<Void, Error>
     {
@@ -136,6 +137,7 @@ final class ChatSessionUnreadMutationQueue {
             }
             try await resolvedRouteLease.patchSession(
                 key: routeKey,
+                agentID: agentID,
                 expectedMarkedUnreadAt: expectedMarkedUnreadAt,
                 label: nil,
                 category: nil,

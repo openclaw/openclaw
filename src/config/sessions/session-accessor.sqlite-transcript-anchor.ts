@@ -9,13 +9,13 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 /** Reads one active message identity from the caller's current SQLite transaction. */
 export function readActiveTranscriptEntryAnchorInTransaction(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db" | "path">;
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
@@ -49,7 +49,31 @@ export function readActiveTranscriptEntryAnchorInTransaction(params: {
       .where("identity.event_id", "=", params.entryId)
       .limit(1),
   );
-  if (row?.message_position === null || row?.message_position === undefined) {
+  return createTranscriptEntryAnchor({ ...params, row });
+}
+
+/** Projects anchor fields after the caller verifies readiness in the same snapshot. */
+export function createTranscriptEntryAnchor(params: {
+  database: Pick<OpenClawAgentDatabase, "path">;
+  resolved: ResolvedTranscriptScope;
+  entryId: string;
+  message?: unknown;
+  row:
+    | {
+        seq: number;
+        parent_id: string | null;
+        message_idempotency_key: string | null;
+        message_position: number | null;
+        generation: string | null;
+      }
+    | undefined;
+}): TranscriptEntryAnchor | undefined {
+  const { row } = params;
+  if (
+    row?.message_position === null ||
+    row?.message_position === undefined ||
+    row.generation === null
+  ) {
     return undefined;
   }
   const idempotencyKey = row.message_idempotency_key ?? readMessageIdempotencyKey(params.message);

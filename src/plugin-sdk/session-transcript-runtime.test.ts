@@ -13,6 +13,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -21,6 +22,7 @@ import {
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionYieldContext,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
@@ -442,39 +444,90 @@ describe("session transcript runtime SDK", () => {
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("rejects an assistant mirror after its admitted writer is superseded", async () => {
+  it.each(["assistant mirror", "yield context"])(
+    "rejects %s after its admitted writer is superseded",
+    async (operation) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "superseded-mirror-session",
+        sessionKey: "agent:main:superseded-mirror",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, {
+        activeWriterRunId: "replacement-run",
+        lifecycleRevision: "revision-a",
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      });
+
+      await expect(
+        withOwnedSessionTranscriptWrites(
+          {
+            sessionKey: scope.sessionKey,
+            sessionTarget: {
+              ...scope,
+              expectedLifecycleRevision: "revision-a",
+              expectedWriterRunId: "superseded-run",
+            },
+            withTranscriptWrite: async (run) => await run(),
+          },
+          async () => {
+            if (operation === "yield context") {
+              await appendSessionYieldContext({
+                ...scope,
+                message: "must not be persisted",
+                assertCurrent: () => {},
+              });
+              return;
+            }
+            await appendAssistantMirrorMessageByIdentity({
+              ...scope,
+              idempotencyKey: "superseded:fallback",
+              text: "must not be persisted",
+            });
+          },
+        ),
+      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+    },
+  );
+
+  it("rechecks yield settlement authority after waiting for the transcript writer", async () => {
     const scope = {
       agentId: "main",
-      sessionId: "superseded-mirror-session",
-      sessionKey: "agent:main:superseded-mirror",
+      sessionId: "yield-settlement-session",
+      sessionKey: "agent:main:yield-settlement",
       storePath,
     };
-    await upsertSessionEntryCore(scope, {
-      activeWriterRunId: "replacement-run",
-      lifecycleRevision: "revision-a",
-      sessionId: scope.sessionId,
-      updatedAt: 10,
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    let active = true;
+    const stopped = new Error("yield settlement stopped");
+    const writerEntered = createDeferredCore();
+    const releaseWriter = createDeferredCore();
+    const heldWriter = withSessionTranscriptWriteLock(scope, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
     });
-
-    await expect(
-      withOwnedSessionTranscriptWrites(
-        {
-          sessionKey: scope.sessionKey,
-          sessionTarget: {
-            ...scope,
-            expectedLifecycleRevision: "revision-a",
-            expectedWriterRunId: "superseded-run",
-          },
-          withTranscriptWrite: async (run) => await run(),
+    await writerEntered.promise;
+    try {
+      const write = appendSessionYieldContext({
+        ...scope,
+        message: "private continuation",
+        assertCurrent: () => {
+          if (!active) {
+            throw stopped;
+          }
         },
-        async () =>
-          await appendAssistantMirrorMessageByIdentity({
-            ...scope,
-            idempotencyKey: "superseded:fallback",
-            text: "must not be persisted",
-          }),
-      ),
-    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      });
+      const rejected = expect(write).rejects.toBe(stopped);
+      active = false;
+      releaseWriter.resolve();
+      await heldWriter;
+      await rejected;
+    } finally {
+      releaseWriter.resolve();
+      await heldWriter;
+    }
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
@@ -655,38 +708,6 @@ describe("session transcript runtime SDK", () => {
     expect(target).not.toHaveProperty("sessionFile");
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
     expect(fs.existsSync(scope.sessionFile)).toBe(false);
-  });
-
-  it("appends messages by the same explicit scoped transcript target", async () => {
-    const scope = {
-      agentId: "main",
-      sessionFile: path.join(tempDir, "mirror-target.jsonl"),
-      sessionId: "mirror-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "hello" }],
-      timestamp: 1,
-    };
-
-    const appended = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message,
-    });
-
-    expect(appended).toBeDefined();
-    expect(appended?.message).toMatchObject(message);
-    await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
-      id: appended?.messageId,
-      text: "hello",
-      timestamp: 1,
-    });
-    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-    ]);
   });
 
   it("publishes internal updates for SQLite transcript identity", async () => {

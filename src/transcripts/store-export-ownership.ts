@@ -2,40 +2,31 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256File } from "../infra/crypto-digest.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isCaseSensitiveDirectory, TRANSCRIPT_EXPORT_FILE_NAMES } from "./store-artifacts.js";
 import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
-import {
-  isCaseSensitiveDirectory,
-  TRANSCRIPT_EXPORT_FILE_NAMES,
-  transcriptSessionExportKey,
-  transcriptSessionSelector,
-} from "./store-artifacts.js";
-import { meetingTranscriptDb, type MeetingTranscriptSessionRow } from "./store-sqlite.js";
+  parseTranscriptExportManifest,
+  parseTranscriptPendingExports,
+} from "./store-export-state.js";
+import type {
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
+} from "./store-sqlite-read.js";
+import type { MeetingTranscriptSessionRow } from "./store-sqlite.js";
 
 type ExportOwnershipParams = {
-  session: TranscriptSessionDescriptor;
+  selector: string;
   exportRootDir: string;
-  databaseOptions: OpenClawStateDatabaseOptions;
 };
-
-function database(options: OpenClawStateDatabaseOptions) {
-  ensureMeetingTranscriptsSchema(options);
-  return openOpenClawStateDatabase(options);
-}
 
 async function transcriptArtifactsMatchOwner(
   sessionDir: string,
   artifacts: Array<{ entry: { name: string }; canonicalName: string }>,
   owner: Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">,
 ): Promise<boolean> {
-  const manifest = JSON.parse(owner.export_manifest_json) as Record<string, string>;
-  const pending = new Set(JSON.parse(owner.export_pending_json) as string[]);
+  const manifest = parseTranscriptExportManifest(owner.export_manifest_json);
+  const pending = parseTranscriptPendingExports(owner.export_pending_json);
   // Pending, altered, or symlinked artifacts must never establish aliased ownership.
   for (const { entry, canonicalName } of artifacts) {
     const artifactPath = path.join(sessionDir, entry.name);
@@ -55,17 +46,11 @@ async function transcriptArtifactsMatchOwner(
 }
 
 export async function assertTranscriptExportPathAvailable(
-  params: ExportOwnershipParams,
+  params: ExportOwnershipParams & {
+    collisions: ReturnType<typeof readTranscriptExportPathCollisions>;
+  },
 ): Promise<void> {
-  const stateDatabase = database(params.databaseOptions);
-  const collisions = executeSqliteQuerySync(
-    stateDatabase.db,
-    meetingTranscriptDb(stateDatabase.db)
-      .selectFrom("meeting_transcript_sessions")
-      .select(["session_id", "started_at", "selector", "export_pending_json"])
-      .where("export_key", "=", transcriptSessionExportKey(params.session))
-      .orderBy("selector", "asc"),
-  ).rows;
+  const { collisions } = params;
   if (collisions.length <= 1) {
     return;
   }
@@ -91,47 +76,37 @@ export async function assertTranscriptExportPathAvailable(
       (row) => row.session_id === metadata.sessionId && row.started_at === metadata.startedAt,
     )?.selector;
   } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
-      if (!(error instanceof SyntaxError)) {
-        throw error;
-      }
+    if (!hasErrnoCode(error, "ENOENT") && !(error instanceof SyntaxError)) {
+      throw error;
     }
   }
   if (!ownerSelector) {
     const pendingOwners = collisions.filter((row) =>
-      (JSON.parse(row.export_pending_json) as string[]).includes("metadata.json"),
+      parseTranscriptPendingExports(row.export_pending_json).has("metadata.json"),
     );
     if (pendingOwners.length === 1) {
       ownerSelector = pendingOwners[0]?.selector;
     }
   }
-  ownerSelector ??= transcriptSessionSelector(params.session);
-  if (ownerSelector !== transcriptSessionSelector(params.session)) {
+  ownerSelector ??= params.selector;
+  if (ownerSelector !== params.selector) {
     throw new Error(
-      `transcript export path collides case-insensitively with another session: ${path.join(params.exportRootDir, transcriptSessionSelector(params.session))}`,
+      `transcript export path collides case-insensitively with another session: ${path.join(params.exportRootDir, params.selector)}`,
     );
   }
 }
 
 export async function hasAliasedCanonicalTranscriptExportPathOwner(
-  params: ExportOwnershipParams,
+  params: ExportOwnershipParams & { owners: ReturnType<typeof readTranscriptExportPathOwners> },
 ): Promise<boolean> {
-  const stateDatabase = database(params.databaseOptions);
-  const owners = executeSqliteQuerySync(
-    stateDatabase.db,
-    meetingTranscriptDb(stateDatabase.db)
-      .selectFrom("meeting_transcript_sessions")
-      .select(["session_id", "started_at", "export_manifest_json", "export_pending_json"])
-      .where("export_key", "=", transcriptSessionExportKey(params.session))
-      .orderBy("selector", "asc"),
-  ).rows;
+  const { owners } = params;
   if (owners.length === 0) {
     return false;
   }
   try {
     await fs.access(params.exportRootDir);
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -139,12 +114,12 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   if (await isCaseSensitiveDirectory(params.exportRootDir)) {
     return false;
   }
-  const sessionDir = path.join(params.exportRootDir, transcriptSessionSelector(params.session));
+  const sessionDir = path.join(params.exportRootDir, params.selector);
   let entries;
   try {
     entries = await fs.readdir(sessionDir, { withFileTypes: true });
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return true;
     }
     throw error;

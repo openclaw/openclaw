@@ -1,12 +1,4 @@
-// Keep the runtime class on the public package specifier so OpenClaw and
-// external consumers share one constructor identity.
-import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
-import type {
-  AssistantMessage,
-  EventStream,
-  ToolResultMessage,
-  EventStream as SourceEventStream,
-} from "@openclaw/llm-core";
+import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -34,13 +26,11 @@ import {
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
-  createInterruptedTurnMessage,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
   ToolResultContentSource,
   AgentContext,
-  AgentEvent,
   AgentLoopConfig,
   AgentMessage,
   AgentTool,
@@ -55,11 +45,9 @@ import { validateToolArguments } from "./validation.js";
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type { AgentEventSink } from "./agent-stream-response.js";
 
-const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
-
 const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
   "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
-const STEERING_TOOL_SKIP_MESSAGE = "Skipped due to queued user message.";
+const STEERING_TOOL_SKIP_MESSAGE = "Skipped to process an incoming message.";
 const TOOL_ADMISSION_FAILURE_MESSAGE = "Tool execution was blocked before launch.";
 const TOOL_ADMISSION_FAILURE_DETAILS = {
   status: "blocked",
@@ -74,48 +62,6 @@ function getSteeringAtCheckpoint(
     return [];
   }
   return getInternalSyncSteeringGetter(callback)?.() ?? callback.call(config);
-}
-
-/**
- * Start an agent loop with a new prompt message.
- * The prompt is added to the context and events are emitted for it.
- */
-export function agentLoop(
-  prompts: AgentMessage[],
-  context: AgentContext,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): EventStream<AgentEvent, AgentMessage[]> {
-  return streamAgentRun(
-    (emit) => runAgentLoop(prompts, context, config, emit, signal, streamFn, runtime),
-    config,
-    signal,
-  );
-}
-
-/**
- * Continue an agent loop from the current context without adding a new message.
- * Used for retries - context already has user message or tool results.
- *
- * **Important:** The last message in context must convert to a `user` or `toolResult` message
- * via `convertToLlm`. If it doesn't, the LLM provider will reject the request.
- * This cannot be validated here since `convertToLlm` is only called once per turn.
- */
-export function agentLoopContinue(
-  context: AgentContext,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): EventStream<AgentEvent, AgentMessage[]> {
-  assertContinuableContext(context);
-  return streamAgentRun(
-    (emit) => runAgentLoopContinue(context, config, emit, signal, streamFn, runtime),
-    config,
-    signal,
-  );
 }
 
 /** Run a prompt-started loop and emit events through a caller-owned sink. */
@@ -154,18 +100,6 @@ function assertContinuableContext(context: AgentContext): void {
   }
 }
 
-function streamAgentRun(
-  run: (emit: AgentEventSink) => Promise<AgentMessage[]>,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-): EventStream<AgentEvent, AgentMessage[]> {
-  const stream = createAgentStream();
-  void run((event) => stream.push(event))
-    .then((messages) => stream.end(messages))
-    .catch((error: unknown) => pushLoopFailure(stream, config, error, signal));
-  return stream;
-}
-
 async function runAgentLoopCore(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -198,34 +132,6 @@ async function runAgentLoopCore(
     return [];
   }
   return runLoop(state, newMessages, config, signal, emit, streamFn, runtime);
-}
-
-function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-  return new EventStreamConstructor<AgentEvent, AgentMessage[]>(
-    (event: AgentEvent) => event.type === "agent_end",
-    (event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
-  );
-}
-
-function pushLoopFailure(
-  stream: EventStream<AgentEvent, AgentMessage[]>,
-  config: AgentLoopConfig,
-  error: unknown,
-  signal: AbortSignal | undefined,
-): void {
-  const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted);
-  stream.push({ type: "message_start", message: failureMessage });
-  stream.push({ type: "message_end", message: failureMessage });
-  stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
-  const messages: AgentMessage[] = [failureMessage];
-  if (aborted && !isTurnHandoffAbort(signal)) {
-    const interruption = createInterruptedTurnMessage();
-    messages.push(interruption);
-    stream.push({ type: "message_start", message: interruption });
-    stream.push({ type: "message_end", message: interruption });
-  }
-  stream.push({ type: "agent_end", messages });
 }
 
 /**
@@ -283,6 +189,29 @@ async function runLoop(
     return true;
   };
 
+  const commitPendingMessages = async () => {
+    const messagesToInject = pendingMessages;
+    pendingMessages = [];
+    let injectedMessage = false;
+    for (const message of messagesToInject) {
+      if (config.consumeQueuedMessageCancellation?.(message)) {
+        continue;
+      }
+      await emit({ type: "message_start", message });
+      if (config.consumeQueuedMessageCancellation?.(message)) {
+        continue;
+      }
+      if (message.role === "user") {
+        turnTainted = false;
+      }
+      await emit({ type: "message_end", message });
+      state.context.messages.push(message);
+      newMessages.push(message);
+      injectedMessage = true;
+    }
+    return injectedMessage;
+  };
+
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
     let hasMoreToolCalls = true;
@@ -302,25 +231,7 @@ async function runLoop(
 
       // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
-        const messagesToInject = pendingMessages;
-        let injectedMessage = false;
-        pendingMessages = [];
-        for (const message of messagesToInject) {
-          if (config.consumeQueuedMessageCancellation?.(message)) {
-            continue;
-          }
-          await emit({ type: "message_start", message });
-          if (config.consumeQueuedMessageCancellation?.(message)) {
-            continue;
-          }
-          if (message.role === "user") {
-            turnTainted = false;
-          }
-          await emit({ type: "message_end", message });
-          state.context.messages.push(message);
-          newMessages.push(message);
-          injectedMessage = true;
-        }
+        const injectedMessage = await commitPendingMessages();
         if (!injectedMessage && !hasMoreToolCalls) {
           // The entire drained batch was cancelled before transcript commit.
           // Re-evaluate the loop instead of issuing an empty provider continuation.
@@ -359,6 +270,7 @@ async function runLoop(
             toolLoopRecoveryState.criticalToolLoopSeen,
             toolCalls,
             scheduling,
+            scheduling.hasUnobservedAsyncToolResults,
           );
           if (batch.intervention) {
             toolLoopRecoveryState.criticalToolLoopSeen = true;
@@ -371,25 +283,15 @@ async function runLoop(
       );
       const { message } = streamed;
 
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
-        await emit({
-          type: "turn_end",
-          message,
-          toolResults: streamed.batches.flatMap((batch) => batch.messages),
-        });
-        if (message.stopReason === "aborted" && signal?.aborted && !isTurnHandoffAbort(signal)) {
-          await appendInterruptedTurnMessage(newMessages, emit);
-        }
-        await emit({ type: "agent_end", messages: newMessages });
-        return newMessages;
-      }
-
-      const remainingToolCalls = message.content.filter(
-        (item): item is AgentToolCall =>
-          item.type === "toolCall" &&
-          !streamed.executedIds.has(item.id) &&
-          (message.stopReason === "toolUse" || item.async === true),
-      );
+      const providerFailed = message.stopReason === "error" || message.stopReason === "aborted";
+      const remainingToolCalls = providerFailed
+        ? []
+        : message.content.filter(
+            (item): item is AgentToolCall =>
+              item.type === "toolCall" &&
+              !streamed.executedIds.has(item.id) &&
+              (message.stopReason === "toolUse" || item.async === true),
+          );
       const terminalToolBatch =
         remainingToolCalls.length > 0
           ? await executeToolCalls(
@@ -400,6 +302,8 @@ async function runLoop(
               emit,
               toolLoopRecoveryState.criticalToolLoopSeen,
               remainingToolCalls,
+              undefined,
+              streamed.executedIds.size > 0,
             )
           : undefined;
       const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
@@ -417,6 +321,9 @@ async function runLoop(
       turnTainted ||= toolResults.some(toolResultTaintsTurn);
       hasMoreToolCalls =
         streamed.continuationRequired ||
+        (message.stopReason === "stop" &&
+          message.endTurn === false &&
+          !executedToolBatch?.terminate) ||
         (executedToolBatch !== undefined && !executedToolBatch.terminate);
       pendingMessages = executedToolBatch?.steeringMessages ?? [];
       if (executedToolBatch?.intervention) {
@@ -431,6 +338,13 @@ async function runLoop(
       turnOpen = false;
       if (executedToolBatch?.fatal) {
         throw executedToolBatch.fatal.error;
+      }
+      if (message.stopReason === "aborted") {
+        if (signal?.aborted && !isTurnHandoffAbort(signal)) {
+          await appendInterruptedTurnMessage(newMessages, emit);
+        }
+        await emit({ type: "agent_end", messages: newMessages });
+        return newMessages;
       }
       if (await stopIfAborted()) {
         return newMessages;
@@ -452,6 +366,11 @@ async function runLoop(
         await emit({ type: "message_end", message: terminalMessage });
         await emit({ type: "turn_end", message: terminalMessage, toolResults: [] });
         turnOpen = false;
+        await emit({ type: "agent_end", messages: newMessages });
+        return newMessages;
+      }
+
+      if (providerFailed) {
         await emit({ type: "agent_end", messages: newMessages });
         return newMessages;
       }
@@ -485,12 +404,13 @@ async function runLoop(
 
       if (pendingMessages.length === 0) {
         if (
-          await config.shouldStopAfterTurn?.({
+          !nextTurnSnapshot?.stop &&
+          (await config.shouldStopAfterTurn?.({
             message,
             toolResults,
             context: state.context,
             newMessages,
-          })
+          }))
         ) {
           await emit({ type: "agent_end", messages: newMessages });
           return newMessages;
@@ -500,6 +420,12 @@ async function runLoop(
         pendingMessages = Array.isArray(steering) ? steering : await steering;
       }
       if (await stopIfAborted()) {
+        return newMessages;
+      }
+      if (nextTurnSnapshot?.stop) {
+        // The old owner is about to close; commit accepted steering before re-admission.
+        await commitPendingMessages();
+        await emit({ type: "agent_end", messages: newMessages });
         return newMessages;
       }
     }
@@ -531,6 +457,7 @@ async function executeToolCalls(
   criticalToolLoopSeen: boolean,
   toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall"),
   scheduling?: AsyncToolBatchScheduling,
+  hasUnobservedAsyncToolResults = false,
 ): Promise<ExecutedToolCallBatch> {
   const batch: ToolBatchContext = {
     currentContext,
@@ -541,6 +468,7 @@ async function executeToolCalls(
     resolved: new Map(),
     validated: new Map(),
     onParallelStarted: scheduling?.onParallelStarted,
+    hasUnobservedAsyncToolResults,
   };
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
@@ -605,6 +533,7 @@ type ToolBatchContext = {
   lifecycle?: InternalToolBatchLifecycle;
   warnings?: ToolLoopWarning[];
   onParallelStarted?: () => void;
+  hasUnobservedAsyncToolResults: boolean;
 };
 
 type ResolvedToolCallOutcome =
@@ -897,7 +826,15 @@ async function prepareToolCallEntry(
   }
   const execution = await prepareToolCallExecution(
     preparation,
-    { assistantMessage: batch.assistantMessage, toolCall: preparation.toolCall },
+    {
+      assistantMessage: batch.assistantMessage,
+      toolCall: preparation.toolCall,
+      hasUnobservedAsyncToolResults:
+        batch.hasUnobservedAsyncToolResults ||
+        batch.assistantMessage.content
+          .slice(0, batch.assistantMessage.content.indexOf(toolCall))
+          .some((item) => item.type === "toolCall" && item.async === true),
+    },
     batch.signal,
     batch.emit,
   );
@@ -1184,7 +1121,7 @@ async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createErrorToolResult(coerceErrorMessage(error)),
+        result: createToolExecutionErrorResult(error),
         isError: true,
         executionStarted: false,
       },
@@ -1237,7 +1174,7 @@ async function prepareToolCallExecution(
               throw implementationStartError.error;
             }
             return {
-              result: createErrorToolResult(coerceErrorMessage(error)),
+              result: createToolExecutionErrorResult(error),
               isError: true,
               executionStarted,
               ...(executionStarted && signal?.aborted && error === signal.reason
@@ -1298,7 +1235,7 @@ async function prepareToolCallExecution(
               executionStarted: false,
             }
           : {
-              result: createErrorToolResult(coerceErrorMessage(internalPreparation.outcome.error)),
+              result: createToolExecutionErrorResult(internalPreparation.outcome.error),
               isError: true,
               executionStarted: false,
             },
@@ -1548,6 +1485,13 @@ async function completeUnstartedToolCall(
   );
   await emitToolExecutionEnd(finalized, batch.emit);
   return finalized;
+}
+
+function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
+  const result = createErrorToolResult(coerceErrorMessage(error));
+  return typeof error === "object" && error !== null
+    ? copyInternalToolResultState(error, result)
+    : result;
 }
 
 function createErrorToolResult(message: string, details: unknown = {}): AgentToolResult<unknown> {

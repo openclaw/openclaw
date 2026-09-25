@@ -6,7 +6,6 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -15,14 +14,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import { verifyBackupArchive } from "./backup-verify.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
   const entries: string[] = [];
@@ -152,7 +144,7 @@ describe("backupRestoreCommand", () => {
 
           await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
           await expect(
-            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+            backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
           ).resolves.toMatchObject({ ok: true, entryCount: 3 });
           const original = path.join(targetPath, payloadPath);
           const linked = path.join(targetPath, hardlinkPath);
@@ -195,7 +187,7 @@ describe("backupRestoreCommand", () => {
             includeWorkspace: false,
             nowMs: Date.UTC(2026, 7, 12, 12, 0, 0),
           });
-          const runtime = createRuntime();
+          const runtime = createTestRuntime();
           const restored = await backupRestoreCommand(runtime, {
             archive: backup.archivePath,
             target: targetPath,
@@ -327,7 +319,7 @@ describe("backupRestoreCommand", () => {
         expect(archiveEntries.some((entry) => entry.includes("external-runtime"))).toBe(false);
         expect(archiveEntries.some((entry) => entry.endsWith("/sessions/session.json"))).toBe(true);
 
-        const restored = await backupRestoreCommand(createRuntime(), {
+        const restored = await backupRestoreCommand(createTestRuntime(), {
           archive: backup.archivePath,
           target: targetPath,
         });
@@ -395,10 +387,13 @@ describe("backupRestoreCommand", () => {
         await fs.writeFile(path.join(nonEmptyTarget, "keep.txt"), "keep\n");
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: emptyTarget }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: emptyTarget }),
         ).resolves.toMatchObject({ targetPath: emptyTarget });
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: nonEmptyTarget }),
+          backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: nonEmptyTarget,
+          }),
         ).rejects.toThrow(/target directory must be empty/iu);
         await expect(fs.readFile(path.join(nonEmptyTarget, "keep.txt"), "utf8")).resolves.toBe(
           "keep\n",
@@ -421,7 +416,7 @@ describe("backupRestoreCommand", () => {
         await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
 
         await expect(
-          backupRestoreCommand(createRuntime(), {
+          backupRestoreCommand(createTestRuntime(), {
             archive: state.path("missing-backup.tar.gz"),
             target: targetPath,
           }),
@@ -447,7 +442,7 @@ describe("backupRestoreCommand", () => {
         await fs.writeFile(state.configPath, '{"agents":{"entries":', "utf8");
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).resolves.toMatchObject({ targetPath });
       },
     );
@@ -474,94 +469,122 @@ describe("backupRestoreCommand", () => {
         await fs.mkdir(targetPath);
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/manifest is not valid JSON/iu);
         await expect(fs.readdir(targetPath)).resolves.toEqual([]);
       },
     );
   });
 
-  it.each([
-    {
-      label: "absolute",
-      linkpath: "/private/tmp/outside-restore",
-      error: /symbolic link target must be relative/iu,
-    },
-    {
-      label: "archive-escaping",
-      linkpath: "../../outside-restore",
-      error: /symbolic link target is outside the declared archive root/iu,
-    },
-    {
-      label: "backslash-containing",
-      linkpath: "nested\\outside-restore",
-      error: /symbolic link target must use forward slashes/iu,
-    },
-    {
-      label: "declared-asset-escaping",
-      linkpath: "../outside-declared-assets",
-      error: /symbolic link is outside the declared backup assets/iu,
-      insideDeclaredAsset: true,
-    },
-    {
-      label: "undeclared-entry",
-      linkpath: ".",
-      error: /symbolic link is outside the declared backup assets/iu,
-    },
+  it.runIf(process.platform !== "win32").each([
+    { label: "absolute", linkpath: "/outside-restore", external: true },
+    { label: "archive-escaping", linkpath: "../../../../../../outside-restore", external: true },
+    { label: "backslash-containing", linkpath: "nested\\outside-restore", external: false },
+    { label: "declared-asset-escaping", linkpath: "../outside-declared-assets", external: true },
   ])(
-    "rejects $label symlink targets before touching the restore target",
-    async ({ linkpath, error, insideDeclaredAsset }) => {
+    "backupRestoreCommand recreates a reported $label target without rewriting it",
+    async ({ linkpath, external }) => {
       await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-backup-restore-absolute-symlink-",
-          scenario: "minimal",
-        },
+        { layout: "state-only", prefix: "oc-link-", scenario: "minimal" },
         async (state) => {
-          const archivePath = state.path("absolute-symlink.tar.gz");
-          const targetPath = state.path("restore-target");
-          const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-          const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
-          const declaredAssetRoot = path.posix.dirname(payloadPath);
+          const archivePath = state.path("links.tar.gz");
+          const targetPath = state.path("restored");
+          const archiveRoot = "backup";
+          const declaredAssetRoot = buildBackupArchivePath(archiveRoot, "/tmp/restore-state");
+          const entryPath = `${declaredAssetRoot}/link`;
+          const externalSymbolicLinks = external ? [{ entryPath, linkpath }] : [];
           await writeArchive({
             archivePath,
             archiveRoot,
-            payloadPath,
-            ...(insideDeclaredAsset
-              ? {
-                  manifest: `${JSON.stringify({
-                    schemaVersion: 1,
-                    createdAt: "2026-08-12T00:00:00.000Z",
-                    archiveRoot,
-                    assets: [
-                      {
-                        kind: "config",
-                        sourcePath: "/tmp",
-                        archivePath: declaredAssetRoot,
-                      },
-                    ],
-                  })}\n`,
-                }
-              : {}),
+            payloadPath: `${declaredAssetRoot}/openclaw.json`,
+            manifest: JSON.stringify({
+              schemaVersion: 1,
+              createdAt: "2026-08-12T00:00:00.000Z",
+              archiveRoot,
+              platform: "linux",
+              assets: [
+                { kind: "state", sourcePath: "/tmp/restore-state", archivePath: declaredAssetRoot },
+              ],
+              externalSymbolicLinks,
+            }),
+            extraEntries: [encodeTarEntry({ path: entryPath, type: "SymbolicLink", linkpath })],
+          });
+          const result = await backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: targetPath,
+          });
+          expect(await fs.readlink(path.join(targetPath, entryPath))).toBe(linkpath);
+          expect(result.externalSymbolicLinks ?? []).toEqual(externalSymbolicLinks);
+          expect(
+            await fs.readFile(path.join(targetPath, declaredAssetRoot, "openclaw.json"), "utf8"),
+          ).toBe("{}\n");
+        },
+      );
+    },
+  );
+
+  it.each([
+    { label: "undeclared link entry", childType: undefined, suffix: "" },
+    { label: "file beneath a symbolic link", childType: "File" as const, suffix: "" },
+    { label: "link beneath a symbolic link", childType: "SymbolicLink" as const, suffix: "" },
+    {
+      label: "link beneath a space-suffixed symbolic link",
+      childType: "SymbolicLink" as const,
+      suffix: " ",
+    },
+  ])(
+    "backupRestoreCommand rejects $label before touching the restore target",
+    async ({ childType, suffix }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "oc-link-", scenario: "minimal" },
+        async (state) => {
+          const archivePath = state.path("unsafe.tar.gz");
+          const targetPath = state.path("restored");
+          const outside = state.path("outside");
+          await fs.mkdir(outside);
+          await fs.writeFile(path.join(outside, "sentinel"), "unchanged\n");
+          const archiveRoot = "backup";
+          const declaredAssetRoot = buildBackupArchivePath(archiveRoot, "/tmp/restore-state");
+          const entryPath = childType
+            ? `${declaredAssetRoot}/a${suffix}`
+            : `${archiveRoot}/payload/a`;
+          await writeArchive({
+            archivePath,
+            archiveRoot,
+            payloadPath: `${declaredAssetRoot}/openclaw.json`,
+            manifest: JSON.stringify({
+              schemaVersion: 1,
+              createdAt: "2026-08-12T00:00:00.000Z",
+              archiveRoot,
+              platform: "linux",
+              assets: [
+                { kind: "state", sourcePath: "/tmp/restore-state", archivePath: declaredAssetRoot },
+              ],
+              externalSymbolicLinks: [{ entryPath, linkpath: outside }],
+            }),
             extraEntries: [
-              encodeTarEntry({
-                path: insideDeclaredAsset
-                  ? `${declaredAssetRoot}/unsafe-link`
-                  : `${archiveRoot}/payload/absolute-link`,
-                type: "SymbolicLink",
-                linkpath,
-              }),
+              encodeTarEntry({ path: entryPath, type: "SymbolicLink", linkpath: outside }),
+              ...(childType
+                ? [
+                    encodeTarEntry({
+                      path: `${entryPath}/b`,
+                      type: childType,
+                      ...(childType === "File"
+                        ? { contents: "must not write\n" }
+                        : { linkpath: "../openclaw.json" }),
+                    }),
+                  ]
+                : []),
             ],
           });
-
           await expect(
-            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
-          ).rejects.toThrow(error);
+            backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
+          ).rejects.toThrow(
+            childType ? /beneath a symbolic link/iu : /outside the declared backup assets/iu,
+          );
           await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await fs.readdir(outside)).toEqual(["sentinel"]);
+          expect(await fs.readFile(path.join(outside, "sentinel"), "utf8")).toBe("unchanged\n");
         },
       );
     },
@@ -595,7 +618,7 @@ describe("backupRestoreCommand", () => {
         });
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/incomplete target was cleaned/iu);
         await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
         await new Promise<void>((resolve) => {
@@ -635,7 +658,7 @@ describe("backupRestoreCommand", () => {
         const cleanupError = new Error("cleanup denied");
         vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
 
-        const restoreError = await backupRestoreCommand(createRuntime(), {
+        const restoreError = await backupRestoreCommand(createTestRuntime(), {
           archive: archivePath,
           target: targetPath,
         }).catch((error: unknown) => error);

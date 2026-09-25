@@ -11,7 +11,8 @@ export function createDraftTitleFixture(
     title: DEFAULT_PREPARED_TITLE,
   }),
   data?: NewSessionRouteData,
-  requestOther = async (_method: string, _params?: unknown): Promise<unknown> => ({}),
+  requestOther = async (method: string, _params?: unknown): Promise<unknown> =>
+    method === "models.list" ? { models: [] } : {},
 ) {
   const fixture = createDraftFixture({
     data,
@@ -31,6 +32,7 @@ export function createDraftTitleFixture(
         : method === "worktrees.branches"
           ? { repositoryStatus: "git", branches: [], defaultBranch: "main" }
           : requestOther(method, params),
+    modelCatalog: (params) => requestOther("models.list", params),
     takePreparedTitle: () => titles.takePreparedTitle(),
   });
   const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({

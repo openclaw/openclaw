@@ -57,8 +57,8 @@ describe("workspace attestation survival", () => {
     await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    const snapshot = readWorkspaceStateSnapshot(tempDir);
-    replaceWorkspaceAttestation({
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes: new Map([
@@ -76,10 +76,10 @@ describe("workspace attestation survival", () => {
     const tempDir = await makeWorkspace();
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
     generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes,
@@ -95,10 +95,10 @@ describe("workspace attestation survival", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "custom instructions\n");
-    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
     generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes,
@@ -113,10 +113,10 @@ describe("workspace attestation survival", () => {
     const tempDir = await makeWorkspace();
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
     generatedHashes.set(DEFAULT_AGENTS_FILENAME, "0".repeat(64));
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes,

@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -53,10 +55,13 @@ suite.define(() => {
       const before = await gateway.getRequests("terminal.input");
       await page.keyboard.press("Control+Backquote");
       if (route === "chat") {
-        await panel.locator(".tp-header").waitFor({ state: "hidden" });
+        const tabLabel = page
+          .locator('[data-region-header="side"] .tabstrip-tab__label')
+          .filter({ hasText: "sh" });
+        await tabLabel.waitFor({ state: "hidden" });
         expect(await gateway.getRequests("terminal.input")).toEqual(before);
         await page.keyboard.press("Control+Backquote");
-        await page.locator("openclaw-terminal-panel .tp-header").waitFor();
+        await tabLabel.waitFor();
       } else {
         await expect
           .poll(async () => (await gateway.getRequests("terminal.input")).length)
@@ -440,7 +445,16 @@ suite.define(() => {
         await page.waitForTimeout(250);
 
         if (deadSessionScreenshotPath) {
-          await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
+          if (deadSessionVideoDir) {
+            await writeFile(
+              deadSessionScreenshotPath,
+              await takeControlUiViewportScreenshot(page, page.locator("openclaw-terminal-panel"), [
+                page.locator("openclaw-terminal-panel .tabstrip-tab__status"),
+              ]),
+            );
+          } else {
+            await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
+          }
         }
         const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
         await expect

@@ -7,27 +7,123 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 
+describe.skipIf(process.platform === "win32")("cloud-worker app packaging identity", () => {
+  const script = readFileSync(scriptPath, "utf8");
+  const initialization = script.slice(
+    script.indexOf('CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"'),
+    script.indexOf("PKG_VERSION="),
+  );
+
+  function resolveVariant(overrides: NodeJS.ProcessEnv) {
+    return spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `set -euo pipefail\nROOT_DIR="$1"\n${initialization}\nprintf '%s\\n' "$APP_DESTINATION" "$BUNDLE_ID"`,
+        "package-identity",
+        process.cwd(),
+      ],
+      { encoding: "utf8", env: { PATH: "/usr/bin:/bin", ...overrides } },
+    );
+  }
+
+  it.each([false, true])(
+    "keeps the cloud variant %s separate from the ordinary output",
+    (cloud) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: cloud ? "1" : "0" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        path.join(process.cwd(), "dist", cloud ? "OpenClawCloudWorker.app" : "OpenClaw.app"),
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      ]);
+    },
+  );
+
+  it.each([
+    { BUNDLE_ID: "ai.openclaw.mac" },
+    { ALLOW_ADHOC_SIGNING: "1" },
+    { SIGN_IDENTITY: "-" },
+    { DISABLE_LIBRARY_VALIDATION: "1" },
+    { SKIP_TEAM_ID_CHECK: "1" },
+    { OPENCLAW_PACKAGE_APP_ROOT: path.join(process.cwd(), "dist/OpenClaw.app") },
+  ])(
+    "rejects a cloud build that weakens its identity or replaces the ordinary app: %j",
+    (override) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: "1", ...override });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR:");
+    },
+  );
+
+  it.runIf(process.platform === "darwin").each([false, true])(
+    "stamps cloud capability only in its dedicated bundle: %s",
+    (cloud) => {
+      const app = tempDirs.make("openclaw-cloud-bundle-");
+      mkdirSync(path.join(app, "Contents"));
+      writeFileSync(
+        path.join(app, "Contents/Info.plist"),
+        readFileSync("apps/macos/Sources/OpenClaw/Resources/Info.plist"),
+      );
+      const stamp = script.slice(
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier',
+        ),
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString',
+        ),
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          `set -euo pipefail\nsource "$1"\nAPP_ROOT="$2"\nBUNDLE_ID="$3"\nCLOUD_WORKER_HOST="$4"\n${stamp}\n/usr/bin/plutil -convert json -o - "$APP_ROOT/Contents/Info.plist"`,
+          "package-stamp",
+          path.resolve("scripts/lib/plistbuddy.sh"),
+          app,
+          cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+          cloud ? "1" : "0",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const plist = JSON.parse(result.stdout);
+      expect(plist.CFBundleIdentifier).toBe(
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      );
+      expect(plist.CFBundleName).toBe(cloud ? "OpenClaw Cloud Worker" : "OpenClaw");
+      expect(plist.OpenClawCloudWorkerHostVersion).toBe(cloud ? 1 : undefined);
+      expect(plist.CFBundleURLTypes).toEqual(cloud ? undefined : expect.any(Array));
+    },
+  );
+});
+
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
-    it.each(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+    const test = createMacScriptTest();
+    test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
       "joins architecture workers and preserves assembly safety: %s",
-      async (mode) => {
-        const root = tempDirs.make("openclaw-swift-parallel-");
+      { timeout: 15_000 },
+      async (mode, { mac, onTestFinished }) => {
+        const root = mac.createTempDir("openclaw-swift-parallel-");
         const stage = path.join(root, "stage");
         const scripts = path.join(root, "scripts/lib");
         mkdirSync(scripts, { recursive: true });
@@ -78,6 +174,7 @@ fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
 const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
 fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
+console.log('ready:' + arch);
 const deadline = Date.now() + 5000;
 while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
   if (Date.now() > deadline) throw new Error('architecture barrier did not open');
@@ -127,20 +224,32 @@ touch "$ROOT_DIR/assembled"
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
         });
-        child.stdout.resume();
-        const closed = new Promise<number | null>((resolve) => {
-          child.on("close", resolve);
+        const closed = mac.lifetime.track(
+          new Promise<number | null>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", resolve);
+          }),
+        );
+        const output = createInterface({ input: child.stdout });
+        const ready = new Set<string>();
+        output.on("line", (line) => {
+          if (line === "ready:arm64" || line === "ready:x86_64") {
+            ready.add(line);
+            if (mode === "cancel" && ready.size === 2) {
+              child.kill("SIGTERM");
+            }
+          }
         });
-        if (mode === "cancel") {
-          await expect
-            .poll(
-              () =>
-                existsSync(path.join(root, "ready-arm64")) &&
-                existsSync(path.join(root, "ready-x86_64")),
-            )
-            .toBe(true);
-          child.kill("SIGTERM");
-        }
+        onTestFinished(async () => {
+          try {
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill("SIGTERM");
+            }
+            await closed;
+          } finally {
+            output.close();
+          }
+        });
         const code = await closed;
         expect(code, stderr).toBe(
           mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
@@ -166,7 +275,6 @@ touch "$ROOT_DIR/assembled"
           ).toBe(mode === "cleanup-failure");
         }
       },
-      15_000,
     );
   },
 );
@@ -205,6 +313,7 @@ describe("packaged worker freshness", () => {
           `set -euo pipefail
 ROOT_DIR="$1"
 APP_DESTINATION="$ROOT_DIR/dist/OpenClaw.app"
+APP_BUNDLE_NAME=OpenClaw.app
 ${script.slice(allocationStart, allocationEnd)}
 printf '%s' "$APP_STAGE_DIR"
 `,
@@ -294,7 +403,7 @@ ${cleanup}
     const start = script.indexOf('if [[ "${SKIP_TSC:-0}"');
     const end = script.indexOf('node - "$ROOT_DIR/dist/build-info.json"', start);
     const result = spawnSync(
-      "bash",
+      process.platform === "win32" ? "bash" : "/bin/bash",
       [
         "-c",
         `
@@ -331,8 +440,9 @@ function makePlist(): string {
   return plist;
 }
 
-function runHelper(script: string, shell = "bash") {
-  return spawnSync(shell, ["-lc", script], {
+function runHelper(script: string, shell = process.platform === "win32" ? "bash" : "/bin/bash") {
+  // Login/logout hooks can replace the helper's exit status on headless hosts.
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -400,7 +510,7 @@ function runSwiftToolchainHarness(options: {
     writeFileSync(
       xcodebuild,
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         '[[ "$*" == "-version" ]] || exit 2',
         ...(options.xcodebuildFailure
           ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
@@ -414,7 +524,7 @@ function runSwiftToolchainHarness(options: {
   writeFileSync(
     path.join(toolsDir, "xcrun"),
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
       'developer_dir="${DEVELOPER_DIR:-$MOCK_SELECTED_DEVELOPER_DIR}"',
       'xcodebuild="$developer_dir/usr/bin/xcodebuild"',
@@ -430,7 +540,7 @@ function runSwiftToolchainHarness(options: {
   writeFileSync(
     path.join(toolsDir, "swift"),
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       `echo 'swift-driver version: 1.120.0 Apple Swift version ${options.swiftVersion} (swiftlang-${options.swiftVersion} clang-1700.0.13.5)'`,
       "",
     ].join("\n"),
@@ -745,7 +855,7 @@ function getStopPackagedAppBlock(): string {
 function getSwiftCompatibilityBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Copying app icon"');
+  const end = script.indexOf('echo "🖼  Compiling app icon"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -757,6 +867,17 @@ function getSwiftPMResourceBundleBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying SwiftPM resource bundles"');
   const end = script.indexOf("running_packaged_app_pids()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getControlUiOmissionBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("# The native dashboard loads the Gateway-served HTTP UI.");
+  const end = script.indexOf('echo "📦 Copying SwiftPM resource bundles"', start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -851,6 +972,8 @@ function runSwiftPMResourceBundleHarness(
 
 function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
+  const workRoot = tempDirs.make("openclaw-resource-backups-");
+  const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
   const keyboardShortcuts = path.join(
@@ -908,20 +1031,20 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
 
   const result = runHelper(`
     set -euo pipefail
-    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    SWIFT_WORK_ROOT=${JSON.stringify(workRoot)}
     BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    ${failRestore ? "mv() { return 13; }" : ""}
+    ${failRestore ? "mv() { printf 'restore failed\\n' >&2; return 13; }" : ""}
     cleanup_status=0
     restore_swiftpm_resource_sources || cleanup_status=$?
     exit "$cleanup_status"
   `);
 
-  return { fixtures, result };
+  return { backupRoot, fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -936,11 +1059,11 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
 
   writeFileSync(
     lsofPath,
-    ["#!/usr/bin/env bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
+    ["#!/bin/bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
     "utf8",
   );
-  writeFileSync(pgrepPath, "#!/usr/bin/env bash\nprintf '123\\n'\n", "utf8");
-  writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+  writeFileSync(pgrepPath, "#!/bin/bash\nprintf '123\\n'\n", "utf8");
+  writeFileSync(sleepPath, "#!/bin/bash\nexit 0\n", "utf8");
   chmodSync(lsofPath, 0o755);
   chmodSync(pgrepPath, 0o755);
   chmodSync(sleepPath, 0o755);
@@ -970,7 +1093,7 @@ function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
 
   writeFileSync(
     xcodeSelectPath,
-    ["#!/usr/bin/env bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
+    ["#!/bin/bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
     "utf8",
   );
   chmodSync(xcodeSelectPath, 0o755);
@@ -996,7 +1119,7 @@ function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
   writeFileSync(
     swiftPath,
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       mutateLockfile ? `printf 'changed\\n' > ${JSON.stringify(resolvedFile)}` : ":",
     ].join("\n"),
     "utf8",
@@ -1150,7 +1273,9 @@ describe("package-mac-app plist stamping", () => {
 
   it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const sourceCheck = script.indexOf('bash "$ROOT_DIR/scripts/apple-release-source-check.sh"');
+    const sourceCheck = script.indexOf(
+      '/bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh"',
+    );
     const build = script.indexOf('node "$ROOT_DIR/scripts/build-mac-swift.mts"');
     const embeddedRead = script.indexOf(
       'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
@@ -1283,9 +1408,89 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
-  it.runIf(process.platform === "darwin")(
-    "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
-    () => {
+  it.each(["primary", "secondary"])(
+    "merges framework architectures when %s file output exceeds the pipe buffer",
+    (verboseFramework) => {
+      const root = tempDirs.make("openclaw-package-framework-pipe-");
+      const primary = path.join(root, "primary.framework");
+      const secondary = path.join(root, "secondary.framework");
+      const destination = path.join(root, "destination.framework");
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(framework);
+        writeFileSync(
+          path.join(framework, "Fixture"),
+          framework === secondary ? "arm64 x86_64\n" : "arm64\n",
+        );
+        writeFileSync(path.join(framework, "Info.plist"), "resource\n");
+      }
+      const description = path.join(root, "file-output");
+      // A matching first line followed by more than a pipe can buffer makes an
+      // early-exiting grep kill the producer, without depending on scheduling.
+      writeFileSync(
+        description,
+        "Mach-O universal binary with 2 architectures\n" + "architecture detail\n".repeat(65536),
+      );
+      const helper = getMergeFrameworkMachOsBlock()
+        .replaceAll("/usr/bin/file", "fixture_file")
+        .replaceAll("/usr/bin/lipo", "fixture_lipo");
+      const result = runHelper(`
+        set -euo pipefail
+        fixture_file() {
+          if [[ "$1" == */Info.plist ]]; then
+            printf 'XML document\\n'
+          elif [[ "$1" == */${verboseFramework}.framework/Fixture ]]; then
+            cat ${JSON.stringify(description)}
+          else
+            printf 'Mach-O 64-bit executable\\n'
+          fi
+        }
+        fixture_lipo() {
+          case "$1" in
+            -info) printf 'Architectures in the fat file: %s are: %s\\n' "$2" "$(cat "$2")" ;;
+            -thin)
+              [[ "$2" == x86_64 && "$4" == -output ]] || return 2
+              printf '%s\\n' "$2" > "$5" ;;
+            -create)
+              [[ "$4" == -output ]] || return 2
+              cat "$2" "$3" > "$5" ;;
+            *) return 2 ;;
+          esac
+        }
+        ${helper}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(path.join(destination, "Fixture"), "utf8")).toBe("arm64\nx86_64\n");
+      expect(readFileSync(path.join(destination, "Info.plist"), "utf8")).toBe("resource\n");
+    },
+  );
+
+  it("builds and bundles the macOS control CLI for every requested architecture", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const buildLoop = readFileSync(swiftScriptPath, "utf8");
+    const cliCopy = script.slice(
+      script.indexOf('echo "🚚 Copying macOS control CLI"'),
+      script.indexOf(
+        'if [[ "$SKIP_MLX_TTS" == "1" ]]; then',
+        script.indexOf('echo "🚚 Copying binary"'),
+      ),
+    );
+
+    expect(buildLoop).toContain('--product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch"');
+    expect(cliCopy).toContain(
+      'cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+    expect(cliCopy).toContain('/usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}"');
+    expect(cliCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"');
+    expect(cliCopy).toContain(
+      '/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+  });
+
+  it.runIf(process.platform === "darwin").each(["arm64", "arm64e"] as const)(
+    "merges framework Mach-O binaries with %s slices and glob metacharacters in the checkout path",
+    (secondaryArchitecture) => {
       const root = tempDirs.make("openclaw-package-framework-[fixture]-");
       const primary = path.join(root, "Primary.framework");
       const secondary = path.join(root, "Secondary.framework");
@@ -1296,41 +1501,56 @@ describe("package-mac-app plist stamping", () => {
         mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
       }
 
-      const fixtureBinary = "/bin/ls";
-      const fixtureArchitectures = spawnSync("/usr/bin/lipo", ["-archs", fixtureBinary], {
-        encoding: "utf8",
-      })
-        .stdout.trim()
-        .split(/\s+/u);
-      const [primaryArchitecture, secondaryArchitecture] = fixtureArchitectures;
-      if (!primaryArchitecture || !secondaryArchitecture) {
-        throw new Error(`${fixtureBinary} must contain at least two architectures`);
-      }
+      // Inert mach_header_64 dylibs (mach-o/loader.h and mach/machine.h).
+      // Own the CPU/subtype bytes so host executables and compiler SDKs cannot
+      // change this fixture's slice set; real file/lipo still classify and merge it.
+      const thinMachO = (cpu: number, subtype: number) => {
+        const bytes = Buffer.alloc(32);
+        [0xfeedfacf, cpu, subtype, 6, 0, 0, 0, 0].forEach((value, index) =>
+          bytes.writeUInt32LE(value, index * 4),
+        );
+        return bytes;
+      };
+      const intel = thinMachO(0x01000007, 3);
+      const arm = thinMachO(0x0100000c, secondaryArchitecture === "arm64e" ? 2 : 0);
       const primaryBinary = path.join(primary, relativeBinary);
       const secondaryBinary = path.join(secondary, relativeBinary);
       const destinationBinary = path.join(destination, relativeBinary);
-      expect(
-        spawnSync("/usr/bin/lipo", [
-          "-thin",
-          primaryArchitecture,
-          fixtureBinary,
-          "-output",
-          primaryBinary,
-        ]).status,
-      ).toBe(0);
-      expect(spawnSync("/bin/cp", [fixtureBinary, secondaryBinary]).status).toBe(0);
-      writeFileSync(destinationBinary, readFileSync(primaryBinary));
+      const armBinary = path.join(root, "arm-slice");
+      writeFileSync(primaryBinary, intel);
+      writeFileSync(armBinary, arm);
+      const universal = spawnSync(
+        "/usr/bin/lipo",
+        ["-create", primaryBinary, armBinary, "-output", secondaryBinary],
+        { encoding: "utf8" },
+      );
+      expect(universal.status, universal.stderr).toBe(0);
+      writeFileSync(destinationBinary, intel);
 
       const result = runHelper(`
         set -euo pipefail
         ${getMergeFrameworkMachOsBlock()}
         merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
-        /usr/bin/lipo -info ${JSON.stringify(destinationBinary)}
+        /usr/bin/lipo -archs ${JSON.stringify(destinationBinary)}
       `);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(primaryArchitecture);
-      expect(result.stdout).toContain(secondaryArchitecture);
+      expect(result.stdout.trim().split(/\s+/u).toSorted()).toEqual(
+        ["x86_64", secondaryArchitecture].toSorted(),
+      );
+      for (const [arch, bytes] of [
+        ["x86_64", intel],
+        [secondaryArchitecture, arm],
+      ] as const) {
+        const extracted = path.join(root, `merged-${arch}`);
+        const slice = spawnSync(
+          "/usr/bin/lipo",
+          ["-thin", arch, destinationBinary, "-output", extracted],
+          { encoding: "utf8" },
+        );
+        expect(slice.status, slice.stderr).toBe(0);
+        expect(readFileSync(extracted)).toEqual(bytes);
+      }
     },
   );
 
@@ -1446,46 +1666,62 @@ describe("package-mac-app plist stamping", () => {
     expect(dev.stdout).toContain("reached-build");
   });
 
-  it("falls back to corepack pnpm when the pnpm shim is absent", () => {
-    const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
-    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    const logPath = path.join(tempRoot, "corepack.log");
+  for (const { name, runner, expectedCommands } of [
+    {
+      name: "uses pnpm when Corepack is absent",
+      runner: "pnpm",
+      expectedCommands: ["install --frozen-lockfile --config.node-linker=hoisted", "build"],
+    },
+    {
+      name: "falls back to corepack pnpm when the pnpm shim is absent",
+      runner: "corepack",
+      expectedCommands: [
+        "pnpm --version",
+        "pnpm install --frozen-lockfile --config.node-linker=hoisted",
+        "pnpm build",
+      ],
+    },
+  ] as const) {
+    it(name, () => {
+      const helperBlock = getPackageManagerHelperBlock();
+      const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+      const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+      const logPath = path.join(tempRoot, "corepack.log");
 
-    const corepackPath = path.join(toolsDir, "corepack");
-    writeFileSync(
-      corepackPath,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        "  echo '11.2.2'",
-        "fi",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(corepackPath, 0o755);
+      symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+      const runnerPath = path.join(toolsDir, runner);
+      writeFileSync(
+        runnerPath,
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+          'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+          "  echo '11.2.2'",
+          "fi",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(runnerPath, 0o755);
 
-    const result = runHelper(`
+      const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm install --frozen-lockfile --config.node-linker=hoisted
       run_pnpm build
     `);
 
-    expect(result.status).toBe(0);
-    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-      `${tempRoot}|pnpm --version`,
-      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
-      `${tempRoot}|pnpm build`,
-    ]);
-  });
+      expect(result.status).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+        expectedCommands.map((command) => `${tempRoot}|${command}`),
+      );
+    });
+  }
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
@@ -1493,6 +1729,8 @@ describe("package-mac-app plist stamping", () => {
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
+    symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+    symlinkSync("/usr/bin/grep", path.join(toolsDir, "grep"));
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -1505,7 +1743,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       path.join(toolsDir, "pnpm"),
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
         'if [[ "${1:-}" == "--version" ]]; then echo "11.8.0"; fi',
@@ -1516,7 +1754,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       path.join(toolsDir, "corepack"),
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
         'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
@@ -1534,7 +1772,7 @@ describe("package-mac-app plist stamping", () => {
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
       run_pnpm --version
@@ -1552,17 +1790,10 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
-    // the detection this test needs to fail; an empty cache with network disabled
-    // keeps "corepack pnpm is unavailable" true everywhere.
-    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
-
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      export COREPACK_HOME=${JSON.stringify(corepackHome)}
-      export COREPACK_ENABLE_NETWORK=0
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);
@@ -1698,7 +1929,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       nodePath,
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
         '  echo "node ran outside repo root: $PWD" >&2',
@@ -1766,7 +1997,7 @@ describe("package-mac-app plist stamping", () => {
       writeFileSync(path.join(appRoot, "candidate"), "verified replacement");
       writeFileSync(
         signerPath,
-        '#!/usr/bin/env bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
+        '#!/bin/bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
       );
       chmodSync(signerPath, 0o755);
       for (const arch of ["arm64", "x86_64"]) {
@@ -1926,19 +2157,25 @@ try {
   });
 
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     for (const [file, contents] of fixtures) {
       expect(readFileSync(file, "utf8")).toBe(contents);
-      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
     }
+    expect(readdirSync(backupRoot)).toEqual([]);
   });
 
   it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).not.toBe(0);
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("restore failed\n");
+    const backups = readdirSync(backupRoot).map((file) =>
+      readFileSync(path.join(backupRoot, file), "utf8"),
+    );
+    expect(backups).toHaveLength(fixtures.size);
+    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
   });
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {
@@ -2222,6 +2459,44 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "rejects standalone and private-worker Control UI copies before signing",
+    () => {
+      const root = tempDirs.make("openclaw-package-no-control-ui-");
+      const appRoot = path.join(root, "OpenClaw.app");
+      const block = getControlUiOmissionBlock();
+      mkdirSync(path.join(appRoot, "Contents/Resources/node-worker/arm64"), { recursive: true });
+
+      const run = () =>
+        runHelper(`
+          set -euo pipefail
+          APP_ROOT=${JSON.stringify(appRoot)}
+          BUILD_ARCHS=(arm64)
+          ${block}
+        `);
+
+      expect(run().status).toBe(0);
+
+      mkdirSync(path.join(appRoot, "Contents/Resources/control-ui"), { recursive: true });
+      const standalone = run();
+      expect(standalone.status).toBe(1);
+      expect(standalone.stderr).toContain("Standalone Control UI assets must not be embedded");
+
+      const standalonePath = path.join(appRoot, "Contents/Resources/control-ui");
+      rmSync(standalonePath, { recursive: true });
+      mkdirSync(
+        path.join(
+          appRoot,
+          "Contents/Resources/node-worker/arm64/lib/node_modules/openclaw/dist/control-ui",
+        ),
+        { recursive: true },
+      );
+      const worker = run();
+      expect(worker.status).toBe(1);
+      expect(worker.stderr).toContain("Private node worker must not embed Control UI assets");
+    },
+  );
+
   it("embeds provider vectors as signed app resources", () => {
     const script = readFileSync(scriptPath, "utf8");
     const packageManifest = readFileSync("apps/macos/Package.swift", "utf8");
@@ -2253,7 +2528,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
-  it("stages the pinned universal CUA driver before nested-code signing", () => {
+  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
@@ -2270,13 +2545,14 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.28.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6",
+      "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
-    expect(packageScript).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
+    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
+    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
+    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
     expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
       packageScript.indexOf('echo "🔏 Signing bundle'),
     );
@@ -2301,9 +2577,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
     expect(cuaBlock).toContain("else");
     expect(cuaBlock).toContain("Staging embedded CUA driver");
-    expect(cuaBlock).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(cuaBlock).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {

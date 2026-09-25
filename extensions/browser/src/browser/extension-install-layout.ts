@@ -3,7 +3,11 @@ import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { NativeWindowsContext } from "./extension-windows-contract.js";
+import type { runWindowsManagement } from "./extension-windows-management.js";
+import type { WindowsNativePlatform } from "./extension-windows-platform.js";
 
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
 const UNPACKED_MANIFEST_LOCATION = 4;
@@ -27,7 +31,18 @@ export type DiscoveredChromeExtension = {
   extensionId: string;
   extensionPath: string;
 };
-export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "extensionPath">;
+export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "extensionPath"> & {
+  /** Chrome's recorded state is not proof of an authenticated relay connection. */
+  enabled: boolean;
+  awaitingApproval: boolean;
+};
+type WindowsNativeHostDeps = {
+  platform?: WindowsNativePlatform;
+  manage?: typeof runWindowsManagement;
+  context?: NativeWindowsContext;
+  cliPath?: string;
+  executable?: string;
+};
 export type ExtensionInstallDeps = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -35,9 +50,21 @@ export type ExtensionInstallDeps = {
   homeDir?: string;
   nodePath?: string;
   nativeHostPath?: string;
+  windowsNative?: WindowsNativeHostDeps;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
+
+export async function approvedInstallRealpaths(
+  installed: string,
+  bundled: string,
+): Promise<string[]> {
+  const installedPath = await fs.realpath(installed);
+  const bundledPath = await fs.realpath(bundled);
+  await assertOwnedPath(installedPath, "directory");
+  await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
+  return [...new Set([installedPath, bundledPath])];
+}
 
 /** Chromium crx_file::id_util::GenerateIdForPath for a canonical absolute path. */
 export function generateChromeExtensionIdForPath(
@@ -180,7 +207,18 @@ export async function assertOwnedPath(
   if (info.isSymbolicLink() || (kind === "file" ? !info.isFile() : !info.isDirectory())) {
     throw new Error(`Unsafe ${kind} at ${target}`);
   }
-  if (process.platform !== "win32") {
+  if (process.platform === "win32") {
+    const permissions = await inspectPathPermissions(target);
+    if (
+      !permissions.ok ||
+      permissions.source !== "windows-acl" ||
+      permissions.ownerTrusted !== true ||
+      permissions.groupWritable ||
+      permissions.worldWritable
+    ) {
+      throw new Error(`Refusing unsafe Windows owner or ACL at ${target}`);
+    }
+  } else {
     const uid = process.getuid?.();
     const ownerAllowed =
       uid === undefined || info.uid === uid || (policy.allowRootOwner === true && info.uid === 0);
@@ -191,7 +229,13 @@ export async function assertOwnedPath(
       throw new Error(`Refusing group/world-writable path at ${target}`);
     }
   }
-  if ((await fs.realpath(target)) !== path.resolve(target)) {
+  const canonical = await fs.realpath(target);
+  const expected = path.resolve(target);
+  if (
+    process.platform === "win32"
+      ? canonical.toLowerCase() !== expected.toLowerCase()
+      : canonical !== expected
+  ) {
     throw new Error(`Refusing non-canonical path at ${target}`);
   }
 }
@@ -385,12 +429,25 @@ export async function discoverChromeExtensionIds(params: {
               from_webstore?: unknown;
               location?: unknown;
               path?: unknown;
+              state?: unknown;
+              disable_reasons?: unknown;
             };
             if (
               extensionId === params.storeExtensionId &&
               entry.from_webstore === true &&
               entry.location !== UNPACKED_MANIFEST_LOCATION
             ) {
+              // Current Chrome stores a reason list; older profiles used a bitmask
+              // plus state (ENABLED = 1). External-install approval is bit 13.
+              const reasons = entry.disable_reasons;
+              const enabled =
+                (entry.state === undefined || entry.state === 1) &&
+                (reasons === undefined ||
+                  reasons === 0 ||
+                  (Array.isArray(reasons) && reasons.length === 0));
+              const awaitingApproval = Array.isArray(reasons)
+                ? reasons.includes(8_192)
+                : typeof reasons === "number" && (reasons & 8_192) !== 0;
               storeDiscovered.push({
                 product: root.product,
                 browser: root.label,
@@ -398,6 +455,8 @@ export async function discoverChromeExtensionIds(params: {
                 profile: profileEntry.name,
                 securePreferencesPath: preferencesPath,
                 extensionId,
+                enabled,
+                awaitingApproval,
               });
               continue;
             }

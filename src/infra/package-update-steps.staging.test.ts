@@ -9,7 +9,7 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-global.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 function stagedPrefixFromArgs(argv: string[]): string {
   const prefixIndex = argv.indexOf("--prefix");
@@ -40,6 +40,9 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
         const readPackageBytes = (root: string) =>
           packageFiles.map((relativePath) => fs.readFile(path.join(root, relativePath), "utf8"));
         await writePackageRoot(packageRoot, "1.0.0");
+        const staleStage = path.join(globalRoot, ".openclaw.update-stage-abandoned");
+        await fs.mkdir(staleStage);
+        await fs.writeFile(path.join(staleStage, "evidence"), "earlier candidate bytes\n");
         const originalBytes = await Promise.all(readPackageBytes(packageRoot));
         const params = {
           installTarget: createNpmTarget(globalRoot),
@@ -124,16 +127,19 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
           await expect(fs.access(prefix)).rejects.toMatchObject({ code: "ENOENT" });
         }
         expect((await fs.readdir(globalRoot)).toSorted()).toEqual(
-          [path.basename(protectedBackup), "openclaw"].toSorted(),
+          [path.basename(protectedBackup), path.basename(staleStage), "openclaw"].toSorted(),
+        );
+        await expect(fs.readFile(path.join(staleStage, "evidence"), "utf8")).resolves.toBe(
+          "earlier candidate bytes\n",
         );
         expect(result).toMatchObject({
           failedStep: null,
           afterVersion: "2.0.0",
-          verifiedPackageRoot: packageRoot,
+          activePackageRoot: packageRoot,
           recovery: { serviceRestartSafe: true, version: "2.0.0" },
         });
         expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "global install swap", exitCode: 0 }),
+          expect.objectContaining({ name: "package-swap", exitCode: 0 }),
         );
         expect(await Promise.all(readPackageBytes(packageRoot))).toEqual(candidateBytes);
       });

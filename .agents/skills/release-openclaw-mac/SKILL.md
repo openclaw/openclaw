@@ -8,8 +8,25 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 This is a regular stable-release skill. Do not invoke it for extended-stable;
-that track does not inherit macOS assets, appcast promotion, or a GitHub Release
-unless the current extended-stable release policy explicitly adds them.
+that track's GitHub Release carries shared validation evidence but does not
+inherit macOS assets or appcast promotion.
+
+## Release authorization
+
+An explicit stable or full release request includes macOS publication unless
+the operator limits its scope. Continue through validation, signing,
+notarization, promotion, and verification without asking for separate macOS
+consent. Keep the exact release identity and all artifact checks. macOS
+publication runs in parallel with npm and never blocks it; a mac failure does
+not hold the npm/ClawHub release, GitHub release finalization, or main closeout.
+Fix it in parallel.
+
+Follow the current owner-configured environment policy. Do not invent an extra
+reviewer requirement or recreate an obsolete one. If GitHub still enforces an
+approval, report the actual rule and resolve it through its owner; policy changes
+require explicit organization-owner direction and verified active admin
+membership. Never impersonate a reviewer, fabricate approval, or use another
+signing path to bypass an enforced rule.
 
 ## Credentials
 
@@ -53,10 +70,9 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 - Real mac publish must reuse:
   - a successful release-ops mac preflight run for the same tag/source SHA
   - a successful release-ops mac validation run for the same tag/source SHA
-- Release-ops preflight and real publish enter the protected `mac-release`
-  environment in the `build_sign_and_package` job. Operators may be able to
-  trigger the workflow while Vincent or another environment reviewer approves
-  the paused deployment before signing/notarization/promotion proceeds.
+- Release-ops preflight and real publish use the `mac-release` environment for
+  signing and promotion secrets and its main-only deployment policy. The
+  authorized release operator continues under that environment's current rules.
 - If preflight source SHA differs from tag SHA, validation must also use the same `source_ref`; promotion rejects mismatched proof.
 
 ## Notarization
@@ -71,7 +87,9 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 The public handoff workflow validates the tag, source, build, and package
 metadata before publication. It does not require a GitHub release page because
 it does not upload assets. Keep this validation before the real publish
-workflow; the publisher owns draft creation and final undraft.
+workflow. The core publisher owns GitHub release finalization; macOS promotion
+attaches its verified assets to that release whether it is still a draft or
+already public, so it never waits for the npm flip.
 
 Public handoff validation:
 
@@ -100,9 +118,21 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-Wait for the run to reach the `mac-release` environment approval if GitHub
-pauses it, then get approval from Vincent or another configured environment
-reviewer. Record the successful preflight run id.
+Follow the run through signing and notarization under the configured environment
+policy. Record the successful preflight run id; an approval pause is not a
+successful preflight.
+
+Resume is the default. Re-dispatching the same preflight command after a
+failure (notary outage, DMG packaging, collector) resumes every variant from
+the newest checkpoint left by a failed or cancelled `main` dispatch for the same
+tag and source SHA; only variants without a checkpoint rebuild. The run log
+prints `Resuming <variant> from run <id> attempt <n>` or `Building <variant>`.
+`ignore_checkpoints=true` forces fresh builds. Pass `resume_notarization_run_id`,
+`resume_notarization_run_attempt`, and `resume_notarization_variant` only to pin
+one specific run, or for checkpoints made before the resume index existed
+(`macos-resume-<tag>-<variant>-<sha>` artifacts). Prefer
+`gh run rerun <run-id> --failed --repo openclaw/releases` when the failed job is
+still in the current run.
 
 Release-ops validation for a branch-variation preflight:
 
@@ -127,8 +157,8 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-Wait for the `mac-release` environment approval again if GitHub pauses the real
-publish run before it promotes assets.
+Follow promotion through asset upload and appcast publication under the same
+release authorization and current environment policy.
 
 - Release-ops `openclaw/releases` publish/validate workflows run from their own
   trusted `main` workflow ref. Real publish has a guard that rejects any other
@@ -137,6 +167,6 @@ publish run before it promotes assets.
 
 ## Verify
 
-- `gh release view vYYYY.M.PATCH --repo openclaw/openclaw` shows zip, dmg, dSYM zip, not draft, not prerelease.
+- `gh release view vYYYY.M.PATCH --repo openclaw/openclaw` shows zip, dmg, dSYM zip; once the npm publisher has flipped it: not draft, not prerelease.
 - Public `main` `appcast.xml` points at `OpenClaw-YYYY.M.PATCH.zip`.
 - Appcast entry has `sparkle:version`, `sparkle:shortVersionString`, length, and `sparkle:edSignature`.

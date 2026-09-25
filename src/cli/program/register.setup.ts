@@ -6,7 +6,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
-import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
 import {
   registerOnboardAuthOptions,
   registerOnboardGatewayOptions,
@@ -37,34 +37,6 @@ export function resolveSetupCommandRoute(input: {
     return "system-agent";
   }
   return "onboarding";
-}
-
-function hasExplicitOnboardingOption(command: Command): boolean {
-  return command.options.some((option) => {
-    const name = option.attributeName();
-    return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
-  });
-}
-
-async function isConfiguredInstance(): Promise<boolean> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists) {
-    return false;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return true;
-  }
-  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
-    return false;
-  }
-  // Inference commits before installation finishes; pending local setup must
-  // resume onboarding instead of opening a chat against an unfinished Gateway.
-  const { readLocalOnboardingStateForConfig } =
-    await import("../../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
-  );
 }
 
 async function runSystemAgentEntry(
@@ -139,7 +111,8 @@ export function registerSetupCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
       "--baseline",
@@ -171,10 +144,14 @@ export function registerSetupCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
-      const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
+      const hasOnboardingFlag =
+        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
-      const configured =
-        hasOnboardingFlag || hasSystemAgentRequest ? false : await isConfiguredInstance();
+      let configured = false;
+      if (!hasOnboardingFlag && !hasSystemAgentRequest) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
+      }
       const route = resolveSetupCommandRoute({
         hasOnboardingFlag,
         hasSystemAgentRequest,

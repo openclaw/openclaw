@@ -96,7 +96,10 @@ function resolveProfileForTest(
     cdpHost,
     cdpIsLoopback,
     color: rawProfile?.color ?? state.resolved.color,
-    driver: rawProfile?.driver === "existing-session" ? "existing-session" : "openclaw",
+    driver:
+      rawProfile?.driver === "existing-session" || rawProfile?.driver === "extension"
+        ? rawProfile.driver
+        : "openclaw",
     headless: rawProfile?.headless ?? state.resolved.headless,
     headlessSource:
       typeof rawProfile?.headless === "boolean" ? "profile" : state.resolved.headlessSource,
@@ -123,7 +126,6 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
       profile,
       runtime,
       getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
-      ensureBrowserAvailable: async () => {},
       listTabs: tabOps.listTabs,
       openTab: tabOps.openTab,
     });

@@ -1,17 +1,4 @@
 // Openai plugin module implements tts behavior.
-import {
-  assertOkOrThrowProviderError,
-  readProviderBinaryResponse,
-  resolveProviderRequestHeaders,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
@@ -50,7 +37,7 @@ export function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
+export function isCustomOpenAITtsBaseUrl(baseUrl?: string): boolean {
   if (baseUrl != null) {
     return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
   }
@@ -58,14 +45,14 @@ function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
 }
 
 export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
-  if (isCustomOpenAIEndpoint(baseUrl)) {
+  if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
-  if (isCustomOpenAIEndpoint(baseUrl)) {
+  if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
@@ -80,7 +67,7 @@ function resolveOpenAITtsInstructions(
   if (!next) {
     return undefined;
   }
-  if (baseUrl !== undefined && isCustomOpenAIEndpoint(baseUrl)) {
+  if (baseUrl !== undefined && isCustomOpenAITtsBaseUrl(baseUrl)) {
     return next;
   }
   return model.includes("gpt-4o-mini-tts") ? next : undefined;
@@ -131,6 +118,15 @@ export async function openaiTTS(params: {
   if (!isValidOpenAIVoice(voice, baseUrl)) {
     throw new Error(`Invalid voice: ${voice}`);
   }
+  const {
+    assertOkOrThrowProviderError,
+    readProviderBinaryResponse,
+    resolveProviderRequestHeaders,
+  } = await import("openclaw/plugin-sdk/provider-http");
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("openclaw/plugin-sdk/proxy-capture");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const requestHeaders = resolveProviderRequestHeaders({
     provider: "openai",

@@ -41,7 +41,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 type SandboxExplainOptions = {

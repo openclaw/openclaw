@@ -368,6 +368,43 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("guarded input file URL fetches", () => {
+  it.each(["image", "file"] as const)(
+    "does not start %s processing after cancellation during fetch release",
+    async (kind) => {
+      const controller = new AbortController();
+      const reason = new Error("HTTP request ended during download cleanup");
+      const source = { type: "url" as const, url: "https://example.com/input" };
+      const release = mockUrlFetchResponse({
+        source,
+        fetchedContentType: kind === "image" ? "image/png" : "application/pdf",
+        fetchedBody:
+          kind === "image"
+            ? Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=",
+                "base64",
+              )
+            : Buffer.from("%PDF-1.4\n"),
+      });
+      release?.mockImplementationOnce(async () => controller.abort(reason));
+
+      const extraction =
+        kind === "image"
+          ? extractImageContentFromSource(
+              source,
+              createImageSourceLimits(["image/png"], true),
+              controller.signal,
+            )
+          : extractFileContentFromSource({
+              source,
+              limits: createFileSourceLimits(["application/pdf"], true),
+              signal: controller.signal,
+            });
+      await expect(extraction).rejects.toBe(reason);
+      expect(kind === "image" ? detectMimeMock : extractPdfContentMock).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("releases a rejected fetch without waiting for its capture tee", async () => {
     const response = new Response("server error", { status: 503 });
     const capture = response.clone();
@@ -663,6 +700,32 @@ describe("input file MIME sniffing", () => {
     ).rejects.toThrow("Unsupported file MIME type: application/zip");
   });
 
+  it.each([
+    { text: "雪🙂", maxChars: 4, expected: "雪🙂", truncated: false },
+    { text: "雪🙂!", maxChars: 4, expected: "雪🙂!", truncated: false },
+    { text: "雪🙂!tail", maxChars: 4, expected: "雪🙂!", truncated: true },
+    { text: "雪🙂tail", maxChars: 2, expected: "雪", truncated: true },
+    { text: "not empty", maxChars: 0, expected: "", truncated: true },
+  ])("labels incomplete PDF text at limit $maxChars for $text", async (testCase) => {
+    const images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+    extractPdfContentMock.mockResolvedValueOnce({ text: testCase.text, images });
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "application/pdf",
+        filename: "scan.pdf",
+      },
+      limits: { ...createFileSourceLimits(["application/pdf"]), maxChars: testCase.maxChars },
+    });
+    expect(result.text).toBe(testCase.expected);
+    expect(Boolean(result.metadata?.textTruncated)).toBe(testCase.truncated);
+    expect(result.images).toEqual(images);
+    expect(extractPdfContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPages: 1, maxPixels: 1, minTextChars: 1 }),
+    );
+  });
+
   it("times out local PDF extraction with the input file timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -683,6 +746,9 @@ describe("input file MIME sniffing", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await pending;
+      const signal = extractPdfContentMock.mock.calls[0]?.[0]?.signal as AbortSignal;
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
     } finally {
       vi.useRealTimers();
     }

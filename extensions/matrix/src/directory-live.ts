@@ -1,12 +1,14 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements directory live behavior.
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAuth } from "./matrix/client.js";
 import { MatrixAuthedHttpClient } from "./matrix/sdk/http-client.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
+import type { CoreConfig } from "./types.js";
 
 type MatrixUserResult = {
   user_id?: string;
@@ -36,8 +38,6 @@ type MatrixDirectoryLiveParams = {
   limit?: number | null;
 };
 
-type MatrixResolvedAuth = Awaited<ReturnType<typeof resolveMatrixAuth>>;
-
 const MATRIX_DIRECTORY_TIMEOUT_MS = 10_000;
 
 function resolveMatrixDirectoryLimit(limit?: number | null): number {
@@ -46,32 +46,19 @@ function resolveMatrixDirectoryLimit(limit?: number | null): number {
     : 20;
 }
 
-function createMatrixDirectoryClient(auth: MatrixResolvedAuth): MatrixAuthedHttpClient {
+async function createMatrixDirectoryClient(
+  params: MatrixDirectoryLiveParams,
+): Promise<MatrixAuthedHttpClient> {
+  const auth = await resolveMatrixAuth({
+    cfg: params.cfg as CoreConfig,
+    accountId: params.accountId,
+  });
   return new MatrixAuthedHttpClient({
     homeserver: auth.homeserver,
     accessToken: auth.accessToken,
     ssrfPolicy: auth.ssrfPolicy,
     dispatcherPolicy: auth.dispatcherPolicy,
   });
-}
-
-async function resolveMatrixDirectoryContext(params: MatrixDirectoryLiveParams): Promise<{
-  auth: MatrixResolvedAuth;
-  client: MatrixAuthedHttpClient;
-  query: string;
-  queryLower: string;
-} | null> {
-  const query = normalizeOptionalString(params.query) ?? "";
-  if (!query) {
-    return null;
-  }
-  const auth = await resolveMatrixAuth({ cfg: params.cfg as never, accountId: params.accountId });
-  return {
-    auth,
-    client: createMatrixDirectoryClient(auth),
-    query,
-    queryLower: normalizeLowercaseStringOrEmpty(query),
-  };
 }
 
 function createGroupDirectoryEntry(params: {
@@ -95,12 +82,16 @@ async function requestMatrixJson<T>(
     body?: unknown;
   },
 ): Promise<T> {
-  return (await client.requestJson({
+  const result = await client.requestJson({
     method: params.method,
     endpoint: params.endpoint,
     body: params.body,
     timeoutMs: MATRIX_DIRECTORY_TIMEOUT_MS,
-  })) as T;
+  });
+  if (!isRecord(result)) {
+    throw new Error(`Matrix homeserver returned a non-object JSON response for ${params.endpoint}`);
+  }
+  return result as T;
 }
 
 export async function listMatrixDirectoryPeersLive(
@@ -114,19 +105,13 @@ export async function listMatrixDirectoryPeersLive(
   if (directUserId && isMatrixQualifiedUserId(directUserId)) {
     return [{ kind: "user", id: directUserId }];
   }
-  const context = await resolveMatrixDirectoryContext({
-    ...params,
-    query,
-  });
-  if (!context) {
-    return [];
-  }
+  const client = await createMatrixDirectoryClient(params);
 
-  const res = await requestMatrixJson<MatrixUserDirectoryResponse>(context.client, {
+  const res = await requestMatrixJson<MatrixUserDirectoryResponse>(client, {
     method: "POST",
     endpoint: "/_matrix/client/v3/user_directory/search",
     body: {
-      search_term: context.query,
+      search_term: query,
       limit: resolveMatrixDirectoryLimit(params.limit),
     },
   });
@@ -192,14 +177,8 @@ export async function listMatrixDirectoryGroupsLive(
     return [createGroupDirectoryEntry({ id: directTarget, name: directTarget })];
   }
 
-  const context = await resolveMatrixDirectoryContext({
-    ...params,
-    query,
-  });
-  if (!context) {
-    return [];
-  }
-  const { client, queryLower } = context;
+  const client = await createMatrixDirectoryClient(params);
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const limit = resolveMatrixDirectoryLimit(params.limit);
 
   if (directTarget?.startsWith("#")) {

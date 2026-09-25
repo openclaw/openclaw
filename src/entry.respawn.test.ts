@@ -30,6 +30,24 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["gateway", "run", "--ambient-channels"],
+    ["gateway", "--ambient-channels", "run"],
+    ["gateway", "run", "--dev-ambient-channels"],
+  ])("keeps foreground Gateway ambient channel options in process: %j", (...args) => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(
+        buildCliRespawnPlan({
+          argv: ["node", "openclaw", ...args],
+          env: {},
+          execArgv: [],
+          autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+          platform,
+        }),
+      ).toBeNull();
+    }
+  });
+
   it("does not detach native hook relays through a startup respawn", () => {
     expect(
       buildCliRespawnPlan({
@@ -410,6 +428,7 @@ describe("runCliRespawnPlan", () => {
         stdio: "inherit",
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = expectDefined<unknown[]>(

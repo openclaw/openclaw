@@ -6,9 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
-  probeScheduledTaskExists,
+  isScheduledTaskEnabled,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
 import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
@@ -346,15 +347,20 @@ describe("readScheduledTaskCommand", () => {
     });
   });
 
-  it("returns null when script has no command", async () => {
-    await withScheduledTaskScript(
-      { scriptLines: ["@echo off", "rem This is just a comment"] },
-      async (env) => {
-        const result = await readScheduledTaskCommand(env);
-        expect(result).toBeNull();
-      },
-    );
-  });
+  it.each(["", "< NUL", "2>err<NUL", '>>"out log" 2>&1'])(
+    "rejects a script with no command before redirections: %s",
+    async (redirections) => {
+      await withScheduledTaskScript(
+        { scriptLines: ["@echo off", "rem This is just a comment", redirections] },
+        async (env) => {
+          await expect(readScheduledTaskCommand(env)).resolves.toBeNull();
+          await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+            "Effective Scheduled Task service command could not be inspected.",
+          );
+        },
+      );
+    },
+  );
 
   it("parses full script with all components", async () => {
     await withScheduledTaskScript(
@@ -407,6 +413,119 @@ describe("readScheduledTaskCommand", () => {
           ],
           sourcePath: resolveTaskScriptPath(env),
         });
+      },
+    );
+  });
+
+  it.each([
+    "< NUL",
+    '>> "C:\\Logs\\gateway stdout.log" 2>&1 < NUL',
+    '< NUL >> "%USERPROFILE%\\gateway.log" 2>&1',
+    "1>>gateway.log 2>&1",
+    "2>&1",
+    '2>error.log 1>output.log 0<"nul"',
+    ">out.log<NuL",
+    ">>out.log 2>&1",
+    '> "gateway,part;one=1.log" 2>&1',
+  ])("removes only complete trailing launcher redirections: %s", async (suffix) => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          'cd /d "C:\\OpenClaw fixture"',
+          'set "OPENCLAW_TEST_VALUE=retained"',
+          `node gateway.js --port 18789 --msg "a >b & c" ${suffix}`,
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env, { requireEffective: true });
+        expect(result).toMatchObject({
+          programArguments: ["node", "gateway.js", "--port", "18789", "--msg", "a >b & c"],
+          workingDirectory: "C:\\OpenClaw fixture",
+          environment: { OPENCLAW_TEST_VALUE: "retained" },
+        });
+      },
+    );
+  });
+
+  it.each([
+    ["gateway.js>out.log", ["gateway.js"]],
+    ['gateway.js>>"C:\\Logs\\out log" 2>&1<NUL', ["gateway.js"]],
+    ['gateway.js --msg "a >b"', ["gateway.js", "--msg", "a >b"]],
+    ['gateway.js --msg "a>b"<NUL', ["gateway.js", "--msg", "a>b"]],
+    ['gateway.js --msg "< NUL"', ["gateway.js", "--msg", "< NUL"]],
+    ['gateway.js --msg "a >b">out.log', ["gateway.js", "--msg", "a >b"]],
+    ['gateway.js --port "18789">out.log', ["gateway.js", "--port", "18789"]],
+  ])("preserves arguments beside quoted or attached operators: %s", async (line, args) => {
+    await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
+      expect((await readScheduledTaskCommand(env))?.programArguments).toEqual(["node", ...args]);
+    });
+  });
+
+  it.each(["%OPENCLAW_TEST_LOG_PATH%", "!OPENCLAW_TEST_LOG_PATH!"])(
+    "preserves unquoted redirect expansion boundaries: %s",
+    async (target) => {
+      await withScheduledTaskScript(
+        {
+          scriptLines: [
+            "@echo off",
+            'set "OPENCLAW_TEST_LOG_PATH=C:\\Logs\\gateway output.log"',
+            `node gateway.js --port 18789 < NUL >> ${target} 2>&1`,
+          ],
+        },
+        async (env) => {
+          const result = await readScheduledTaskCommand(env, { requireEffective: true });
+          expect(result?.programArguments).toEqual([
+            "node",
+            "gateway.js",
+            "--port",
+            "18789",
+            "<",
+            "NUL",
+            ">>",
+            target,
+            "2>&1",
+          ]);
+        },
+      );
+    },
+  );
+
+  it.each([
+    [">out&whoami", [">out&whoami"]],
+    [">out&whoami 2>&1", [">out&whoami", "2>&1"]],
+    ["& whoami >out", ["&", "whoami", ">out"]],
+    ["& echo done >out", ["&", "echo", "done", ">out"]],
+    [">first && echo done >>second", [">first", "&&", "echo", "done", ">>second"]],
+    ["| other >out", ["|", "other", ">out"]],
+    ["(other) >out", ["(other)", ">out"]],
+    [">out --extra", [">out", "--extra"]],
+    [">out >", [">out", ">"]],
+    [">out 2>&", [">out", "2>&"]],
+    ['> ""', [">"]],
+    ['> "unterminated', [">", "unterminated"]],
+    ['--msg "a >b', ["--msg", "a >b"]],
+    [">out <input", [">out", "<input"]],
+    [">out >>>next", [">out", ">>>next"]],
+    [">out 2>&12", [">out", "2>&12"]],
+    [">gateway.log,extra 2>&1", [">gateway.log,extra", "2>&1"]],
+    [">gateway.log;extra 2>&1", [">gateway.log;extra", "2>&1"]],
+    [">gateway.log=extra 2>&1", [">gateway.log=extra", "2>&1"]],
+    ["--msg a^>b >out", ["--msg", "a^>b", ">out"]],
+    ['--msg "a\\" >b" >out', ["--msg", 'a" >b', ">out"]],
+    ['--msg ^"a >b^" >out', ["--msg", "^a >b^", ">out"]],
+    ["--port 18789>out", ["--port", "18789>out"]],
+    ["gateway.js2>err", ["gateway.js2>err"]],
+    ["& whoami <NUL", ["&", "whoami", "<NUL"]],
+  ])("keeps the whole ambiguous launcher command: %s", async (tail, args) => {
+    await withScheduledTaskScript(
+      { scriptLines: ["@echo off", `node gateway.js ${tail}`] },
+      async (env) => {
+        expect((await readScheduledTaskCommand(env))?.programArguments).toEqual([
+          "node",
+          "gateway.js",
+          ...args,
+        ]);
       },
     );
   });
@@ -479,3 +598,29 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 });
+
+// Enable policy is not numeric runtime state: a ready task may be disabled.
+it.each([false, true])("retains observed Task Scheduler enable policy %s", (enabled) => {
+  spawnSync.mockReturnValue({
+    status: 0,
+    stdout: JSON.stringify({ state: 3, enabled }),
+    stderr: "",
+  });
+  expect(probeScheduledTaskState("OpenClaw Gateway")).toMatchObject({
+    status: "found",
+    state: 3,
+    enabled,
+  });
+});
+
+it.each([undefined, null, 0, "false"])(
+  "refuses to infer enable policy from a stopped task (%s)",
+  async (enabled) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ state: 3, enabled }),
+      stderr: "",
+    });
+    await expect(isScheduledTaskEnabled({ env: {} })).rejects.toThrow("enable policy");
+  },
+);

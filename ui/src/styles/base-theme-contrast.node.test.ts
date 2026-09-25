@@ -13,9 +13,8 @@ const stylesDir = path.dirname(fileURLToPath(import.meta.url));
  * anyone noticing (issue #107299 measured `--muted` at 3.1–3.5:1 on dark
  * surfaces). Hex tokens are cheap to audit mechanically, so every
  * text-on-surface pairing a theme can produce is asserted here at >= 4.5:1
- * (AA, normal-size text). Non-hex values (rgba tints, color-mix) are skipped:
- * their contrast depends on a compositing surface and is audited in the
- * base.css comments instead.
+ * (AA, normal-size text). Text and surface tokens must resolve to opaque colors;
+ * translucent component paint is composited in the surface-specific cases below.
  */
 
 const TEXT_TOKENS = [
@@ -437,21 +436,48 @@ describe("Control UI theme contrast", () => {
     const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
-        const foreground = tokens.get(textToken);
-        if (!foreground?.startsWith("#")) {
-          continue;
-        }
+        const foreground = resolveOpaqueColor(`var(${textToken})`, tokens);
         for (const surfaceToken of SURFACE_TOKENS) {
-          const background = tokens.get(surfaceToken);
-          if (!background?.startsWith("#")) {
-            continue;
-          }
-          const ratio = contrastRatio(parseHex(foreground), parseHex(background));
+          const background = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const ratio = contrastRatio(foreground, background);
           const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
           if (ratio < floor) {
             failures.push(
-              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+              `${themeName}: ${textToken} rgb(${foreground.join(", ")}) on ${surfaceToken} rgb(${background.join(", ")}) = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps selected controls and session labels at WCAG AA across themes", () => {
+    const cases = [
+      ["components.css", ".btn.active", "var(--accent-subtle)"],
+      [
+        "settings-controls.css",
+        ".settings-segmented--accent > .settings-segmented__btn--active",
+        "var(--accent-subtle)",
+      ],
+      ["sessions.css", ".session-label-chip", null],
+      ["sessions.css", ".session-kind--direct", null],
+    ] as const;
+    const failures: string[] = [];
+    for (const [filename, selector, tint] of cases) {
+      const rule = readRuleBody(fs.readFileSync(path.join(stylesDir, filename), "utf8"), selector);
+      const ink = rule.match(/(?:^|;)\s*color:\s*([^;]+);/u)?.[1];
+      if (!ink) {
+        throw new Error(`could not read text color from "${selector}"`);
+      }
+      for (const [themeName, tokens] of themes) {
+        const foreground = resolveOpaqueColor(ink, tokens);
+        for (const surfaceToken of SURFACE_TOKENS) {
+          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const background = tint ? composite(resolveColor(tint, tokens), host) : host;
+          const ratio = contrastRatio(foreground, background);
+          if (ratio < AA_NORMAL_TEXT_MIN) {
+            failures.push(`${themeName}: ${selector} on ${surfaceToken} = ${ratio.toFixed(2)}:1`);
           }
         }
       }

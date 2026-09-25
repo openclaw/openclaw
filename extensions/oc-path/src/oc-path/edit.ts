@@ -10,7 +10,7 @@
  */
 
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
-import { formatFrontmatterValue } from "./frontmatter-format.js";
+import { rebuildMdRaw } from "./emit.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
 import { guardSentinel } from "./sentinel.js";
 
@@ -41,7 +41,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
     const newEntry: FrontmatterEntry = { ...existing, value: newValue };
     const newFm = ast.frontmatter.slice();
     newFm[idx] = newEntry;
-    return finalize({ ...ast, frontmatter: newFm });
+    return { ok: true, ast: rebuildMdRaw({ ...ast, frontmatter: newFm }) };
   }
 
   if (path.section === undefined || path.item === undefined || path.field === undefined) {
@@ -84,7 +84,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
   };
   const newBlocks = ast.blocks.slice();
   newBlocks[blockIdx] = newBlock;
-  return finalize({ ...ast, blocks: newBlocks });
+  return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
 }
 
 // In-place substitution on `bodyText` so round-trip emit reflects the
@@ -105,38 +105,12 @@ function rebuildBlockBody(block: AstBlock, newItems: readonly AstItem[]): string
       continue;
     }
     const re = new RegExp(`^(\\s*-\\s*${escapeRegex(oldItem.kv.key)}\\s*:\\s*).*$`, "m");
-    body = body.replace(re, `$1${newItem.kv.value}`);
+    const newValue = newItem.kv.value;
+    body = body.replace(re, (_match, prefix: string) => `${prefix}${newValue}`);
   }
   return body;
 }
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function finalize(ast: MdAst): MdEditResult {
-  const parts: string[] = [];
-  if (ast.frontmatter.length > 0) {
-    parts.push("---");
-    for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
-    }
-    parts.push("---");
-  }
-  if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(ast.preamble);
-  }
-  for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
-  }
-  return { ok: true, ast: { ...ast, raw: parts.join("\n") } };
 }

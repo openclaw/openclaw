@@ -116,6 +116,5 @@ export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHo
     prepareAudio,
   });
 
-  return async (paramsJSON?: string | null): Promise<string> =>
-    await host.handleCommand(paramsJSON);
+  return Object.assign(host.handleCommand, { hasActiveWork: host.hasActiveWork });
 }

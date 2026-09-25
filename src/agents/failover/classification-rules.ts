@@ -124,7 +124,12 @@ function hasKnownBareLeading402Signal(text: string): boolean {
   );
 }
 function normalize402Message(raw: string): string {
-  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
+  return (
+    normalizeOptionalLowercaseString(raw)
+      ?.replace(LEADING_402_WRAPPER_RE, "")
+      .replace(/\bhttps?:\/\/[^\s<>"']+/g, " ")
+      .trim() ?? ""
+  );
 }
 function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
@@ -205,6 +210,14 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    // Only quota classifications refine HTTP 429. A generic provider fallback
+    // such as timeout must not erase its billing or rate-limit semantics.
+    if (
+      opts?.preserveProviderSignalClassification &&
+      (messageReason === "billing" || messageReason === "rate_limit")
+    ) {
+      return messageClassification;
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
@@ -262,9 +275,19 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("overloaded");
   }
   if (status === 499 || (status >= 500 && status < 600)) {
-    return messageReason === "overloaded" || messageReason === "server_error"
-      ? messageClassification
-      : toReasonClassification("timeout");
+    // Gateways can wrap a deterministic request rejection in a 5xx response.
+    if (
+      messageReason === "overloaded" ||
+      messageReason === "server_error" ||
+      (status >= 500 && messageReason === "format")
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification(
+      status === 499 || status === 504 || status === 522 || status === 524
+        ? "timeout"
+        : "server_error",
+    );
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
@@ -294,6 +317,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     return null;
   }
   switch (normalized) {
+    case "UNKNOWN_PARAMETER":
+      return "format";
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":
@@ -306,6 +331,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
       return "rate_limit";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
+      return "auth";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -332,21 +359,6 @@ export function classifyCoreFailoverReasonFromErrorType(
       return null;
   }
 }
-export function classifyFailoverClassificationFromErrorType(
-  raw: string | undefined,
-): FailoverClassification | null {
-  const reason = classifyCoreFailoverReasonFromErrorType(raw);
-  return reason ? toReasonClassification(reason) : null;
-}
-function isProvider(provider: string | undefined, match: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return Boolean(normalized && normalized.includes(match));
-}
-function hasProviderBilling429Override(provider: string | undefined): boolean {
-  return (
-    isProvider(provider, "xai") || isProvider(provider, "moonshot") || isProvider(provider, "kimi")
-  );
-}
 function hasStructuredBilling429Signal(raw: string): boolean {
   if (hasBillingApiErrorType(raw)) {
     return true;
@@ -368,7 +380,11 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
-  return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+  const normalizedProvider = normalizeOptionalLowercaseString(provider) ?? "";
+  return (
+    ["xai", "moonshot", "kimi"].some((name) => normalizedProvider.includes(name)) ||
+    !isAmbiguousGeneric429BalanceMessage(raw)
+  );
 }
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;

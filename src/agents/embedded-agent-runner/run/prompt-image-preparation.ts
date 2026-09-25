@@ -7,20 +7,9 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 type PromptExecutionAttempt = Pick<
   RunEmbeddedAgentParams,
-  "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder"
+  "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder" | "workspaceDir"
 > & { model: { input?: string[] } };
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
-
-function emptyPromptImages(): PromptImageResult {
-  return {
-    images: [],
-    imageFactIndexes: [],
-    detectedRefs: [],
-    failedMediaCount: 0,
-    loadedCount: 0,
-    skippedCount: 0,
-  };
-}
 
 /** Prepares ordered prompt images using the admitted media and filesystem policy. */
 export async function prepareEmbeddedAttemptPromptExecution(input: {
@@ -40,13 +29,21 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 > {
   if (input.skipPromptSubmission) {
-    return emptyPromptImages();
+    return {
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 0,
+      skippedCount: 0,
+    };
   }
 
   const { attempt } = input;
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
+    agentWorkspaceDir: attempt.workspaceDir,
     model: attempt.model,
     existingImages: attempt.images,
     imageOrder: attempt.imageOrder,

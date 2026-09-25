@@ -18,12 +18,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
-import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
+import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 
 type UnknownRecord = Record<string, unknown>;
@@ -94,6 +95,30 @@ function normalizeOverrideValue(value: unknown): unknown {
   return value;
 }
 
+function formatPnpmPackageSelector(selector: PackageSelector): string {
+  return selector.bareSpecifier === undefined
+    ? selector.name
+    : `${selector.name}@${selector.bareSpecifier}`;
+}
+
+function parsePnpmScopedOverride(
+  key: string,
+): { parentSelector: string; targetSelector: string } | undefined {
+  try {
+    const parsed = parsePkgAndParentSelector(key);
+    if (!parsed.parentPkg) {
+      return undefined;
+    }
+    return {
+      parentSelector: formatPnpmPackageSelector(parsed.parentPkg),
+      targetSelector: formatPnpmPackageSelector(parsed.targetPkg),
+    };
+  } catch {
+    // Let npm report malformed non-pnpm keys when it consumes the generated manifest.
+    return undefined;
+  }
+}
+
 function normalizeOverrides(overrides: unknown): OverrideMap {
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     return {};
@@ -105,16 +130,12 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
     if (value === "-") {
       continue;
     }
-    const scopedSeparator = key.indexOf(">");
-    if (scopedSeparator > 0) {
-      const parentSelector = key.slice(0, scopedSeparator).trim();
-      const dependencyName = key.slice(scopedSeparator + 1).trim();
-      if (parentSelector && dependencyName) {
-        mergeOverrideEntry(normalized, parentSelector, {
-          [dependencyName]: normalizeOverrideValue(value),
-        });
-        continue;
-      }
+    const scopedOverride = parsePnpmScopedOverride(key);
+    if (scopedOverride) {
+      mergeOverrideEntry(normalized, scopedOverride.parentSelector, {
+        [scopedOverride.targetSelector]: normalizeOverrideValue(value),
+      });
+      continue;
     }
     mergeOverrideEntry(normalized, key, normalizeOverrideValue(value));
   }
@@ -333,10 +354,17 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
     Object.entries(overrides)
       .map<[string, unknown]>(([parentSelector, nestedOverrides]) => {
         if (isRecord(nestedOverrides)) {
+          const parentVersion = exactVersionFromOverrideSpec(nestedOverrides["."]);
+          const pinnedChildren = parentVersion && overrides[`${parentSelector}@${parentVersion}`];
+          // npm uses the first matching parent rule, so object-form pins must
+          // carry the same locked children as scalar pins before shadowing it.
+          const children = isRecord(pinnedChildren)
+            ? (mergeOverrides(nestedOverrides, pinnedChildren, {}) ?? nestedOverrides)
+            : nestedOverrides;
           return [
             parentSelector,
             Object.fromEntries(
-              Object.entries(nestedOverrides)
+              Object.entries(children)
                 .map<[string, unknown]>(([dependencyName, version]) => [
                   dependencyName,
                   typeof version === "string"
@@ -362,7 +390,7 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
 
 function resolvePnpmLockOverridePlan(lockfile: unknown) {
   const versionsByName = collectPnpmLockPackageVersions(lockfile);
-  if (versionsByName.size === 0) {
+  if (!recordAt(lockfile, "packages")) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
   }
   const multiVersionPackageNames = new Set(
@@ -511,9 +539,132 @@ function mergeOverrides(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function readNpmLockOverrides() {
+function runtimePnpmLock(
+  lockfile: unknown,
+  packageJson: UnknownRecord,
+  packageDir: string,
+  localPackageArtifacts: NpmLocalPackageArtifact[],
+) {
+  const packages = recordAt(lockfile, "packages") ?? {};
+  const snapshots = recordAt(lockfile, "snapshots") ?? {};
+  const snapshotsByPackage = new Map<string, string[]>();
+  for (const snapshotKey of Object.keys(snapshots)) {
+    const parsed = parsePnpmPackageKey(snapshotKey);
+    if (parsed) {
+      const key = `${parsed.name}@${parsed.version}`;
+      const contexts = snapshotsByPackage.get(key) ?? [];
+      contexts.push(snapshotKey);
+      snapshotsByPackage.set(key, contexts);
+    }
+  }
+  const selectedPackages = new Set<string>();
+  const pending: string[] = [];
+  const addPackage = (key: string) => {
+    if (selectedPackages.has(key)) {
+      return;
+    }
+    const contexts = snapshotsByPackage.get(key);
+    if (!(key in packages) || !contexts) {
+      throw new Error(`pnpm-lock.yaml is missing runtime package or snapshot: ${key}`);
+    }
+    selectedPackages.add(key);
+    pending.push(...contexts);
+  };
+  const versionsByName = collectPnpmLockPackageVersions(lockfile);
+  const visitedManifests = new Set<string>();
+  const fields = ["dependencies", "optionalDependencies"];
+  if (!shouldUseLegacyPeerDepsForNpmLock(packageJson)) {
+    fields.push("peerDependencies");
+  }
+  const addManifest = (manifest: UnknownRecord, manifestDir: string) => {
+    if (visitedManifests.has(manifestDir)) {
+      return;
+    }
+    visitedManifests.add(manifestDir);
+    const normalized = packageJsonForNpmLock(manifest, {});
+    for (const field of fields) {
+      for (const [name, spec] of Object.entries(recordAt(normalized, field) ?? {})) {
+        if (
+          field === "peerDependencies" &&
+          recordAt(recordAt(manifest, "peerDependenciesMeta"), name)?.optional === true
+        ) {
+          continue;
+        }
+        const artifact =
+          manifestDir === packageDir
+            ? localPackageArtifacts.find((entry) => entry.name === name)
+            : undefined;
+        if (artifact) {
+          addPackage(`${artifact.name}@${artifact.version}`);
+          continue;
+        }
+        if (typeof spec === "string" && spec.startsWith("file:")) {
+          const source = resolveLocalFileDependency(packageDir, manifestDir, spec);
+          addManifest(
+            parseJsonObject(readFileSync(path.join(source, "package.json"), "utf8")),
+            source,
+          );
+          continue;
+        }
+        const alias = typeof spec === "string" ? parseNpmAliasOverrideSpec(spec) : null;
+        const targetName = alias?.name ?? name;
+        const range =
+          alias && typeof spec === "string" ? spec.slice(spec.lastIndexOf("@") + 1) : spec;
+        const versions = [...(versionsByName.get(targetName) ?? [])].filter(
+          (version) =>
+            typeof range === "string" &&
+            (version === range || (semver.valid(version) && semver.satisfies(version, range))),
+        );
+        if (versions.length === 0) {
+          throw new Error(`pnpm-lock.yaml has no runtime resolution for ${name}@${String(spec)}`);
+        }
+        for (const version of versions) {
+          addPackage(`${targetName}@${version}`);
+        }
+      }
+    }
+  };
+  addManifest(packageJson, packageDir);
+  const selectedSnapshots: UnknownRecord = {};
+  while (pending.length > 0) {
+    const snapshotKey = pending.pop()!;
+    const snapshot = snapshots[snapshotKey];
+    selectedSnapshots[snapshotKey] = snapshot;
+    for (const field of ["dependencies", "optionalDependencies"]) {
+      for (const [dependencyName, reference] of Object.entries(recordAt(snapshot, field) ?? {})) {
+        if (typeof reference !== "string") {
+          throw new Error(`invalid pnpm runtime dependency: ${snapshotKey} > ${dependencyName}`);
+        }
+        const resolved = resolveSnapshot({
+          dependencyName,
+          reference,
+          snapshots,
+          includeLocal: true,
+        });
+        if (!resolved) {
+          throw new Error(`unresolved pnpm runtime dependency: ${snapshotKey} > ${dependencyName}`);
+        }
+        addPackage(`${resolved.packageName}@${resolved.version}`);
+      }
+    }
+  }
+  return {
+    packages: Object.fromEntries([...selectedPackages].map((key) => [key, packages[key]])),
+    snapshots: selectedSnapshots,
+  };
+}
+
+function readNpmLockOverrides(
+  packageJson: UnknownRecord,
+  packageDir: string,
+  localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+) {
   const lockfile = readPnpmLock();
-  const plan = resolvePnpmLockOverridePlan(lockfile);
+  // npm can merge sibling override contexts at their common ancestor. Unrelated
+  // workspace versions must not turn an exact runtime pin into nested-only rules.
+  const plan = resolvePnpmLockOverridePlan(
+    runtimePnpmLock(lockfile, packageJson, packageDir, localPackageArtifacts),
+  );
   const plannedOverrides =
     mergeOverrides(plan.versionOverrides, plan.scopedVersionOverrides, {}) ?? {};
   const mergedOverrides =
@@ -545,6 +696,12 @@ function packageJsonForNpmLock(
   delete normalized.bundleDependencies;
   delete normalized.bundledDependencies;
   delete normalized.devDependencies;
+  // The generated lock mirrors dependency resolution and must be reproducible on
+  // every CI host. Preserve platform constraints in the published package.json,
+  // but do not let npm reject this temporary lock-generation manifest.
+  delete normalized.os;
+  delete normalized.cpu;
+  delete normalized.libc;
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = recordAt(normalized, field);
     if (!dependencies) {
@@ -649,6 +806,15 @@ function validateLocalPackageArtifacts(packageDir: string, artifacts: NpmLocalPa
   }
 }
 
+function resolveLocalFileDependency(packageDir: string, manifestDir: string, spec: string) {
+  const source = path.resolve(manifestDir, spec.slice("file:".length));
+  const relative = path.relative(packageDir, source);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`npm package lock file dependency escapes package root: ${spec}`);
+  }
+  return source;
+}
+
 function copyLocalFileDependencies(
   packageJson: UnknownRecord,
   packageDir: string,
@@ -667,11 +833,8 @@ function copyLocalFileDependencies(
         if (typeof spec !== "string" || !spec.startsWith("file:")) {
           continue;
         }
-        const source = path.resolve(current.packageDir, spec.slice("file:".length));
+        const source = resolveLocalFileDependency(packageDir, current.packageDir, spec);
         const relative = path.relative(packageDir, source);
-        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-          throw new Error(`npm package lock file dependency escapes package root: ${spec}`);
-        }
         if (copied.has(relative)) {
           continue;
         }
@@ -1061,7 +1224,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     const localPackageArtifacts = options.localPackageArtifacts ?? [];
     validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
-    const npmLockOverrides = readNpmLockOverrides();
+    const npmLockOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
     const normalizedPackageJson = packageJsonForNpmLock(
       packageJson,
       npmLockOverrides,
@@ -1203,16 +1366,16 @@ function packageLabel(packageDir: string) {
   return relative ? relative.replaceAll(path.sep, "/") : ".";
 }
 
-function listManagedNpmLockPackageDirs() {
+export function listManagedNpmLockPackageDirs(rootDir = ROOT_DIR) {
   // npm locks are generated on demand for every publishable package, but never committed.
   return ["extensions", "packages"]
     .flatMap((parentDir) =>
-      readdirSync(path.join(ROOT_DIR, parentDir), { withFileTypes: true })
+      readdirSync(path.join(rootDir, parentDir), { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.posix.join(parentDir, entry.name)),
     )
     .filter((packageDir) => {
-      const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
+      const packageJsonPath = path.join(rootDir, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {
         return false;
       }
@@ -1228,11 +1391,7 @@ function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
   let hasAmbiguousDependencyPolicyChange = false;
   let hasLockfileChange = false;
 
-  for (const rawPath of changedPaths) {
-    const changedPath = rawPath
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/^\.\/+/u, "");
+  for (const changedPath of changedPaths) {
     if (!changedPath) {
       continue;
     }
@@ -1361,11 +1520,6 @@ export function resolvePackageDirs(args: string[]) {
   };
 }
 
-function checkPackage(packageDir: string) {
-  generateNpmPackageLock(packageDir);
-  return `${packageLabel(packageDir)}: npm package lock validated.`;
-}
-
 /** @internal Directly tested script implementation detail. */
 export function resolveNpmLockJobs(
   rawValue: unknown,
@@ -1386,9 +1540,11 @@ export function resolveNpmLockJobs(
   return jobs;
 }
 
-async function runPackageWorker(packageDir: string) {
+async function runPackageWorker(packageDir: string, rootDir: string) {
   return await new Promise<string>((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), {
+      // Each worker loads policy from the source checkout, using this checkout's tooling.
+      env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: rootDir },
       workerData: {
         kind: NPM_LOCK_WORKER_KIND,
         packageDir,
@@ -1399,25 +1555,35 @@ async function runPackageWorker(packageDir: string) {
         reject(new Error("npm-lock worker returned an invalid response"));
       } else if (typeof message.error === "string") {
         reject(new Error(message.error));
+      } else if (typeof message.output === "string") {
+        resolve(message.output);
       } else {
-        resolve(typeof message.output === "string" ? message.output : "");
+        reject(new Error("npm-lock worker returned an invalid response"));
       }
     });
     worker.once("error", reject);
     worker.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`${packageLabel(packageDir)}: npm-lock worker exited ${code}`));
-      }
+      reject(
+        new Error(`${packageLabel(packageDir)}: npm-lock worker exited ${code} without a result`),
+      );
     });
   });
 }
 
-async function checkPackages({ jobs, packageDirs }: ReturnType<typeof resolvePackageDirs>) {
+export async function generateNpmPackageLocks({
+  jobs,
+  packageDirs,
+  rootDir: sourceRoot = ROOT_DIR,
+}: ReturnType<typeof resolvePackageDirs> & { rootDir?: string }) {
+  const rootDir = path.resolve(sourceRoot);
   const outcomes = await pMap(
     packageDirs,
     async (packageDir) => {
       try {
-        const output = jobs === 1 ? checkPackage(packageDir) : await runPackageWorker(packageDir);
+        const output =
+          jobs === 1 && rootDir === ROOT_DIR
+            ? generateNpmPackageLock(packageDir)
+            : await runPackageWorker(packageDir, rootDir);
         return { output };
       } catch (error) {
         return {
@@ -1429,16 +1595,18 @@ async function checkPackages({ jobs, packageDirs }: ReturnType<typeof resolvePac
   );
 
   const errors: string[] = [];
+  const locks: string[] = [];
   for (const outcome of outcomes) {
-    if (outcome.error) {
+    if (outcome.error !== undefined) {
       errors.push(outcome.error);
-    } else {
-      process.stdout.write(`${outcome.output}\n`);
+    } else if (outcome.output !== undefined) {
+      locks.push(outcome.output);
     }
   }
   if (errors.length > 0) {
     throw new Error(errors.join("\n"));
   }
+  return locks;
 }
 
 async function main() {
@@ -1451,13 +1619,16 @@ async function main() {
   process.stdout.write(
     `Validating ${packageDirs.length} npm package lock${packageDirs.length === 1 ? "" : "s"} with ${effectiveJobs} job${effectiveJobs === 1 ? "" : "s"}.\n`,
   );
-  await checkPackages({ jobs: effectiveJobs, packageDirs });
+  await generateNpmPackageLocks({ jobs: effectiveJobs, packageDirs });
+  for (const packageDir of packageDirs) {
+    process.stdout.write(`${packageLabel(packageDir)}: npm package lock validated.\n`);
+  }
 }
 
 if (!isMainThread && workerData?.kind === NPM_LOCK_WORKER_KIND) {
   const sendToParent = parentPort?.postMessage.bind(parentPort);
   try {
-    const output = checkPackage(workerData.packageDir);
+    const output = generateNpmPackageLock(workerData.packageDir);
     sendToParent?.({ output });
   } catch (error) {
     sendToParent?.({ error: error instanceof Error ? error.message : String(error) });

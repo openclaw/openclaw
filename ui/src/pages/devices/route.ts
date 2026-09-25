@@ -3,15 +3,11 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
-import {
-  createInitialDevicesState,
-  loadDevices,
-  loadExecApprovals,
-  loadNodes,
-} from "../../lib/nodes/index.ts";
 import type { DevicesRouteData } from "./devices-page.ts";
 
 async function loadDevicesRouteData(context: ApplicationContext): Promise<DevicesRouteData> {
+  const { createInitialDevicesState, loadDevices, loadExecApprovals, loadNodes } =
+    await import("../../lib/nodes/page-operations.ts");
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const devices = createInitialDevicesState({

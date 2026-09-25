@@ -5,11 +5,12 @@ import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { renderSystemLaunchDaemonOwnershipShellProbe } from "./launchd-system.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 type LaunchdHandoffMode = LaunchdRestartHandoffMode | "park";
@@ -31,39 +32,11 @@ const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
 const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
 
-type LaunchdRestartLogEnv = {
-  HOME?: string;
-  USERPROFILE?: string;
-  OPENCLAW_STATE_DIR?: string;
-  OPENCLAW_PROFILE?: string;
-};
-
 function resolveGuiDomain(): string {
   if (typeof process.getuid !== "function") {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
-}
-
-function collectStringEnvOverrides(
-  env?: Record<string, string | undefined>,
-): Record<string, string> | undefined {
-  const overrides = Object.fromEntries(
-    Object.entries(env ?? {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
-}
-
-function collectRestartLogEnv(env?: Record<string, string | undefined>): LaunchdRestartLogEnv {
-  const source = { ...process.env, ...env };
-  return {
-    HOME: source.HOME,
-    USERPROFILE: source.USERPROFILE,
-    OPENCLAW_STATE_DIR: source.OPENCLAW_STATE_DIR,
-    OPENCLAW_PROFILE: source.OPENCLAW_PROFILE,
-  };
 }
 
 function resolveLaunchdRestartTarget(
@@ -83,12 +56,15 @@ function resolveLaunchdRestartTarget(
 
 function buildLaunchdRestartScript(
   mode: LaunchdHandoffMode,
-  restartLogEnv: LaunchdRestartLogEnv,
+  restartLogEnv: NodeJS.ProcessEnv,
   label: string,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
-  const waitForCallerPid = `wait_pid="$4"
+  const preamble = `service_target="$1"
+domain="$2"
+plist_path="$3"
+wait_pid="$4"
 ${renderPosixRestartLogSetup(restartLogEnv)}
 printf '[%s] openclaw restart attempt source=handoff mode=${mode} target=%s pid=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$service_target" "$wait_pid" >&2
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
@@ -106,10 +82,7 @@ fi
 `;
 
   if (mode === "park") {
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+    return `${preamble}
 status=0
 if launchctl bootout "$service_target"; then
   status=0
@@ -125,34 +98,13 @@ exit "$status"
 `;
   }
 
-  if (mode === "kickstart") {
-    // Restart is explicit operator intent; undo any previous `launchctl disable`.
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
-${systemOwnershipGuard}
-status=0
-launchctl enable "$service_target"
-if launchctl kickstart -k "$service_target"; then
-  status=0
-else
-  status=$?
-  if launchctl bootstrap "$domain" "$plist_path"; then
-    status=0
-  else
-    launchctl kickstart -k "$service_target"
-    status=$?
-  fi
-fi
-if [ "$status" -eq 0 ]; then
+  const completion = `if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
 else
   printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 exit "$status"
 `;
-  }
 
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
@@ -200,53 +152,36 @@ while :; do
   sleep ${RELOAD_BOOTOUT_WAIT_DELAY_SECONDS}
 done
 `;
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+    return `${preamble}
 ${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
 ${bootoutWaitLoop}
 ${bootstrapRetryLoop}
-if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
-else
-  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
-fi
-exit "$status"
-`;
+${completion}`;
   }
 
   // Without -k, kickstart starts an inert service but leaves a KeepAlive
   // replacement alone. This actively schedules relaunch without a second
   // interruption when launchd wins the race after the caller exits.
-  return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+  const kickstart = mode === "kickstart" ? "kickstart -k" : "kickstart";
+  return `${preamble}
 ${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
-if launchctl kickstart "$service_target"; then
+if launchctl ${kickstart} "$service_target"; then
   status=0
 else
   status=$?
   if launchctl bootstrap "$domain" "$plist_path"; then
     status=0
   else
-    launchctl kickstart "$service_target"
+    launchctl ${kickstart} "$service_target"
     status=$?
   fi
 fi
-if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
-else
-  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
-fi
-exit "$status"
-`;
+${completion}`;
 }
 
 function scheduleDetachedLaunchdHandoff(params: {
@@ -259,11 +194,12 @@ function scheduleDetachedLaunchdHandoff(params: {
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
       : 0;
-  const restartLogEnv = collectRestartLogEnv(params.env);
-  const restartEnv = sanitizeHostExecEnv({
-    baseEnv: process.env,
-    overrides: collectStringEnvOverrides(params.env),
-  });
+  const restartLogEnv = { ...process.env, ...params.env };
+  // Keep the caller's executable search path: service overrides must not redirect
+  // the detached control shell's launchctl, as with the previous host sanitizer.
+  const restartEnv = resolveServiceManagerEnv(
+    mergeProcessEnv([process.env, params.env, { PATH: process.env.PATH }]),
+  );
   try {
     const child = spawn(
       "/bin/sh",

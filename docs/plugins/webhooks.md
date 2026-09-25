@@ -10,7 +10,7 @@ title: "Webhooks plugin"
 The Webhooks plugin adds authenticated HTTP routes so a trusted external
 system (Zapier, n8n, a CI job, an internal service) can create and drive
 managed OpenClaw TaskFlow records over HTTP, without writing a custom plugin.
-`create_flow` creates a tracking record; `run_task` creates or links a child task
+`create_flow` creates a tracking record. `run_task` creates or links a child task
 record. Neither operation starts an agent. The external controller owns the
 workflow and advances its state.
 
@@ -19,8 +19,9 @@ hooks](/automation/cron-jobs#webhooks). To react to internal agent events, use
 [internal hooks](/automation/hooks). Those surfaces do not share this plugin's routes or authentication.
 
 The plugin runs inside the Gateway process. For a remote Gateway, install and
-configure it on that host, then restart the Gateway. It ships with no routes
-configured, so it is a no-op until you add at least one route.
+configure it on that host. It ships with no routes configured, so it is a no-op
+until you add at least one route. With the default hybrid reload mode, route
+configuration changes apply automatically; see [Hot reload](/gateway/configuration/hot-reload).
 
 ## Configure routes
 
@@ -66,12 +67,13 @@ Route fields:
 
 `secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }`.
 
-SecretRefs resolve into the Gateway's startup config snapshot. When one route's
+SecretRefs resolve into the Gateway's runtime config snapshot. When one route's
 secret cannot resolve, the Gateway keeps running and that exact route stays
 registered but cold: requests receive a generic authentication failure (`401`).
-Other routes remain available. Fix the SecretRef source, then reload or restart
-the Gateway to activate the new snapshot. SecretRef values are never resolved
-on the public request path.
+Other routes remain available. After repairing a file, exec, or store SecretRef
+source, run `openclaw plugins reload webhooks` to rebuild routes with refreshed
+secrets. Environment changes require a Gateway restart with the updated
+environment. SecretRef values are never resolved on the public request path.
 
 ## Security model
 
@@ -93,7 +95,7 @@ route can never act outside its bound session. To limit blast radius:
 
 Request handling order is: `POST` method, fixed-window rate limit, JSON content
 type, in-flight limit, shared-secret authentication, bounded JSON body read, then
-action validation. Earlier failures do not reach later checks.
+action validation. Earlier failures do not reach later stages.
 
 | Limit                        | Scope                                                                                                      |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -124,7 +126,7 @@ curl --include https://gateway.example.com/plugins/webhooks/zapier \
   --data '{"action":"get_flow","flowId":"<returned-flow-id>"}'
 ```
 
-HTTP `200` confirms a read or record operation, not completed agent work or
+HTTP `200` acknowledges a read or record operation, not completed agent work or
 message delivery. Use `get_task_summary` for linked task counts and
 [task inspection](/cli/tasks) for actual task status and delivery status. Keep
 those outcomes separate from the controller's flow status.
@@ -149,7 +151,7 @@ those outcomes separate from the controller's flow status.
 
 Mutating actions (`set_waiting`, `resume_flow`, `finish_flow`, `fail_flow`,
 `request_cancel`) require `flowId` and `expectedRevision` for optimistic
-concurrency; a stale revision returns `409 revision_conflict`. Read `result.current`
+concurrency. A stale revision returns `409 revision_conflict`. Read `result.current`
 or call `get_flow`, reconcile the change, then use its current revision.
 `cancel_flow` and `run_task` do not take `expectedRevision`. Action schemas reject
 unknown fields.
@@ -172,24 +174,29 @@ that a matching flow exists.
 `goal` is required. Optional fields are `controllerId`, `status` (`queued`,
 `running`, `waiting`, `blocked`), `notifyPolicy` (`done_only`, `state_changes`,
 `silent`), `currentStep`, `stateJson`, and `waitJson`. The request's `controllerId`
-overrides the route default; it is not a separate authorization boundary.
+overrides the route default. It is not a separate authorization boundary.
 
 Creation has no general idempotency key: retrying `create_flow` after an uncertain
 connection result can create a second flow. Reconcile with `list_flows` before
-repeating creation. Child success alone does not mark a managed flow finished;
-the controller must advance or finish the flow when appropriate.
+repeating creation. Child success alone does not mark a managed flow finished.
+The controller must advance or finish the flow when appropriate.
 
 ### `run_task`
 
 Required fields are `flowId`, `runtime`, and `task`. Allowed `runtime` values are
-`subagent` and `acp`; `status` defaults to `queued` and can be `running`. `startedAt`, `lastEventAt`, and
-`progressSummary` are only valid when `status` is `"running"`; sending them
+`subagent` and `acp`. `status` defaults to `queued` and can be `running`. `startedAt`, `lastEventAt`, and
+`progressSummary` are only valid when `status` is `"running"`. Sending them
 with any other status returns `400 invalid_request`.
 
 The following links an **already existing**, currently owned backing run. Use
 the managed flow id returned by `create_flow`, and the `childSessionKey` and
 `runId` from that existing run. Inventing a child key or run id does not start
 work or grant authority.
+
+The response waits for worker-backed SQLite linkage and registry reconciliation.
+The worker checks the current flow and backing before writing; a backing run
+that has already completed cannot create a new queued or running projection.
+Retrying an existing terminal projection can merge metadata without restarting it.
 
 ```json
 {
@@ -204,9 +211,9 @@ work or grant authority.
 
 `childSessionKey` requires the exact `runId` and current backing ownership by the
 route's configured session. Foreign, stale, or replaced runs are rejected at use
-time. Omit `childSessionKey` to create an unbacked tracking record; supplying an
+time. Omit `childSessionKey` to create an unbacked tracking record. Supplying an
 invalid backing reference is rejected. Reuse by
-`runId` is scoped to the runtime, owner, child, and flow; it is not a universal
+`runId` is scoped to the runtime, owner, child, and flow. It is not a universal
 request-replay guarantee.
 
 Optional metadata includes `sourceId`, `parentTaskId`, `agentId`, `label`,
@@ -216,13 +223,13 @@ Optional metadata includes `sourceId`, `parentTaskId`, `agentId`, `label`,
 ### Waiting and completion
 
 `set_waiting` accepts `currentStep`, `stateJson`, `waitJson`, `blockedTaskId`, and
-`blockedSummary`. A nonempty blocked field selects `blocked`; otherwise the flow
+`blockedSummary`. A nonempty blocked field selects `blocked`. Otherwise the flow
 becomes `waiting`. `resume_flow` accepts `status` (`queued` default or `running`),
 `currentStep`, and `stateJson`, and clears waiting/blocked state.
 
-`finish_flow` marks the flow `succeeded` and accepts `stateJson`; `fail_flow` marks
+`finish_flow` marks the flow `succeeded` and accepts `stateJson`. `fail_flow` marks
 it `failed` and also accepts `blockedTaskId` and `blockedSummary`. Optional string
-fields accept `null` to clear them; `stateJson` and `waitJson` accept any JSON
+fields accept `null` to clear them. `stateJson` and `waitJson` accept any JSON
 value, including retained JSON `null`. Use the current `expectedRevision` for
 each transition.
 
@@ -231,7 +238,7 @@ each transition.
 `request_cancel` records cancellation intent. `cancel_flow` attempts cancellation
 of linked work. If children remain active, the response is HTTP `202` with
 `ok: true`, `code: "cancel_pending"`, and `result.cancelled: false`. Check
-`get_flow` and `get_task_summary` afterward; `202` does not mean cancellation
+`get_flow` and `get_task_summary` afterward. `202` does not mean cancellation
 finished.
 
 ## Response shape
@@ -256,7 +263,7 @@ finished.
 
 Flow and task views omit owner/requester metadata such as `ownerKey`,
 `requesterSessionKey`, and `requesterOrigin`. Task views can still include
-`childSessionKey`, `agentId`, and `runId`; treat responses as operational data.
+`childSessionKey`, `agentId`, and `runId`. Treat responses as operational data.
 `code` values include `not_found`,
 `not_managed`, `revision_conflict`, `persist_failed`, `cancel_requested`,
 `cancel_pending`, `terminal`, `invalid_request`, `request_rejected`, and
@@ -266,24 +273,24 @@ reason not covered by the named codes above.
 
 ### Errors and troubleshooting
 
-| Response              | Next check                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `401`                 | Use the route secret. An unresolved SecretRef leaves that route cold; repair it and reload/restart.     |
-| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                      |
-| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                 |
-| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                          |
-| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                       |
-| `404 not_found`       | The mutation target does not exist in the route's bound session.                                        |
-| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership. |
-| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                    |
+| Response              | Next check                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `401`                 | Use the route secret. For an unresolved SecretRef, follow [route secret recovery](/plugins/webhooks#configure-routes). |
+| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                                     |
+| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                                |
+| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                                         |
+| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                                      |
+| `404 not_found`       | The mutation target does not exist in the route's bound session.                                                       |
+| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership.                |
+| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                                   |
 
 Failures before action validation can be plain text, not the JSON envelope
-above. A Bearer header takes precedence over `x-openclaw-webhook-secret`;
-query-string and body tokens are not authentication methods for this plugin.
+above. A Bearer header takes precedence over `x-openclaw-webhook-secret`.
+Query-string and body tokens are not authentication methods for this plugin.
 
 ## Related
 
 - [Hooks](/automation/hooks) - internal event-driven hooks vs. this HTTP-based TaskFlow bridge
-- [Gateway webhooks (`hooks.*` config)](/automation/cron-jobs#webhooks) - separate generic Gateway HTTP endpoint feature; not the same as this plugin's routes
+- [Gateway webhooks (`hooks.*` config)](/automation/cron-jobs#webhooks) - separate generic Gateway HTTP endpoint feature. Not the same as this plugin's routes
 - [Plugin runtime SDK](/plugins/sdk-runtime)
 - [CLI webhooks](/cli/webhooks)

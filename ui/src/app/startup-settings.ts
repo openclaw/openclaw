@@ -5,7 +5,6 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-// Control UI startup settings resolve native auth handoff and URL parameters.
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
@@ -144,7 +143,13 @@ export function resolveApplicationStartupSettings(
     }
     updateSettings({
       ...(gatewayUrl ? { gatewayUrl } : {}),
-      ...(token ? { token } : credentials ? { token: credentials.token } : {}),
+      // An explicit null retires shared-owner auth for the native browser sign-in
+      // route; an omitted token still preserves the selected Gateway's credentials.
+      ...(nativeAuth.token === null || token
+        ? { token: token ?? "" }
+        : credentials
+          ? { token: credentials.token }
+          : {}),
     });
     if (nativePassword) {
       password = nativePassword;
@@ -242,9 +247,7 @@ export function resolveApplicationStartupSettings(
 
   if (gatewayUrlRaw != null) {
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    if (!gatewayUrlChanged) {
-      pendingGatewayToken = null;
-    } else if (pendingBootstrapToken) {
+    if (!gatewayUrlChanged || pendingBootstrapToken) {
       pendingGatewayToken = null;
     }
     params.delete("gatewayUrl");

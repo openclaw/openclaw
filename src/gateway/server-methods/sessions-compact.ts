@@ -5,12 +5,10 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
-  SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
@@ -20,6 +18,7 @@ import {
   readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -56,18 +55,14 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
-    const maxLines =
-      typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
-        ? Math.max(1, Math.floor(p.maxLines))
-        : undefined;
+    const maxLines = params.maxLines;
 
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, params.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -110,17 +105,15 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     };
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
-    if (!sessionId) {
+    const respondNotCompacted = (details: { ok?: boolean; kept?: number; reason?: string }) => {
       respond(
         true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          reason: "no sessionId",
-        },
+        { ok: true, key: target.canonicalKey, compacted: false, ...details },
         undefined,
       );
+    };
+    if (!sessionId) {
+      respondNotCompacted({ reason: "no sessionId" });
       return;
     }
 
@@ -135,17 +128,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         { maxLines },
       );
       if (!trimPreflight.compacted) {
-        respond(
-          true,
-          {
-            ok: true,
-            key: target.canonicalKey,
-            compacted: false,
-            ...("kept" in trimPreflight
-              ? { kept: trimPreflight.kept }
-              : { reason: "no transcript" }),
-          },
-          undefined,
+        respondNotCompacted(
+          "kept" in trimPreflight ? { kept: trimPreflight.kept } : { reason: "no transcript" },
         );
         return;
       }
@@ -157,21 +141,25 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         storePath,
       });
       if (transcriptStats.eventCount === 0) {
-        respond(
-          true,
-          {
-            ok: true,
-            key: target.canonicalKey,
-            compacted: false,
-            reason: "no transcript",
-          },
-          undefined,
-        );
+        respondNotCompacted({ reason: "no transcript" });
         return;
       }
     }
 
     const lifecycleRevision = entry.lifecycleRevision;
+    const readCurrentEntry = () => {
+      const latest = loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgentId,
+      }).entry;
+      return latest &&
+        latest.sessionId === sessionId &&
+        latest.lifecycleRevision === lifecycleRevision &&
+        !resolveSessionWorkStartError(target.canonicalKey, latest)
+        ? latest
+        : undefined;
+    };
     const queueIdentities = [key, target.canonicalKey, compactTarget.primaryKey, sessionId];
     const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
     let sessionStillCurrent = true;
@@ -184,17 +172,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         identities: lifecycleIdentities,
         kind: "compaction",
         prepare: async () => {
-          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
-            key,
-            cfg,
-            agentId: requestedAgentId,
-          }).entry;
-          if (
-            !latestEntry ||
-            latestEntry.sessionId !== sessionId ||
-            latestEntry.lifecycleRevision !== lifecycleRevision ||
-            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
-          ) {
+          const latestEntry = readCurrentEntry();
+          if (!latestEntry) {
             sessionStillCurrent = false;
             return;
           }
@@ -251,16 +230,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
           if (compactionNoopReason) {
-            respond(
-              true,
-              {
-                ok: false,
-                key: target.canonicalKey,
-                compacted: false,
-                reason: compactionNoopReason,
-              },
-              undefined,
-            );
+            respondNotCompacted({ ok: false, reason: compactionNoopReason });
             return;
           }
           if (blockedByQueuedWork) {
@@ -286,17 +256,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
-            key,
-            cfg,
-            agentId: requestedAgentId,
-          }).entry;
-          if (
-            !latestEntry ||
-            latestEntry.sessionId !== sessionId ||
-            latestEntry.lifecycleRevision !== lifecycleRevision ||
-            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
-          ) {
+          const latestEntry = readCurrentEntry();
+          if (!latestEntry) {
             respond(
               false,
               undefined,
@@ -358,16 +319,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             storePath,
           });
           if (transcriptStats.eventCount === 0) {
-            respond(
-              true,
-              {
-                ok: true,
-                key: target.canonicalKey,
-                compacted: false,
-                reason: "no transcript",
-              },
-              undefined,
-            );
+            respondNotCompacted({ reason: "no transcript" });
             return;
           }
           emitSessionOperation(context, {
@@ -430,29 +382,16 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   ) {
                     return { ok: false };
                   }
-                  const entryToUpdate = existingEntry;
-                  entryToUpdate.updatedAt = Date.now();
-                  entryToUpdate.compactionCount =
-                    Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-                  if (result.compactionKind === "context-engine") {
-                    clearAllCliSessions(entryToUpdate);
-                  }
-                  delete entryToUpdate.inputTokens;
-                  delete entryToUpdate.outputTokens;
-                  delete entryToUpdate.contextBudgetStatus;
-                  if (
-                    typeof result.result?.tokensAfter === "number" &&
-                    Number.isFinite(result.result.tokensAfter)
-                  ) {
-                    entryToUpdate.totalTokens = result.result.tokensAfter;
-                    entryToUpdate.totalTokensFresh = true;
-                    entryToUpdate.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-                  } else {
-                    delete entryToUpdate.totalTokens;
-                    delete entryToUpdate.totalTokensFresh;
-                    delete entryToUpdate.totalTokensVersion;
-                  }
-                  return { ok: true, entry: entryToUpdate };
+                  return {
+                    ok: true,
+                    entry: {
+                      ...existingEntry,
+                      ...projectCompactionAccountingPatch(existingEntry, {
+                        compactionKind: result.compactionKind,
+                        tokensAfter: result.result?.tokensAfter,
+                      }),
+                    },
+                  };
                 },
               });
               persisted = persistProjection.ok;

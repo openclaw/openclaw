@@ -2,6 +2,7 @@ import type {
   SessionCatalogSession,
   SessionCreatedActor,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { presenceViewerLabel } from "../presence-users.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
 
@@ -58,8 +59,6 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   // Custom groups are collected separately so they sort ahead of project groups
   // regardless of session order; interleaving by first-seen would make section
   // order depend on the roster's sort.
-  const customGroups: CatalogProjectGroup[] = [];
-  const projectGroups: CatalogProjectGroup[] = [];
   const customGroupsByName = new Map<string, CatalogProjectGroup>();
   const projectGroupsByPath = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
@@ -79,7 +78,6 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
           sessions: [],
         };
         customGroupsByName.set(customGroup, group);
-        customGroups.push(group);
       }
       group.sessions.push(session);
       continue;
@@ -103,12 +101,11 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         sessions: [],
       };
       projectGroupsByPath.set(projectPath, group);
-      projectGroups.push(group);
     }
     group.sessions.push(session);
   }
 
-  return { groups: [...customGroups, ...projectGroups], ungrouped };
+  return { groups: [...customGroupsByName.values(), ...projectGroupsByPath.values()], ungrouped };
 }
 
 /** Groups adopted sessions by their creator identity. Native threads only carry
@@ -131,7 +128,13 @@ export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSe
     const key = `person:${actorGroupId}`;
     let group = groupsById.get(key);
     if (!group) {
-      const label = actor.label?.trim() || actor.identity.id;
+      const label =
+        actor.identity.type === "profile"
+          ? presenceViewerLabel({
+              id: actor.identity.id,
+              name: actor.label?.trim() || actor.identity.id,
+            })
+          : actor.label?.trim() || actor.identity.id;
       group = {
         kind: "person",
         key,

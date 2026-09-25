@@ -2,6 +2,7 @@
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   formatAgentModelStartupDetails,
@@ -36,6 +37,55 @@ vi.mock("../agents/model-thinking-default.js", () => ({
 }));
 
 describe("gateway startup log", () => {
+  it.each([false, true])(
+    "logs the concrete owner's primary instead of its utility (ambient owner: %s)",
+    async (ambientOwner) => {
+      const info = vi.fn();
+      await logGatewayStartup({
+        cfg: {
+          meta: { migrations: { utilityModelSeparation: true } },
+          agents: {
+            ownership: "explicit",
+            ...(ambientOwner ? { defaults: { systemAgent: { agentId: "worker" } } } : {}),
+            entries: {
+              worker: {
+                utilityModel: "helper@local:utility",
+                models: { "local-utility/small": { alias: "helper" } },
+              },
+              ...(ambientOwner ? { other: {} } : {}),
+            },
+          },
+          models: {
+            providers: Object.fromEntries(
+              ["local-utility", "ordinary"].map((provider) => [
+                provider,
+                {
+                  baseUrl: "http://127.0.0.1:9/v1",
+                  models: [
+                    makeProviderModelFixture({
+                      id: provider === "local-utility" ? "small" : "large",
+                      provider,
+                      api: "openai-completions",
+                      baseUrl: "http://127.0.0.1:9/v1",
+                    }),
+                  ],
+                },
+              ]),
+            ),
+          },
+        },
+        env: {},
+        manifestRecords: [],
+        bindHost: "127.0.0.1",
+        loadedPluginIds: [],
+        port: 18789,
+        log: { info, warn: vi.fn() },
+        isNixMode: false,
+      });
+      expect(info.mock.calls[0]?.[0]).toContain("agent model: ordinary/large");
+    },
+  );
+
   beforeEach(() => {
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");
@@ -420,5 +470,20 @@ describe("gateway startup log", () => {
     expect(listeningMessages).toEqual([
       "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
     ]);
+    const messages = info.mock.calls.map((call) => call[0]);
+    const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
+    expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
+      pid: process.pid,
+      node: process.versions.node,
+      sqlite: process.versions.sqlite,
+      uv: process.versions.uv,
+      openssl: process.versions.openssl,
+    });
+    const workers = messages.find((message) => message.startsWith("worker startup state: "));
+    expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
+      workerCount: expect.any(Number),
+      workerLifecycle: expect.any(Array),
+      compute: { limit: expect.any(Number), active: 0, pendingTasks: 0 },
+    });
   });
 });

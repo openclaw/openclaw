@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -17,6 +18,7 @@ import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
@@ -29,6 +31,11 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
+  /** Host-only root for system-owned turns; never persisted in cron state. */
+  executionRoot?: string;
+  /** Explicit instruction set for a host-owned turn, including an empty review context. */
+  skillsSnapshot?: SkillSnapshot;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -77,6 +84,7 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
  * persistence will write.
  */
 export async function resolveCronAuthSelection(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -99,6 +107,7 @@ export async function resolveCronAuthSelection(params: {
   }
   const runtime = await loadCronAuthProfileRuntime();
   return await runtime.resolveSessionAuthSelection({
+    agentId: params.agentId,
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,

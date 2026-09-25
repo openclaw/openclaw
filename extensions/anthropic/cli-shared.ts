@@ -1,4 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
@@ -8,7 +9,6 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -123,17 +123,20 @@ export function resolveClaudeCliThinkingEnv(
   }
 }
 
-/** Return whether the startup-probed Claude Code build supports the cache-control flag. */
+/** Parse only stable versions; prereleases do not establish native feature support. */
+export function parseClaudeCodeVersion(versionOutput: string | undefined): string | undefined {
+  return versionOutput?.match(/(?:^|\s)(\d+\.\d+\.\d+)(?=$|\s)/u)?.[1];
+}
+
+/** Return whether the probed Claude Code build supports the cache-control flag. */
 export function supportsClaudeDynamicSystemPromptSections(
   versionOutput: string | undefined,
 ): boolean {
-  // Only stable version tokens prove flag support. A prerelease suffix could
-  // predate the stable release and turn every local invocation into an argv error.
-  const match = versionOutput?.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?=$|\s)/u);
-  if (!match) {
+  const parsed = parseClaudeCodeVersion(versionOutput);
+  if (!parsed) {
     return false;
   }
-  const version = match.slice(1).map(Number);
+  const version = parsed.split(".").map(Number);
   const minimum =
     CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION.split(".").map(Number);
   for (const [index, component] of version.entries()) {

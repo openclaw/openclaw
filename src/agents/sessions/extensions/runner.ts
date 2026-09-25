@@ -7,11 +7,14 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import { reportExtensionHandlerError } from "./handler-error.js";
+import { bindExtensionMetadataActions } from "./metadata-actions.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -41,7 +44,6 @@ import type {
   ProviderConfig,
   RegisteredCommand,
   RegisteredTool,
-  ReplacedSessionContext,
   ResolvedCommand,
   ResourcesDiscoverEvent,
   ResourcesDiscoverResult,
@@ -163,37 +165,6 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends {
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
-type NewSessionHandler = (options?: {
-  parentSession?: string;
-  setup?: (sessionManager: SessionManager) => Promise<void>;
-  withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-}) => Promise<{ cancelled: boolean }>;
-
-type ForkHandler = (
-  entryId: string,
-  options?: {
-    position?: "before" | "at";
-    withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-  },
-) => Promise<{ cancelled: boolean }>;
-
-type NavigateTreeHandler = (
-  targetId: string,
-  options?: {
-    summarize?: boolean;
-    customInstructions?: string;
-    replaceInstructions?: boolean;
-    label?: string;
-  },
-) => Promise<{ cancelled: boolean }>;
-
-type SwitchSessionHandler = (
-  sessionPath: string,
-  options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-) => Promise<{ cancelled: boolean }>;
-
-type ReloadHandler = () => Promise<void>;
-
 export type ShutdownHandler = () => void;
 
 /**
@@ -264,11 +235,17 @@ export class ExtensionRunner {
   private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
   private compactFn: (options?: CompactOptions) => void = () => {};
   private getSystemPromptFn: () => string = () => "";
-  private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
-  private forkHandler: ForkHandler = async () => ({ cancelled: false });
-  private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
-  private switchSessionHandler: SwitchSessionHandler = async () => ({ cancelled: false });
-  private reloadHandler: ReloadHandler = async () => {};
+  private newSessionHandler: ExtensionCommandContextActions["newSession"] = async () => ({
+    cancelled: false,
+  });
+  private forkHandler: ExtensionCommandContextActions["fork"] = async () => ({ cancelled: false });
+  private navigateTreeHandler: ExtensionCommandContextActions["navigateTree"] = async () => ({
+    cancelled: false,
+  });
+  private switchSessionHandler: ExtensionCommandContextActions["switchSession"] = async () => ({
+    cancelled: false,
+  });
+  private reloadHandler: ExtensionCommandContextActions["reload"] = async () => {};
   private shutdownHandler: ShutdownHandler = () => {};
   private shortcutDiagnostics: ResourceDiagnostic[] = [];
   private commandDiagnostics: ResourceDiagnostic[] = [];
@@ -309,9 +286,8 @@ export class ExtensionRunner {
     this.runtime.setActiveTools = actions.setActiveTools;
     this.runtime.refreshTools = actions.refreshTools;
     this.runtime.getCommands = actions.getCommands;
-    this.runtime.setModel = actions.setModel;
+    bindExtensionMetadataActions(this.sessionManager, this.runtime, actions);
     this.runtime.getThinkingLevel = actions.getThinkingLevel;
-    this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
     // Context actions (required)
     this.getModel = contextActions.getModel;
@@ -502,6 +478,7 @@ export class ExtensionRunner {
     if (this.staleMessage) {
       throw new Error(this.staleMessage);
     }
+    this.runtime.assertActive();
   }
 
   onError(listener: ExtensionErrorListener): () => void {
@@ -635,38 +612,33 @@ export class ExtensionRunner {
   }
 
   createCommandContext(): ExtensionCommandContext {
-    // Use property descriptors instead of object spread so the guarded getters from
-    // createContext() stay lazy. A spread would eagerly read them once and freeze the
-    // old values into the returned object, bypassing stale-instance checks.
-    const context = Object.defineProperties(
-      {},
-      Object.getOwnPropertyDescriptors(this.createContext()),
-    ) as ExtensionCommandContext;
-    context.waitForIdle = () => {
-      this.assertActive();
-      return this.waitForIdleFn();
-    };
-    context.newSession = (options) => {
-      this.assertActive();
-      return this.newSessionHandler(options);
-    };
-    context.fork = (entryId, options) => {
-      this.assertActive();
-      return this.forkHandler(entryId, options);
-    };
-    context.navigateTree = (targetId, options) => {
-      this.assertActive();
-      return this.navigateTreeHandler(targetId, options);
-    };
-    context.switchSession = (sessionPath, options) => {
-      this.assertActive();
-      return this.switchSessionHandler(sessionPath, options);
-    };
-    context.reload = () => {
-      this.assertActive();
-      return this.reloadHandler();
-    };
-    return context;
+    // Add commands to the fresh context without reading its guarded getters.
+    return Object.assign(this.createContext(), {
+      waitForIdle: () => {
+        this.assertActive();
+        return this.waitForIdleFn();
+      },
+      newSession: (options) => {
+        this.assertActive();
+        return this.newSessionHandler(options);
+      },
+      fork: (entryId, options) => {
+        this.assertActive();
+        return this.forkHandler(entryId, options);
+      },
+      navigateTree: (targetId, options) => {
+        this.assertActive();
+        return this.navigateTreeHandler(targetId, options);
+      },
+      switchSession: (sessionPath, options) => {
+        this.assertActive();
+        return this.switchSessionHandler(sessionPath, options);
+      },
+      reload: () => {
+        this.assertActive();
+        return this.reloadHandler();
+      },
+    } satisfies ExtensionCommandContextActions);
   }
 
   private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
@@ -698,12 +670,7 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
-          this.emitError({
-            extensionPath: ext.path,
-            event: eventType,
-            error: coerceErrorMessage(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
+          reportExtensionHandlerError(err, ext.path, eventType, (error) => this.emitError(error));
         }
       }
     }
@@ -765,8 +732,8 @@ export class ExtensionRunner {
         currentEvent.details = handlerResult.details;
         modified = true;
       }
-      if (handlerResult?.isError !== undefined) {
-        currentEvent.isError = handlerResult.isError;
+      if (handlerResult?.isError !== undefined || isToolResultError(handlerResult)) {
+        currentEvent.isError = handlerResult?.isError ?? true;
         modified = true;
       }
       if (handlerResult?.terminate !== undefined) {
@@ -864,10 +831,7 @@ export class ExtensionRunner {
     systemPromptOptions: BuildSystemPromptOptions,
   ): Promise<BeforeAgentStartCombinedResult | undefined> {
     let currentSystemPrompt = systemPrompt;
-    const ctx = Object.defineProperties(
-      {},
-      Object.getOwnPropertyDescriptors(this.createContext()),
-    ) as ExtensionContext;
+    const ctx = this.createContext();
     ctx.getSystemPrompt = () => {
       this.assertActive();
       return currentSystemPrompt;

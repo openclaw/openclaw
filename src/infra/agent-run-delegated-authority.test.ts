@@ -101,6 +101,65 @@ test.each(["close", "replacement", "restart"])(
   },
 );
 
+test.each(["release", "abort"])(
+  "nested approval scopes retain their original worker through %s and reentrant cleanup",
+  (closure) => {
+    const root = claimAgentRunDelegatedAuthority({
+      instanceId: "nested-instance",
+      runId: "nested-run",
+    });
+    const workerLifetime = new AbortController();
+    const worker = claimAgentRunApprovalAuthority(root, [workerLifetime.signal]);
+    const request = claimAgentRunApprovalAuthority({ ...worker }, [new AbortController().signal]);
+    const child = claimAgentRunApprovalAuthority(request, [new AbortController().signal]);
+    const sibling = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const copiedChild = structuredClone(child);
+    expect(validateAgentRunDelegatedAuthority(copiedChild, worker)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(worker, request)).toBe(false);
+    expect(validateAgentRunDelegatedAuthority(sibling, worker)).toBe(false);
+    const closed: Array<{
+      claimId: string;
+      reason: string | undefined;
+      childCurrent: boolean;
+      rootCurrent: boolean;
+      siblingCurrent: boolean;
+      releasedAgain: boolean;
+    }> = [];
+    const stop = registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
+      closed.push({
+        claimId: authority.claimId,
+        reason,
+        childCurrent: validateAgentRunDelegatedAuthority(copiedChild),
+        rootCurrent: validateAgentRunDelegatedAuthority(root),
+        siblingCurrent: validateAgentRunDelegatedAuthority(sibling),
+        releasedAgain: releaseAgentRunDelegatedAuthority(child),
+      });
+    });
+    try {
+      if (closure === "release") {
+        releaseAgentRunDelegatedAuthority(worker);
+      } else {
+        workerLifetime.abort();
+      }
+      expect(closed).toEqual(
+        [child.claimId, request.claimId, worker.claimId].map((claimId) => ({
+          claimId,
+          reason: "approval-scope-closed",
+          childCurrent: false,
+          rootCurrent: true,
+          siblingCurrent: true,
+          releasedAgain: false,
+        })),
+      );
+      expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
+      expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("no longer active");
+    } finally {
+      stop();
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  },
+);
+
 test("stale projection sweeping cannot retire a live delegated authority claim", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const authority = claimAgentRunDelegatedAuthority({
@@ -154,6 +213,92 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
     unregister();
   }
 });
+
+test.each(["parent", "approval"])("exact %s cleanup does not consult a revoked source", (kind) => {
+  let current = true;
+  const assertSourceCurrent = vi.fn(() => {
+    if (!current) {
+      throw new Error("source retired");
+    }
+  });
+  const parent = claimAgentRunDelegatedAuthority(
+    { instanceId: "source-cleanup-instance", runId: "source-cleanup-run" },
+    assertSourceCurrent,
+  );
+  const authority =
+    kind === "parent"
+      ? parent
+      : claimAgentRunApprovalAuthority(parent, [new AbortController().signal]);
+  current = false;
+  assertSourceCurrent.mockClear();
+  expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+  expect(assertSourceCurrent).not.toHaveBeenCalled();
+  if (kind === "approval") {
+    expect(releaseAgentRunDelegatedAuthority(parent)).toBe(true);
+  }
+  expect(getAgentRunContext("source-cleanup-run")).toBeUndefined();
+});
+
+test.each(["replacement", "restart"])(
+  "rechecks the exact owner after a source callback causes %s",
+  (outcome) => {
+    let duringCheck: (() => void) | undefined;
+    const sourceAssertion = () => {
+      const run = duringCheck;
+      duringCheck = undefined;
+      run?.();
+    };
+    const first = claimAgentRunDelegatedAuthority(
+      { instanceId: "source-first", runId: "source-run" },
+      sourceAssertion,
+    );
+    let successor: typeof first | undefined;
+    duringCheck = () => {
+      if (outcome === "restart") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      successor = claimAgentRunDelegatedAuthority({
+        instanceId: "source-next",
+        runId: "source-run",
+      });
+    };
+    expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(validateAgentRunDelegatedAuthority(successor!)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(releaseAgentRunDelegatedAuthority(successor!)).toBe(true);
+  },
+);
+
+test.each(
+  [false, true].flatMap((revoked) =>
+    ["omitted", "replaced"].map((binding) => ({ revoked, binding })),
+  ),
+)(
+  "refuses a $binding source binding for the same instance (revoked=$revoked)",
+  ({ revoked, binding }) => {
+    const instance = { instanceId: "bound-instance", runId: "bound-run" };
+    let current = true;
+    const assertSourceCurrent = () => {
+      if (!current) {
+        throw new Error("source retired");
+      }
+    };
+    const authority = claimAgentRunDelegatedAuthority(instance, assertSourceCurrent);
+    const replacement = vi.fn();
+    try {
+      expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(authority);
+      current = !revoked;
+      expect(() =>
+        claimAgentRunDelegatedAuthority(instance, binding === "replaced" ? replacement : undefined),
+      ).toThrow("already bound");
+      expect(replacement).not.toHaveBeenCalled();
+      // Refusing admission must leave the original owner available for exact cleanup.
+      expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+  },
+);
 
 test("same-generation stale terminal clear cannot revoke a reused-run successor", () => {
   const runId = "same-generation-successor";

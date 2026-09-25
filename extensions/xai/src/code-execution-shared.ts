@@ -2,6 +2,7 @@
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
@@ -67,7 +68,7 @@ export async function requestXaiCodeExecution(params: {
       endpoint: XAI_CODE_EXECUTION_ENDPOINT,
       inputText: params.task,
       tools: [{ type: "code_interpreter" }],
-      reasoningEffort: params.model === XAI_DEFAULT_CODE_EXECUTION_MODEL ? "low" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "low"),
       errorLabel: "xAI code execution failed",
     },
     (data) => {

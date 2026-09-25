@@ -25,11 +25,15 @@ const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Keep readiness across plugin-only reloads, while the singleton lifecycle
 // clears it before an in-process Gateway restart starts replacement services.
-const workboardLifecycleGatewayState = resolveGlobalSingleton(
+const workboardLifecycleGatewayState = resolveGlobalSingleton<{
+  ready: boolean;
+  abortSignal?: AbortSignal;
+}>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
+    state.abortSignal = undefined;
   },
 );
 
@@ -78,7 +82,8 @@ type WorkboardLifecycleMatchHandler = (input: {
 }) => Promise<void>;
 
 type WorkboardLifecycleService = OpenClawPluginService & {
-  onGatewayStart: () => void;
+  stop: () => void;
+  onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
 };
 
@@ -442,6 +447,7 @@ export function createWorkboardLifecycleService(params: {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
+  let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
@@ -468,12 +474,33 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
+    removeDrainListener?.();
+    removeDrainListener = undefined;
     generation += 1;
     begin = undefined;
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
+  };
+  const onGatewayStop = () => {
+    workboardLifecycleGatewayState.ready = false;
+    workboardLifecycleGatewayState.abortSignal = undefined;
+    stop();
+  };
+  const beginWhenGatewayReady = () => {
+    if (!workboardLifecycleGatewayState.ready) {
+      return;
+    }
+    removeDrainListener?.();
+    const signal = workboardLifecycleGatewayState.abortSignal;
+    if (signal?.aborted) {
+      onGatewayStop();
+      return;
+    }
+    signal?.addEventListener("abort", onGatewayStop, { once: true });
+    removeDrainListener = () => signal?.removeEventListener("abort", onGatewayStop);
+    begin?.();
   };
   return {
     id: "workboard-lifecycle-sync",
@@ -482,39 +509,45 @@ export function createWorkboardLifecycleService(params: {
       let begun = false;
       const reconcile = async () => {
         try {
-          let cards = await params.store.list();
-          if (generation !== owner) {
-            return;
-          }
-          if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
-            try {
-              const snapshot = await params.readSessions({
-                includeUnknown: cards.some(
-                  (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                ),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              await syncWorkboardLifecycleSessions({
-                store: params.store,
-                cards,
-                ...snapshot,
-                now: params.now?.() ?? Date.now(),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              cards = await params.store.list();
-            } catch (error) {
-              ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+          await params.store.runOperation(async () => {
+            let cards = await params.store.list();
+            if (generation !== owner) {
+              return;
             }
-          }
-          if (generation === owner) {
-            await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
-          }
+            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+              try {
+                const snapshot = await params.readSessions({
+                  includeUnknown: cards.some(
+                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+                  ),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                await syncWorkboardLifecycleSessions({
+                  store: params.store,
+                  cards,
+                  ...snapshot,
+                  now: params.now?.() ?? Date.now(),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                cards = await params.store.list();
+              } catch (error) {
+                if (generation === owner) {
+                  ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+                }
+              }
+            }
+            if (generation === owner) {
+              await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
+            }
+          });
         } catch (error) {
-          ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
+          if (generation === owner) {
+            ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
+          }
         } finally {
           if (generation === owner) {
             timer = setTimeout(() => void reconcile(), WORKBOARD_LIFECYCLE_SWEEP_MS);
@@ -531,18 +564,14 @@ export function createWorkboardLifecycleService(params: {
         // hooks keep end-state writes immediate between 60-second sweeps.
         void reconcile();
       };
-      if (workboardLifecycleGatewayState.ready) {
-        begin();
-      }
+      beginWhenGatewayReady();
     },
     stop,
-    onGatewayStart() {
+    onGatewayStart(abortSignal) {
       workboardLifecycleGatewayState.ready = true;
-      begin?.();
+      workboardLifecycleGatewayState.abortSignal = abortSignal;
+      beginWhenGatewayReady();
     },
-    onGatewayStop() {
-      workboardLifecycleGatewayState.ready = false;
-      stop();
-    },
+    onGatewayStop,
   };
 }

@@ -1,23 +1,161 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
+import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
+  createdSessionListResult,
+  expectPastedPngImage,
   installMockGateway,
   ONE_PIXEL_PNG_B64,
   pastePng,
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("retries a saved unsent cloud turn on its already-active worker", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const sessionKey = "agent:cloud:late-active-retry";
+      const sessionId = "session-late-active-retry";
+      const messageId = "late-active-first-turn";
+      const message = "Continue the saved cloud task";
+      const diagnostic =
+        "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.";
+      const placement = {
+        state: "active",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+        environmentId: "worker-late-active-retry",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "manifest-late-active-retry",
+        remoteWorkspaceDir: "/workspace/cloud-proof",
+      };
+      const sessions = createdSessionListResult(sessionKey);
+      const session = { ...sessions.sessions[0], sessionId, placement };
+      const gateway = await installMockGateway(page, {
+        defaultAgentId: "cloud",
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": createCloudAgentsListResponse(),
+          "sessions.list": { ...sessions, sessions: [session] },
+          "sessions.describe": { session },
+          "sessions.dispatch": {
+            __mockError: {
+              code: "INVALID_REQUEST",
+              message: "session cannot dispatch from placement active",
+            },
+          },
+          "sessions.send": { runId: messageId, status: "started" },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => composer.isDisabled()).toBe(false);
+      // Pending history permits editing before the authenticated recovery scope is ready.
+      await waitForGatewayRecoveryScope(page);
+      const owner = await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime: { context: ApplicationContext };
+        };
+        const { gateway: appGateway } = app.runtime.context;
+        return {
+          gatewayUrl: appGateway.connection.gatewayUrl,
+          recoveryScope: appGateway.snapshot.client!.recoveryScope,
+        };
+      });
+      // The unit regression covers timeout expiry; this GUI starts from its persisted result.
+      const recovery: SessionPlacementPausedRecovery = {
+        ...owner,
+        sessionKey,
+        messageId,
+        message,
+        agentId: "cloud",
+        target: { kind: "profile", profileId: "aws" },
+        phase: "paused",
+        reason: "not-sent",
+        error: diagnostic,
+      };
+      const storageKey = sessionPlacementRecoveryExactStorageKey(
+        owner.gatewayUrl,
+        owner.recoveryScope,
+        sessionKey,
+      );
+      await page.evaluate(
+        ({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)),
+        { key: storageKey, record: recovery },
+      );
+      await page.reload();
+      await waitForCommittedChatRoute(page);
+      const initialTurn = page.locator(".chat-group.user", { hasText: message });
+      const retry = initialTurn.getByRole("button", { name: "Retry queued message" });
+      await retry.waitFor({ state: "visible" });
+      await pollLocatorText(initialTurn.locator(".chat-send-status")).toContain("Not sent");
+      const alert = page.getByRole("alert").filter({ hasText: diagnostic });
+      await alert.waitFor({ state: "visible" });
+      await pollLocatorText(alert).toContain("startup needs attention");
+      expect(await composer.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      if (captureUiProof) {
+        await alert.locator("summary").click();
+        await writeFile(
+          path.join(suite.artifactDir, "late-active-retry-before.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [initialTurn]),
+        );
+      }
+
+      await retry.click();
+      expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
+        params: { key: sessionKey, agentId: "cloud", message, idempotencyKey: messageId },
+      });
+      await expect
+        .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
+        .toBeNull();
+      await expect.poll(() => alert.count()).toBe(0);
+      await expect.poll(() => retry.count()).toBe(0);
+      await expect.poll(() => composer.isDisabled()).toBe(false);
+      await composer.fill("Follow-up after recovery");
+      expect(await composer.inputValue()).toBe("Follow-up after recovery");
+      expect(await initialTurn.count()).toBe(1);
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+      for (const method of [
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.reclaim",
+        "chat.send",
+      ]) {
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "late-active-retry-after.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            initialTurn,
+            composer,
+          ]),
+        );
+      }
+    });
+  });
+
   it("retries an ambiguous cloud create with the same account, session key and machine class", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -51,7 +189,7 @@ suite.define(() => {
       workspaceGit: true,
       methodResponses: {
         "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
-        "chat.metadata": {
+        "models.list": {
           cases: [
             {
               match: { authProfileId: account.authProfileId },
@@ -119,22 +257,30 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await place.evaluate((element) => {
+        const onAfterShow = (event: Event) => {
+          if (event.target === element) {
+            element.removeEventListener("wa-after-show", onAfterShow);
+            element.setAttribute("data-test-picker-ready", "true");
+          }
+        };
+        element.addEventListener("wa-after-show", onAfterShow);
+      });
       await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
-        .click();
-      await page.locator("#new-session-where-trigger").click();
+      await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
+      await page.locator('[data-value="cloud:aws"]').click();
       await page.locator('[data-value="machine:fast"]').click();
       await expect
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
-      await page.locator('[data-chat-model-select="true"]').click();
-      const picker = page.locator(".chat-model-account__picker");
-      await picker.locator("[data-chat-account-trigger]").click();
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
+      await openChatModelPicker(page);
+      const picker = page.locator("[data-chat-account-selection]");
+      await picker.locator("[data-chat-account-group-toggle]").click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect
         .poll(() =>
           page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
@@ -170,8 +316,11 @@ suite.define(() => {
         .toBe(message);
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-      ).toBe("aws · fast");
-      await gateway.waitForRequest("chat.metadata");
+      ).toBe("aws");
+      expect(
+        await page.locator("#new-session-where-trigger").getAttribute("data-machine-class"),
+      ).toBe("fast");
+      await gateway.waitForRequest("models.list");
       try {
         await expect
           .poll(() =>
@@ -180,11 +329,12 @@ suite.define(() => {
           .toBe("false");
       } finally {
         if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(suite.artifactDir, "personal-account-recovery.png"),
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "personal-account-recovery.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".new-session-page__message"),
+            ]),
+          );
         }
       }
       await page.getByRole("button", { name: "Start session" }).click();
@@ -233,20 +383,7 @@ suite.define(() => {
       deferredMethods: ["sessions.create", "sessions.delete"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -274,7 +411,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
@@ -357,20 +494,7 @@ suite.define(() => {
         deferredMethods: ["sessions.create"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "cloud",
-                identity: { name: "Cloud" },
-                name: "Cloud",
-                workspace: WORKSPACE,
-                workspaceGit: true,
-              },
-            ],
-            defaultId: "cloud",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createCloudAgentsListResponse(),
           "environments.list": {
             environments: [],
             profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -410,7 +534,7 @@ suite.define(() => {
         await page.locator("#new-session-where-trigger").click();
         await page
           .locator("wa-popover.new-session-page__where-popover")
-          .getByRole("button", { name: "Cloud · aws" })
+          .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);
@@ -429,13 +553,10 @@ suite.define(() => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "01-interrupted.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "01-interrupted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [interrupted]),
+          );
         }
         const reset = interrupted.getByRole("button", { name: "Reset", exact: true });
         expect(await reset.count()).toBe(1);
@@ -447,13 +568,10 @@ suite.define(() => {
         await expect.poll(() => start.isEnabled()).toBe(true);
         expect(await readRecovery()).toBeNull();
         if (captureUiProof) {
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "02-recovered.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "02-recovered.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+          );
         }
 
         const previousCreateCount = (await gateway.getRequests("sessions.create")).length;
@@ -526,11 +644,7 @@ suite.define(() => {
   );
 
   it("checks an unconfirmed cloud turn without replay when composer storage is unavailable", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:cloud:storage-recovery";
     const message = "keep this cloud recovery task";
@@ -538,20 +652,7 @@ suite.define(() => {
       deferredMethods: ["sessions.send"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -607,7 +708,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
@@ -657,9 +758,7 @@ suite.define(() => {
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
-      await retainedTurn
-        .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-        .waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
         .toBe(true);

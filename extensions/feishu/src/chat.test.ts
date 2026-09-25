@@ -395,6 +395,21 @@ describe("registerFeishuChatTools", () => {
     expect(contactUserGetMock).not.toHaveBeenCalled();
   });
 
+  it("preserves an allowed metadata failure in the tool error envelope", async () => {
+    const [tool] = registerChatTool({ account: { allowFrom: ["*"] } });
+    const error = new Error("provider unavailable");
+    chatGetMock.mockRejectedValueOnce(error);
+
+    const result = await tool.execute("tc_allowed_metadata_failure", {
+      action: "info",
+      chat_id: "oc_other",
+    });
+
+    expect(result.details).toEqual({ error: '{"message":"provider unavailable"}' });
+    expect(result.content[0]?.text).toContain(error.message);
+    expect(chatGetMock).toHaveBeenCalledOnce();
+  });
+
   it("lets a direct operator read an unconfigured group", async () => {
     const [tool] = registerChatTool({
       account: { groupPolicy: "allowlist" },
@@ -501,9 +516,10 @@ describe("registerFeishuChatTools", () => {
     expect(chatMembersGetMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips registration when chat tool is disabled", () => {
-    const [, registerTool] = registerChatTool({ account: { tools: { chat: false } } });
-    expect(registerTool).not.toHaveBeenCalled();
+  it("does not expose the disabled chat tool", () => {
+    const [tool] = registerChatTool({ account: { tools: { chat: false } } });
+    expect(tool).toBeFalsy();
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
   it("preserves Feishu diagnostics from rejected member lookups", async () => {

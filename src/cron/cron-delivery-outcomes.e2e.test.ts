@@ -321,6 +321,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           let now = Date.now();
+          const runIsolatedAgentJob = vi.fn(async () => ({
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: "primary route rejected",
+          }));
           const cron = new CronService({
             storePath,
             cronEnabled: true,
@@ -328,12 +334,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: vi.fn(async () => ({
-              status: "ok" as const,
-              delivered: false,
-              deliveryAttempted: true,
-              deliveryError: "primary route rejected",
-            })),
+            runIsolatedAgentJob,
             sendCronFailureAlert: async (params) =>
               await sendGatewayCronFailureAlert({
                 ...params,
@@ -407,6 +408,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             ).toHaveLength(1);
 
             now += 3_540_000;
+            runIsolatedAgentJob.mockResolvedValue({
+              status: "ok",
+              delivered: false,
+              deliveryAttempted: true,
+              deliveryError: "primary target no longer exists",
+            });
             await cron.run(job.id, "force");
             await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
 

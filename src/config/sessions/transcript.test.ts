@@ -14,7 +14,9 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -23,6 +25,7 @@ import {
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
+  replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -32,6 +35,7 @@ import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "./transcript-append.test-support.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -66,6 +70,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         storePath,
       });
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -220,6 +225,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -293,6 +300,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -1069,21 +1078,21 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         updateMode: "none",
         messages: [
-          {
-            eventId: "root-user",
-            parentId: null,
-            message: { role: "user", content: "keep this branch", timestamp: 1_000 },
-          },
-          {
-            eventId: "active-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "active answer", timestamp: 2_000 },
-          },
-          {
-            eventId: "abandoned-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "abandoned answer", timestamp: 3_000 },
-          },
+          transcriptMessage("root-user", null, {
+            role: "user",
+            content: "keep this branch",
+            timestamp: 1_000,
+          }),
+          transcriptMessage("active-reply", "root-user", {
+            role: "assistant",
+            content: "active answer",
+            timestamp: 2_000,
+          }),
+          transcriptMessage("abandoned-reply", "root-user", {
+            role: "assistant",
+            content: "abandoned answer",
+            timestamp: 3_000,
+          }),
         ],
       },
     );
@@ -1718,6 +1727,53 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         content: [{ type: "text", text: "[redacted by hook]" }],
       }),
     ]);
+  });
+
+  it("dedupes a delivery mirror without parsing historical message bodies", async () => {
+    await writeTranscriptStore();
+    const scope = createFixtureTranscriptScope();
+    const history = Array.from({ length: 500 }, (_, index) => ({
+      type: "message",
+      id: `history-${index}`,
+      parentId: index === 0 ? null : `history-${index - 1}`,
+      message: {
+        role: "user",
+        content: `archived-mirror-body-${index} ${"x".repeat(2_000)}`,
+      },
+    }));
+    await replaceTranscriptEvents(scope, [
+      ...history,
+      {
+        type: "message",
+        id: "latest-reply",
+        parentId: "history-499",
+        message: createExactAssistantMessage({ text: "The current reply" }),
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(fixture.storePath(), { agentId: "main" }).path,
+    });
+    const parse = JSON.parse;
+    let parsedHistoricalBodies = 0;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes("archived-mirror-body-")) {
+        parsedHistoricalBodies += 1;
+      }
+      return parse(text, reviver);
+    });
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath: fixture.storePath(),
+        text: "The current reply",
+      });
+      expect(result).toMatchObject({ ok: true, messageId: "latest-reply" });
+      expect(parsedHistoricalBodies).toBe(0);
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(await loadFixtureMessages()).toHaveLength(history.length + 1);
   });
 
   it("reports assistant messages blocked by before_message_write", async () => {

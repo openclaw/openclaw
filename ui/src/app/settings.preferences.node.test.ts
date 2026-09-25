@@ -22,7 +22,6 @@ import {
   persistSessionToken,
   loadSettings,
   loadUiPreferences,
-  normalizeChatMessageMaxWidth,
   saveSettings,
 } from "./settings.ts";
 
@@ -50,7 +49,7 @@ describe("settings preference persistence", () => {
     },
   );
 
-  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", () => {
+  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", async () => {
     setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
     const events = new EventTarget();
     vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
@@ -127,6 +126,7 @@ describe("settings preference persistence", () => {
       resetServerUiPrefsSync();
       theme.dispose();
       gateway.stop();
+      await vi.dynamicImportSettled();
     }
   });
 
@@ -221,7 +221,10 @@ describe("settings preference persistence", () => {
     expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
-  it("defaults task progress auto-collapse off and persists only the opt-in", () => {
+  it.each([
+    { key: "chatShowTaskProgress", defaultValue: true },
+    { key: "chatCollapseTaskProgress", defaultValue: false },
+  ] as const)("persists only the non-default $key preference", ({ key, defaultValue }) => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -230,22 +233,18 @@ describe("settings preference persistence", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+    expect(loadSettings()[key]).toBe(defaultValue);
 
-    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: true });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatCollapseTaskProgress).toBe(true);
-    expect(loadSettings().chatCollapseTaskProgress).toBe(true);
+    saveSettings({ ...loadSettings(), [key]: !defaultValue });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")[key]).toBe(!defaultValue);
+    expect(loadSettings()[key]).toBe(!defaultValue);
 
-    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: false });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-      "chatCollapseTaskProgress",
-    );
+    saveSettings({ ...loadSettings(), [key]: defaultValue });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(key);
+    expect(loadSettings()[key]).toBe(defaultValue);
 
-    localStorage.setItem(
-      scopedKey,
-      JSON.stringify({ gatewayUrl: gwUrl, chatCollapseTaskProgress: "yes" }),
-    );
-    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+    localStorage.setItem(scopedKey, JSON.stringify({ gatewayUrl: gwUrl, [key]: "yes" }));
+    expect(loadSettings()[key]).toBe(defaultValue);
   });
 
   it("persists only the non-default catalog open target", () => {
@@ -341,26 +340,6 @@ describe("settings preference persistence", () => {
     saveSettings({ ...loadSettings(), showAdvancedSettings: false });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "showAdvancedSettings",
-    );
-  });
-
-  it("normalizes and persists browser-local chat message width", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
-    const gwUrl = expectedGatewayUrl("");
-    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-
-    expect(normalizeChatMessageMaxWidth("  min(1280px,   82%)  ")).toBe("min(1280px, 82%)");
-    expect(normalizeChatMessageMaxWidth("960px; color: red")).toBeUndefined();
-
-    saveSettings({ ...loadSettings(), chatMessageMaxWidth: "  min(1280px,   82%)  " });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatMessageMaxWidth).toBe(
-      "min(1280px, 82%)",
-    );
-    expect(loadSettings().chatMessageMaxWidth).toBe("min(1280px, 82%)");
-
-    saveSettings({ ...loadSettings(), chatMessageMaxWidth: undefined });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-      "chatMessageMaxWidth",
     );
   });
 

@@ -1,16 +1,13 @@
 import {
-  createNpmMetadataEnv,
+  loadNpmPackageVersions,
   resolveNpmSpecMetadata,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import {
-  compareOpenClawReleaseVersions,
-  isExactSemverVersion,
   isPrereleaseSemverVersion,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
-import { compareValidSemver } from "../infra/semver.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { comparePackageUpdateVersions } from "../infra/package-update-utils.js";
 import {
   validateOpenClawPackageInstallCompatibility,
   type PluginInstallRuntime,
@@ -30,54 +27,18 @@ export function isNpmPackageNotFoundMessage(error: string): boolean {
   return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
-function compareNpmSemver(a: string, b: string): number {
-  const releaseCmp = compareOpenClawReleaseVersions(a, b);
-  if (releaseCmp !== null) {
-    return releaseCmp;
-  }
-  return compareValidSemver(a, b) ?? 0;
-}
-
 type TrustedOfficialPrereleaseResolution =
   | { kind: "stable"; resolution: NpmSpecResolution }
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
-async function loadNpmPackageVersions(params: {
-  packageName: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(
-    ["npm", "view", params.packageName, "versions", "--json"],
-    {
-      timeoutMs: Math.max(params.timeoutMs, 60_000),
-      signal: params.signal,
-      killProcessTree: true,
-      env: createNpmMetadataEnv(),
-    },
-  );
-  if (versions.code !== 0) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(versions.stdout.trim());
-  } catch {
-    return null;
-  }
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
-    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
-  );
-}
-
 export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedPrereleaseVersion: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   signal?: AbortSignal;
-  logger: PluginInstallLogger;
+  killProcessTree?: boolean;
+  logger?: PluginInstallLogger;
 }): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
     return null;
@@ -86,18 +47,19 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
     packageName: params.spec.name,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    killProcessTree: params.killProcessTree,
   });
   if (!semverVersions) {
     return null;
   }
   const stableVersion = semverVersions
     .filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(compareNpmSemver)
+    .toSorted(comparePackageUpdateVersions)
     .at(-1);
   if (!stableVersion) {
     const prereleaseVersion = semverVersions
       .filter(isPrereleaseSemverVersion)
-      .toSorted(compareNpmSemver)
+      .toSorted(comparePackageUpdateVersions)
       .at(-1);
     if (prereleaseVersion && semverVersions.every(isPrereleaseSemverVersion)) {
       if (prereleaseVersion !== params.resolvedPrereleaseVersion) {
@@ -110,12 +72,12 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
         if (!metadataResult.ok) {
           return null;
         }
-        params.logger.warn?.(
+        params.logger?.warn?.(
           `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${prereleaseSpec} because this trusted official OpenClaw package has no stable npm versions yet.`,
         );
         return { kind: "prerelease-only", resolution: metadataResult.metadata };
       }
-      params.logger.warn?.(
+      params.logger?.warn?.(
         `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
       );
       return { kind: "allow-prerelease-only" };
@@ -132,7 +94,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   if (!metadataResult.ok) {
     return null;
   }
-  params.logger.warn?.(
+  params.logger?.warn?.(
     `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
   );
   return { kind: "stable", resolution: metadataResult.metadata };
@@ -216,6 +178,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     packageName: params.parsedSpec.name,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    killProcessTree: true,
   });
   if (!versions) {
     return null;
@@ -227,8 +190,8 @@ export async function resolveLatestCompatibleNpmResolution(params: {
         ? resolvePrereleaseChannel(version) === prereleaseChannel
         : !isPrereleaseSemverVersion(version),
     )
-    .filter((version) => compareNpmSemver(version, currentVersion) < 0)
-    .toSorted(compareNpmSemver)
+    .filter((version) => comparePackageUpdateVersions(version, currentVersion) < 0)
+    .toSorted(comparePackageUpdateVersions)
     .toReversed();
   for (const version of candidates) {
     const spec = `${params.parsedSpec.name}@${version}`;

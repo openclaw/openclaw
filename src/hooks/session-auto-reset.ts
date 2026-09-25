@@ -4,7 +4,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import type { SessionMemoryTranscript } from "./bundled/session-memory/capture.js";
 import {
   createInternalHookEvent,
@@ -67,7 +67,7 @@ export function emitSessionAutoResetHook(params: {
     previousSessionMemory: params.previousSessionMemory,
   });
 
-  void runWithGatewayIndependentRootWorkContinuation(
+  void runWithGatewayDetachedWorkContinuation(
     () => triggerInternalHook(event),
     "hooks:session-auto-reset",
   ).catch((error: unknown) => {

@@ -11,11 +11,9 @@ import {
   buildMentionPrompt,
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
-  primeMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
   runAssertedDriverTopLevelScenario,
   runConfigurableTopLevelScenario,
-  runDriverTopLevelMentionScenario,
   type MatrixQaScenarioContext,
   type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
@@ -148,13 +146,15 @@ export async function runMatrixQaCanary(params: {
   sutUserId: string;
   timeoutMs: number;
 }): Promise<{
+  body: string;
   driverEventId: string;
   reply: MatrixQaCanaryArtifact["reply"];
   token: string;
 }> {
-  const canary = await runDriverTopLevelMentionScenario({
+  const canary = await runConfigurableTopLevelScenario({
+    accessToken: params.driverAccessToken,
+    actorId: "driver",
     baseUrl: params.baseUrl,
-    driverAccessToken: params.driverAccessToken,
     observedEvents: params.observedEvents,
     roomId: params.roomId,
     syncState: params.syncState,
@@ -164,7 +164,12 @@ export async function runMatrixQaCanary(params: {
     tokenPrefix: "MATRIX_QA_CANARY",
   });
   assertTopLevelReplyArtifact("canary reply", canary.reply);
-  return canary;
+  return {
+    body: canary.body,
+    driverEventId: canary.driverEventId,
+    reply: canary.reply,
+    token: canary.token,
+  };
 }
 
 export async function runThreadFollowUpScenario(context: MatrixQaScenarioContext) {
@@ -210,6 +215,9 @@ export async function runThreadRootPreservationScenario(context: MatrixQaScenari
 }
 
 export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenarioContext) {
+  if (!context.gatewayCall) {
+    throw new Error("Matrix nested reply proof requires the Gateway send method");
+  }
   const result = await runThreadScenario(context, {
     createNestedReply: true,
     tokenPrefix: "MATRIX_QA_THREAD_NESTED",
@@ -218,7 +226,7 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
     expectedRootEventId: result.rootEventId,
     label: "thread nested reply",
   });
-  requireMatrixQaNestedThreadEvent(
+  const selectedReplyId = requireMatrixQaNestedThreadEvent(
     result.nestedDriverEventId,
     "Matrix thread nested reply scenario",
   );
@@ -227,14 +235,54 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
     expectedEventId: result.rootEventId,
     label: "thread nested reply in_reply_to",
   });
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const explicitToken = buildMatrixQaToken("MATRIX_QA_EXPLICIT_THREAD_REPLY");
+  await context.gatewayCall("send", {
+    channel: "matrix",
+    accountId: context.sutAccountId,
+    to: context.roomId,
+    message: explicitToken,
+    threadId: result.rootEventId,
+    replyToId: selectedReplyId,
+    idempotencyKey: randomUUID(),
+  });
+  const explicit = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      isMatrixQaExactMarkerReply(event, {
+        roomId: context.roomId,
+        sutUserId: context.sutUserId,
+        token: explicitToken,
+      }),
+    roomId: context.roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  const explicitRelation = explicit.event.relatesTo;
+  if (
+    explicitRelation?.relType !== "m.thread" ||
+    explicitRelation.eventId !== result.rootEventId ||
+    explicitRelation.inReplyToId !== selectedReplyId ||
+    explicitRelation.isFallingBack === true
+  ) {
+    throw new Error("Matrix explicit reply lost its selected target or became a thread fallback");
+  }
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: explicit.since,
+    startSince,
+  });
+  const explicitReply = buildMatrixReplyArtifact(explicit.event, explicitToken);
   return {
-    artifacts: buildMatrixQaThreadArtifacts(result),
+    artifacts: { ...buildMatrixQaThreadArtifacts(result), secondReply: explicitReply },
     details: buildMatrixQaThreadDetailLines({
       result,
       includeNestedTrigger: true,
       extraLines: [
         `reply in_reply_to: ${result.reply.relatesTo?.inReplyToId ?? "<none>"}`,
         `expected fallback root: ${result.rootEventId}`,
+        ...buildMatrixReplyDetails("explicit reply", explicitReply),
       ],
     }).join("\n"),
   } satisfies MatrixQaScenarioExecution;
@@ -408,40 +456,18 @@ export async function runRoomThreadReplyOverrideScenario(context: MatrixQaScenar
 }
 
 export async function runObserverAllowlistOverrideScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
+  const { body, driverEventId, reply, token } = await runConfigurableTopLevelScenario({
     accessToken: context.observerAccessToken,
     actorId: "observer",
     baseUrl: context.baseUrl,
     observedEvents: context.observedEvents,
+    roomId: context.roomId,
     syncState: context.syncState,
     syncStreams: context.syncStreams,
-  });
-  const token = buildMatrixQaToken("MATRIX_QA_OBSERVER_ALLOWLIST");
-  const body = buildMentionPrompt(context.sutUserId, token);
-  const driverEventId = await client.sendTextMessage({
-    body,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const matched = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      isMatrixQaExactMarkerReply(event, {
-        roomId: context.roomId,
-        sutUserId: context.sutUserId,
-        token,
-      }) && event.relatesTo === undefined,
-    roomId: context.roomId,
-    since: startSince,
+    sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
+    tokenPrefix: "MATRIX_QA_OBSERVER_ALLOWLIST",
   });
-  advanceMatrixQaActorCursor({
-    actorId: "observer",
-    syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
-  });
-  const reply = buildMatrixReplyArtifact(matched.event, token);
   assertTopLevelReplyArtifact("observer allowlist reply", reply);
   return {
     artifacts: {

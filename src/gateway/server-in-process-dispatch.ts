@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import {
+  GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
+} from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { registerDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
+import { bindCreatedInputMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
@@ -17,11 +22,15 @@ type InProcessGatewayDispatchOptions = {
   isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
   methodRegistry?: GatewayMethodRegistry;
   onAccepted?: (payload: unknown) => void;
+  /** Observes handler settlement separately from the non-cancelling response deadline. */
+  onExecution?: (execution: Promise<void>) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   sessionMutationCommitGuard?: () => void;
+  assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
+  hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
 };
 
 export function unwrapGatewayMethodDispatchResponse(
@@ -79,9 +88,11 @@ async function waitForDispatch<T>(
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
   onTimeout?: () => void,
+  requestTimeoutMs?: number,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
+  let releaseDeadline: (() => void) | undefined;
   try {
     if (signal?.aborted) {
       throw resolveDispatchAbortError(method, signal);
@@ -90,11 +101,22 @@ async function waitForDispatch<T>(
     if (remainingTimeoutMs === undefined && !signal) {
       return await promise;
     }
+    releaseDeadline =
+      deadlineMs === undefined ? undefined : registerDiagnosticToolExecutionDeadline(deadlineMs);
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
           onTimeout?.();
-          reject(new Error(`gateway request timeout for ${method}`));
+          reject(
+            new GatewayProtocolRequestTimeoutError(
+              {
+                method,
+                timeoutMs: requestTimeoutMs ?? remainingTimeoutMs,
+                requestSent: true,
+              },
+              `gateway request timeout for ${method}`,
+            ),
+          );
         }, remainingTimeoutMs);
       }
       if (signal) {
@@ -114,6 +136,7 @@ async function waitForDispatch<T>(
     }
     throw error;
   } finally {
+    releaseDeadline?.();
     if (timeout) {
       clearTimeout(timeout);
     }
@@ -139,6 +162,7 @@ export async function waitForGatewayDispatch<T>(
     signal,
     onSignalAbort,
     onTimeout,
+    timeoutMs,
   );
 }
 
@@ -175,35 +199,47 @@ export async function dispatchGatewayRequestInProcessRaw(
   try {
     const { handleGatewayRequest } = await import("./server-methods.js");
     entry?.assertOpen();
-    void handleGatewayRequest({
-      req,
-      requestEntry: entry,
-      client: options.client,
-      isWebchatConnect: options.isWebchatConnect ?? (() => false),
-      respond: (ok, payload, error, meta) => {
-        const response = { ok, payload, error, ...(meta ? { meta } : {}) };
-        if (!firstResponse) {
-          firstResponse = response;
-          resolveFirstResponse?.(response);
-          return;
-        }
-        if (!finalResponse) {
-          finalResponse = response;
-          resolveFinalResponse?.(response);
-        }
-      },
-      context: options.context,
-      methodRegistry: options.methodRegistry,
-      sessionMutationCommitGuard: options.sessionMutationCommitGuard,
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
-      .then(() => {
-        if (!firstResponse) {
-          rejectFirstResponse?.(
-            new Error(`Gateway method "${method}" completed without a response.`),
-          );
-        }
-      })
+    const execution = options.context
+      .trackExecution(() =>
+        handleGatewayRequest(
+          bindCreatedInputMutationAuthority(
+            {
+              req,
+              requestEntry: entry,
+              client: options.client,
+              isWebchatConnect: options.isWebchatConnect ?? (() => false),
+              respond: (ok, payload, error, meta) => {
+                const response = { ok, payload, error, ...(meta ? { meta } : {}) };
+                if (!firstResponse) {
+                  firstResponse = response;
+                  resolveFirstResponse?.(response);
+                  return;
+                }
+                if (!finalResponse) {
+                  finalResponse = response;
+                  resolveFinalResponse?.(response);
+                }
+              },
+              context: options.context,
+              methodRegistry: options.methodRegistry,
+              sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+              ...(options.hasCurrentClientAuthority
+                ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
+                : {}),
+              ...(options.signal ? { signal: options.signal } : {}),
+            },
+            options.assertCreatedInputSourceCurrent,
+          ),
+        )
+          .then(() => {
+            if (!firstResponse) {
+              rejectFirstResponse?.(
+                new Error(`Gateway method "${method}" completed without a response.`),
+              );
+            }
+          })
+          .finally(() => entry?.release()),
+      )
       .catch((err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err));
         if (!firstResponse) {
@@ -212,8 +248,8 @@ export async function dispatchGatewayRequestInProcessRaw(
         }
         postFirstResponseError = error;
         rejectFinalResponse?.(error);
-      })
-      .finally(() => entry?.release());
+      });
+    options.onExecution?.(execution);
   } catch (error) {
     entry?.release();
     throw error;
@@ -225,6 +261,8 @@ export async function dispatchGatewayRequestInProcessRaw(
     deadlineMs,
     options.signal,
     options.onSignalAbort,
+    undefined,
+    options.timeoutMs,
   );
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (!firstResponse.ok || options.expectFinal !== true || firstPayload?.status !== "accepted") {
@@ -252,6 +290,8 @@ export async function dispatchGatewayRequestInProcessRaw(
       deadlineMs,
       options.signal,
       options.onSignalAbort,
+      undefined,
+      options.timeoutMs,
     ))
   );
 }

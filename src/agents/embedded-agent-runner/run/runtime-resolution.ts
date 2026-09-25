@@ -54,6 +54,7 @@ export function resolveAttemptTrajectoryAttribution(params: {
 export function resolveInitialThinkLevel(params: {
   requested?: ThinkLevel;
   config?: RunEmbeddedAgentParams["config"];
+  agentId?: string;
   provider: string;
   modelId: string;
   model: { reasoning?: boolean };
@@ -63,6 +64,7 @@ export function resolveInitialThinkLevel(params: {
   }
   return resolveThinkingDefault({
     cfg: params.config ?? {},
+    agentId: params.agentId,
     provider: params.provider,
     model: params.modelId,
     catalog: [

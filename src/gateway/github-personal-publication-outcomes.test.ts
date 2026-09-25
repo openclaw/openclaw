@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
+  createForeignPublicationSession,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import {
   BRANCH,
   SESSION_ID,
@@ -14,6 +17,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 
 const mocks = githubPublicationTestMocks();
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
@@ -49,6 +53,107 @@ describe("personal publication definitive outcomes", () => {
       { sessionKey: SESSION_KEY, sessionId: SESSION_ID, agentId: "main" },
       requestId,
     );
+  it.each([
+    { boundary: "connection closes", readback: false },
+    { boundary: "permission ends", readback: false },
+    { boundary: "permission ends during readback", readback: true },
+  ] as const)(
+    "retains an accepted open PR response after the requesting $boundary",
+    async ({ boundary, readback }) => {
+      const workspace = await createRealPublicationWorkspace();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let created = false;
+      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+        let response = await transport(argv, options);
+        const creating = argv.includes("POST") && argv.includes("repos/openclaw/openclaw/pulls");
+        if (creating) {
+          created = true;
+          if (readback) {
+            return commandResult("", 1);
+          }
+        }
+        if (readback && created && argv.includes("state=all")) {
+          response = commandResult(
+            JSON.stringify([
+              {
+                url: "https://github.com/openclaw/openclaw/pull/125200",
+                userId: account.accountId,
+                state: "open",
+                body: "",
+                headSha: await workspace.git("rev-parse", "HEAD"),
+                headRef: BRANCH,
+                baseRef: "main",
+              },
+            ]),
+          );
+        }
+        if (creating || (readback && created && argv.includes("state=all"))) {
+          if (boundary === "connection closes") {
+            fixture.runtime.live = false;
+          } else {
+            fixture.client.connect.scopes = ["operator.read"];
+          }
+        }
+        return response;
+      });
+
+      const published = await fixture.coordinator.requestPersonalForSession(
+        request(),
+        fixture.action,
+      );
+
+      expect(published).toMatchObject({
+        status: "published",
+        url: "https://github.com/openclaw/openclaw/pull/125200",
+      });
+      expect(
+        readPersonalGitHubPublication(fixture.owner, { requestId: published.requestId }),
+      ).toMatchObject({
+        status: "published",
+        pull_request_url: "https://github.com/openclaw/openclaw/pull/125200",
+      });
+      await fixture.coordinator.resumeSessionRequests();
+      expect(workspace.effects).toEqual(["push", "pull_request"]);
+    },
+  );
+
+  it("does not resume shared GitHub writes after the RPC request loses write permission", async () => {
+    fixture.client.internal = {
+      ...fixture.client.internal,
+      operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(fixture.owner, fixture.config),
+    };
+    const workspace = await createRealPublicationWorkspace();
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      const response = await transport(argv, options);
+      if (argv[0] === "git" && argv.includes("push")) {
+        await createForeignPublicationSession(fixture.otherOwner);
+      }
+      return response;
+    });
+    const idempotencyKey = "shared-rpc-revoked-after-push";
+    const response = await rpc("sessions.github.publish", {
+      sessionKey: SESSION_KEY,
+      idempotencyKey,
+      selection: {
+        source: "shared",
+        expected: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
+      },
+    });
+    expect(response[0]).toBe(false);
+    await fixture.coordinator.resumeSessionRequests();
+    expect(workspace.effects).toEqual(["push"]);
+    const receipt = readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
+      sessionId: SESSION_ID,
+      idempotencyKey,
+    });
+    expect(receipt).toMatchObject({
+      status: "failed",
+      head_commit: await workspace.git("rev-parse", "HEAD"),
+      pull_request_url: null,
+    });
+  });
+
   it.each([
     "closed",
     "closed-before-unavailable",

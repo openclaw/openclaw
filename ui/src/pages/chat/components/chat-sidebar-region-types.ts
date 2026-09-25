@@ -20,11 +20,10 @@ export type SidebarPanelDefinition = {
 
 export type SidebarRegionCallbacks = {
   activatePanel: (panelId: string) => void;
+  togglePanelExpanded: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;
   openSlot: (slot: SidebarSlotId) => void;
-  appendComposerText: (text: string) => void;
   reorderPanel: (panelId: string, targetPanelId: string, placement: "before" | "after") => void;
   resizePanel: (columnId: string, size: number) => void;
-  setExpanded: (expanded: boolean) => void;
   setOpen: (open: boolean) => void;
 };

@@ -11,6 +11,21 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "@babel/generator": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
+    "@babel/parser": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["parser", "compiler-api"]
+    },
+    "@babel/traverse": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
     "@clack/core": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -104,6 +119,11 @@
       "class": "core-runtime",
       "risk": ["filesystem-watch"]
     },
+    "chrome-devtools-mcp": {
+      "owner": "plugin:browser",
+      "class": "plugin-runtime",
+      "risk": ["browser-control", "protocol-client"]
+    },
     "commander": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -128,6 +148,11 @@
       "owner": "core:html-entities",
       "class": "core-runtime",
       "risk": ["parser", "untrusted-html"]
+    },
+    "esbuild": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["native", "compiler-api"]
     },
     "execa": {
       "owner": "core:process-execution",
@@ -174,6 +199,11 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
+    "import-meta-resolve": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["module-resolution"]
+    },
     "jiti": {
       "owner": "core:plugin-loader",
       "class": "core-runtime",
@@ -188,6 +218,11 @@
       "owner": "core:archive-handling",
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
+    },
+    "koffi": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "ffi", "process-execution", "secret-input"]
     },
     "kysely": {
       "owner": "core:sqlite-storage",
@@ -246,8 +281,9 @@
       "risk": ["formatting"]
     },
     "quickjs-wasi": {
-      "owner": "core:code-mode",
-      "class": "core-runtime",
+      "owner": "plugin:code-mode-quickjs",
+      "class": "plugin-runtime",
+      "activation": ["tools.codeMode.executor.quickjs"],
       "risk": ["wasm", "sandboxed-js"]
     },
     "clawpdf": {
@@ -281,20 +317,10 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
-    "tree-sitter-bash": {
-      "owner": "core:command-explainer",
-      "class": "core-runtime",
-      "risk": ["wasm", "parser", "untrusted-shell"]
-    },
     "tslog": {
       "owner": "core:logging",
       "class": "core-runtime",
       "risk": ["logging"]
-    },
-    "typescript": {
-      "owner": "core:typescript-analysis",
-      "class": "core-runtime",
-      "risk": ["compiler-api"]
     },
     "typebox": {
       "owner": "core:json-schema-contracts",

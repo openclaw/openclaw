@@ -4,8 +4,10 @@ import type {
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -16,9 +18,11 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
@@ -34,6 +38,8 @@ export type CustodianMessage = {
   at: number;
   question: CustodianStructuredQuestion | null;
   step: WizardStep | null;
+  /** Gateway-recorded optional welcome; notices and required input remain visible. */
+  optionalWelcome?: boolean;
 };
 
 export function createCustodianMessage(
@@ -55,7 +61,10 @@ export function createCustodianReplyMessage(
   const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
   return silentReply && !question && !step
     ? null
-    : createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step);
+    : {
+        ...createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step),
+        optionalWelcome: result.optionalWelcome === true,
+      };
 }
 
 export function hasUnresolvedCustodianQuestion(
@@ -100,12 +109,22 @@ export function custodianErrorMessage(error: unknown): string {
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   const rawMessage = { role: message.role, content: message.text };
+  const normalized = normalizeMessage(rawMessage);
+  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
   return {
     kind: "group",
     key,
     role: message.role,
-    messages: [{ message: rawMessage, key }],
-    visibleContent: resolveMessageVisibleContent(rawMessage, normalizeMessage(rawMessage)),
+    messages: [
+      {
+        message: rawMessage,
+        key,
+        hasVisibleContent:
+          visibleContent === "non-text" ||
+          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
+      },
+    ],
+    visibleContent,
     timestamp: message.at,
     isStreaming: false,
   };
@@ -113,7 +132,7 @@ function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
 
 type CustodianTranscriptResult =
   | { ok: true; turns: SystemAgentChatHistoryResult["turns"] }
-  | { ok: false; error: string };
+  | { ok: false; error: unknown };
 
 async function readCustodianTranscript(
   client: GatewayBrowserClient,
@@ -126,31 +145,79 @@ async function readCustodianTranscript(
     );
     return { ok: true, turns: result.turns };
   } catch (error) {
-    return { ok: false, error: custodianErrorMessage(error) };
+    return { ok: false, error };
   }
 }
 
 export class CustodianTranscriptLoader {
   status: PanelRefreshStatus = createPanelRefreshStatus();
   private generation = 0;
+  private recoveryPending = false;
   private inFlight: {
     client: GatewayBrowserClient;
     epoch: number;
     promise: Promise<CustodianTranscriptResult>;
   } | null = null;
 
-  constructor(private readonly onStatusChange: () => void) {}
+  constructor(
+    private readonly onStatusChange: () => void,
+    private readonly getGatewaySnapshot: () => ApplicationGatewaySnapshot | undefined,
+  ) {}
 
   get refreshing(): boolean {
     return this.inFlight !== null;
   }
 
+  deferRecovery(): void {
+    this.recoveryPending = true;
+  }
+
+  clearRecovery(): void {
+    this.recoveryPending = false;
+  }
+
+  settleRecovery(blocked: boolean, refresh: () => void): void {
+    if (this.recoveryPending && !blocked) {
+      this.clearRecovery();
+      refresh();
+    }
+  }
+
+  watchAvailability(refresh: () => void): () => void {
+    let previous = this.getGatewaySnapshot();
+    return () => {
+      const next = this.getGatewaySnapshot();
+      const becameAvailable =
+        next && isGatewayAvailable(next) && (!previous || !isGatewayAvailable(previous));
+      previous = next;
+      if (becameAvailable) {
+        void this.recover(refresh);
+      }
+    };
+  }
+
+  private async recover(refresh: () => void): Promise<void> {
+    const generation = this.generation;
+    await this.inFlight?.promise;
+    const snapshot = this.getGatewaySnapshot();
+    if (
+      generation === this.generation &&
+      snapshot &&
+      isGatewayAvailable(snapshot) &&
+      (this.status.awaitingGateway || this.status.error !== null)
+    ) {
+      refresh();
+    }
+  }
+
   invalidate(): void {
+    // Normal turns invalidate reads, but keep the intent to recover once idle.
     this.generation += 1;
     this.inFlight = null;
   }
 
   reset(): void {
+    this.clearRecovery();
     this.invalidate();
     this.status = createPanelRefreshStatus();
   }
@@ -177,7 +244,7 @@ export class CustodianTranscriptLoader {
       }
       this.status = result.ok
         ? completePanelRefresh()
-        : failPanelRefresh(this.status, result.error);
+        : failPanelRefresh(this.status, result.error, this.getGatewaySnapshot());
       return result;
     } finally {
       if (this.inFlight?.promise === promise) {
@@ -193,6 +260,7 @@ export class CustodianTranscriptLoader {
     firstMessageId: number,
     isCurrent: () => boolean,
   ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
+    this.clearRecovery();
     const result = await this.read(client, epoch, isCurrent);
     return result?.ok && isCurrent()
       ? createCustodianTranscriptMessages(result.turns, firstMessageId)
@@ -241,7 +309,6 @@ function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterI
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
   boundaryAfterId: number | null;
-  assistantAvatar: string;
   showQuestion: boolean;
   questionDisabled: boolean;
   showWizardStep: boolean;
@@ -265,7 +332,7 @@ export function renderCustodianTranscriptEntry(params: {
             showReasoning: false,
             showToolCalls: false,
             assistantName: t("custodian.title"),
-            assistantAvatar: params.assistantAvatar,
+            agentId: SYSTEM_AGENT_ID,
           })
         : nothing
     }

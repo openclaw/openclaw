@@ -1,4 +1,3 @@
-import AudioToolbox
 import AVFoundation
 import Foundation
 import OpenClawChatUI
@@ -519,36 +518,6 @@ actor TalkModeRuntime {
         await sendAndSpeak(text)
     }
 
-    private func bindSelectedInputIfNeeded(
-        _ selection: AudioInputDeviceResolution,
-        to input: AVAudioInputNode) -> AudioInputDeviceResolution
-    {
-        guard selection.shouldBindSelectedDevice, let selectedUID = selection.resolvedUID else {
-            return selection
-        }
-        guard let audioUnit = input.audioUnit,
-              var deviceID = AudioInputDeviceObserver.inputDeviceID(forUID: selectedUID)
-        else {
-            self.logger.warning("talk selected input could not be resolved; using system default")
-            return self.defaultFallback(for: selection)
-        }
-
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioObjectID>.size))
-        guard status == noErr else {
-            self.logger.warning(
-                "talk selected input binding failed status=\(status); using system default")
-            return self.defaultFallback(for: selection)
-        }
-        self.logger.info("talk selected input bound uid=\(selectedUID, privacy: .private(mask: .hash))")
-        return selection
-    }
-
     private func prepareStartedRecognitionCapture(
         selection: AudioInputDeviceResolution,
         enableVoiceProcessing: Bool)
@@ -564,7 +533,8 @@ actor TalkModeRuntime {
                 try input.setVoiceProcessingEnabled(true)
             }
 
-            let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
+            let activeResolution = AudioInputDeviceObserver.bindSelectedInputIfNeeded(
+                selection, to: input, logger: self.logger, context: "talk")
             guard activeResolution.resolvedUID != nil else {
                 throw TalkAudioInputError.unavailable
             }
@@ -598,13 +568,6 @@ actor TalkModeRuntime {
             audioEngine.stop()
             throw error
         }
-    }
-
-    private func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
-        AudioInputDeviceResolution(
-            selectedUID: selection.selectedUID,
-            resolvedUID: AudioInputDeviceObserver.resolveSelection(nil).resolvedUID,
-            fellBackToSystemDefault: selection.selectedUID != nil)
     }
 }
 
@@ -1035,21 +998,10 @@ extension TalkModeRuntime {
         func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
             ElevenLabsTTSRequest(
                 text: input.cleanedText,
+                directive: input.directive,
                 modelId: modelId,
                 outputFormat: outputFormat,
-                speed: TalkTTSValidation.resolveSpeed(
-                    speed: input.directive?.speed,
-                    rateWPM: input.directive?.rateWPM),
-                stability: TalkTTSValidation.validatedStability(
-                    input.directive?.stability,
-                    modelId: modelId),
-                similarity: TalkTTSValidation.validatedUnit(input.directive?.similarity),
-                style: TalkTTSValidation.validatedUnit(input.directive?.style),
-                speakerBoost: input.directive?.speakerBoost,
-                seed: TalkTTSValidation.validatedSeed(input.directive?.seed),
-                normalize: ElevenLabsTTSClient.validatedNormalize(input.directive?.normalize),
-                language: input.language,
-                latencyTier: TalkTTSValidation.validatedLatencyTier(input.directive?.latencyTier))
+                language: input.language)
         }
 
         let request = makeRequest(outputFormat: outputFormat)
@@ -1446,21 +1398,21 @@ extension TalkModeRuntime {
             envVoice: envVoice,
             sagVoice: sagVoice,
             envApiKey: envApiKey)
-        if parsed.missingResolvedPayload {
+        if parsed.snapshot.missingResolvedPayload {
             self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
         }
-        if parsed.activeProvider == Self.defaultTalkProvider {
+        if parsed.snapshot.activeProvider == Self.defaultTalkProvider {
             self.ttsLogger.info("talk config provider from talk.resolved")
-        } else if parsed.activeProvider == Self.mlxTalkProvider ||
-            parsed.activeProvider == Self.systemTalkProvider
+        } else if parsed.snapshot.activeProvider == Self.mlxTalkProvider ||
+            parsed.snapshot.activeProvider == Self.systemTalkProvider
         {
             self.ttsLogger.info(
-                "talk provider \(parsed.activeProvider, privacy: .public) active")
+                "talk provider \(parsed.snapshot.activeProvider, privacy: .public) active")
         } else {
             self.ttsLogger
                 .info(
                     """
-                    talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak \
+                    talk provider \(parsed.snapshot.activeProvider, privacy: .public) uses gateway talk.speak \
                     with system voice fallback
                     """)
         }
@@ -1499,7 +1451,7 @@ extension TalkModeRuntime {
 
     func commitTalkConfig(_ cfg: TalkModeGatewayConfigState, locale: String) {
         self.defaultVoiceId = cfg.voiceId
-        self.voiceAliases = cfg.voiceAliases
+        self.voiceAliases = cfg.snapshot.voiceAliases
         if !self.voiceOverrideActive {
             self.currentVoiceId = cfg.voiceId
         }
@@ -1509,15 +1461,15 @@ extension TalkModeRuntime {
         }
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
-        self.activeTalkProvider = cfg.activeProvider
-        self.realtimeProvider = cfg.realtimeProvider
-        self.realtimeModelId = cfg.realtimeModelId
-        self.realtimeSpeakerVoice = cfg.realtimeSpeakerVoice
-        self.realtimeMode = cfg.realtimeMode
-        self.realtimeTransport = cfg.realtimeTransport
-        self.realtimeBrain = cfg.realtimeBrain
+        self.activeTalkProvider = cfg.snapshot.activeProvider
+        self.realtimeProvider = cfg.snapshot.realtime.provider
+        self.realtimeModelId = cfg.snapshot.realtime.modelId
+        self.realtimeSpeakerVoice = cfg.snapshot.realtime.speakerVoice
+        self.realtimeMode = cfg.snapshot.realtime.mode
+        self.realtimeTransport = cfg.snapshot.realtime.transport
+        self.realtimeBrain = cfg.snapshot.realtime.brain
         self.hasGatewayRealtimeRelayTuple = cfg.hasGatewayRealtimeRelayTuple
-        let configuredSilenceMs = cfg.silenceTimeoutMs
+        let configuredSilenceMs = cfg.snapshot.silenceTimeoutMs
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
         let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
         if isCJKLocale, configuredSilenceMs < 2000 {
@@ -1527,7 +1479,7 @@ extension TalkModeRuntime {
                         "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
         }
         self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
-        self.speechLocaleID = cfg.speechLocaleID
+        self.speechLocaleID = cfg.snapshot.speechLocaleID
         self.apiKey = cfg.apiKey
         self.mlxReferenceAudioPath = cfg.referenceAudioPath
         self.mlxReferenceText = cfg.referenceText
@@ -1536,17 +1488,17 @@ extension TalkModeRuntime {
         let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
         self.logger
             .info(
-                "talk config provider=\(cfg.activeProvider, privacy: .public) " +
+                "talk config provider=\(cfg.snapshot.activeProvider, privacy: .public) " +
                     "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "referenceAudio=\(cfg.referenceAudioPath != nil, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
-                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
-                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public) " +
-                    "realtimeMode=\(cfg.realtimeMode ?? "off", privacy: .public) " +
-                    "realtimeTransport=\(cfg.realtimeTransport ?? "default", privacy: .public) " +
-                    "realtimeBrain=\(cfg.realtimeBrain ?? "default", privacy: .public) " +
+                    "silenceTimeoutMs=\(cfg.snapshot.silenceTimeoutMs, privacy: .public) " +
+                    "speechLocale=\(cfg.snapshot.speechLocaleID ?? "device", privacy: .public) " +
+                    "realtimeMode=\(cfg.snapshot.realtime.mode ?? "off", privacy: .public) " +
+                    "realtimeTransport=\(cfg.snapshot.realtime.transport ?? "default", privacy: .public) " +
+                    "realtimeBrain=\(cfg.snapshot.realtime.brain ?? "default", privacy: .public) " +
                     "macOSRealtimeOptIn=\(self.macOSRealtimeRelayOptIn, privacy: .public)")
     }
 

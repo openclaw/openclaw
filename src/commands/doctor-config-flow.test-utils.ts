@@ -1,4 +1,6 @@
 // Doctor config-flow test utilities share mock input symbols and config fixtures across repair suites.
+import type { ConfigIncludeOwnership } from "../config/includes.js";
+
 const DOCTOR_CONFIG_TEST_INPUT = Symbol.for("openclaw.doctorConfigFlow.testInput");
 
 type DoctorConfigTestInput = {
@@ -6,6 +8,7 @@ type DoctorConfigTestInput = {
   parsed?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
   agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
   exists: boolean;
   path: string;
   preflightMode: "fast" | "issues" | "compat";
@@ -37,23 +40,13 @@ function shouldUseCompatPreflight(path: ReadonlyArray<string>, value: unknown): 
   const joined = path.join(".");
   const last = path[path.length - 1];
   if (
-    joined === "heartbeat" ||
     joined === "memorySearch" ||
     joined === "gateway.bind" ||
     joined === "hooks.internal.handlers"
   ) {
     return true;
   }
-  if (
-    joined === "channels.telegram.groupMentionsOnly" ||
-    joined === "agents.defaults.sandbox.perSession"
-  ) {
-    return true;
-  }
-  if (path.length >= 4 && path[0] === "agents" && path[1] === "list" && last === "perSession") {
-    return true;
-  }
-  if (last === "ttlHours" && path[path.length - 2] === "threadBindings") {
+  if (joined === "channels.telegram.groupMentionsOnly") {
     return true;
   }
   if (
@@ -134,6 +127,7 @@ export async function runDoctorConfigWithInput<T>(params: {
   parsedConfig?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
   agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
   exists?: boolean;
   repair?: boolean;
   preflightMode?: "fast" | "issues" | "compat";
@@ -155,6 +149,9 @@ export async function runDoctorConfigWithInput<T>(params: {
       : {}),
     ...(params.agentRosterIncludeOwned !== undefined
       ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
+    ...(params.includeProvenance
+      ? { includeProvenance: structuredClone(params.includeProvenance) }
       : {}),
     exists: params.exists ?? true,
     path: "/virtual/.openclaw/openclaw.json",

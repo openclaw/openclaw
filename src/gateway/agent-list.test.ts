@@ -37,6 +37,20 @@ describe("listGatewayAgentsBasic", () => {
         ownership: "explicit",
         selectionRequired: true,
       });
+
+      expect(
+        listGatewayAgentsBasic({
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "research" } },
+            entries: { ops: {}, research: {} },
+          },
+        }),
+      ).toMatchObject({
+        defaultId: "research",
+        ownership: "explicit",
+        selectionRequired: false,
+      });
     });
   });
 

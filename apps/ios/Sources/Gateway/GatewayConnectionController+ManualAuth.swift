@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import os
 
 extension GatewayConnectionController {
     static func resolvedManualPort(host: String, port: Int) -> Int? {
@@ -121,6 +122,10 @@ extension GatewayConnectionController {
     }
 
     struct ManualAuthOverride: Equatable {
+        private final class Handoff: Sendable {
+            let accepted = OSAllocatedUnfairLock(initialState: false)
+        }
+
         struct SetupAuth {
             let token: String
             let bootstrapToken: String
@@ -156,6 +161,52 @@ extension GatewayConnectionController {
         let expiresAtMs: Int64?
         let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
+        private var handoff = Handoff()
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.token == rhs.token &&
+                lhs.bootstrapToken == rhs.bootstrapToken &&
+                lhs.password == rhs.password &&
+                lhs.targetStableID == rhs.targetStableID &&
+                lhs.tlsFingerprintSha256 == rhs.tlsFingerprintSha256 &&
+                lhs.expiresAtMs == rhs.expiresAtMs &&
+                lhs.isSetupCodeOrigin == rhs.isSetupCodeOrigin &&
+                lhs.suppressStoredDeviceAuth == rhs.suppressStoredDeviceAuth
+        }
+
+        var wasHandedOff: Bool {
+            self.handoff.accepted.withLock { $0 }
+        }
+
+        var unconsumed: Self? {
+            self.wasHandedOff ? nil : self
+        }
+
+        func markHandedOff() {
+            // Root Retry and the form can retain copies of one setup attempt. Record handoff
+            // on their shared receipt so neither can replay credentials after consumption.
+            self.handoff.accepted.withLock { $0 = true }
+        }
+
+        func refreshedFieldsAfterHandoff(
+            token: String,
+            password: String,
+            instanceId: String,
+            targetStableID: String) -> (token: String, password: String)?
+        {
+            guard self.wasHandedOff,
+                  GatewayStableIdentifier.matches(self.targetStableID, targetStableID)
+            else { return nil }
+            let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                instanceId: instanceId,
+                gatewayStableID: targetStableID)
+            // Reload unchanged fields, but retain edits made after another surface retried.
+            return (
+                token.trimmingCharacters(in: .whitespacesAndNewlines) == (self.token ?? "")
+                    ? credentials.token ?? "" : token,
+                password.trimmingCharacters(in: .whitespacesAndNewlines) == (self.password ?? "")
+                    ? credentials.password ?? "" : password)
+        }
 
         static func explicit(
             token: String?,
@@ -221,7 +272,7 @@ extension GatewayConnectionController {
             allowManualOverride: Bool) -> ManualAuthOverride?
         {
             guard allowManualOverride else { return nil }
-            if let current,
+            if let current = current?.unconsumed,
                GatewayStableIdentifier.matches(current.targetStableID, targetStableID)
             {
                 return current
@@ -258,7 +309,7 @@ extension GatewayConnectionController {
                     expiresAtMs: nil,
                     suppressStoredDeviceAuth: true)
             }
-            return ManualAuthOverride.explicit(
+            var override = ManualAuthOverride.explicit(
                 token: token,
                 bootstrapToken: pendingOverride.bootstrapToken,
                 password: password,
@@ -267,6 +318,8 @@ extension GatewayConnectionController {
                 expiresAtMs: pendingOverride.expiresAtMs,
                 isSetupCodeOrigin: pendingOverride.isSetupCodeOrigin,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
+            override.handoff = pendingOverride.handoff
+            return override
         }
 
         static func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {

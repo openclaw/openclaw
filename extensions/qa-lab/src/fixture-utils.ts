@@ -1,9 +1,7 @@
 // Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -231,7 +229,10 @@ export function countSystemPromptChars(body: unknown): number {
   return total;
 }
 
-function countOccurrences(haystack: string, needle: string): number {
+const TOOL_IDENTIFIER_CHARACTERS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+function countOccurrences(haystack: string, needle: string, exactIdentifier = false): number {
   if (!needle) {
     return 0;
   }
@@ -242,9 +243,22 @@ function countOccurrences(haystack: string, needle: string): number {
     if (next < 0) {
       return count;
     }
-    count += 1;
+    const before = haystack[next - 1];
+    const after = haystack[next + needle.length];
+    if (
+      !exactIdentifier ||
+      ((before === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(before)) &&
+        (after === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(after)))
+    ) {
+      count += 1;
+    }
     offset = next + needle.length;
   }
+}
+
+/** Counts exact ASCII tool identifiers in diagnostic text without interpreting regex syntax. */
+export function countToolIdentifierMentions(text: string, identifier: string): number {
+  return countOccurrences(text, identifier, true);
 }
 
 function createCounts(needles: Record<string, string>): Record<string, number> {
@@ -329,29 +343,16 @@ async function visitSessionLogEvents(
   if (!sqlitePath) {
     return;
   }
-  let db: DatabaseSync | null = null;
   try {
-    db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const hasTranscriptEvents = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
-      .get();
-    if (!hasTranscriptEvents) {
-      return;
-    }
-    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
-    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json === "string") {
-        visit(row.event_json);
-      }
-    }
+    const { visitQaSqliteTranscriptEvents } = await import("openclaw/plugin-sdk/qa-runtime");
+    await visitQaSqliteTranscriptEvents(sqlitePath, visit);
   } catch {
     // Missing or unreadable stores contribute no events.
-  } finally {
-    db?.close();
   }
 }
 
 export async function countSessionLogMentions(params: {
+  identifierKeys?: ReadonlySet<string>;
   sessionsDir: string;
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
@@ -362,7 +363,10 @@ export async function countSessionLogMentions(params: {
       return;
     }
     for (const [key, needle] of Object.entries(params.needles)) {
-      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      const count = params.identifierKeys?.has(key)
+        ? countToolIdentifierMentions(scanText, needle)
+        : countOccurrences(scanText, needle);
+      counts[key] = (counts[key] ?? 0) + count;
     }
   });
   return counts;

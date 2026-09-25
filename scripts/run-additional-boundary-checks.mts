@@ -92,19 +92,9 @@ export const BOUNDARY_CHECKS = (
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
-      "extension-src-outside-plugin-sdk-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-src-outside-plugin-sdk"],
-    ],
-    [
-      "extension-normalization-core-bypass-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-normalization-core-bypass"],
-    ],
-    [
-      "extension-relative-outside-package-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-relative-outside-package"],
+      "extension-plugin-sdk-boundaries",
+      "node",
+      ["--import", "./scripts/tsx.mjs", "scripts/check-extension-plugin-sdk-boundary.mts", "--all"],
     ],
     [
       "lint:extensions:telegram-grammy-types",
@@ -208,6 +198,7 @@ export function parseShardSelection(value: unknown) {
 export function selectChecksForShard(
   checks: BoundaryCheck[],
   shardSpec: string | BoundaryShard | BoundaryShard[] | null,
+  coreTestBoundaryOwner: "additional" | "test-types" = "additional",
 ) {
   const shards =
     typeof shardSpec === "string"
@@ -217,11 +208,11 @@ export function selectChecksForShard(
         : shardSpec
           ? [shardSpec]
           : null;
-  if (!shards || shards.length === 0) {
-    return checks;
-  }
-  return checks.filter((_check, index) =>
-    shards.some((shard) => index % shard.count === shard.index),
+  // Transfer only this obligation, after partitioning so other checks keep their owner.
+  return checks.filter(
+    (check, index) =>
+      (!shards?.length || shards.some((shard) => index % shard.count === shard.index)) &&
+      (coreTestBoundaryOwner !== "test-types" || check.label !== "lint:tmp:tsgo-core-boundary"),
   );
 }
 
@@ -588,6 +579,7 @@ Runs supplemental architecture and boundary checks with bounded concurrency.
 
 Options:
   --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  --core-test-boundary-owner=test-types  The required type job owns the core graph boundary
   -h, --help        Show this help
 `;
 }
@@ -595,8 +587,13 @@ Options:
 export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.env) {
   let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
   let help = false;
+  let coreTestBoundaryOwner: "additional" | "test-types" = "additional";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
+    if (arg === "--core-test-boundary-owner=test-types") {
+      coreTestBoundaryOwner = "test-types";
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       help = true;
       continue;
@@ -620,7 +617,7 @@ export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.en
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
-  return { help, shardSpec };
+  return { help, shardSpec, coreTestBoundaryOwner };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -649,7 +646,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
       );
       const shards = parseShardSelection(cliArgs.shardSpec);
-      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards, cliArgs.coreTestBoundaryOwner);
       if (shards) {
         process.stdout.write(
           `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,

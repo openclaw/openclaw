@@ -1,7 +1,8 @@
-import { html, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { html, nothing, type PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import {
@@ -10,12 +11,13 @@ import {
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
+  @property({ type: Boolean }) preview = false;
   @property() sourceIdentity = "";
   @property() label = "";
   @property() mimeType = "";
@@ -28,10 +30,15 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onFallbackExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
+  // Buffering can lower readyState after the first frame without another loadeddata event.
+  @state() private frameReady = false;
+
   private media: HTMLVideoElement | null = null;
   private mediaVisible = false;
-  private viewportElement: HTMLElement | null = null;
-  private stopObservingViewport: (() => void) | undefined;
+  private readonly viewport = new ChatAttachmentViewportRef(() => {
+    this.mediaVisible = true;
+    this.syncSource();
+  });
   private readonly sourceController = new ChatMediaSourceController();
 
   override connectedCallback(): void {
@@ -40,9 +47,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = null;
+    this.viewport.disconnect();
     this.sourceController.cancel();
     if (this.media) {
       this.sourceController.reset(this.media);
@@ -51,6 +56,10 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
+    if (changedProperties.has("src") && !this.src && this.media) {
+      this.sourceController.cancel();
+      this.sourceController.reset(this.media);
+    }
     if (
       this.sourceController.readiness === "unavailable" &&
       (changedProperties.has("src") ||
@@ -74,25 +83,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   private setMedia = (element: Element | undefined) => {
+    this.frameReady = false;
     this.media = element instanceof HTMLVideoElement ? element : null;
     this.syncSource();
-  };
-
-  private setViewportElement = (element: Element | undefined) => {
-    const viewportElement = element instanceof HTMLElement ? element : null;
-    if (this.viewportElement === viewportElement) {
-      return;
-    }
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = viewportElement;
-    if (!viewportElement) {
-      return;
-    }
-    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
-      this.mediaVisible = true;
-      this.syncSource();
-    });
   };
 
   private syncSource(): void {
@@ -134,9 +127,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
 
   override render() {
     const downloadHref = safeMediaAttachmentHref(this.src);
-    const preparing = this.sourceController.readiness === "preparing";
-    const unavailable = this.sourceController.readiness === "unavailable";
-    if (unavailable) {
+    const preparing = this.sourceController.readiness === "preparing" && !this.preview;
+    if (this.sourceController.readiness === "unavailable") {
       return renderCompactAttachmentCard({
         kind: "video",
         label: this.label,
@@ -146,15 +138,19 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         onExpand: this.onFallbackExpand,
       });
     }
+    const loading = this.preview && !this.frameReady;
     const onExpand = this.onExpand && this.sourceController.readySource ? this.expand : undefined;
     const dimensions =
       this.mediaWidth && this.mediaHeight
         ? { "aspect-ratio": `${this.mediaWidth} / ${this.mediaHeight}` }
-        : {};
+        : this.preview
+          ? { "aspect-ratio": "16 / 9" }
+          : {};
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
-        ${ref(this.setViewportElement)}
+        aria-busy=${loading ? "true" : nothing}
+        ${ref(this.viewport.setElement)}
         ?data-openable=${Boolean(onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, onExpand)}
       >
@@ -164,6 +160,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
+          downloadPending: this.preview && !downloadHref,
+          loading,
           expandLabel: t("chat.mediaPlayer.openVideo", { filename: this.label }),
           onExpand,
           visualMode: "preview-with-favicon",
@@ -176,11 +174,36 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
             : null
         }
         <div class="chat-assistant-video-frame" ?hidden=${preparing}>
+          ${
+            loading
+              ? html`<div
+                  class="chat-video-skeleton"
+                  role="status"
+                  aria-label=${t("common.loading")}
+                >
+                  <div class="chat-video-skeleton__controls" aria-hidden="true">
+                    ${icons.play}<span>0:00<span>/ 0:00</span></span>
+                    ${icons.volume2}${icons.maximize}${icons.moreHorizontal}
+                  </div>
+                  <div class="chat-video-skeleton__timeline skeleton" aria-hidden="true"></div>
+                </div>`
+              : nothing
+          }
           <video
             controls
-            preload="metadata"
+            aria-label=${this.label.trim() || t("chat.attachments.video")}
+            preload=${this.preview ? "auto" : "metadata"}
             style=${styleMap(dimensions)}
             ${ref(this.setMedia)}
+            @loadeddata=${() => {
+              this.frameReady = true;
+            }}
+            @playing=${() => {
+              this.frameReady = true;
+            }}
+            @emptied=${() => {
+              this.frameReady = false;
+            }}
             @loadedmetadata=${() => {
               if (!this.media) {
                 return;

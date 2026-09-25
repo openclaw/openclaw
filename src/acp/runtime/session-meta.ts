@@ -1,19 +1,23 @@
+import { randomUUID } from "node:crypto";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
+import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import {
   mergeSessionEntry,
-  type AcpSessionRuntimeOptions,
-  type SessionAcpIdentity,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  legacyAcpMigrationBindingMatches,
+  recordLegacyAcpMigrationCompletion,
+} from "../../infra/legacy-acp-migration-source.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   type OpenClawStateDatabaseOptions,
@@ -21,18 +25,21 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   acpSessionRowMatchesEntry,
-  type AcpSessionEntryBinding,
   type AcpSessionRow,
   type AcpSessionsTable,
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
   legacyAcpDatabaseSessionKeys,
   parseAcpDatabaseSessionKeyCandidates,
+  resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
+  selectLegacyFreeAcpSessionRows,
+  upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
+import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import {
   readSessionEntryFromStore,
   resolveSessionStorePathForAcp,
@@ -52,25 +59,6 @@ export type AcpSessionStoreEntry = {
   acp?: SessionAcpMeta;
   storeReadFailed?: boolean;
 };
-
-export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
-  const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
-  const runtimeOptions = safeParseJsonRecord(row.runtime_options_json ?? "") as
-    | AcpSessionRuntimeOptions
-    | undefined;
-  return {
-    backend: row.backend,
-    agent: row.agent,
-    runtimeSessionName: row.runtime_session_name,
-    ...(identity ? { identity } : {}),
-    mode: row.mode === "oneshot" ? "oneshot" : "persistent",
-    ...(runtimeOptions ? { runtimeOptions } : {}),
-    ...(row.cwd != null ? { cwd: row.cwd } : {}),
-    state: row.state === "running" || row.state === "error" ? row.state : "idle",
-    lastActivityAt: row.last_activity_at,
-    ...(row.last_error != null ? { lastError: row.last_error } : {}),
-  };
-}
 
 function bindAcpSessionMeta(params: {
   sessionKey: string;
@@ -107,70 +95,11 @@ export function readAcpSessionMeta(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const storeEntry = readSessionEntryFromStore({
-    sessionKey,
-    agentId: params.agentId,
-    cfg: params.cfg,
-    env: params.env,
+  return readAcpSessionEntry({
+    ...params,
+    sessionKey: params.sessionKey.trim(),
     clone: false,
-  });
-  if (!storeEntry.storePath) {
-    return undefined;
-  }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          storeEntry.storeSessionKey,
-          storeEntry.agentId,
-          storeEntry.cfg,
-          storeEntry.entry,
-        ),
-        entry: storeEntry.entry,
-      }),
-    { env: params.env, path: params.databasePath },
-  );
-  if (!row) {
-    return undefined;
-  }
-  return rowToAcpSessionMeta(row);
-}
-
-export function readAcpSessionMetaForEntry(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  entry: AcpSessionEntryBinding | undefined;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          sessionKey,
-          params.agentId,
-          params.cfg,
-          params.entry,
-        ),
-        entry: params.entry,
-      }),
-    { env: params.env, path: params.databasePath },
-  );
-  if (!row) {
-    return undefined;
-  }
-  return rowToAcpSessionMeta(row);
+  })?.acp;
 }
 
 export function readAcpSessionMetaBatch(params: {
@@ -191,9 +120,6 @@ export function readAcpSessionMetaBatch(params: {
   for (const item of params.entries) {
     const rawSessionKey = item.sessionKey.trim();
     const sessionKey = buildAcpDatabaseSessionKey(rawSessionKey, item.agentId);
-    if (!sessionKey) {
-      continue;
-    }
     if (item.entry?.acp) {
       result.set(item.entry, item.entry.acp);
       continue;
@@ -234,6 +160,7 @@ export function readAcpSessionMetaBatch(params: {
           ).rows,
       );
       const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
+      const unresolved: Array<{ entry: SessionEntry; key: string }> = [];
       for (const [sessionKey, entries] of entriesByKey) {
         for (const item of entries) {
           const row = [sessionKey, ...item.legacyKeys]
@@ -243,7 +170,21 @@ export function readAcpSessionMetaBatch(params: {
             )
             .find((candidateRow) => candidateRow !== undefined);
           result.set(item.entry, row ? rowToAcpSessionMeta(row) : undefined);
+          const legacyKey = !row && resolveLegacyFreeAcpSessionKey(item.rawSessionKey);
+          if (legacyKey) {
+            unresolved.push({ entry: item.entry, key: legacyKey });
+          }
         }
+      }
+      const legacyRows = selectLegacyFreeAcpSessionRows(
+        database,
+        unresolved.map(({ key }) => key),
+      );
+      for (const { entry, key } of unresolved) {
+        const row = legacyRows
+          .get(key)
+          ?.find((candidate) => acpSessionRowMatchesEntry(candidate, entry));
+        result.set(entry, row ? rowToAcpSessionMeta(row) : undefined);
       }
     },
     { env: params.env, path: params.databasePath },
@@ -274,6 +215,7 @@ export function writeAcpSessionMetaForMigration(params: {
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   env?: NodeJS.ProcessEnv;
+  database?: OpenClawStateDatabaseOptions["database"];
   databasePath?: string;
   now?: () => number;
 }): void {
@@ -291,110 +233,19 @@ export function writeAcpSessionMetaForMigration(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       upsertAcpSessionMetaRow(database.db, row);
-    },
-    { env: params.env, path: params.databasePath },
-  );
-}
-
-export function repairAcpSessionMetaKeyForMigration(params: {
-  sessionKey: string;
-  candidateSessionKeys?: Iterable<string | null | undefined>;
-  entry?: AcpSessionEntryBinding;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-  now?: () => number;
-}): boolean {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return false;
-  }
-
-  let repaired = false;
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const currentRow = selectAcpSessionRow(database.db, sessionKey);
-      if (currentRow && acpSessionRowMatchesEntry(currentRow, params.entry)) {
-        return;
-      }
-
-      const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
-      const candidateKeys = new Set<string>();
-      candidateKeys.add(normalizedSessionKey);
-      for (const candidate of params.candidateSessionKeys ?? []) {
-        const trimmed = typeof candidate === "string" ? candidate.trim() : "";
-        if (
-          trimmed &&
-          trimmed !== sessionKey &&
-          normalizeLowercaseStringOrEmpty(trimmed) === normalizedSessionKey
-        ) {
-          candidateKeys.add(trimmed);
+      for (const identity of parseAcpDatabaseSessionKeyCandidates(sessionKey)) {
+        const keys = new Set([
+          identity.storeSessionKey,
+          resolveLegacyFreeAcpSessionKey(identity.storeSessionKey),
+        ]);
+        for (const key of keys) {
+          if (key) {
+            sessionChanges.emit({ sessionKey: key, agentId: identity.agentId }, database.db);
+          }
         }
       }
-
-      let row: AcpSessionRow | undefined;
-      for (const candidateKey of candidateKeys) {
-        const candidateRow = selectAcpSessionRow(database.db, candidateKey);
-        if (candidateRow && acpSessionRowMatchesEntry(candidateRow, params.entry)) {
-          row = candidateRow;
-          break;
-        }
-      }
-      row ??= executeSqliteQuerySync(
-        database.db,
-        getAcpSessionKysely(database.db)
-          .selectFrom("acp_sessions")
-          .selectAll()
-          .where((eb) => eb.fn<string>("lower", ["session_key"]), "=", normalizedSessionKey)
-          .orderBy("last_activity_at", "desc")
-          .orderBy("session_key", "asc"),
-      ).rows.find(
-        (candidate) =>
-          candidate.session_key !== sessionKey &&
-          acpSessionRowMatchesEntry(candidate, params.entry),
-      );
-      if (!row) {
-        return;
-      }
-      upsertAcpSessionMetaRow(database.db, {
-        ...row,
-        session_key: sessionKey,
-        updated_at: params.now?.() ?? Date.now(),
-      });
-      executeSqliteQuerySync(
-        database.db,
-        getAcpSessionKysely(database.db)
-          .deleteFrom("acp_sessions")
-          .where("session_key", "=", row.session_key),
-      );
-      repaired = true;
     },
-    { env: params.env, path: params.databasePath },
-  );
-  return repaired;
-}
-
-function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {
-  executeSqliteQuerySync(
-    db,
-    getAcpSessionKysely(db)
-      .insertInto("acp_sessions")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("session_key").doUpdateSet({
-          session_id: (eb) => eb.ref("excluded.session_id"),
-          backend: (eb) => eb.ref("excluded.backend"),
-          agent: (eb) => eb.ref("excluded.agent"),
-          runtime_session_name: (eb) => eb.ref("excluded.runtime_session_name"),
-          identity_json: (eb) => eb.ref("excluded.identity_json"),
-          mode: (eb) => eb.ref("excluded.mode"),
-          runtime_options_json: (eb) => eb.ref("excluded.runtime_options_json"),
-          cwd: (eb) => eb.ref("excluded.cwd"),
-          state: (eb) => eb.ref("excluded.state"),
-          last_activity_at: (eb) => eb.ref("excluded.last_activity_at"),
-          last_error: (eb) => eb.ref("excluded.last_error"),
-          updated_at: (eb) => eb.ref("excluded.updated_at"),
-        }),
-      ),
+    { database: params.database, env: params.env, path: params.databasePath },
   );
 }
 
@@ -414,21 +265,14 @@ export function readAcpSessionEntry(params: {
   if (!storeEntry.storePath) {
     return null;
   }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          storeEntry.storeSessionKey,
-          storeEntry.agentId,
-          storeEntry.cfg,
-          storeEntry.entry,
-        ),
-        entry: storeEntry.entry,
-      }),
-    { env: params.env, path: params.databasePath },
-  );
-  const acp = row ? rowToAcpSessionMeta(row) : undefined;
+  const acp = readAcpSessionMetaForEntry({
+    sessionKey: storeEntry.storeSessionKey,
+    agentId: storeEntry.agentId,
+    cfg: storeEntry.cfg,
+    entry: storeEntry.entry,
+    env: params.env,
+    databasePath: params.databasePath,
+  });
   return {
     cfg: storeEntry.cfg,
     agentId: storeEntry.agentId,
@@ -517,7 +361,37 @@ function sessionStoreUpdateOptions(params: {
   };
 }
 
+function consumeLegacyAcpMigrationSources(params: {
+  database: DatabaseSync;
+  agentId?: string;
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry | undefined;
+  env?: NodeJS.ProcessEnv;
+  now: number;
+}): void {
+  if (!params.entry) {
+    return;
+  }
+  const current = readLegacyAcpMigrationContext(params);
+  if (current.sources.length === 0) {
+    return;
+  }
+  if (
+    current.entry?.sessionId !== params.entry.sessionId ||
+    current.entry.lifecycleRevision !== params.entry.lifecycleRevision
+  ) {
+    throw new Error("Canonical ACP session changed before legacy source consumption.");
+  }
+  for (const source of current.sources) {
+    if (legacyAcpMigrationBindingMatches(source, current.entry)) {
+      recordLegacyAcpMigrationCompletion(params.database, source, params.now);
+    }
+  }
+}
+
 export async function upsertAcpSessionMeta(params: {
+  assertCommitAllowed?: () => void;
   sessionKey: string;
   agentId?: string;
   cfg?: OpenClawConfig;
@@ -545,7 +419,7 @@ export async function upsertAcpSessionMeta(params: {
   if (!storeEntry.storePath) {
     return null;
   }
-  const { entry } = storeEntry;
+  const { entry, storePath } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   const databaseSessionKey = buildAcpDatabaseSessionKey(storageSessionKey, storeEntry.agentId);
   let current: SessionAcpMeta | undefined;
@@ -555,6 +429,7 @@ export async function upsertAcpSessionMeta(params: {
   const updatedAt = params.now?.() ?? Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      params.assertCommitAllowed?.();
       const currentRow = selectAcpSessionRowForStoreEntry(
         database.db,
         storageSessionKey,
@@ -564,7 +439,10 @@ export async function upsertAcpSessionMeta(params: {
       );
       currentRowKey = currentRow?.session_key;
       current = currentRow ? rowToAcpSessionMeta(currentRow) : undefined;
-      preparedEntry = mergeSessionEntry(entry, { updatedAt });
+      preparedEntry = mergeSessionEntry(entry, {
+        updatedAt,
+        ...(entry ? {} : { lifecycleRevision: randomUUID() }),
+      });
       nextMeta = params.mutate(
         current,
         current ? mergeAcpForReturn(preparedEntry, current) : entry,
@@ -592,19 +470,42 @@ export async function upsertAcpSessionMeta(params: {
           {
             ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
             replaceEntry: true,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
         )
       : null;
     runOpenClawStateWriteTransaction(
       (database) => {
+        params.assertCommitAllowed?.();
+        consumeLegacyAcpMigrationSources({
+          database: database.db,
+          agentId: storeEntry.agentId,
+          storePath,
+          sessionKey: patched?.sessionKey ?? storageSessionKey,
+          entry: patched?.entry ?? entry,
+          env: params.env,
+          now: updatedAt,
+        });
         const sessionKeysToDelete = new Set([databaseSessionKey]);
-        if (currentRowKey) {
+        if (currentRowKey && !resolveLegacyFreeAcpSessionKey(currentRowKey)) {
           sessionKeysToDelete.add(currentRowKey);
         }
         if (patched?.sessionKey) {
           sessionKeysToDelete.add(
             buildAcpDatabaseSessionKey(patched.sessionKey, storeEntry.agentId),
           );
+        }
+        // An explicit close consumes every readable raw alias of this same lifecycle.
+        // Leaving an alias behind would make the next read reopen the closed metadata.
+        for (const aliases of selectLegacyFreeAcpSessionRows(database.db, [
+          storageSessionKey,
+          patched?.sessionKey ?? storageSessionKey,
+        ]).values()) {
+          for (const alias of aliases) {
+            if (acpSessionRowMatchesEntry(alias, patched?.entry ?? entry)) {
+              sessionKeysToDelete.add(alias.session_key);
+            }
+          }
         }
         for (const key of sessionKeysToDelete) {
           executeSqliteQuerySync(
@@ -614,6 +515,10 @@ export async function upsertAcpSessionMeta(params: {
               .where("session_key", "=", key),
           );
         }
+        sessionChanges.emit(
+          { agentId: storeEntry.agentId, sessionKey: patched?.sessionKey ?? storageSessionKey },
+          database.db,
+        );
       },
       { env: params.env, path: params.databasePath },
     );
@@ -621,6 +526,7 @@ export async function upsertAcpSessionMeta(params: {
       agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKeys: [storageSessionKey, patched?.sessionKey],
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     return patched?.entry ?? null;
   }
@@ -641,6 +547,7 @@ export async function upsertAcpSessionMeta(params: {
       ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
       fallbackEntry: preparedEntry,
       replaceEntry: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     },
   );
   if (!persisted) {
@@ -650,9 +557,21 @@ export async function upsertAcpSessionMeta(params: {
     agentId: storeEntry.agentId,
     storePath: storeEntry.storePath,
     sessionKeys: [storageSessionKey, persisted.sessionKey],
+    assertCommitAllowed: params.assertCommitAllowed,
   });
   runOpenClawStateWriteTransaction(
     (database) => {
+      // The entry patch and legacy cleanup await before this authoritative publication.
+      params.assertCommitAllowed?.();
+      consumeLegacyAcpMigrationSources({
+        database: database.db,
+        agentId: storeEntry.agentId,
+        storePath,
+        sessionKey: persisted.sessionKey,
+        entry: persisted.entry,
+        env: params.env,
+        now: updatedAt,
+      });
       const persistedDatabaseSessionKey = buildAcpDatabaseSessionKey(
         persisted.sessionKey,
         storeEntry.agentId,
@@ -675,7 +594,11 @@ export async function upsertAcpSessionMeta(params: {
             .where("session_key", "=", databaseSessionKey),
         );
       }
-      if (currentRowKey && currentRowKey !== persistedDatabaseSessionKey) {
+      if (
+        currentRowKey &&
+        currentRowKey !== persistedDatabaseSessionKey &&
+        !resolveLegacyFreeAcpSessionKey(currentRowKey)
+      ) {
         executeSqliteQuerySync(
           database.db,
           getAcpSessionKysely(database.db)
@@ -683,7 +606,10 @@ export async function upsertAcpSessionMeta(params: {
             .where("session_key", "=", currentRowKey),
         );
       }
-      if (persistedDatabaseSessionKey !== persisted.sessionKey) {
+      if (
+        persistedDatabaseSessionKey !== persisted.sessionKey &&
+        !resolveLegacyFreeAcpSessionKey(persisted.sessionKey)
+      ) {
         const legacyRow = selectAcpSessionRow(database.db, persisted.sessionKey);
         if (legacyRow && acpSessionRowMatchesEntry(legacyRow, persisted.entry)) {
           executeSqliteQuerySync(
@@ -694,6 +620,25 @@ export async function upsertAcpSessionMeta(params: {
           );
         }
       }
+      for (const aliases of selectLegacyFreeAcpSessionRows(database.db, [
+        storageSessionKey,
+        persisted.sessionKey,
+      ]).values()) {
+        for (const alias of aliases) {
+          if (acpSessionRowMatchesEntry(alias, persisted.entry)) {
+            executeSqliteQuerySync(
+              database.db,
+              getAcpSessionKysely(database.db)
+                .deleteFrom("acp_sessions")
+                .where("session_key", "=", alias.session_key),
+            );
+          }
+        }
+      }
+      sessionChanges.emit(
+        { agentId: storeEntry.agentId, sessionKey: persisted.sessionKey },
+        database.db,
+      );
     },
     { env: params.env, path: params.databasePath },
   );

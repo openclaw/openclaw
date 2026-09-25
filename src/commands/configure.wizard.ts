@@ -10,20 +10,18 @@ import {
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatPortRangeHint } from "../cli/error-format.js";
-import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -31,7 +29,7 @@ import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
-import { promptGatewayConfig } from "./configure.gateway.js";
+import { promptGatewayConfig, validateGatewayPortInput } from "./configure.gateway.js";
 import type {
   ChannelsWizardMode,
   ConfigureWizardParams,
@@ -69,25 +67,13 @@ import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
-type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
 type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+const loadSetupPluginConfigModule = createLazyPromise(
   () => import("../wizard/setup.plugin-config.js"),
 );
-
-function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parsePort(value) === null) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
-
-function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  return setupPluginConfigModuleLoader.load();
-}
 
 async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
@@ -481,7 +467,7 @@ export async function runConfigureWizard(
       }
       if (!snapshot.valid) {
         outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run configure.`,
+          `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run configure.`,
         );
         runtime.exit(1);
         return;
@@ -572,12 +558,12 @@ export async function runConfigureWizard(
         command: opts.command,
         mode: metadataMode,
       });
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig: remoteConfig,
+      const committed = await writeWizardConfigFile(remoteConfig, {
+        mergeBase: baseConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
         writeOptions: configWriteOwnership,
       });
-      remoteConfig = committed.config;
+      remoteConfig = committed.nextConfig;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
         const healthCheckOutcome = await runGatewayHealthCheck({
@@ -637,7 +623,7 @@ export async function runConfigureWizard(
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
-    const channelSetup = createChannelSetupTransaction({ runtime });
+    const channelSetup = createChannelSetupHooks({ runtime });
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -648,14 +634,13 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-        const committedConfig = await writeWizardConfigFile(configToCommit, {
-          mergeBase: mergeBaseConfig,
-          writeOptions: configWriteOwnership,
-        });
-        mergeBaseConfig = structuredClone(committedConfig);
-        return committedConfig;
+      const committed = await writeWizardConfigFile(nextConfig, {
+        mergeBase: mergeBaseConfig,
+        writeOptions: configWriteOwnership,
       });
+      mergeBaseConfig = structuredClone(committed.nextConfig);
+      await channelSetup.runPostWriteHooks(committed.path);
+      nextConfig = committed.nextConfig;
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);
@@ -736,7 +721,7 @@ export async function runConfigureWizard(
         runtime,
         1,
       );
-      gatewayPort = parsePort(portInput) ?? gatewayPort;
+      gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
     };
 
     let didConfigureGateway = false;

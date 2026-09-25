@@ -1,16 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { gatewayKernelLogs } from "./server-kernel.js";
@@ -27,7 +32,7 @@ describe("Gateway workspace migration readiness", () => {
   });
   beforeEach(async () => {
     state = await createOpenClawTestState({
-      label: "gateway-workspace-readiness",
+      label: "ws-readiness",
       env: {
         OPENCLAW_GATEWAY_TOKEN: undefined,
         OPENCLAW_GATEWAY_PASSWORD: undefined,
@@ -56,55 +61,173 @@ describe("Gateway workspace migration readiness", () => {
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
-  const start = (port: number) =>
+  const start = (
+    port: number,
+    startupConfigSnapshotRead?: Awaited<
+      ReturnType<typeof readConfigFileSnapshotWithPluginMetadata>
+    >,
+  ) =>
     startGatewayServer(port, {
       auth: { mode: "none" },
       bind: "loopback",
       controlUiEnabled: false,
       hotReloadRecovery: requestRecoveryRestart,
+      startupConfigSnapshotRead,
     });
 
-  it("refuses startup for a secondary workspace until Doctor removes its legacy state", async () => {
-    const stateDir = state.stateDir;
-    const workspaceDir = path.join(stateDir, "workspace-secondary");
-    const cfg: OpenClawConfig = {
-      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { workspace: path.join(stateDir, "workspace-main") },
-          secondary: { workspace: workspaceDir },
-        },
+  it("scans a cold shared store once before refusing every owned session workspace", async () => {
+    const storePath = state.statePath("shared.sqlite");
+    const sandbox = {
+      mode: "all",
+      scope: "session",
+      workspaceAccess: "ro",
+      workspaceRoot: state.path("sandboxes-main"),
+    } as const;
+    const agents = {
+      main: { workspace: state.workspaceDir, sandbox },
+      secondary: {
+        workspace: state.path("workspace-secondary"),
+        sandbox: { ...sandbox, workspaceRoot: state.path("sandboxes-secondary") },
       },
     };
-    await writeConfigFile(cfg);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const sourcePath = path.join(workspaceDir, "openclaw-workspace-state.json");
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
+    await state.writeConfig({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      session: { store: storePath },
+      agents: { ownership: "explicit", entries: agents },
+    } satisfies OpenClawConfig);
+    const addLegacyWorkspace = async (agentId: keyof typeof agents, sessionKey: string) => {
+      const agent = agents[agentId];
+      const { sandboxWorkspaceDir } = resolveSandboxWorkspaceLayoutPaths({
+        cfg: agent.sandbox,
+        agentId,
+        rawSessionKey: sessionKey,
+        workspaceDir: agent.workspace,
+      });
+      await fs.mkdir(sandboxWorkspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sandboxWorkspaceDir, "openclaw-workspace-state.json"),
+        JSON.stringify({ version: 1 }),
+      );
+      return sandboxWorkspaceDir;
+    };
+    const workspaces: string[] = [];
+    for (const agentId of ["main", "secondary"] as const) {
+      for (const suffix of ["first", "second"]) {
+        const sessionKey = `agent:${agentId}:${suffix}`;
+        replaceSessionEntrySync(
+          { agentId, sessionKey, storePath, env: state.env },
+          { sessionId: sessionKey, updatedAt: 1 },
+        );
+        workspaces.push(await addLegacyWorkspace(agentId, sessionKey));
+      }
+    }
+    replaceSessionEntrySync(
+      { agentId: "outsider", sessionKey: "agent:outsider:first", storePath, env: state.env },
+      { sessionId: "outsider-session", updatedAt: 1 },
     );
+    const unrelatedWorkspaces = await Promise.all([
+      addLegacyWorkspace("main", "agent:main:absent"),
+      addLegacyWorkspace("main", "agent:outsider:first"),
+      addLegacyWorkspace("main", "agent:secondary:first"),
+      addLegacyWorkspace("secondary", "agent:main:first"),
+    ]);
+    closeOpenClawAgentDatabasesForTest();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+
     const port = await getFreePort();
-
-    await expect(start(port)).rejects.toThrow("Legacy workspace setup state requires migration");
-    await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
-    await expect(fs.stat(sourcePath)).resolves.toBeDefined();
-
-    const migration = await migrateLegacyWorkspaceState({
-      stateDir,
-      detected: detectLegacyWorkspaceState({
-        cfg,
-        stateDir,
-        homedir: os.homedir,
-        doctorOnlyStateMigrations: true,
-      }),
+    const attempt = start(port).then((started) => {
+      server = started;
+      return started;
     });
-    expect(migration.warnings).toEqual([]);
-    server = await start(port);
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-    expect(ready.status).toBe(200);
-    await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(attempt).rejects.toThrow("Legacy workspace setup state requires migration");
+    for (const workspace of workspaces) {
+      await expect(attempt).rejects.toThrow(workspace);
+    }
+    for (const workspace of unrelatedWorkspaces) {
+      await expect(attempt).rejects.not.toThrow(workspace);
+    }
+    await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+
+    // The refusal ends the first workspace admission before later startup passes.
+    const canonicalScans = prepare.mock.calls.reduce((count, [sql], index) => {
+      if (!sql.includes('"retained_window"')) {
+        return count;
+      }
+      const result = prepare.mock.results[index];
+      return (
+        count +
+        iterate.mock.contexts.filter(
+          (statement) => result?.type === "return" && statement === result.value,
+        ).length
+      );
+    }, 0);
+    expect(canonicalScans).toBe(1);
   });
+
+  it.each(["disk", "supplied snapshot"])(
+    "refuses a secondary workspace from %s until Doctor migrates it",
+    async (source) => {
+      const stateDir = state.stateDir;
+      const workspaceDir = path.join(stateDir, "workspace-secondary");
+      const cfg: OpenClawConfig = {
+        gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { workspace: path.join(stateDir, "workspace-main") },
+            secondary: { workspace: workspaceDir },
+          },
+        },
+      };
+      await writeConfigFile(cfg);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const sourcePath = path.join(workspaceDir, "openclaw-workspace-state.json");
+      await fs.writeFile(
+        sourcePath,
+        JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
+      );
+      const initialSnapshotRead =
+        source === "supplied snapshot"
+          ? await readConfigFileSnapshotWithPluginMetadata({ observe: false })
+          : undefined;
+      if (initialSnapshotRead) {
+        await writeConfigFile({
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            entries: {
+              ...cfg.agents?.entries,
+              secondary: { workspace: path.join(stateDir, "workspace-clean") },
+            },
+          },
+        });
+      }
+      const port = await getFreePort();
+      const attempt = start(port, initialSnapshotRead).then((started) => {
+        server = started;
+        return started;
+      });
+      await expect(attempt).rejects.toThrow("Legacy workspace setup state requires migration");
+      await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+      await expect(fs.stat(sourcePath)).resolves.toBeDefined();
+
+      const migration = await migrateLegacyWorkspaceState({
+        stateDir,
+        detected: await detectLegacyWorkspaceState({
+          cfg,
+          stateDir,
+          homedir: os.homedir,
+          doctorOnlyStateMigrations: true,
+        }),
+      });
+      expect(migration.warnings).toEqual([]);
+      server = await start(port, initialSnapshotRead);
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+      expect(ready.status).toBe(200);
+      await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
+    },
+  );
 
   it.each(["managed write", "file watcher"])(
     "rejects an unmigrated workspace switch before publication via %s",
@@ -113,7 +236,7 @@ describe("Gateway workspace migration readiness", () => {
       state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
       state.applyEnv();
       const oldWorkspace = state.workspaceDir;
-      const nextWorkspace = state.path("retained-workspace");
+      const nextWorkspace = state.path("retained");
       const reloadError = vi.spyOn(gatewayKernelLogs.logReload, "error");
       const cfg: OpenClawConfig = {
         gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
@@ -184,7 +307,7 @@ describe("Gateway workspace migration readiness", () => {
       server = undefined;
       const migration = await migrateLegacyWorkspaceState({
         stateDir: state.stateDir,
-        detected: detectLegacyWorkspaceState({
+        detected: await detectLegacyWorkspaceState({
           cfg: nextConfig,
           stateDir: state.stateDir,
           doctorOnlyStateMigrations: true,

@@ -1,18 +1,25 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  bindLegacyPluginSdkResourceHost,
+  getLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import {
@@ -20,8 +27,11 @@ import {
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
   readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -51,6 +61,7 @@ const unavailableCron: GatewayCronServiceContract = {
   remove: async () => cronUnavailable(),
   removeStaleJobFamily: async () => cronUnavailable(),
   removeAgentJobsTransactional: async () => cronUnavailable(),
+  quiesceJobs: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
@@ -66,6 +77,7 @@ function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
+  const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) =>
@@ -90,6 +102,7 @@ function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
@@ -97,7 +110,6 @@ function createLocalGatewayRequestContext(
     getRuntimeConfig: params.getRuntimeConfig,
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
-    notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: (loadParams) =>
@@ -108,6 +120,8 @@ function createLocalGatewayRequestContext(
     loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
     readPreparedGatewayModelCatalog: (loadParams) =>
       readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
+    readPreparedGatewayModelCatalogBatch: (agentIds) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, { getConfig: params.getRuntimeConfig }),
     readChatMetadata: async () => {
       throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },
@@ -171,6 +185,36 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  let projection: SessionRowProjection | undefined;
+  let initializing: Promise<void> | undefined;
+  bindSessionRowProjection(context, () => projection);
+  context.ensureSessionRowProjection = () => {
+    if (!initializing) {
+      // The same host retains embedded resources used by admitted work after its caller returns.
+      resourceHost.adopt(context, {
+        release: async () => {
+          await initializing?.catch(() => {});
+          projection?.dispose();
+          await projection?.ensureMaterialized();
+        },
+      });
+      initializing = import("./session-row-projection.js").then(
+        async ({ createSessionRowProjection }) => {
+          projection = await createSessionRowProjection({
+            cfg: params.getRuntimeConfig(),
+            getConfig: params.getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                context,
+                listAgentIds(params.getRuntimeConfig()),
+              ),
+            context,
+          });
+        },
+      );
+    }
+    return initializing;
+  };
   context.createAgentTurnFacade = async (principal) => {
     const { createInternalAgentTurnFacade } =
       await import("./agent-turn/internal-facade.runtime.js");
@@ -185,14 +229,19 @@ export function withLocalGatewayRequestScope<T>(
   run: () => T,
 ): T {
   const existing = getPluginRuntimeGatewayRequestScope();
-  if (existing?.context) {
+  if (existing?.context || existing?.resolveGatewayContext) {
     return run();
   }
   const context = createLocalGatewayRequestContext(params);
+  // Session admission retains the instance binding after dropping request context.
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
   return withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,
+      resolveGatewayContext,
       isWebchatConnect: existing?.isWebchatConnect ?? (() => false),
     },
     run,

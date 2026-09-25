@@ -1,10 +1,44 @@
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import type {
   ManagedServiceManagerBoundaryResult,
   ManagedServiceManagerBoundaryOptions,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
+
+/** A LaunchAgent gateway's own environment; the handoff keeps only the label for its children. */
+export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
+  OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+  XPC_SERVICE_NAME: "ai.openclaw.gateway",
+  OPENCLAW_SERVICE_MARKER: "openclaw",
+  OPENCLAW_SERVICE_KIND: "gateway",
+} as const;
+
+/** The pre-fix CLI emulation restarts launchd after it exits; never leave that shell behind. */
+export async function awaitEmulatedRecoveryHandoffExit(statePath: string): Promise<void> {
+  const state = JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as {
+    recoveryHandoffPid?: number;
+  };
+  const pid = state.recoveryHandoffPid;
+  if (typeof pid !== "number") {
+    return;
+  }
+  const deadline = Date.now() + 6_000;
+  while (isPidAlive(pid)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`emulated recovery handoff ${pid} is still running`);
+    }
+    await sleep(50);
+  }
+}
 
 export function createManagedServiceCommandFixture(params: {
   kind: "systemd" | "launchd";
@@ -14,6 +48,7 @@ export function createManagedServiceCommandFixture(params: {
   options?: ManagedServiceManagerBoundaryOptions;
 }) {
   const { kind, root, statePath, options } = params;
+  const checksServiceIdentity = kind === "launchd" && options?.recoveryChecksServiceIdentity;
   const recovery =
     kind === "systemd"
       ? { kind, unit: "openclaw-gateway.service" }
@@ -26,21 +61,54 @@ export function createManagedServiceCommandFixture(params: {
   return {
     serviceRecovery: recovery,
     recoveryCommandArgv: [
-      process.execPath,
+      testNodeExecPath,
+      ...(checksServiceIdentity ? ["--input-type=module"] : []),
       "-e",
       [
+        ...(checksServiceIdentity
+          ? [
+              `import { createRequire } from "node:module";`,
+              `const require = createRequire(import.meta.url);`,
+            ]
+          : []),
+        `void (async () => {`,
+        ...(checksServiceIdentity
+          ? [
+              `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});`,
+              // The recovery command runs from the helper's temp dir; name the repo tsconfig for path aliases.
+              `register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`,
+              `const { isCurrentProcessInsideLaunchdService } = await import(${JSON.stringify(new URL("../daemon/launchd-current-service.ts", import.meta.url).href)});`,
+            ]
+          : []),
         `const fs = require("node:fs");`,
         `const { spawnSync } = require("node:child_process");`,
-        `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
-        `state.guardedRestart = process.argv.slice(1);`,
-        `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+        `${managedServiceStateUpdateScript(statePath, "state.guardedRestart = process.argv.slice(1)")};`,
+        ...(checksServiceIdentity
+          ? [
+              `const recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", process.env);`,
+              `${managedServiceStateUpdateScript(
+                statePath,
+                `state.recoveryInsideService = recoveryInsideService;
+                state.recoveryEnv = Object.fromEntries(["LAUNCH_JOB_LABEL", "LAUNCH_JOB_NAME", "XPC_SERVICE_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND", "OPENCLAW_LAUNCHD_LABEL"].map((key) => [key, process.env[key]]))`,
+              )};`,
+              // Reproduce the old CLI's early success while its detached restart waits for exit.
+              `if (recoveryInsideService) {`,
+              `  const { spawn } = require("node:child_process");`,
+              `  const child = spawn("/bin/sh", ["-c", ${JSON.stringify('attempts=0; while kill -0 "$1" 2>/dev/null && [ "$attempts" -lt 100 ]; do attempts=$((attempts + 1)); sleep 0.05; done; launchctl enable gui/501/ai.openclaw.gateway; launchctl bootstrap gui/501 "$2"')}, "openclaw-test-recovery", String(process.pid), ${JSON.stringify(path.join(root, "ai.openclaw.gateway.plist"))}], { detached: true, stdio: "ignore" });`,
+              `  ${managedServiceStateUpdateScript(statePath, "state.recoveryHandoffPid = child.pid")};`,
+              `  child.unref();`,
+              `  console.log(JSON.stringify({ action: "restart", ok: true, result: "scheduled" }));`,
+              `  process.exit(0);`,
+              `}`,
+            ]
+          : []),
+        `${managedServiceStateUpdateScript(statePath, "state.recoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")};`,
         ...(options?.recoverySentinel
           ? [
               `const { DatabaseSync } = require("node:sqlite");`,
               `const db = new DatabaseSync(${JSON.stringify(params.stateDatabasePath)});`,
               `const row = db.prepare("SELECT payload_json FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").get();`,
-              `state.sentinelAtRecovery = JSON.parse(row.payload_json);`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `const state = ${managedServiceStateUpdateScript(statePath, "state.sentinelAtRecovery = JSON.parse(row.payload_json)")};`,
               ...(options.recoverySentinel === "consumed"
                 ? [
                     `db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run();`,
@@ -57,8 +125,8 @@ export function createManagedServiceCommandFixture(params: {
         ...(options?.recoveryHang
           ? [
               `const { spawn } = require("node:child_process");`,
-              `state.recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `const recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+              `${managedServiceStateUpdateScript(statePath, "state.recoveryDescendantPid = recoveryDescendantPid")};`,
               `setInterval(() => {}, 1000);`,
             ]
           : options?.recoveryExitCode === undefined || options.recoveryExitCode === 0
@@ -78,6 +146,10 @@ export function createManagedServiceCommandFixture(params: {
                   `if (spawnSync(${JSON.stringify(kind === "systemd" ? "systemctl" : "launchctl")}, ${JSON.stringify(args)}).status !== 0) process.exit(1);`,
               )
             : [`process.exit(${options.recoveryExitCode});`]),
+        ...(checksServiceIdentity
+          ? [`console.log(JSON.stringify({ action: "restart", ok: true, result: "restarted" }));`]
+          : []),
+        `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
       ].join(""),
       "--",
       "gateway",
@@ -88,31 +160,37 @@ export function createManagedServiceCommandFixture(params: {
     triageCommandArgv: options?.triageMissing
       ? [path.join(root, "missing-triage")]
       : [
-          process.execPath,
+          testNodeExecPath,
           "-e",
           [
+            `void (async () => {`,
             `const fs = require("node:fs");`,
             `const args = process.argv.slice(1);`,
-            `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
             `const contextPath = args[args.indexOf("--update-result") + 1];`,
-            `state.triageCalls = (state.triageCalls || 0) + 1;`,
-            `state.triageArgs = args;`,
-            `state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));`,
-            `state.triageInputMode = fs.statSync(contextPath).mode & 0o777;`,
-            `state.triageObservedRestored = state.restored === true;`,
-            `state.triageObservedRecovery = Array.isArray(state.guardedRestart);`,
-            `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+            `${managedServiceStateUpdateScript(
+              statePath,
+              `
+              state.triageCalls = (state.triageCalls || 0) + 1;
+              state.triageArgs = args;
+              state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));
+              state.triageInputMode = fs.statSync(contextPath).mode & 0o777;
+              state.triageObservedRestored = state.restored === true;
+              state.triageObservedRecovery = Array.isArray(state.guardedRestart);
+              state.triageRecoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;
+            `,
+            )};`,
             ...(options?.triageHang
               ? [
                   `const { spawn } = require("node:child_process");`,
-                  `state.triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-                  `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+                  `const triageDescendantPid = spawn(process.execPath, ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "triage-descendant-ready"))}, String(process.pid)); setInterval(() => {}, 1000);`)}], { stdio: "ignore" }).pid;`,
+                  `${managedServiceStateUpdateScript(statePath, "state.triageDescendantPid = triageDescendantPid")};`,
                   `setInterval(() => {}, 1000);`,
                 ]
               : [
                   `console.log(JSON.stringify({ promptPath: "triage-prompt.md", bundlePath: "support.zip" }));`,
                   `process.exit(${options?.triageExitCode ?? 0});`,
                 ]),
+            `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
           ].join(""),
           "--",
           "triage",
@@ -154,7 +232,9 @@ export function registerManagedRecoveryCommandTests(
   expect: typeof import("vitest").expect,
 ): void {
   itUnix("verifies launchd after a slow guarded restart", async () => {
+    const recoveryTimeoutMs = 120_000;
     const { state, sentinel, commandTimings } = await runManagedServiceManagerBoundary("launchd", {
+      recoveryTimeoutMs,
       recoveryClockAdvanceMs: 31_000,
       updaterExitCode: 0,
       helperExitCode: 1,
@@ -175,8 +255,49 @@ export function registerManagedRecoveryCommandTests(
     });
     const inspections = commandTimings.filter(({ action }) => action === "print");
     expect(inspections.at(-1)!.startedAtMs - inspections.at(-2)!.startedAtMs).toBe(31_000);
-    expect(inspections.at(-1)!.timeoutMs).toBe(5_000);
+    expect(inspections.at(-1)!.timeoutMs).toBe(recoveryTimeoutMs);
   });
+
+  itUnix(
+    "restores launchd through a synchronous installed-CLI restart when the helper inherits only the configured label",
+    async () => {
+      const { state, sentinel, log } = await runManagedServiceManagerBoundary("launchd", {
+        recoveryChecksServiceIdentity: true,
+        updaterNotification: "published",
+        updaterResult: {
+          status: "error",
+          mode: "npm",
+          reason: "global update (omit optional)",
+          recovery: { serviceRestartSafe: true, version: "1.0.0" },
+        },
+      });
+      // The guarded CLI sees the service identity without launchd's own labels or markers.
+      expect(state.recoveryEnv, log).toEqual({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" });
+      expect(state.guardedRestart).toEqual([
+        "gateway",
+        "restart",
+        "--preserve-definition",
+        "--json",
+      ]);
+      expect(state.recoveryInsideService, log).toBe(false);
+      expect(state).toMatchObject({ restored: true, healthProbeCount: 1 });
+      expect(log).toContain(
+        "gateway service recovery succeeded (readiness and runtime identity verified)",
+      );
+      // The updater's published reason survives; only the restore step records recovery.
+      expect(sentinel).toMatchObject({
+        payload: {
+          status: "error",
+          stats: {
+            reason: "global update (omit optional)",
+            steps: expect.arrayContaining([
+              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+            ]),
+          },
+        },
+      });
+    },
+  );
 
   itUnix.each(["systemd", "launchd"] as const)(
     "keeps %s parked when the installed CLI refuses a verified recovery restart",
@@ -281,14 +402,6 @@ export function registerManagedLaunchdTeardownTests(
       updaterRan: false,
     },
     {
-      label: "restores an expired handoff after loaded teardown and transient bootstrap EIO",
-      options: {
-        parentExitTimeoutMs: 500,
-        launchdTeardown: { loadedPrints: 2, pendingBootstrapFailures: 2 },
-      },
-      updaterRan: false,
-    },
-    {
       label:
         "retries canonical bootstrap when an operation-in-progress service disappears during restoration",
       options: {
@@ -341,14 +454,18 @@ export function registerManagedLaunchdTeardownTests(
     20_000,
   );
 
-  itUnix(
-    "never starts launchd bootstrap after its absolute restoration deadline or grants a command excess time",
-    async () => {
+  itUnix.each([
+    { recoveryTimeoutMs: 30_000, commandWorkMs: 5_000, restored: false },
+    { recoveryTimeoutMs: 120_000, commandWorkMs: 6_000, restored: true },
+  ])(
+    "honors a $recoveryTimeoutMs ms launchd restoration budget with $commandWorkMs ms commands",
+    async ({ recoveryTimeoutMs, commandWorkMs, restored }) => {
       const { commandTimings, commands, sentinel, state } = await runManagedServiceManagerBoundary(
         "launchd",
         {
           cancelAfterPark: true,
-          launchdTeardown: { clockEachCommandMs: 5_000, loadedPrints: 4 },
+          recoveryTimeoutMs,
+          launchdTeardown: { clockEachCommandMs: commandWorkMs, loadedPrints: 4 },
         },
       );
       const restoreIndex = commandTimings.findIndex(({ action }) => action === "bootout") + 1;
@@ -356,31 +473,48 @@ export function registerManagedLaunchdTeardownTests(
       const restoration = commandTimings.slice(restoreIndex);
       const restoreStartedAtMs = restoration[0]?.startedAtMs ?? 0;
 
-      expect(restoration.map(({ action }) => action)).toEqual([
-        "print",
+      const actions = restoration.map(({ action }) => action);
+      // Parent exit and bootout completion can add read-only observations before
+      // the fixture consumes its loaded states; mutations and deadlines stay exact.
+      expect(actions.slice(0, 2)).toEqual(["print", "enable"]);
+      expect(actions.filter((action) => action !== "print")).toEqual([
         "enable",
-        "print",
-        "print",
-        "print",
-        "print",
+        ...(restored ? ["bootstrap"] : []),
       ]);
-      expect(commands.some((command) => command.startsWith("bootstrap "))).toBe(false);
+      expect(actions.at(-1)).toBe("print");
+      expect(commands.some((command) => command.startsWith("bootstrap "))).toBe(restored);
       for (const { startedAtMs, timeoutMs } of restoration) {
         const elapsedMs = startedAtMs - restoreStartedAtMs;
-        expect(elapsedMs).toBeLessThan(30_000);
-        expect(timeoutMs).toBeLessThanOrEqual(5_000);
-        expect(elapsedMs + timeoutMs).toBeLessThanOrEqual(30_000);
+        expect(elapsedMs).toBeLessThan(recoveryTimeoutMs);
+        expect(elapsedMs + timeoutMs).toBeLessThanOrEqual(recoveryTimeoutMs);
       }
-      expect(restoration.at(-1)?.timeoutMs).toBeLessThan(5_000);
       expect(state).toMatchObject({ disabled: false, parked: true });
-      expect(state.restored).toBeUndefined();
+      if (restored) {
+        expect(actions.at(-2)).toBe("bootstrap");
+        expect(state).toMatchObject({
+          restored: true,
+          unloaded: true,
+          healthProbeCount: 1,
+          loadedPrintsObserved: 4,
+          loadedPrintsRemaining: 0,
+        });
+        expect(restoration.at(-1)!.startedAtMs - restoreStartedAtMs).toBeGreaterThan(30_000);
+      } else {
+        expect(restoration.at(-1)?.timeoutMs).toBeLessThan(commandWorkMs);
+        expect(state.restored).toBeUndefined();
+      }
       expect(sentinel).toMatchObject({
         payload: {
-          status: "error",
+          status: restored ? "skipped" : "error",
           stats: {
-            reason: "managed-service-handoff-restore-failed",
+            reason: restored
+              ? "managed-service-handoff-cancelled"
+              : "managed-service-handoff-restore-failed",
             steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
+              expect.objectContaining({
+                name: "service-restore",
+                log: { exitCode: restored ? 0 : 1 },
+              }),
             ]),
           },
         },

@@ -1,5 +1,3 @@
-// Telegram plugin module implements update offset store behavior.
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
@@ -9,8 +7,8 @@ import {
 } from "./token-fingerprint.js";
 
 const STORE_VERSION = 3;
-export const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
-export const TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES = 1_000;
+const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
+const TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES = 1_000;
 
 type TelegramUpdateOffsetState = {
   version: number;
@@ -25,7 +23,7 @@ function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
+function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
   return normalizeTelegramStateAccountId(accountId);
 }
 
@@ -175,52 +173,4 @@ export async function deleteTelegramUpdateOffset(params: {
   await openUpdateOffsetStore(params.env).delete(
     normalizeTelegramUpdateOffsetAccountId(params.accountId),
   );
-}
-
-export async function listTelegramLegacyUpdateOffsetEntries(params: {
-  accountId?: string;
-  persistedPath: string;
-}): Promise<Array<{ key: string; value: TelegramUpdateOffsetState }>> {
-  const { value } = await readJsonFileWithFallback<unknown>(params.persistedPath, null);
-  const parsed = safeParseState(value);
-  if (!parsed || parsed.lastUpdateId === null) {
-    return [];
-  }
-  return [{ key: normalizeTelegramUpdateOffsetAccountId(params.accountId), value: parsed }];
-}
-
-export function shouldReplaceTelegramUpdateOffsetEntry(params: {
-  existingValue: unknown;
-  incomingValue: unknown;
-  botToken?: string;
-}): boolean {
-  const existing = safeParseState(params.existingValue);
-  const incoming = safeParseState(params.incomingValue);
-  if (!incoming || incoming.lastUpdateId === null) {
-    return false;
-  }
-  if (!existing || existing.lastUpdateId === null) {
-    return true;
-  }
-  if (!params.botToken) {
-    if (existing.botId && incoming.botId && existing.botId !== incoming.botId) {
-      return false;
-    }
-    if (
-      existing.tokenFingerprint &&
-      incoming.tokenFingerprint &&
-      existing.tokenFingerprint !== incoming.tokenFingerprint
-    ) {
-      return false;
-    }
-  }
-  const incomingRotation = rotationForToken(incoming, params.botToken);
-  if (incomingRotation) {
-    return false;
-  }
-  const existingRotation = rotationForToken(existing, params.botToken);
-  if (existingRotation) {
-    return true;
-  }
-  return incoming.lastUpdateId > existing.lastUpdateId;
 }

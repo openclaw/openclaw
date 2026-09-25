@@ -18,6 +18,7 @@ import {
 } from "./installed-plugin-index-policy.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -84,6 +85,11 @@ function buildInstalledPluginIndex(
         }
       : baseDiscovery;
   const registry = loadPluginManifestRegistryCore({
+    registryPath: resolveInstalledPluginIndexStorePath({
+      env,
+      stateDir: params.stateDir,
+      filePath: params.pluginIndexFilePath,
+    }),
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -98,6 +104,7 @@ function buildInstalledPluginIndex(
     env,
     pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
     activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
   const plugins = buildInstalledPluginIndexRecords({
     candidates: discovery.candidates,
@@ -115,7 +122,9 @@ function buildInstalledPluginIndex(
       hostContractVersion: resolveCompatibilityHostVersion(env),
       compatRegistryVersion: resolveCompatRegistryVersion(),
       migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env),
+      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+      }),
       generatedAtMs,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
@@ -164,20 +173,13 @@ export function refreshInstalledPluginIndex(
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
 }
 
-export function getInstalledPluginRecord(
-  index: InstalledPluginIndex,
-  pluginId: string,
-): InstalledPluginIndexRecord | undefined {
-  return index.plugins.find((plugin) => plugin.pluginId === pluginId);
-}
-
 export function isInstalledPluginEnabled(
   index: InstalledPluginIndex,
   pluginId: string,
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  const record = getInstalledPluginRecord(index, pluginId);
+  const record = index.plugins.find((plugin) => plugin.pluginId === pluginId);
   if (!record || !config) {
     return record?.enabled ?? false;
   }
@@ -200,8 +202,18 @@ export function createInstalledPluginEnabledPredicate(
 ): (pluginId: string) => boolean {
   let source: PluginActivationConfigSource | undefined;
   let bundledSource: PluginActivationConfigSource | undefined;
+  let records: Map<string, InstalledPluginIndexRecord> | undefined;
   return (pluginId) => {
-    const record = plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (!records) {
+      records = new Map();
+      // Inventory is fixed for this operation; retain the first duplicate like find().
+      for (const entry of plugins) {
+        if (!records.has(entry.pluginId)) {
+          records.set(entry.pluginId, entry);
+        }
+      }
+    }
+    const record = records.get(pluginId);
     if (!record || !config) {
       return record?.enabled ?? false;
     }

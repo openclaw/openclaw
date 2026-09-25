@@ -1,4 +1,5 @@
 // Mattermost plugin module owns native model-picker interactions.
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type { MattermostInteractionResponse } from "./interactions.js";
@@ -125,14 +126,6 @@ export function createMattermostModelPickerInteractionHandler(
     if (pickerState.ownerUserId !== params.payload.user_id) {
       return { ephemeral_text: "Only the person who opened this picker can use it." };
     }
-    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
-      updateModelPickerPost({
-        channelId: params.payload.channel_id,
-        postId: params.payload.post_id,
-        message,
-        buttons,
-      });
-
     const channelInfo = await resolveChannelInfo(params.payload.channel_id);
     const pickerCommandText =
       pickerState.action === "select"
@@ -203,7 +196,21 @@ export function createMattermostModelPickerInteractionHandler(
       agentId: eventPlan.route.agentId,
       sessionKey: eventPlan.thread.sessionKey,
     };
-    const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId);
+    const sessionEntry = getSessionEntry({
+      storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
+      sessionKey: modelSessionRoute.sessionKey,
+      readConsistency: "latest",
+    });
+    const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId, {
+      sessionEntry,
+    });
+    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
+      updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: [data.refreshWarning, message].filter(Boolean).join("\n\n"),
+        buttons,
+      });
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }

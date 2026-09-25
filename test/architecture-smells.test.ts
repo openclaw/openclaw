@@ -1,6 +1,10 @@
 // Architecture boundary tests cover hostile module-specifier syntax in the canonical scanner.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const forbiddenPath = "../../src/private.js";
 const templateQuote = String.fromCharCode(96);
@@ -153,7 +157,7 @@ describe("architecture boundary module reference scanner", () => {
     },
   ])("detects $name", ({ source, kind }) => {
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([{ kind, line: 1, specifier: forbiddenPath }]);
@@ -162,24 +166,29 @@ describe("architecture boundary module reference scanner", () => {
   it("ignores comments, string contents, and allowed module specifiers", () => {
     expect(
       collectModuleReferencesFromSource(
-        [
-          '// import "../../src/private.js"',
-          'const text = "require(\\\"../../src/private.js\\\")";',
-          'import "../../src/allowed.js";',
-        ].join("\n"),
+        parser.parseSourceFile(
+          "fixture.ts",
+          [
+            '// import "../../src/private.js"',
+            'const text = "require(\\\"../../src/private.js\\\")";',
+            'import "../../src/allowed.js";',
+          ].join("\n"),
+        ),
         { acceptSpecifier: (specifier) => specifier === forbiddenPath },
       ),
     ).toEqual([]);
   });
 
   it.each([
+    'const pattern = /"/; import "../../src/allowed.js";',
+    'new URL("../../src/allowed.js", import.m\\u0065ta.url)',
     'const message = `${(24 / 2) ? require("../../src/allowed.js") : null}`',
     'const message = `${/}/.test("safe") ? require("../../src/allowed.js") : null}`',
     'const message = `${\\u0072equire("../../src/allowed.js")}`',
     'const message = `${/}/.test("safe") ? import("../../src/allowed.js") : null}`',
   ])("keeps ordinary division and regexp fallback free of false positives", (source) => {
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([]);
@@ -187,10 +196,28 @@ describe("architecture boundary module reference scanner", () => {
 
   it("preserves the actual source line for multiline guarded imports", () => {
     expect(
-      collectModuleReferencesFromSource('\n\nimport /* comment */ "../../src/private.js";', {
-        acceptSpecifier: (specifier) => specifier === forbiddenPath,
-      }),
+      collectModuleReferencesFromSource(
+        parser.parseSourceFile("fixture.ts", '\n\nimport /* comment */ "../../src/private.js";'),
+        {
+          acceptSpecifier: (specifier) => specifier === forbiddenPath,
+        },
+      ),
     ).toEqual([{ kind: "import", line: 3, specifier: forbiddenPath }]);
+  });
+
+  it("sorts references on the same line by kind and specifier", () => {
+    expect(
+      collectModuleReferencesFromSource(
+        parser.parseSourceFile(
+          "fixture.ts",
+          'import "./z.js"; require("./z.js"); import "./a.js";',
+        ),
+      ),
+    ).toEqual([
+      { kind: "commonjs-require", line: 1, specifier: "./z.js" },
+      { kind: "import", line: 1, specifier: "./a.js" },
+      { kind: "import", line: 1, specifier: "./z.js" },
+    ]);
   });
 
   it.each([
@@ -220,7 +247,7 @@ describe("architecture boundary module reference scanner", () => {
     const startedAt = performance.now();
 
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([]);

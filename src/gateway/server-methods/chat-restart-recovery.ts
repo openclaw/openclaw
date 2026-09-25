@@ -20,24 +20,27 @@ import {
   type SessionTranscriptTurnExpectedState,
   type SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey, resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
-import { resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
+import { boundedWorkerError } from "../worker-environments/worker-error.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
 
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
+const log = createSubsystemLogger("gateway/restart-recovery");
 
 type RestartSafeChatRequest = {
   fingerprint: string;
@@ -51,6 +54,7 @@ type RestartSafeChatAdmission = {
 
 export type RestartSafeChatTerminalState = {
   error?: string;
+  errorKind?: "state_contention";
   retryable: boolean;
   status: "failed" | "killed";
 };
@@ -125,11 +129,7 @@ export function createRestartSafeChatRequest(params: {
     return undefined;
   }
   return {
-    fingerprint: fingerprintRestartSafeChatRequest({
-      message: params.message,
-      mentions: params.mentions,
-      senderIsOwner: params.senderIsOwner,
-    }),
+    fingerprint: fingerprintRestartSafeChatRequest(params),
   };
 }
 
@@ -264,6 +264,7 @@ function isRestartSafeChatSession(params: {
 }
 
 function hasRestartUnsafeChatWork(params: {
+  activeRunScopeKey: string;
   context: Pick<GatewayRequestContext, "chatAbortControllers"> &
     Partial<Pick<GatewayRequestContext, "chatQueuedTurns">>;
   sessionId: string;
@@ -276,12 +277,7 @@ function hasRestartUnsafeChatWork(params: {
       resolveSessionDispatchKind(params.sessionKey, params.entry),
     ) !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
-    replyRunRegistry.isActive(
-      resolveChatSendActiveScopeKey({
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      }),
-    )
+    replyRunRegistry.isActive(params.activeRunScopeKey)
   ) {
     return true;
   }
@@ -313,10 +309,14 @@ function hasRestartUnsafeChatWork(params: {
 }
 
 export function resolveRestartSafeChatAdmission(params: {
+  activeRunScopeKey: string;
   agentId: string;
   cfg: OpenClawConfig;
   clientRunId: string;
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns">;
+  context: Pick<
+    GatewayRequestContext,
+    "chatAbortControllers" | "chatQueuedTurns" | "workerSessionPlacementService"
+  >;
   entry?: SessionEntry;
   initialSessionEntry?: SessionEntry;
   now: number;
@@ -328,6 +328,14 @@ export function resolveRestartSafeChatAdmission(params: {
 }): RestartSafeChatAdmission | undefined {
   const request = params.request;
   const entry = params.entry ?? params.initialSessionEntry;
+  const placement = params.context.workerSessionPlacementService
+    ?.getMany([params.sessionId])
+    .get(params.sessionId);
+  // Only local input may be consumed before turn admission. Worker setup and
+  // reconciliation retain approved input in custody until their writer is ready.
+  if (placement && placement.state !== "local") {
+    return undefined;
+  }
   if (
     !request ||
     !entry ||
@@ -353,31 +361,11 @@ export function resolveRestartSafeChatAdmission(params: {
   if (retryableClaim && entry.restartRecoveryDeliveryRequestFingerprint !== request.fingerprint) {
     throw new Error("chat retry does not match its durable admission");
   }
-  const mainRestartRecovery = (entry as InternalSessionEntry).mainRestartRecovery;
   return {
     requestFingerprint: request.fingerprint,
     ...(retryableClaim
       ? {
-          retryExpectedState: {
-            abortedLastRun: entry.abortedLastRun,
-            mainRestartRecoveryCycleId: mainRestartRecovery?.cycleId,
-            mainRestartRecoveryRevision: mainRestartRecovery?.revision,
-            restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-            restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-            restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-            restartRecoveryDeliveryRequestFingerprint:
-              entry.restartRecoveryDeliveryRequestFingerprint,
-            restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-            restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-            restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-            restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-            restartRecoverySameChannelThreadRequired:
-              entry.restartRecoverySameChannelThreadRequired,
-            restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-            restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-            restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-            status: entry.status,
-          },
+          retryExpectedState: buildRestartRecoveryExpectedState(entry),
         }
       : entry.restartRecoveryDeliverySourceRunId
         ? { priorTerminalSourceRunId: entry.restartRecoveryDeliverySourceRunId }
@@ -435,7 +423,7 @@ export async function terminalizeRestartSafeChatAdmission(
 ): Promise<boolean> {
   const endedAt = Date.now();
   let terminalized = false;
-  await patchSessionEntryCore(
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (current) => {
       if (
@@ -458,6 +446,7 @@ export async function terminalizeRestartSafeChatAdmission(
               endedAt,
               aborted: params.status === "killed",
               error: params.error,
+              errorKind: params.errorKind,
             },
           },
         }),
@@ -475,5 +464,21 @@ export async function terminalizeRestartSafeChatAdmission(
     },
     { requireWriteSuccess: true, skipMaintenance: true },
   );
+  if (terminalized && persisted && params.status === "failed") {
+    await recordGatewaySessionRunFailure({
+      target: {
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        sessionId: persisted.sessionId,
+        expectedLifecycleRevision: persisted.lifecycleRevision,
+      },
+      runId: params.clientRunId,
+      error: params.error,
+      errorKind: params.errorKind,
+    }).catch((error: unknown) => {
+      // The claim is already settled; report failure must not trigger a competing terminal write.
+      log.warn(`Failed to record restart-safe chat failure notice: ${boundedWorkerError(error)}`);
+    });
+  }
   return terminalized;
 }

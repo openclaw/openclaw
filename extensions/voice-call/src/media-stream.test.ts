@@ -11,7 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
@@ -19,6 +18,7 @@ import {
   waitForClose,
   withTimeout,
 } from "./websocket-test-support.js";
+import { WebSocket } from "./websocket.js";
 
 const createStubSession = (): RealtimeTranscriptionSession => ({
   connect: async () => {},
@@ -297,7 +297,7 @@ describe("MediaStreamHandler security hardening", () => {
 
     const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));
 
-    expect(result.sent).toBe(false);
+    expect(result).toBe(false);
     expect(ws["send"]).not.toHaveBeenCalled();
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
@@ -341,7 +341,7 @@ describe("MediaStreamHandler security hardening", () => {
     const result = handler.sendMark("MZ-overflow", "mark-1");
 
     expect(ws["send"]).toHaveBeenCalledTimes(1);
-    expect(result.sent).toBe(false);
+    expect(result).toBe(false);
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 

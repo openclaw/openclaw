@@ -1,4 +1,3 @@
-// Search setup flow configures web search providers and defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
@@ -16,13 +15,13 @@ import {
 } from "../config/types.secrets.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { sortPluginEntriesById } from "../plugins/plugin-entry-order.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolveWebSearchInstallCatalogEntries,
   type WebSearchInstallCatalogEntry,
 } from "../plugins/web-search-install-catalog.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -32,7 +31,6 @@ import { sortFlowContributionsByLabel, type FlowContribution } from "./types.js"
 
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
 type SearchProvider = NonNullable<SearchConfig["provider"]>;
-type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
 type SearchProviderSetupContribution = FlowContribution & {
   kind: "search";
@@ -100,7 +98,7 @@ function buildSearchProviderSetupContribution(params: {
 function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
-  const runtimeProviders = sortWebSearchProviders(
+  const runtimeProviders = sortPluginEntriesById(
     resolvePluginWebSearchProviders({
       config,
       env: process.env,
@@ -126,7 +124,7 @@ function resolveSearchProviderSetupContributions(
     .map((entry): SearchProviderEntryWithInstall =>
       Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
     );
-  const providers = sortWebSearchProviders([...runtimeProviders, ...installCatalogProviders]);
+  const providers = sortPluginEntriesById([...runtimeProviders, ...installCatalogProviders]);
   return sortFlowContributionsByLabel(
     providers.filter(showsSearchProviderInSetup).map((provider) =>
       buildSearchProviderSetupContribution({
@@ -271,15 +269,11 @@ export function applySearchKey(
   if (!providerEntry) {
     return config;
   }
-  const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  const nextBase: OpenClawConfig = {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: { ...config.tools?.web, search },
-    },
-  };
-  const next = applySearchProviderSelectionConfig(nextBase, providerEntry);
+  const next = applySearchProviderSelectionConfig(config, providerEntry, {
+    ...config.tools?.web?.search,
+    provider,
+    enabled: true,
+  });
   providerEntry.setConfiguredCredentialValue?.(next, key);
   return next;
 }
@@ -287,14 +281,22 @@ export function applySearchKey(
 function applySearchProviderSelectionConfig(
   config: OpenClawConfig,
   providerEntry: Pick<PluginWebSearchProviderEntry, "pluginId" | "applySelectionConfig">,
+  search: SearchConfig,
 ): OpenClawConfig {
+  const next: OpenClawConfig = {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: { ...config.tools?.web, search },
+    },
+  };
   if (providerEntry.applySelectionConfig) {
-    return providerEntry.applySelectionConfig(config);
+    return providerEntry.applySelectionConfig(next);
   }
   if (providerEntry.pluginId) {
-    return enablePluginInConfig(config, providerEntry.pluginId).config;
+    return enablePluginInConfig(next, providerEntry.pluginId).config;
   }
-  return config;
+  return next;
 }
 
 export function applySearchProviderSelection(
@@ -305,22 +307,11 @@ export function applySearchProviderSelection(
   if (!providerEntry) {
     return config;
   }
-  const search: MutableSearchConfig = {
+  return applySearchProviderSelectionConfig(config, providerEntry, {
     ...config.tools?.web?.search,
     provider,
     enabled: true,
-  };
-  const nextBase: OpenClawConfig = {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: {
-        ...config.tools?.web,
-        search,
-      },
-    },
-  };
-  return applySearchProviderSelectionConfig(nextBase, providerEntry);
+  });
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
@@ -346,14 +337,10 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   }
 
   const pluginId = providerEntry.pluginId;
-  const originalPluginEntry = (
-    original.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
-  const resultPluginEntry = (
-    next.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
+  const originalPluginEntry = original.plugins?.entries?.[pluginId];
+  const resultPluginEntry = next.plugins?.entries?.[pluginId];
 
-  const nextPlugins = { ...next.plugins } as Record<string, unknown>;
+  const nextPlugins = { ...next.plugins };
 
   if (Array.isArray(original.plugins?.allow)) {
     nextPlugins.allow = [...original.plugins.allow];
@@ -363,7 +350,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   if (resultPluginEntry || originalPluginEntry) {
     const nextEntries = {
-      ...(nextPlugins.entries as Record<string, Record<string, unknown>> | undefined),
+      ...nextPlugins.entries,
     };
     const patchedEntry = { ...resultPluginEntry };
     if (typeof originalPluginEntry?.enabled === "boolean") {
@@ -377,7 +364,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   return {
     ...next,
-    plugins: nextPlugins as OpenClawConfig["plugins"],
+    plugins: nextPlugins,
   };
 }
 
@@ -747,24 +734,11 @@ export async function runSearchSetupFlow(
     "Web search",
   );
 
-  const search: SearchConfig = {
-    ...config.tools?.web?.search,
-    enabled: false,
-    provider: choice,
-  };
   return completedSearchSetup(
-    applySearchProviderSelectionConfig(
-      {
-        ...config,
-        tools: {
-          ...config.tools,
-          web: {
-            ...config.tools?.web,
-            search,
-          },
-        },
-      },
-      entry,
-    ),
+    applySearchProviderSelectionConfig(config, entry, {
+      ...config.tools?.web?.search,
+      enabled: false,
+      provider: choice,
+    }),
   );
 }

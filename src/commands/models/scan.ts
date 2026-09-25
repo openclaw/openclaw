@@ -1,5 +1,5 @@
 /** OpenRouter free-model scanner and fallback updater for model commands. */
-import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
   parseStrictFiniteNumber,
@@ -25,8 +25,8 @@ const CTX_PAD = 8;
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
   clackMultiselect(styleSelectParams(params));
 
-function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
-  if (isCancel(value)) {
+function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
+  if (typeof value === "symbol") {
     cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
     runtime.exit(0);
     throw new Error("unreachable");
@@ -35,7 +35,7 @@ function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
 }
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
     if (aImage !== bImage) {
@@ -53,7 +53,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
     if (aLatency !== bLatency) {
@@ -151,7 +151,7 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
 }
 
 function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -162,7 +162,7 @@ function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): numb
 }
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -173,7 +173,7 @@ function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number 
 }
 
 function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(raw);
@@ -354,12 +354,7 @@ export async function modelsScanCommand(
 
   await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
-    for (const entry of selected) {
-      if (!nextModels[entry]) {
-        nextModels[entry] = {};
-      }
-    }
-    for (const entry of selectedImages) {
+    for (const entry of [...selected, ...selectedImages]) {
       if (!nextModels[entry]) {
         nextModels[entry] = {};
       }

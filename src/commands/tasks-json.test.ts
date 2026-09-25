@@ -13,7 +13,6 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -21,16 +20,10 @@ import type {
   TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
 import { tasksListCommand, tasksShowCommand } from "./tasks.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -67,13 +60,11 @@ async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-json-command-" },
     async () => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run();
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -88,7 +79,6 @@ describe("tasks JSON commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -112,7 +102,7 @@ describe("tasks JSON commands", () => {
         task: "Refresh schedule",
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -122,13 +112,54 @@ describe("tasks JSON commands", () => {
         tasks: [jsonRoundTrip(cliTask)],
       });
 
-      const emptyRuntime = createRuntime();
+      const emptyRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "subagent" }, emptyRuntime);
       expect(readJsonLog(emptyRuntime)).toStrictEqual({
         count: 0,
         runtime: "subagent",
         status: null,
         tasks: [],
+      });
+    });
+  });
+
+  it("preserves full records and newest-insertion ties after filtering", async () => {
+    await withTaskJsonStateDir(async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_800_000_000_000);
+      const first = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-first",
+        status: "running",
+        task: "First selected task",
+        detail: { nested: { values: ["line\nvalue", "\u0000", "🦞"], complete: true } },
+      });
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-out",
+        status: "queued",
+        task: "Unselected task between tied records",
+      });
+      const last = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-last",
+        status: "running",
+        task: "Last selected task",
+        detail: { nested: { values: [0, false, null], complete: true } },
+      });
+      const runtime = createTestRuntime();
+      await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 2,
+        runtime: "cli",
+        status: "running",
+        tasks: [jsonRoundTrip(last), jsonRoundTrip(first)],
       });
     });
   });
@@ -165,19 +196,19 @@ describe("tasks JSON commands", () => {
         endedAt: Date.now(),
       });
 
-      const listRuntime = createRuntime();
+      const listRuntime = createTestRuntime();
       await tasksListCommand({ status: "succeeded" }, listRuntime);
       const listOutput = vi.mocked(listRuntime.log).mock.calls.flat().join("\n");
       expect(listOutput).toContain("Task pressure: 0 queued · 0 running · 1 issues");
       expect(listOutput).toMatch(/\bblocked\s+pending\b/);
 
-      const blockedRuntime = createRuntime();
+      const blockedRuntime = createTestRuntime();
       await tasksListCommand({ status: "blocked" }, blockedRuntime);
       const blockedOutput = vi.mocked(blockedRuntime.log).mock.calls.flat().join("\n");
       expect(blockedOutput).toContain(task.taskId.slice(0, 9));
       expect(blockedOutput).not.toContain(completed.taskId.slice(0, 9));
 
-      const blockedJsonRuntime = createRuntime();
+      const blockedJsonRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, status: "blocked" }, blockedJsonRuntime);
       expect(readJsonLog(blockedJsonRuntime)).toMatchObject({
         count: 1,
@@ -186,7 +217,7 @@ describe("tasks JSON commands", () => {
         tasks: [{ taskId: task.taskId, status: "succeeded", terminalOutcome: "blocked" }],
       });
 
-      const succeededJsonRuntime = createRuntime();
+      const succeededJsonRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, status: "succeeded" }, succeededJsonRuntime);
       expect(readJsonLog(succeededJsonRuntime)).toMatchObject({
         count: 2,
@@ -197,11 +228,11 @@ describe("tasks JSON commands", () => {
         ]),
       });
 
-      const showRuntime = createRuntime();
+      const showRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId }, showRuntime);
       expect(vi.mocked(showRuntime.log).mock.calls.flat().join("\n")).toContain("status: blocked");
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
       expect(readJsonLog(jsonRuntime)).toMatchObject({
         status: "succeeded",
@@ -221,7 +252,7 @@ describe("tasks JSON commands", () => {
         task: "Inspect issue backlog",
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -264,7 +295,7 @@ describe("tasks JSON commands", () => {
         updatedAt: now - 40 * 60_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditJsonCommand({ json: true, limit: 1 }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -323,7 +354,7 @@ describe("tasks JSON commands", () => {
 
   it("reports blank audit filters as absent in JSON output", async () => {
     await withTaskJsonStateDir(async () => {
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditJsonCommand({ json: true, severity: "  ", code: "\t" }, runtime);
 
       expect(readJsonLog(runtime)).toMatchObject({
@@ -364,7 +395,7 @@ describe("tasks JSON commands", () => {
     const query = vi.spyOn(taskRuntime, "listTaskRecords").mockImplementation(() => {
       throw new Error("task JSON query performed");
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => run(runtime));
@@ -385,11 +416,11 @@ describe("tasks JSON commands", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await tasksAuditJsonCommand({ json: true }, runtime);
 

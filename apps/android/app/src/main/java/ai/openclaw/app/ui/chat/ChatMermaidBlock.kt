@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -18,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -155,6 +155,7 @@ internal fun ChatMermaidBlock(source: String) {
           }
 
           rendered != null -> {
+            val anchor = rememberChatReaderAnchor(request)
             Image(
               bitmap = rendered.bitmap.asImageBitmap(),
               contentDescription = nativeString("Mermaid diagram"),
@@ -163,7 +164,8 @@ internal fun ChatMermaidBlock(source: String) {
                 Modifier
                   .fillMaxWidth()
                   .clickable(role = Role.Button, onClickLabel = nativeString("Expand diagram")) { expanded = true }
-                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp),
+                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp)
+                  .then(anchor?.modifier ?: Modifier),
             )
           }
 
@@ -192,7 +194,7 @@ internal fun ChatMermaidBlock(source: String) {
               IconButton(onClick = { menuExpanded = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Diagram options"), modifier = Modifier.size(20.dp), tint = colors.textMuted)
               }
-              DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+              AppDropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                 DropdownMenuItem(
                   text = { Text(if (showSource) nativeString("View diagram") else nativeString("View source")) },
                   onClick = {

@@ -5,34 +5,36 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
+import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import {
   prepareE2eVitestRuntime,
   prepareVitestRuntime,
   resolveVitestCliEntry,
-  resolveVitestRuntimeCliSelections,
 } from "./lib/vitest-build-prerequisites.mts";
+import { createVitestCacheSlots } from "./lib/vitest-cache-slots.mts";
 import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
-import {
-  isCiLikeEnv,
-  resolveLocalFullSuiteProfile,
-  resolveLocalVitestEnv,
-} from "./lib/vitest-local-scheduling.mts";
-import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+} from "./lib/vitest-runtime-selection.mts";
 import {
   createShardTimingSample,
   readShardTimings,
   writeShardTimings,
 } from "./lib/vitest-shard-timings.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
-  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
@@ -49,25 +51,37 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
-  shouldRetryVitestNoOutputTimeout,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
-  withRetryNoOutputTimeout,
+  type VitestCacheAssignment,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mts";
 
 type VitestRunSpec = BaseVitestRunSpec & {
+  timingIncludePatterns?: string[];
   continueOnFailure?: boolean;
   reportIndex?: number;
   workerRun?: VitestWorkerRun;
+  cacheAssignment?: VitestCacheAssignment;
 };
 type VitestCommandOutcome = {
   code: number;
   noOutputTimedOut: boolean;
   signal: NodeJS.Signals | null;
+  groupJoined: boolean;
 };
 
 type ShardTiming = NonNullable<ReturnType<typeof createShardTimingSample>>;
+
+function assertCacheLeaseJoined(spec: VitestRunSpec, result: VitestCommandOutcome) {
+  if (
+    spec.cacheAssignment?.kind === "scheduler" &&
+    spec.cacheAssignment.leased &&
+    !result.groupJoined
+  ) {
+    throw new Error("Cannot continue a Vitest cache lease without verified group completion");
+  }
+}
 
 function printHelp() {
   console.log(`Usage: node --import tsx scripts/test-projects.mts [--changed <base>] [--watch] [targets...] [-- vitest-args...]
@@ -111,12 +125,13 @@ function runPnpmSpecCommand(
     });
 
     completion.then(
-      ({ code, signal }) => {
+      ({ code, signal, groupJoined }) => {
         const exitSignal = getForwardedSignal() ?? signal;
         resolve({
           code: exitSignal ? signalExitCode(exitSignal) : (code ?? 1),
           noOutputTimedOut,
           signal: exitSignal,
+          groupJoined,
         });
       },
       (error: unknown) => {
@@ -127,6 +142,7 @@ function runPnpmSpecCommand(
 }
 
 async function runVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
+  let preflightJoined = true;
   if (spec.includeFilePath && spec.includePatterns) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns, {
       expandGlobs: !spec.watchMode,
@@ -141,15 +157,17 @@ async function runVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
         undefined,
         "tooling",
       );
+      preflightJoined = preflightResult.groupJoined;
       if (preflightResult.code !== 0 || preflightResult.signal) {
         return preflightResult;
       }
+      assertCacheLeaseJoined(spec, preflightResult);
     }
     const attempt = reports?.attempt(spec.reportIndex!, spec.pnpmArgs);
     try {
       const result = await runPnpmSpecCommand(spec, attempt?.args ?? spec.pnpmArgs, spec.workerRun);
       attempt?.complete(result);
-      return result;
+      return { ...result, groupJoined: preflightJoined && result.groupJoined };
     } catch (error) {
       attempt?.fail(error);
       throw error;
@@ -176,13 +194,9 @@ function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: Nod
 async function runLoggedVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  let result = await runVitestSpec(spec, reports);
-  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
-    console.error(`[test] retrying ${spec.config} after no-output timeout`);
-    result = await runVitestSpec(withRetryNoOutputTimeout(spec), reports);
-  }
+  const result = await runVitestSpec(spec, reports);
   const durationMs = performance.now() - startedAt;
-  if (result.noOutputTimedOut && result.signal) {
+  if (result.noOutputTimedOut) {
     console.error(`[test] ${spec.config} exceeded no-output timeout`);
     return {
       ...result,
@@ -232,6 +246,7 @@ async function runVitestSpecs(
   let stopScheduling = false;
   const failures: FailedVitestShard[] = [];
   const timings: ShardTiming[] = [];
+  const withCacheSlot = createVitestCacheSlots();
   await pMap(
     specs,
     async (spec, index) => {
@@ -240,7 +255,7 @@ async function runVitestSpecs(
       }
       let result: Awaited<ReturnType<typeof runLoggedVitestSpec>>;
       try {
-        result = await runLoggedVitestSpec(spec, reports);
+        result = await withCacheSlot(spec, (assigned) => runLoggedVitestSpec(assigned, reports));
       } catch (error) {
         stopScheduling = true;
         throw error;
@@ -274,14 +289,17 @@ async function runVitestSpecs(
   return { exitCode, failures, timings, stopScheduling };
 }
 
-export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
+export async function runTestProjects(
+  exitBySignal: typeof exitVitestBySignal,
+  args: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const suiteStartedAt = performance.now();
-  const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     printHelp();
     return;
   }
-  const baseEnv = resolveLocalVitestEnv(process.env);
+  const baseEnv = resolveVitestProcessEnv(env);
   const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
@@ -303,6 +321,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
           config: plan.config,
+          timingTargets: plan.timingTargets,
           continueOnFailure: true,
           env: baseEnv,
           includeFilePath: null,
@@ -310,7 +329,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
           pnpmArgs: [
             "exec",
             "node",
-            ...resolveVitestNodeArgs(process.env),
+            ...resolveVitestNodeArgs(baseEnv),
             resolveVitestCliEntry(),
             ...(plan.watchMode ? [] : ["run"]),
             "--config",
@@ -324,7 +343,17 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
           baseEnv,
           cwd: process.cwd(),
         });
-  const runSpecs: VitestRunSpec[] = applyDefaultMultiSpecVitestCachePaths(
+  const inheritedIncludePatterns = rawRunSpecs.some((spec) => !spec.includeFilePath)
+    ? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", baseEnv)
+    : null;
+  for (const spec of rawRunSpecs) {
+    // An owned include file replaces the inherited filter. Otherwise retain its
+    // identity beside CLI chunk targets without changing execution or cleanup.
+    if (!spec.includeFilePath && inheritedIncludePatterns !== null) {
+      spec.timingIncludePatterns = inheritedIncludePatterns;
+    }
+  }
+  const runSpecs: VitestRunSpec[] = applyDefaultVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {
@@ -387,12 +416,17 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     process.cwd(),
   );
   const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  let preparingWorkers = false;
+  let workers: VitestWorkerRun | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     termination.signal ??= signal;
+    if (preparingWorkers) {
+      // An upstream preparation request must also settle before this group exits.
+      void workers?.dispose().catch(() => {});
+    }
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
-  let workers: VitestWorkerRun | undefined;
   let reportFailure: string | undefined;
   let printCompletedSummary: (() => void) | undefined;
   try {
@@ -433,14 +467,38 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
       }
     }
 
+    if (termination.signal) {
+      return;
+    }
     const compiled = runnable.filter(
       ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
     );
     if (compiled.length) {
-      workers = createVitestWorkerRun();
+      workers = createVitestWorkerRun(baseEnv, getVitestWorkerDescriptor());
       for (const { spec } of compiled) {
         spec.workerRun = workers;
       }
+      if (
+        compiled.some(
+          ({ spec, cliArgs, execution }) =>
+            execution &&
+            execution.options.root === undefined &&
+            execution.options.dir === undefined &&
+            execution.options.project === undefined &&
+            execution.options.run !== false &&
+            shouldPrepareVitestCoreWorkers(spec.config, cliArgs, spec.env, spec.includePatterns),
+        )
+      ) {
+        preparingWorkers = true;
+        try {
+          await workers.prepare();
+        } finally {
+          preparingWorkers = false;
+        }
+      }
+    }
+    if (termination.signal) {
+      return;
     }
     const isFullSuiteRun =
       targetArgs.length === 0 &&

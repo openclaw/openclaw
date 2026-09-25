@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
@@ -61,12 +62,12 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => [
+  listKnownProviderAuthEnvVarNamesCore: () => [
     "ANTHROPIC_API_KEY",
     "MINIMAX_CODE_PLAN_KEY",
     "OPENAI_API_KEY",
   ],
-  resolveProviderAuthEnvVarCandidates: () => ({
+  resolveProviderAuthEnvVarCandidatesCore: () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
     openai: ["OPENAI_API_KEY"],
@@ -134,6 +135,19 @@ describe("resolveProviderAuths plugin boundary", () => {
     resolveApiKeyForProfileMock.mockResolvedValue(null);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
+  });
+
+  it("normalizes direct plugin candidates before provider env keys", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const { context } = rawParams as { context: ProviderResolveUsageAuthContext };
+      const token = context.resolveApiKeyFromConfigAndStore({
+        envDirect: [undefined, "first-\r\nkey", "second-key"],
+      });
+      return token ? { token } : null;
+    });
+    await expect(
+      resolveProviderAuthsForTest({ providers: ["zai"], env: { ZAI_API_KEY: "fallback-key" } }),
+    ).resolves.toEqual([{ provider: "zai", token: "first-key" }]);
   });
 
   it("prefers plugin-owned usage auth when available", async () => {
@@ -478,7 +492,7 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("uses a caller-provided auth store for credential gating", async () => {
+  it("carries the selected OAuth flow from the caller-provided auth store to usage policy", async () => {
     const store = {
       profiles: {
         "anthropic:external": {
@@ -486,6 +500,7 @@ describe("resolveProviderAuths plugin boundary", () => {
           provider: "anthropic",
           access: "external-access",
           refresh: "external-refresh",
+          authFlow: "external-flow",
           expires: Date.now() + 60_000,
         },
       },
@@ -507,7 +522,9 @@ describe("resolveProviderAuths plugin boundary", () => {
         providers: ["anthropic"],
         store: store as never,
       }),
-    ).resolves.toEqual([{ provider: "anthropic", token: "external-access" }]);
+    ).resolves.toEqual([
+      { provider: "anthropic", token: "external-access", authFlow: "external-flow" },
+    ]);
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();

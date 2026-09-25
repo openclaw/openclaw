@@ -28,6 +28,19 @@ private struct ExecApprovalGatewayEventPayload: Decodable {
     var id: String
 }
 
+private struct ApprovalInboxDiscovery: Decodable {
+    struct Request: Decodable {
+        let sessionKey: String?
+        let agentId: String?
+    }
+
+    let id: String
+    let approvalKind: String?
+    let request: Request
+    let createdAtMs: Double
+    let expiresAtMs: Double
+}
+
 private struct NodeEventRequestPayload: Encodable {
     var event: String
     var payloadJSON: String
@@ -75,6 +88,16 @@ final class NodeAppModel {
         let pluginId: String?
         let toolName: String?
         let pluginSeverity: String?
+        // Discovery provenance is transient: cached approvals must rediscover their
+        // source under the current operator before contributing session attention.
+        var attentionSource: ApprovalAttentionSource?
+        var createdAtMs: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case id, kind, gatewayStableID, commandText, commandPreview, warningText
+            case allowedDecisions, host, nodeId, agentId, expiresAtMs
+            case descriptionText, pluginId, toolName, pluginSeverity
+        }
 
         init(
             id: String,
@@ -121,6 +144,13 @@ final class NodeAppModel {
         var allowsDeny: Bool {
             self.allowedDecisions.contains(ApprovalDecision.deny.rawValue)
         }
+    }
+
+    struct ApprovalAttentionSource: Equatable {
+        let sessionKey: String?
+        let agentID: String?
+        let createdAtMs: Double
+        let authorityGeneration: UInt64
     }
 
     struct ExecApprovalInboxKey: Hashable, Sendable {
@@ -368,7 +398,13 @@ final class NodeAppModel {
 
     private(set) var isDesktopObserveAvailable: Bool = false
 
-    private(set) var hasOperatorAdminScope: Bool = false
+    // Privileged requests must notice authority loss even if UI observation coalesces a reconnect.
+    private(set) var operatorAuthorityGeneration: UInt64 = 0
+    private(set) var hasOperatorAdminScope: Bool = false {
+        didSet {
+            if oldValue != self.hasOperatorAdminScope { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
 
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
@@ -390,6 +426,7 @@ final class NodeAppModel {
     // keeps the previous failure readable while an explicit reconnect starts a fresh attempt.
     private var nodeGatewayProblem: GatewayConnectionProblem?
     private var operatorGatewayProblem: GatewayConnectionProblem?
+    private var gatewayPreconnectProblem: (stableID: String, problem: GatewayConnectionProblem)?
     var gatewayDisplayStatusText: String {
         self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
     }
@@ -403,6 +440,9 @@ final class NodeAppModel {
     var gatewayAgents: [AgentSummary] = []
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
+    private(set) var pendingLiveVoiceStart = false
+    var liveVoiceStartError: String?
     var newChatRequestID: Int = 0
     // RootTabs has one chat destination; keep its acknowledgement here so recreating
     // that destination cannot replay a request that the prior view already handled.
@@ -423,7 +463,9 @@ final class NodeAppModel {
 
     var pendingExecApprovalInboxItems: [ExecApprovalInboxItem] {
         self.execApprovalInboxPromptsByKey.compactMap { key, prompt in
-            guard !self.terminalExecApprovalKeys.contains(key) else { return nil }
+            guard !self.terminalExecApprovalKeys.contains(key),
+                  prompt.expiresAtMs.map({ $0 > Int64(Date().timeIntervalSince1970 * 1000) }) != false
+            else { return nil }
             return ExecApprovalInboxItem(id: key, prompt: prompt)
         }.sorted { lhs, rhs in
             let lhsExpires = lhs.prompt.expiresAtMs ?? Int64.max
@@ -442,6 +484,28 @@ final class NodeAppModel {
 
     var pendingExecApprovalCount: Int {
         self.pendingExecApprovalInboxItems.count
+    }
+
+    var pendingApprovalAttentionRequests: [OpenClawChatAttentionRequest] {
+        self.pendingExecApprovalInboxItems.compactMap { item in
+            let prompt = item.prompt
+            guard self.isExecApprovalPromptCurrent(prompt),
+                  let source = prompt.attentionSource,
+                  source.authorityGeneration == self.operatorAuthorityGeneration,
+                  let expiresAtMs = prompt.expiresAtMs
+            else { return nil }
+            return OpenClawChatAttentionRequest(
+                id: prompt.id,
+                kind: .approval,
+                sessionKey: source.sessionKey,
+                agentID: source.agentID ?? prompt.agentId,
+                createdAtMs: source.createdAtMs,
+                expiresAtMs: Double(expiresAtMs),
+                preview: prompt.kind == ApprovalKind.exec.rawValue
+                    ? prompt.commandPreview ?? prompt.commandText
+                    : [prompt.commandText, prompt.descriptionText].compactMap(\.self).joined(separator: "\n\n"),
+                ownerID: Data(prompt.gatewayStableID.utf8).base64EncodedString() + ":\(source.authorityGeneration)")
+        }
     }
 
     /// An uncertain resolution keeps approval actions frozen, but must not trap the
@@ -503,6 +567,7 @@ final class NodeAppModel {
     @ObservationIgnored var testChatSessionRoutingRestoreHandler: (() async -> Void)?
     @ObservationIgnored private var testExecApprovalPromptFetchHandler:
         ((String, String) async -> ExecApprovalPromptFetchOutcome)?
+    @ObservationIgnored private var testApprovalInboxListHandler: ((String) async throws -> Data)?
     @ObservationIgnored private var testExecApprovalResolutionHandler:
         ((String, ApprovalKind, String, String) async -> ExecApprovalResolutionOutcome)?
     @ObservationIgnored private var testExecApprovalResolutionReconcilesUnknownAck = false
@@ -545,6 +610,9 @@ final class NodeAppModel {
     @ObservationIgnored var chatSessionRoutingRestoreTask: Task<Void, Never>?
     private var watchExecApprovalPromptsByID: [ExecApprovalIdentifier.Key: ExecApprovalPrompt] = [:]
     private var execApprovalInboxPromptsByKey: [ExecApprovalInboxKey: ExecApprovalPrompt] = [:]
+    @ObservationIgnored private var approvalInboxRefreshGeneration: UInt64 = 0
+    @ObservationIgnored private var approvalInboxEventRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var approvalInboxExpiryTask: Task<Void, Never>?
     private var dismissedExecApprovalPresentationKeys: Set<ExecApprovalInboxKey> = []
     private var terminalExecApprovalKeys: Set<ExecApprovalInboxKey> = []
     @ObservationIgnored private var terminalExecApprovalKeyOrder: [ExecApprovalInboxKey] = []
@@ -564,7 +632,12 @@ final class NodeAppModel {
     private var completedPendingForegroundActionIDsByGateway: [String: Set<String>] = [:]
 
     var gatewayConnected = false
-    private var operatorConnected = false
+    private var operatorConnected = false {
+        didSet {
+            if oldValue != self.operatorConnected { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
+
     private var shareDeliveryChannel: String?
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
@@ -587,6 +660,23 @@ final class NodeAppModel {
 
     var isChatDictationActive: Bool {
         self.chatDictationCaptureId != nil
+    }
+
+    var chatDictationPhase: OpenClawChatDictationControl.Phase {
+        guard let captureId = self.chatDictationCaptureId else {
+            return self.isChatDictationPending ? .starting : .idle
+        }
+        guard self.talkMode.isActivePushToTalkCapture(captureId) else { return .processing }
+        return self.talkMode.isListening ? .listening : .starting
+    }
+
+    var chatDictationPartialTranscript: String {
+        guard let captureId = self.chatDictationCaptureId else { return "" }
+        return self.talkMode.pushToTalkPartialTranscript(captureId: captureId)
+    }
+
+    var chatDictationLevel: Double {
+        self.chatDictationPhase == .listening ? self.talkMode.micLevel : 0
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -616,7 +706,7 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return LocalFixtureChatTransport(fixture: .appleReviewDemo)
         }
-        let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
+        let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider = { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
             return IOSMediaArtifactLoader.Connection(
                 config: config,
@@ -629,7 +719,9 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
-            mediaArtifactLoader: mediaArtifactLoader)
+            mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: connectionProvider),
+            sourceResourceLoader: IOSSourceResourceLoader(
+                gateway: self.operatorSession, connectionProvider: connectionProvider))
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -653,6 +745,11 @@ final class NodeAppModel {
         let agentID = self.chatDeliveryAgentId ?? ""
         return "\(self.chatTransportModeID)|\(gatewayID)|\(agentID)|\(self.chatTranscriptCacheGeneration)"
     }
+
+    /// Chat and the persistent sidebar consume the same Gateway-scoped request lifecycle.
+    let chatPresentation = IOSChatViewModelOwner()
+    /// Request admission only; the connection controller owns the later handoff.
+    var isGatewayPickerRequestInFlight = false
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
     /// changes `chatViewModelIdentityID` for session-list refreshes, but must
@@ -936,7 +1033,13 @@ final class NodeAppModel {
         }
     }
 
-    var activeGatewayConnectConfig: GatewayConnectConfig?
+    var activeGatewayConnectConfig: GatewayConnectConfig? {
+        didSet {
+            if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
+                self.operatorAuthorityGeneration &+= 1
+            }
+        }
+    }
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
@@ -1312,6 +1415,7 @@ final class NodeAppModel {
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: VoiceWakePreferences.enabledKey)
         self.voiceWake.setEnabled(enabled)
         if enabled {
             // If talk is enabled, voice wake should not grab the mic.
@@ -1369,18 +1473,6 @@ final class NodeAppModel {
                 enabled: enabled,
                 phase: enabled ? "enabled" : "disabled")
         }
-    }
-
-    func setTalkProviderSelection(_ rawValue: String) {
-        let selection = TalkModeProviderSelection.resolved(rawValue)
-        UserDefaults.standard.set(selection.rawValue, forKey: TalkModeProviderSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
-    }
-
-    func setTalkRealtimeVoiceSelection(_ rawValue: String) {
-        let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(rawValue) ?? ""
-        UserDefaults.standard.set(voice, forKey: TalkModeRealtimeVoiceSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
     }
 
     private func requestTalkPermissionUpgrade() {
@@ -1561,14 +1653,19 @@ final class NodeAppModel {
         self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
-    func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
+    func requestLocationPermissions(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard !Task.isCancelled, isCurrent() else { return false }
         guard mode != .off else {
             self.reconcileSignificantLocationMonitoring(
                 mode: mode,
                 authorizationStatus: self.locationService.authorizationStatus())
             return true
         }
-        let status = await locationService.ensureAuthorization(mode: mode)
+        let status = await locationService.ensureAuthorization(mode: mode, isCurrent: isCurrent)
+        guard !Task.isCancelled, isCurrent() else { return false }
         switch status {
         case .authorizedAlways:
             self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
@@ -1651,10 +1748,7 @@ final class NodeAppModel {
                 paramsJSON: #"{"keys":["ui.accent"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(res)
         } catch {
             return nil
         }
@@ -1754,24 +1848,6 @@ final class NodeAppModel {
         }
     }
 
-    func setGlobalWakeWords(_ words: [String]) async {
-        let sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-
-        struct Payload: Codable {
-            var triggers: [String]
-        }
-        let payload = Payload(triggers: sanitized)
-        guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
-
-        do {
-            _ = try await self.operatorGateway.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
-        } catch {
-            // Best-effort only.
-        }
-    }
-
     private func startVoiceWakeSync(shouldContinue: @escaping @MainActor @Sendable () -> Bool = { true }) async {
         guard shouldContinue() else { return }
         self.voiceWakeSyncTask?.cancel()
@@ -1785,6 +1861,9 @@ final class NodeAppModel {
 
             guard let operatorRoute = await self.operatorGateway.currentRoute(), shouldContinue() else { return }
             let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
+            self.schedulePendingApprovalInboxRefresh(
+                expectedOperatorRoute: operatorRoute,
+                shouldContinue: shouldContinue)
             for await evt in stream {
                 if Task.isCancelled || !shouldContinue() { return }
                 guard evt.payload != nil else { continue }
@@ -1799,7 +1878,7 @@ final class NodeAppModel {
     func handleOperatorGatewayServerEvent(
         _ evt: EventFrame,
         expectedOperatorRoute: GatewayNodeSessionRoute? = nil,
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool = { true }) async
     {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
@@ -1825,23 +1904,18 @@ final class NodeAppModel {
             }
             guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
             self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
-        case ExecApprovalNotificationBridge.requestedKind:
-            guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
-            if let gatewayStableID = self.currentExecApprovalGatewayStableID() {
-                self.appendPendingPersistedExecApprovalReadback(
-                    approvalId: approvalId,
-                    gatewayStableID: gatewayStableID)
-            }
-            await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
-                approvalId: approvalId,
-                shouldApply: shouldContinue)
-            guard shouldContinue() else { return }
-            await presentExecApprovalGatewayEventPrompt(
-                approvalId: approvalId,
+        case ExecApprovalNotificationBridge.requestedKind, "plugin.approval.requested", "openclaw.approval.requested":
+            await self.handleRequestedApprovalGatewayEvent(
+                payload,
                 expectedOperatorRoute: expectedOperatorRoute,
                 shouldContinue: shouldContinue)
-        case ExecApprovalNotificationBridge.resolvedKind:
+        case ExecApprovalNotificationBridge.resolvedKind, "plugin.approval.resolved", "openclaw.approval.resolved":
             guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+            let approvalKind: ApprovalKind = switch evt.event {
+            case "plugin.approval.resolved": .plugin
+            case "openclaw.approval.resolved": .systemAgent
+            default: .exec
+            }
             guard let context = await self.operatorRouteForExecApproval(
                 sourceReason: "resolved_event",
                 expectedOperatorRoute: expectedOperatorRoute,
@@ -1849,21 +1923,69 @@ final class NodeAppModel {
             else {
                 self.appendPendingExecApprovalResolvedPush(ExecApprovalNotificationPrompt(
                     approvalId: approvalId,
-                    gatewayDeviceId: nil))
+                    gatewayDeviceId: nil,
+                    kind: approvalKind))
                 return
             }
+            self.approvalInboxRefreshGeneration &+= 1
             let reconciled = await handleExecApprovalResolvedForCurrentGateway(
                 approvalId: approvalId,
+                approvalKind: approvalKind,
                 routeContext: context,
                 shouldContinue: shouldContinue)
             if !reconciled, shouldContinue() {
                 self.appendPendingExecApprovalResolvedPush(ExecApprovalNotificationPrompt(
                     approvalId: approvalId,
-                    gatewayDeviceId: nil))
+                    gatewayDeviceId: nil,
+                    kind: approvalKind))
             }
+            self.schedulePendingApprovalInboxRefresh(
+                expectedOperatorRoute: expectedOperatorRoute,
+                shouldContinue: shouldContinue)
         default:
             return
         }
+    }
+
+    private func handleRequestedApprovalGatewayEvent(
+        _ payload: AnyCodable,
+        expectedOperatorRoute: GatewayNodeSessionRoute?,
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+        if let expectedOperatorRoute {
+            guard await self.operatorGateway.currentRoute() == expectedOperatorRoute,
+                  shouldContinue()
+            else { return }
+        }
+        self.approvalInboxRefreshGeneration &+= 1
+        let discovery = try? GatewayPayloadDecoding.decode(payload, as: ApprovalInboxDiscovery.self)
+        let attentionSource = discovery.flatMap { discovery -> ApprovalAttentionSource? in
+            guard discovery.createdAtMs.isFinite, discovery.createdAtMs >= 0,
+                  discovery.expiresAtMs.isFinite,
+                  discovery.expiresAtMs > Date().timeIntervalSince1970 * 1000
+            else { return nil }
+            return Self.approvalAttentionSource(
+                discovery, authorityGeneration: self.operatorAuthorityGeneration)
+        }
+        if let gatewayStableID = self.currentExecApprovalGatewayStableID() {
+            self.appendPendingPersistedExecApprovalReadback(
+                approvalId: approvalId,
+                gatewayStableID: gatewayStableID)
+        }
+        await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
+            approvalId: approvalId,
+            shouldApply: shouldContinue)
+        guard shouldContinue() else { return }
+        await self.presentExecApprovalPrompt(
+            approvalId: approvalId,
+            notificationPush: nil,
+            expectedOperatorRoute: expectedOperatorRoute,
+            attentionSource: attentionSource,
+            shouldContinue: shouldContinue)
+        self.schedulePendingApprovalInboxRefresh(
+            expectedOperatorRoute: expectedOperatorRoute,
+            shouldContinue: shouldContinue)
     }
 
     nonisolated static func execApprovalEventID(from payload: AnyCodable) -> String? {
@@ -2919,6 +3041,12 @@ final class NodeAppModel {
             return nil
         }
         self.chatDictationCaptureId = nil
+        if payload.status == "empty" {
+            throw NSError(domain: "ChatDictation", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    localized: "No speech heard. Try again and speak near the microphone."),
+            ])
+        }
         return payload.transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -3296,6 +3424,9 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
             ])
         }
+        guard let route = await self.operatorGateway.currentRoute() else {
+            throw CancellationError()
+        }
         let status = await watchMessagingService.status()
         guard status.supported, status.paired, status.appInstalled else {
             throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
@@ -3305,8 +3436,9 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
-            timeoutSeconds: 20)
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#,
+            timeoutSeconds: 20,
+            ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
         guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
               setupLink.connectionEndpoints.contains(where: \.tls)
@@ -3315,6 +3447,8 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
             ])
         }
+        try Task.checkCancellation()
+        guard await self.operatorGateway.currentRoute() == route else { throw CancellationError() }
         return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
     }
 
@@ -3451,6 +3585,40 @@ extension NodeAppModel {
     func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
         self.openChatRequestID &+= 1
+    }
+
+    func consumeOpenChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.openChatRequestID,
+              requestID != self.consumedOpenChatRequestID
+        else { return false }
+        self.consumedOpenChatRequestID = requestID
+        return true
+    }
+
+    func requestLiveVoiceStart() {
+        self.pendingLiveVoiceStart = true
+    }
+
+    func consumeLiveVoiceStartRequest(
+        isSceneActive: Bool,
+        isOnboardingPresented: Bool,
+        hasGatewayConfiguration: Bool)
+    {
+        guard self.pendingLiveVoiceStart, isSceneActive else { return }
+        // Consume before admission: finishing onboarding must not start a forgotten request.
+        self.pendingLiveVoiceStart = false
+        self.liveVoiceStartError = nil
+        guard !isOnboardingPresented, hasGatewayConfiguration else {
+            self.liveVoiceStartError = String(localized: "Connect to your Gateway, then run Start Live Voice again.")
+            return
+        }
+        self.openChat(sessionKey: self.chatSessionKey)
+        guard !self.talkMode.isEnabled else { return }
+        self.setTalkEnabled(true)
+        if !self.talkMode.isEnabled {
+            self.liveVoiceStartError = self.talkMode.statusText
+        }
     }
 
     func requestNewChat() {
@@ -3591,8 +3759,20 @@ extension NodeAppModel {
         let targetChanged = previousGatewayStableID.map {
             !$0.isEmpty && !GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
-        if targetChanged {
-            self.clearGatewayProblemForCommittedTargetSwitch(to: effectiveStableID)
+        let preconnectProblem = self.gatewayPreconnectProblem
+        let preservesPreconnectProblem = GatewayStableIdentifier.matches(
+            preconnectProblem?.stableID,
+            effectiveStableID)
+        self.gatewayPreconnectProblem = nil
+        if targetChanged || preconnectProblem != nil {
+            self.operatorGatewayProblem = nil
+            self.clearGatewayConnectionProblem()
+            self.setGatewayConnectionProgress(reconnecting: false)
+        }
+        if let preconnectProblem, preservesPreconnectProblem {
+            // A preflight failure owns its snapshot. Late callbacks from the old route must not
+            // substitute their problem or pairing controls when this target commits.
+            self.lastGatewayProblem = preconnectProblem.problem
         }
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
@@ -3612,6 +3792,7 @@ extension NodeAppModel {
            activeConfig.hasSameConnectionInputs(as: nextConfig),
            nodeGatewayTask != nil,
            operatorGatewayTask != nil || !operatorLoopRequired,
+           preconnectProblem == nil,
            !forceReconnect
         {
             self.gatewayAutoReconnectEnabled = true
@@ -3623,7 +3804,7 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
-            preservingGatewayProblem: isSameGatewayTarget,
+            preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
             preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
@@ -3689,6 +3870,7 @@ extension NodeAppModel {
 
     private func invalidateGatewayConnectAttempts() {
         self.gatewayConnectGeneration &+= 1
+        self.cancelGatewayPreconnectVerification()
     }
 
     var hasGatewaySessionResetInFlight: Bool {
@@ -3831,6 +4013,7 @@ extension NodeAppModel {
         self.lastGatewayProblem = nil
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
+        self.gatewayPreconnectProblem = nil
         self.cancelTalkPermissionUpgrade()
         // Publish teardown through the shared barrier before returning. A replacement connect
         // must await old loop cleanup instead of racing this synchronous UI action.
@@ -3934,6 +4117,13 @@ extension NodeAppModel {
     }
 
     func clearGatewayConnectionProblem() {
+        let activeStableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID
+        // Success belongs to the active route, not another target still awaiting trust.
+        if activeStableID == nil ||
+            GatewayStableIdentifier.matches(self.gatewayPreconnectProblem?.stableID, activeStableID)
+        {
+            self.gatewayPreconnectProblem = nil
+        }
         self.nodeGatewayProblem = nil
         if let operatorGatewayProblem {
             self.lastGatewayProblem = operatorGatewayProblem
@@ -3951,14 +4141,51 @@ extension NodeAppModel {
         self.gatewayPairingRequestId = nil
     }
 
-    func beginGatewayPreconnectVerification(statusText: String) {
-        // Preflight has not committed the replacement target yet. Keep the readable snapshot
-        // while retiring live pairing control; the committed route switch clears the snapshot.
+    func beginGatewayPreconnectVerification(stableID: String, statusText: String) {
+        if let preconnectProblem = self.gatewayPreconnectProblem,
+           GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID)
+        {
+            self.lastGatewayProblem = preconnectProblem.problem
+        } else {
+            let activeStableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID
+            if self.gatewayPreconnectProblem != nil || !GatewayStableIdentifier.matches(activeStableID, stableID) {
+                self.lastGatewayProblem = nil
+            }
+            self.gatewayPreconnectProblem = nil
+        }
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.gatewayStatusText = statusText
+    }
+
+    func failGatewayPreconnectVerification(
+        _ problem: GatewayConnectionProblem,
+        stableID: String,
+        host: String?,
+        expectedGeneration: UInt64?)
+    {
+        guard expectedGeneration == self.gatewayConnectGeneration else { return }
+        let problem = GatewayConnectionIssue.addingEndpointGuidance(to: problem, host: host)
+        self.gatewayPreconnectProblem = (stableID: stableID, problem: problem)
+        self.applyGatewayConnectionProblem(problem)
+    }
+
+    func cancelGatewayPreconnectVerification() {
+        guard self.gatewayPreconnectProblem != nil else { return }
+        self.gatewayPreconnectProblem = nil
+        self.clearGatewayConnectionProblem()
+    }
+
+    func hasGatewayPreconnectProblem(for stableID: String) -> Bool {
+        guard let preconnectProblem = self.gatewayPreconnectProblem else { return false }
+        return GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID) &&
+            self.lastGatewayProblem == preconnectProblem.problem
+    }
+
+    var unresolvedGatewayPreconnectStableID: String? {
+        self.gatewayPreconnectProblem?.stableID
     }
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
@@ -3991,6 +4218,9 @@ extension NodeAppModel {
 
     func applyOperatorGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
         guard !self.isLocalGatewayFixtureEnabled else { return }
+        let problem = GatewayConnectionIssue.addingEndpointGuidance(
+            to: problem,
+            host: self.activeGatewayConnectConfig?.url.host)
         self.operatorGatewayProblem = problem
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
@@ -4965,7 +5195,11 @@ extension NodeAppModel {
     func mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
         GatewayConnectionProblemMapper.map(
             error: error,
-            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
+            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem).map {
+            GatewayConnectionIssue.addingEndpointGuidance(
+                to: $0,
+                host: self.activeGatewayConnectConfig?.url.host)
+        }
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(_ context: NodeGatewayLoopContext) {
@@ -5097,6 +5331,7 @@ extension NodeAppModel {
             caps: [
                 OpenClawGatewayClientCapability.agentKind,
                 OpenClawGatewayClientCapability.inlineWidgets,
+                OpenClawGatewayClientCapability.modelSelectionPolicy,
             ],
             commands: [],
             permissions: [:],
@@ -5344,24 +5579,6 @@ extension NodeAppModel {
         } catch {
             // Best-effort only.
         }
-    }
-
-    func runSharePipelineSelfTest() async {
-        self.recordShareEvent("Share self-test running…")
-
-        let payload = SharedContentPayload(
-            title: "OpenClaw Share Self-Test",
-            url: URL(string: "https://openclaw.ai/share-self-test"),
-            text: "Validate iOS share->deep-link->gateway forwarding.")
-        guard let deepLink = ShareToAgentDeepLink.buildURL(
-            from: payload,
-            instruction: "Reply with: SHARE SELF-TEST OK")
-        else {
-            self.recordShareEvent("Self-test failed: could not build deep link.")
-            return
-        }
-
-        await handleDeepLink(url: deepLink)
     }
 
     func refreshLastShareEventFromRelay() {
@@ -5697,10 +5914,148 @@ extension NodeAppModel {
         return GatewayStableIdentifier.exact(stableID)
     }
 
+    func refreshPendingApprovalInbox() async {
+        await self.refreshPendingApprovalInbox(expectedOperatorRoute: nil, shouldContinue: { true })
+    }
+
+    private func schedulePendingApprovalInboxRefresh(
+        expectedOperatorRoute: GatewayNodeSessionRoute?,
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool)
+    {
+        self.approvalInboxEventRefreshTask?.cancel()
+        self.approvalInboxEventRefreshTask = Task { [weak self] in
+            await self?.refreshPendingApprovalInbox(
+                expectedOperatorRoute: expectedOperatorRoute,
+                shouldContinue: shouldContinue)
+        }
+    }
+
+    private func refreshPendingApprovalInbox(
+        expectedOperatorRoute: GatewayNodeSessionRoute?,
+        shouldContinue: @MainActor @Sendable @escaping () -> Bool) async
+    {
+        self.pruneExpiredWatchExecApprovalPrompts()
+        guard shouldContinue(), let gatewayStableID = self.currentExecApprovalGatewayStableID() else { return }
+        let routeGeneration = self.gatewayRouteGeneration
+        let authorityGeneration = self.operatorAuthorityGeneration
+        let route = await self.operatorGateway.currentRoute()
+        guard expectedOperatorRoute == nil || expectedOperatorRoute == route else { return }
+        #if DEBUG
+        guard self.testApprovalInboxListHandler != nil || (self.operatorConnected && route != nil) else { return }
+        #else
+        guard self.operatorConnected, route != nil else { return }
+        #endif
+        self.approvalInboxRefreshGeneration &+= 1
+        let generation = self.approvalInboxRefreshGeneration
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return shouldContinue() && !Task.isCancelled &&
+                self.approvalInboxRefreshGeneration == generation &&
+                self.operatorAuthorityGeneration == authorityGeneration &&
+                self.isCurrentExecApprovalReadbackRoute(generation: routeGeneration, stableID: gatewayStableID)
+        }
+        for (kind, method) in [
+            (ApprovalKind.exec, "exec.approval.list"),
+            (.plugin, "plugin.approval.list"),
+            (.systemAgent, "openclaw.approval.list"),
+        ] {
+            guard isCurrent() else { return }
+            do {
+                let response = try await self.fetchPendingApprovalList(method: method, route: route)
+                guard await self.operatorGateway.currentRoute() == route, isCurrent() else { return }
+                let discoveries = try JSONDecoder().decode([ApprovalInboxDiscovery].self, from: response)
+                let knownKeys = Set(self.execApprovalInboxPromptsByKey.compactMap { key, prompt in
+                    prompt.kind == kind.rawValue && self.isExecApprovalPromptCurrent(prompt) ? key : nil
+                })
+                var listedKeys = Set<ExecApprovalInboxKey>()
+                for discovery in discoveries {
+                    guard isCurrent() else { return }
+                    guard discovery.approvalKind == nil || discovery.approvalKind == kind.rawValue,
+                          discovery.createdAtMs.isFinite, discovery.createdAtMs >= 0,
+                          discovery.expiresAtMs.isFinite,
+                          discovery.expiresAtMs > Date().timeIntervalSince1970 * 1000,
+                          let key = Self.execApprovalInboxKey(
+                              approvalID: discovery.id,
+                              gatewayStableID: gatewayStableID)
+                    else { continue }
+                    listedKeys.insert(key)
+                    guard !self.terminalExecApprovalKeys.contains(key) else { continue }
+                    let outcome = await self.fetchExecApprovalPrompt(
+                        approvalId: discovery.id,
+                        sourceReason: "inbox_discovery",
+                        expectedOperatorRoute: route,
+                        shouldContinue: isCurrent)
+                    guard await self.operatorGateway.currentRoute() == route, isCurrent() else { return }
+                    self.applyPendingApprovalInboxReadback(
+                        outcome,
+                        discovery: discovery,
+                        kind: kind,
+                        gatewayStableID: gatewayStableID,
+                        authorityGeneration: authorityGeneration)
+                }
+                guard isCurrent() else { return }
+                // A successful list is authoritative only for its own kind. Failed or
+                // unavailable sibling lists must not discard their pending approvals.
+                for key in knownKeys.subtracting(listedKeys) {
+                    self.execApprovalInboxPromptsByKey.removeValue(forKey: key)
+                    self.watchExecApprovalPromptsByID.removeValue(forKey: key.approvalID)
+                }
+                self.persistWatchExecApprovalBridgeState()
+            } catch {
+                // Shipped peers may not advertise every family; the remaining lists
+                // and live events still contribute to the same inbox.
+                continue
+            }
+        }
+    }
+
+    private func applyPendingApprovalInboxReadback(
+        _ outcome: ExecApprovalPromptFetchOutcome,
+        discovery: ApprovalInboxDiscovery,
+        kind: ApprovalKind,
+        gatewayStableID: String,
+        authorityGeneration: UInt64)
+    {
+        switch outcome {
+        case var .loaded(prompt):
+            guard prompt.kind == kind.rawValue else { return }
+            prompt.attentionSource = Self.approvalAttentionSource(
+                discovery, authorityGeneration: authorityGeneration)
+            self.upsertWatchExecApprovalPrompt(prompt)
+        case let .terminal(terminal):
+            guard terminal.kind == kind else { return }
+            self.markExecApprovalOwnerTerminal(approvalId: terminal.id, gatewayStableID: gatewayStableID)
+        case .stale:
+            self.markExecApprovalOwnerTerminal(approvalId: discovery.id, gatewayStableID: gatewayStableID)
+        case .failed:
+            break
+        }
+    }
+
+    private func fetchPendingApprovalList(method: String, route: GatewayNodeSessionRoute?) async throws -> Data {
+        #if DEBUG
+        if let testApprovalInboxListHandler { return try await testApprovalInboxListHandler(method) }
+        #endif
+        return try await self.operatorGateway.request(
+            method: method,
+            paramsJSON: "{}",
+            timeoutSeconds: 12,
+            ifCurrentRoute: route)
+    }
+
+    private static func approvalAttentionSource(
+        _ discovery: ApprovalInboxDiscovery,
+        authorityGeneration: UInt64) -> ApprovalAttentionSource
+    {
+        ApprovalAttentionSource(
+            sessionKey: self.trimmedOrNil(discovery.request.sessionKey),
+            agentID: self.trimmedOrNil(discovery.request.agentId),
+            createdAtMs: discovery.createdAtMs,
+            authorityGeneration: authorityGeneration)
+    }
+
     private func isExecApprovalPromptCurrent(_ prompt: ExecApprovalPrompt) -> Bool {
-        guard let kind = ApprovalKind(rawValue: prompt.kind ?? ""),
-              kind == .exec || kind == .plugin
-        else { return false }
+        guard ApprovalKind(rawValue: prompt.kind ?? "") != nil else { return false }
         return GatewayStableIdentifier.matches(
             self.currentExecApprovalGatewayStableID(),
             prompt.gatewayStableID)
@@ -5714,6 +6069,11 @@ extension NodeAppModel {
     }
 
     private func invalidateExecApprovalSurfacesForGatewayChange() {
+        self.approvalInboxRefreshGeneration &+= 1
+        self.approvalInboxEventRefreshTask?.cancel()
+        self.approvalInboxEventRefreshTask = nil
+        self.approvalInboxExpiryTask?.cancel()
+        self.approvalInboxExpiryTask = nil
         self.pendingExecApprovalPromptRequestGeneration &+= 1
         self.dismissPendingExecApprovalPrompt()
         self.pendingNotificationPermissionGuidancePrompt = nil
@@ -5792,6 +6152,28 @@ extension NodeAppModel {
         self.watchExecApprovalPromptsByID = self.watchExecApprovalPromptsByID.filter { _, prompt in
             guard let expiresAtMs = prompt.expiresAtMs else { return true }
             return expiresAtMs > currentNowMs
+        }
+        self.execApprovalInboxPromptsByKey = self.execApprovalInboxPromptsByKey.filter { _, prompt in
+            prompt.expiresAtMs.map { $0 > currentNowMs } != false
+        }
+        if let prompt = self.pendingExecApprovalPrompt,
+           let expiresAtMs = prompt.expiresAtMs, expiresAtMs <= currentNowMs,
+           self.pendingExecApprovalPromptOutcome == nil
+        {
+            self.markPendingExecApprovalTerminal(
+                approvalId: prompt.id,
+                outcome: ExecApprovalOutcome(text: "This approval has expired.", tone: .warning))
+        }
+        self.approvalInboxExpiryTask?.cancel()
+        self.approvalInboxExpiryTask = nil
+        guard let nextExpiry = self.execApprovalInboxPromptsByKey.values.compactMap(\.expiresAtMs).min() else {
+            return
+        }
+        self.approvalInboxExpiryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(max(1, nextExpiry - currentNowMs)))
+            } catch { return }
+            self?.persistWatchExecApprovalBridgeState()
         }
     }
 
@@ -5916,8 +6298,15 @@ extension NodeAppModel {
         guard self.isExecApprovalPromptCurrent(prompt),
               let approvalID = Self.execApprovalIDKey(prompt.id),
               let inboxKey = Self.execApprovalInboxKey(prompt),
-              !self.terminalExecApprovalKeys.contains(inboxKey)
+              !self.terminalExecApprovalKeys.contains(inboxKey),
+              prompt.expiresAtMs.map({ $0 > Int64(Date().timeIntervalSince1970 * 1000) }) != false
         else { return }
+        var prompt = prompt
+        // Canonical readback omits pending sourceSessionKey. Preserve the source
+        // already discovered for this exact approval and operator authority.
+        if prompt.attentionSource == nil {
+            prompt.attentionSource = self.execApprovalInboxPromptsByKey[inboxKey]?.attentionSource
+        }
         self.watchExecApprovalPromptsByID[approvalID] = prompt
         self.execApprovalInboxPromptsByKey[inboxKey] = prompt
         self.persistWatchExecApprovalBridgeState()
@@ -7048,7 +7437,7 @@ extension NodeAppModel {
             return true
         }
         let routeGeneration = self.gatewayRouteGeneration
-        let prompt: ExecApprovalPrompt
+        var prompt: ExecApprovalPrompt
         if let cachedPrompt = Self.execApprovalIDKey(approvalID)
             .flatMap({ watchExecApprovalPromptsByID[$0] }),
             GatewayStableIdentifier.matches(
@@ -8013,6 +8402,7 @@ extension NodeAppModel {
         approvalId: String,
         notificationPush: ExecApprovalNotificationPrompt?,
         expectedOperatorRoute: GatewayNodeSessionRoute?,
+        attentionSource: ApprovalAttentionSource? = nil,
         shouldContinue: @MainActor @Sendable () -> Bool) async
     {
         guard shouldContinue(), Self.validatedApprovalID(approvalId) != nil else { return }
@@ -8048,7 +8438,8 @@ extension NodeAppModel {
             self.pendingExecApprovalPromptResolving = false
         }
         switch fetchedPrompt {
-        case let .loaded(fetchedPrompt):
+        case var .loaded(fetchedPrompt):
+            fetchedPrompt.attentionSource = attentionSource
             if let notificationPush,
                ApprovalKind(rawValue: fetchedPrompt.kind ?? "") != notificationPush.kind
             {
@@ -8186,7 +8577,7 @@ extension NodeAppModel {
         else {
             return nil
         }
-        let prompt: ExecApprovalPrompt
+        var prompt: ExecApprovalPrompt
         switch snapshot.presentation {
         case let .exec(presentation):
             guard self.isValidExecApprovalPresentation(presentation) else { return nil }
@@ -8220,9 +8611,27 @@ extension NodeAppModel {
                 pluginId: self.approvalPresentationString(presentation.pluginid),
                 toolName: self.approvalPresentationString(presentation.toolname),
                 pluginSeverity: presentation.severity.rawValue)
-        case .systemAgent:
-            return nil
+        case let .systemAgent(presentation):
+            guard presentation.kind == ApprovalKind.systemAgent.rawValue,
+                  self.trimmedOrNil(presentation.title) != nil,
+                  self.trimmedOrNil(presentation.description) != nil,
+                  self.isValidOptionalApprovalPresentationString(presentation.agentid)
+            else { return nil }
+            prompt = ExecApprovalPrompt(
+                id: snapshot.id,
+                kind: presentation.kind,
+                gatewayStableID: gatewayStableID,
+                commandText: presentation.title,
+                commandPreview: nil,
+                warningText: nil,
+                allowedDecisions: [],
+                host: nil,
+                nodeId: nil,
+                agentId: self.approvalPresentationString(presentation.agentid),
+                expiresAtMs: Int64(snapshot.expiresatms),
+                descriptionText: presentation.description)
         }
+        prompt.createdAtMs = Double(snapshot.createdatms)
         return self.makeExecApprovalPrompt(prompt)
     }
 
@@ -8252,7 +8661,6 @@ extension NodeAppModel {
         let normalizedCommandText = input.commandText.trimmingCharacters(in: .whitespacesAndNewlines)
         let exactGatewayStableID = GatewayStableIdentifier.exact(input.gatewayStableID)
         guard let kind = ApprovalKind(rawValue: approvalKind),
-              kind == .exec || kind == .plugin,
               !normalizedCommandText.isEmpty,
               let exactGatewayStableID
         else {
@@ -8261,11 +8669,11 @@ extension NodeAppModel {
         let decisions = input.allowedDecisions
         guard decisions.count == Set(decisions).count,
               decisions.allSatisfy({ ApprovalDecision(rawValue: $0) != nil }),
-              decisions.contains(ApprovalDecision.deny.rawValue)
+              kind == .systemAgent ? decisions.isEmpty : decisions.contains(ApprovalDecision.deny.rawValue)
         else {
             return nil
         }
-        return ExecApprovalPrompt(
+        var prompt = ExecApprovalPrompt(
             id: approvalId,
             kind: approvalKind,
             gatewayStableID: exactGatewayStableID,
@@ -8281,6 +8689,9 @@ extension NodeAppModel {
             pluginId: self.trimmedOrNil(input.pluginId),
             toolName: self.trimmedOrNil(input.toolName),
             pluginSeverity: self.trimmedOrNil(input.pluginSeverity))
+        prompt.attentionSource = input.attentionSource
+        prompt.createdAtMs = input.createdAtMs
+        return prompt
     }
 
     private static func approvalPresentationString(_ value: AnyCodable?) -> String? {
@@ -8361,8 +8772,10 @@ extension NodeAppModel {
             self.isValidPluginApprovalPresentation(
                 value,
                 terminalDecision: terminalDecision) ? .plugin : nil
-        case .systemAgent:
-            nil
+        case let .systemAgent(value):
+            value.kind == ApprovalKind.systemAgent.rawValue &&
+                self.trimmedOrNil(value.title) != nil &&
+                self.trimmedOrNil(value.description) != nil ? .systemAgent : nil
         }
     }
 
@@ -9863,6 +10276,9 @@ extension NodeAppModel {
             self.stageGatewaySetupLink(link)
         case .dashboard:
             self.dashboardNavigationRequestID &+= 1
+        case .gatewayAdd:
+            self.recordShareEvent(
+                "This browser sign-in link is for the OpenClaw Mac app. Use a device pairing link on iOS.")
         }
     }
 
@@ -10327,8 +10743,15 @@ extension NodeAppModel {
 
     func _test_setUnifiedExecApprovalGetResponses(
         _ responses: [(approvalID: String, json: String)],
-        beforeResponse: (@Sendable (String) async -> Void)? = nil)
+        beforeResponse: (@Sendable (String) async -> Void)? = nil,
+        listResponses: [String: String] = [:],
+        beforeListResponse: (@Sendable (String) async -> Void)? = nil)
     {
+        self.testApprovalInboxListHandler = listResponses.isEmpty ? nil : { method in
+            await beforeListResponse?(method)
+            guard let json = listResponses[method] else { throw URLError(.unsupportedURL) }
+            return Data(json.utf8)
+        }
         let keyedResponses = responses.compactMap { response -> (ExecApprovalIdentifier.Key, Data)? in
             guard let approvalID = Self.execApprovalIDKey(response.approvalID) else { return nil }
             return (approvalID, Data(response.json.utf8))
@@ -10574,19 +10997,5 @@ extension NodeAppModel {
     }
 }
 #endif
-
-extension NodeAppModel {
-    private func clearGatewayProblemForCommittedTargetSwitch(to stableID: String) {
-        guard let currentStableID = self.activeGatewayConnectConfig?.effectiveStableID
-            ?? self.connectedGatewayID,
-            !GatewayStableIdentifier.matches(currentStableID, stableID)
-        else { return }
-        // This runs only when the replacement config commits, without a suspension before the
-        // route generation advances. Preflight retains the prior snapshot until this boundary.
-        self.operatorGatewayProblem = nil
-        self.clearGatewayConnectionProblem()
-        self.setGatewayConnectionProgress(reconnecting: false)
-    }
-}
 
 // swiftlint:enable type_body_length file_length

@@ -1,17 +1,36 @@
-import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
+import {
+  hasOpenClawAgentReadOnlySchema,
+  openOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabaseHandle,
+} from "../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  borrowOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  claimFullyCopied,
+  claimUnchanged,
+  claimsMatch,
+  generationsMatch,
+  readClaim,
+} from "./legacy-main-session-migration-claims.js";
 import type {
   LegacyMainSessionMigrationMode,
   LegacyMainSessionMigrationOutcome,
   PhysicalStore,
   SessionClaim,
-  TranscriptDigest,
 } from "./legacy-main-session-migration.contract.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
   runSqliteSessionDeletionTransaction,
   withSqliteSessionDeletions,
@@ -21,79 +40,31 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
+import {
+  copySqliteSessionGenerationRows,
+  readSqliteSessionGenerationClaim,
+  readSqliteSessionGenerationWindows,
+  rehomeSqliteSessionGenerationWindow,
+} from "./session-accessor.sqlite-generation-copy.js";
+import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
+import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
-
-function projectEntryIdentity(entry: SessionEntry): SessionEntry {
-  const projected = structuredClone(entry) as SessionEntry & {
-    sessionFile?: unknown;
-    transcriptPath?: unknown;
-  };
-  delete projected.sessionFile;
-  delete projected.transcriptPath;
-  return projected;
-}
-
-function digestTranscriptRows(rows: readonly { eventJson: string }[]): TranscriptDigest {
-  let rollingHash = "";
-  for (const row of rows) {
-    rollingHash = createHash("sha256")
-      .update(rollingHash)
-      .update("\0")
-      .update(row.eventJson)
-      .digest("hex");
-  }
-  return { eventCount: rows.length, rollingHash };
-}
-
-export function claimsMatch(left: SessionClaim, right: SessionClaim): boolean {
-  return (
-    isDeepStrictEqual(projectEntryIdentity(left.entry), projectEntryIdentity(right.entry)) &&
-    left.digest.eventCount === right.digest.eventCount &&
-    left.digest.rollingHash === right.digest.rollingHash
-  );
-}
-
-export function readClaim(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
-  store: PhysicalStore,
-  key: string,
-  canonicalKey: string,
-): SessionClaim | undefined {
-  const row = readExactSessionEntryRowForCanonicalRepair(database, key);
-  if (!row) {
-    return undefined;
-  }
-  const transcriptRows = executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
-      .selectFrom("transcript_events")
-      .select(["created_at", "event_json"])
-      .where("session_id", "=", row.entry.sessionId)
-      .orderBy("seq", "asc"),
-  ).rows.map((event) => ({ createdAt: event.created_at, eventJson: event.event_json }));
-  return {
-    canonicalKey,
-    digest: digestTranscriptRows(transcriptRows),
-    entry: row.entry,
-    eventRows: transcriptRows,
-    key,
-    store,
-  };
-}
 
 export function samePhysicalStore(left: PhysicalStore, right: PhysicalStore): boolean {
   return isSameOpenClawAgentDatabasePath(left.path, right.path);
 }
 
 function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
-  return [...claims].toSorted((left, right) => {
+  return claims.toSorted((left, right) => {
     const freshness = (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
     return (
       freshness ||
@@ -117,6 +88,7 @@ function writeMigratedSessionClaim(
   sessionKey: string,
   entry: SessionEntry,
 ): void {
+  invalidateSessionEntryMaintenanceAgeFact(database.db);
   writeSessionEntry(database, sessionKey, entry, {
     allowStoredAliases: true,
     previousEntry: null,
@@ -129,7 +101,9 @@ function mutateLegacySessionClaims<T>(
     store: PhysicalStore;
     env: NodeJS.ProcessEnv;
     claims: readonly SessionClaim[];
-    operationLabel: string;
+    operationLabel:
+      | "session-migration.legacy-main-in-place"
+      | "session-migration.legacy-main-quarantine";
     beforePersistentApply?: () => void;
   },
   commit: (database: OpenClawAgentDatabase) => T,
@@ -144,13 +118,17 @@ function mutateLegacySessionClaims<T>(
     scope,
     params.claims.map(({ key: sessionKey, entry }) => ({ sessionKey, entry })),
     async (assertCurrent) =>
-      runExclusiveSqliteSessionWrite(scope, async () => {
-        assertCurrent();
-        params.beforePersistentApply?.();
-        return runSqliteSessionDeletionTransaction(commit, scope, {
-          operationLabel: params.operationLabel,
-        });
-      }),
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          assertCurrent();
+          params.beforePersistentApply?.();
+          return runSqliteSessionDeletionTransaction(commit, scope, {
+            operationLabel: params.operationLabel,
+          });
+        },
+        params.operationLabel,
+      ),
   );
 }
 
@@ -162,7 +140,7 @@ function migrateClaimsInPlace(params: {
   env: NodeJS.ProcessEnv;
   store: PhysicalStore;
   winner: SessionClaim;
-}): Promise<boolean> {
+}): Promise<SessionClaim | undefined> {
   return mutateLegacySessionClaims(
     {
       ...params,
@@ -182,13 +160,13 @@ function migrateClaimsInPlace(params: {
       );
       if (
         currentAliases.some(
-          (claim, index) => !claim || !claimsMatch(claim, params.aliases[index]!),
+          (claim, index) => !claim || !claimUnchanged(claim, params.aliases[index]!),
         ) ||
         (params.canonical
-          ? !currentCanonical || !claimsMatch(currentCanonical, params.canonical)
+          ? !currentCanonical || !claimUnchanged(currentCanonical, params.canonical)
           : currentCanonical !== undefined)
       ) {
-        return false;
+        return undefined;
       }
       if (!currentCanonical) {
         writeMigratedSessionClaim(database, params.canonicalKey, params.winner.entry);
@@ -202,7 +180,7 @@ function migrateClaimsInPlace(params: {
           validatedEntries: new Map(currentAliases.map((claim) => [claim!.key, claim!.entry])),
         },
       );
-      return true;
+      return readClaim(database, params.store, params.canonicalKey, params.canonicalKey);
     },
   );
 }
@@ -211,33 +189,181 @@ async function copyClaimCrossStore(params: {
   beforePersistentApply?: () => void;
   canonicalKey: string;
   destination: PhysicalStore;
+  expectedDestination?: SessionClaim;
   env: NodeJS.ProcessEnv;
   source: SessionClaim;
 }): Promise<SessionClaim | undefined> {
-  await importSqliteSessionRows({
-    beforePersistentApply: params.beforePersistentApply,
+  const destinationOptions = {
     agentId: params.destination.databaseAgentId,
-    defaultAgentId: params.destination.databaseAgentId,
     env: params.env,
-    storePath: params.destination.path,
-    sessionKey: params.canonicalKey,
-    entry: params.source.entry,
-    skipIfExists: true,
-    readExactTranscriptRows: (append) => {
-      for (const row of params.source.eventRows) {
-        append(row);
-      }
+    path: params.destination.path,
+  };
+  return await runExclusiveSqliteSessionWrite(
+    destinationOptions,
+    async () => {
+      params.beforePersistentApply?.();
+      return runOpenClawAgentWriteTransaction((destinationDatabase) => {
+        const current = readClaim(
+          destinationDatabase,
+          params.destination,
+          params.canonicalKey,
+          params.canonicalKey,
+        );
+        if (
+          (params.expectedDestination &&
+            (!current || !claimUnchanged(current, params.expectedDestination))) ||
+          (current && !claimsMatch(params.source, current))
+        ) {
+          return undefined;
+        }
+        const source = withOpenClawAgentDatabaseReadOnly(
+          (sourceDatabase) =>
+            runSqliteDeferredTransactionSync(sourceDatabase.db, () => {
+              const fresh = readClaim(
+                sourceDatabase,
+                params.source.store,
+                params.source.key,
+                params.canonicalKey,
+              );
+              if (
+                !fresh ||
+                !claimUnchanged(fresh, params.source) ||
+                fresh.databaseIdentity ===
+                  readOpenClawAgentDatabaseIdentity(destinationDatabase).identity
+              ) {
+                return undefined;
+              }
+              const destinationWindows = new Map(
+                readSqliteSessionGenerationWindows(
+                  destinationDatabase,
+                  [],
+                  fresh.generations.map((generation) => generation.window.session_id),
+                ).map((window) => [window.session_id, window]),
+              );
+              const currentGenerations = new Map(
+                current?.generations.map((generation) => [
+                  generation.window.session_id,
+                  generation,
+                ]),
+              );
+              const missing: SqliteSessionGenerationClaim[] = [];
+              for (const generation of fresh.generations) {
+                assertSessionTranscriptHot(sourceDatabase.db, generation.window.session_id);
+                if (
+                  normalizeStoreSessionKey(generation.window.session_key.trim()) !==
+                  normalizeStoreSessionKey(params.source.key.trim())
+                ) {
+                  return undefined;
+                }
+                const existing = destinationWindows.get(generation.window.session_id);
+                if (!existing) {
+                  missing.push(generation);
+                } else if (
+                  existing.session_key !== params.canonicalKey ||
+                  !generationsMatch(
+                    generation,
+                    currentGenerations.get(existing.session_id) ??
+                      readSqliteSessionGenerationClaim(destinationDatabase, existing),
+                    params.canonicalKey,
+                  )
+                ) {
+                  return undefined;
+                }
+              }
+              if (!current) {
+                if (readExactSessionEntryRow(destinationDatabase, params.canonicalKey)) {
+                  return undefined;
+                }
+                writeMigratedSessionClaim(destinationDatabase, params.canonicalKey, fresh.entry);
+              }
+              const sourceDb = getSessionKysely(sourceDatabase.db);
+              const destinationDb = getSessionKysely(destinationDatabase.db);
+              const sourceKeys = new Set([normalizeStoreSessionKey(params.source.key.trim())]);
+              for (const generation of missing) {
+                const window = generation.window;
+                const links = executeSqliteQuerySync(
+                  sourceDatabase.db,
+                  sourceDb
+                    .selectFrom("session_conversations")
+                    .selectAll()
+                    .where("session_id", "=", window.session_id),
+                ).rows;
+                const conversationIds = [
+                  ...(window.primary_conversation_id ? [window.primary_conversation_id] : []),
+                  ...links.map((link) => link.conversation_id),
+                ];
+                for (const conversation of executeSqliteQuerySync(
+                  sourceDatabase.db,
+                  sourceDb
+                    .selectFrom("conversations")
+                    .selectAll()
+                    .where("conversation_id", "in", sqliteStringSet(conversationIds)),
+                ).rows) {
+                  executeSqliteQuerySync(
+                    destinationDatabase.db,
+                    destinationDb
+                      .insertInto("conversations")
+                      .values(conversation)
+                      .onConflict((conflict) => conflict.column("conversation_id").doNothing()),
+                  );
+                }
+                const mapped = rehomeSqliteSessionGenerationWindow(
+                  window,
+                  params.canonicalKey,
+                  sourceKeys,
+                );
+                executeSqliteQuerySync(
+                  destinationDatabase.db,
+                  destinationDb
+                    .insertInto("session_windows")
+                    .values(mapped)
+                    // A new logical entry already created its current window in this transaction.
+                    .onConflict((conflict) => conflict.column("session_id").doUpdateSet(mapped)),
+                );
+                copySqliteSessionGenerationRows({
+                  destination: destinationDatabase,
+                  source: sourceDatabase,
+                  sessionId: window.session_id,
+                  sourceWindowPresent: true,
+                });
+                executeSqliteQuerySync(
+                  destinationDatabase.db,
+                  destinationDb
+                    .deleteFrom("session_conversations")
+                    .where("session_id", "=", window.session_id),
+                );
+                for (const link of links) {
+                  executeSqliteQuerySync(
+                    destinationDatabase.db,
+                    destinationDb.insertInto("session_conversations").values(link),
+                  );
+                }
+              }
+              copySessionNodeArtifactsForRepair(
+                sourceDatabase,
+                destinationDatabase,
+                [fresh.key],
+                params.canonicalKey,
+                { includeMembers: false },
+              );
+              return readClaim(
+                destinationDatabase,
+                params.destination,
+                params.canonicalKey,
+                params.canonicalKey,
+              );
+            }),
+          {
+            agentId: params.source.store.databaseAgentId,
+            env: params.env,
+            path: params.source.store.path,
+          },
+        );
+        return source.found ? source.value : undefined;
+      }, destinationOptions);
     },
-  });
-  const destination = withOpenClawAgentDatabaseReadOnly(
-    (database) => readClaim(database, params.destination, params.canonicalKey, params.canonicalKey),
-    {
-      agentId: params.destination.databaseAgentId,
-      env: params.env,
-      path: params.destination.path,
-    },
+    "session-migration.legacy-main-copy",
   );
-  return destination.found ? destination.value : undefined;
 }
 
 async function deleteExpectedClaim(
@@ -250,15 +376,105 @@ async function deleteExpectedClaim(
     archiveTranscript: false,
     deleteTranscriptWithoutArchive: true,
     expectedEntry: claim.entry,
-    expectedTranscript: {
-      sessionId: claim.entry.sessionId,
-      eventJson: claim.eventRows.map((row) => row.eventJson),
-    },
+    expectedDatabaseIdentity: claim.databaseIdentity,
+    expectedGenerations: claim.generations,
+    expectedNodeArtifactFingerprint: claim.nodeArtifactFingerprint,
     requireWriteSuccess: true,
     storePath: claim.store.ownerStorePath,
     target: { canonicalKey: claim.key, storeKeys: [claim.key] },
   });
   return result.deleted;
+}
+
+async function deleteCopiedClaims(params: {
+  aliases: readonly SessionClaim[];
+  beforePersistentApply?: () => void;
+  canonicalKey: string;
+  destination: PhysicalStore;
+  env: NodeJS.ProcessEnv;
+  receipt: SessionClaim;
+}): Promise<SessionClaim | undefined> {
+  const sources = params.aliases.filter(
+    (claim) => !samePhysicalStore(claim.store, params.destination),
+  );
+  if (sources.length === 0) {
+    return undefined;
+  }
+  const options = {
+    agentId: params.destination.databaseAgentId,
+    env: params.env,
+    path: params.destination.path,
+  };
+  const changed = () =>
+    new Error(`Canonical session changed before legacy cleanup: ${params.canonicalKey}`);
+  const writer = getOpenClawAgentDatabaseIfOpen(options);
+  if (!writer) {
+    throw changed();
+  }
+  const destinationIdentity = readOpenClawAgentDatabaseIdentity(writer).identity;
+  const retained = borrowOpenClawAgentDatabase(options);
+  let reader: OpenClawAgentReadOnlyDatabaseHandle | undefined;
+  try {
+    const opened = openOpenClawAgentDatabaseReadOnly(options);
+    if (!opened.found) {
+      throw changed();
+    }
+    reader = opened.database;
+    const destinationReader = reader;
+    const assertCurrent = () => {
+      if (
+        retained.db !== writer.db ||
+        sources.some((claim) => claim.databaseIdentity === destinationIdentity) ||
+        getOpenClawAgentDatabaseIfOpen(options) !== writer ||
+        !isOpenClawAgentDatabasePathCurrent(writer) ||
+        writer.db.isTransaction ||
+        !isOpenClawAgentDatabasePathCurrent(destinationReader) ||
+        readOpenClawAgentDatabaseIdentity(destinationReader).identity !== destinationIdentity
+      ) {
+        throw changed();
+      }
+    };
+    let verifiedVersion: number | undefined;
+    const assertCopied = () => {
+      params.beforePersistentApply?.();
+      assertCurrent();
+      const version = readSqliteDataVersion(destinationReader.db);
+      if (version === verifiedVersion) {
+        return;
+      }
+      if (!hasOpenClawAgentReadOnlySchema(destinationReader)) {
+        throw changed();
+      }
+      const destination = readClaim(
+        destinationReader,
+        params.destination,
+        params.canonicalKey,
+        params.canonicalKey,
+      );
+      if (!destination || !claimUnchanged(destination, params.receipt)) {
+        throw changed();
+      }
+      assertCurrent();
+      if (readSqliteDataVersion(destinationReader.db) !== version) {
+        throw changed();
+      }
+      // Only this dedicated reader can reuse its counter; no snapshot survives the assertion.
+      verifiedVersion = version;
+    };
+    assertCopied();
+    for (const claim of sources) {
+      if (!(await deleteExpectedClaim(claim, assertCopied))) {
+        return claim;
+      }
+    }
+    return undefined;
+  } finally {
+    try {
+      reader?.close();
+    } finally {
+      retained.release();
+    }
+  }
 }
 
 function quarantineClaim(params: {
@@ -282,7 +498,7 @@ function quarantineClaim(params: {
         params.claim.key,
         params.claim.canonicalKey,
       );
-      if (!fresh || !claimsMatch(fresh, params.claim)) {
+      if (!fresh || !claimUnchanged(fresh, params.claim)) {
         return undefined;
       }
       let quarantineKey: string;
@@ -316,7 +532,7 @@ export async function processIdenticalClaims(params: {
   const crossStore = params.aliases.some(
     (claim) => !samePhysicalStore(claim.store, params.destination),
   );
-  if (params.mode === "detect") {
+  if (params.mode !== "doctor-fix") {
     return {
       kind: params.canonical
         ? "canonical-exists-identical"
@@ -333,41 +549,33 @@ export async function processIdenticalClaims(params: {
   const destinationAliases = params.aliases.filter((claim) =>
     samePhysicalStore(claim.store, params.destination),
   );
-  if (!canonical && destinationAliases.length > 0) {
-    const inPlaceWinner = freshestClaim(destinationAliases);
-    if (
-      !(await migrateClaimsInPlace({
-        beforePersistentApply: params.beforePersistentApply,
-        aliases: destinationAliases,
-        canonicalKey: params.canonicalKey,
-        env: params.env,
-        store: params.destination,
-        winner: inPlaceWinner,
-      }))
-    ) {
+  if (destinationAliases.length > 0) {
+    canonical = await migrateClaimsInPlace({
+      beforePersistentApply: params.beforePersistentApply,
+      aliases: destinationAliases,
+      ...(canonical ? { canonical } : {}),
+      canonicalKey: params.canonicalKey,
+      env: params.env,
+      store: params.destination,
+      winner: canonical ?? freshestClaim(destinationAliases),
+    });
+    if (!canonical) {
       return {
         kind: "divergent-aliases",
         canonicalKey: params.canonicalKey,
         detail: "source aliases changed during the in-place transaction",
       };
     }
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        readClaim(database, params.destination, params.canonicalKey, params.canonicalKey),
-      {
-        agentId: params.destination.databaseAgentId,
-        env: params.env,
-        path: params.destination.path,
-      },
-    );
-    canonical = result.found ? result.value : undefined;
   }
-  if (!canonical) {
-    const sourceBefore = winner;
+  for (const sourceBefore of params.aliases) {
+    if (samePhysicalStore(sourceBefore.store, params.destination)) {
+      continue;
+    }
     const copied = await copyClaimCrossStore({
       beforePersistentApply: params.beforePersistentApply,
       canonicalKey: params.canonicalKey,
       destination: params.destination,
+      ...(canonical ? { expectedDestination: canonical } : {}),
       env: params.env,
       source: sourceBefore,
     });
@@ -381,10 +589,10 @@ export async function processIdenticalClaims(params: {
     );
     if (
       !copied ||
-      !claimsMatch(copied, sourceBefore) ||
+      !claimFullyCopied(sourceBefore, copied) ||
       !sourceAfter.found ||
       !sourceAfter.value ||
-      !claimsMatch(sourceAfter.value, sourceBefore)
+      !claimUnchanged(sourceAfter.value, sourceBefore)
     ) {
       return {
         kind: "divergent-canonical",
@@ -394,7 +602,7 @@ export async function processIdenticalClaims(params: {
     }
     canonical = copied;
   }
-  if (!claimsMatch(canonical, winner)) {
+  if (!canonical || !claimsMatch(canonical, winner)) {
     return {
       kind: "divergent-canonical",
       canonicalKey: params.canonicalKey,
@@ -404,36 +612,13 @@ export async function processIdenticalClaims(params: {
 
   // The destination commit is durable before source cleanup. Every retry therefore sees either
   // the original claim, an identical canonical claim, or both; no read-through fallback is needed.
-  for (const claim of params.aliases) {
-    if (samePhysicalStore(claim.store, params.destination)) {
-      continue;
-    }
-    if (!(await deleteExpectedClaim(claim, params.beforePersistentApply))) {
-      return {
-        kind: "divergent-canonical",
-        canonicalKey: params.canonicalKey,
-        detail: `source changed before expected-entry cleanup: ${claim.store.path}#${claim.key}`,
-      };
-    }
-  }
-  if (params.canonical && destinationAliases.length > 0) {
-    if (
-      !(await migrateClaimsInPlace({
-        beforePersistentApply: params.beforePersistentApply,
-        aliases: destinationAliases,
-        canonical: params.canonical,
-        canonicalKey: params.canonicalKey,
-        env: params.env,
-        store: params.destination,
-        winner: params.canonical,
-      }))
-    ) {
-      return {
-        kind: "divergent-canonical",
-        canonicalKey: params.canonicalKey,
-        detail: "canonical or aliases changed during in-place cleanup",
-      };
-    }
+  const changedSource = await deleteCopiedClaims({ ...params, receipt: canonical });
+  if (changedSource) {
+    return {
+      kind: "divergent-canonical",
+      canonicalKey: params.canonicalKey,
+      detail: `source changed before expected-entry cleanup: ${changedSource.store.path}#${changedSource.key}`,
+    };
   }
   return {
     kind: params.canonical
@@ -464,7 +649,7 @@ export async function repairDivergentClaims(params: {
       canonicalKey: params.canonicalKey,
       destination: params.destination,
       env: params.env,
-      mode: "automatic",
+      mode: "doctor-fix",
     });
     if (migrated.kind === "divergent-aliases" || migrated.kind === "divergent-canonical") {
       return { quarantinedKeys: [], resolved: false };
@@ -483,26 +668,27 @@ export async function repairDivergentClaims(params: {
     return { quarantinedKeys: [], resolved: false };
   }
 
-  const quarantinedKeys: string[] = [];
-  for (const claim of params.claims) {
-    if (claim === winner || claim === params.destinationCanonical) {
-      continue;
+  const remaining = params.claims.filter(
+    (claim) => claim !== winner && claim !== params.destinationCanonical,
+  );
+  const identical = remaining.filter((claim) => claimsMatch(claim, canonical));
+  if (identical.length > 0) {
+    const migrated = await processIdenticalClaims({
+      beforePersistentApply: params.beforePersistentApply,
+      aliases: identical,
+      canonical,
+      canonicalKey: params.canonicalKey,
+      destination: params.destination,
+      env: params.env,
+      mode: "doctor-fix",
+    });
+    if (migrated.kind === "divergent-aliases" || migrated.kind === "divergent-canonical") {
+      return { quarantinedKeys: [], resolved: false };
     }
-    if (claimsMatch(claim, canonical)) {
-      const cleaned = samePhysicalStore(claim.store, params.destination)
-        ? await migrateClaimsInPlace({
-            beforePersistentApply: params.beforePersistentApply,
-            aliases: [claim],
-            canonical,
-            canonicalKey: params.canonicalKey,
-            env: params.env,
-            store: params.destination,
-            winner: canonical,
-          })
-        : await deleteExpectedClaim(claim, params.beforePersistentApply);
-      if (!cleaned) {
-        return { quarantinedKeys, resolved: false };
-      }
+  }
+  const quarantinedKeys: string[] = [];
+  for (const claim of remaining) {
+    if (identical.includes(claim)) {
       continue;
     }
     const quarantineKey = await quarantineClaim({

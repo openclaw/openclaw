@@ -9,9 +9,12 @@ import type {
 import {
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/speech-provider";
+import {
+  asFiniteNumberInRange,
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { volcengineTTS, type VolcengineTtsEncoding } from "./tts.js";
 
 const DEFAULT_VOICE = "en_female_anna_mars_bigtts";
@@ -111,23 +114,9 @@ function resolveLegacyVolcengineCredentials(config: {
 }
 
 function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProviderConfig {
-  const normalized = normalizeVolcengineProviderConfig({});
-  return {
-    apiKey:
-      normalizeResolvedSecretInputString({
-        value: config.apiKey,
-        path: "tts.providers.volcengine.apiKey",
-      }) ?? normalized.apiKey,
-    appId: trimToUndefined(config.appId) ?? normalized.appId,
-    token: trimToUndefined(config.token) ?? normalized.token,
-    voice: trimToUndefined(config.voice) ?? normalized.voice,
-    cluster: trimToUndefined(config.cluster) ?? normalized.cluster,
-    resourceId: trimToUndefined(config.resourceId) ?? normalized.resourceId,
-    appKey: trimToUndefined(config.appKey) ?? normalized.appKey,
-    baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
-    speedRatio: normalizeSpeedRatio(config.speedRatio) ?? normalized.speedRatio,
-    emotion: trimToUndefined(config.emotion) ?? normalized.emotion,
-  };
+  return normalizeVolcengineProviderConfig({
+    volcengine: { ...config, token: trimToUndefined(config.token) },
+  });
 }
 
 function readVolcengineOverrides(

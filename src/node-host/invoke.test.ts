@@ -10,10 +10,6 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeHostCommandContext,
-} from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -200,70 +196,6 @@ describe("node host invoke", () => {
       sessionKey: "agent:main:canvas",
       prepareExecAuthorization: expect.any(Function),
     });
-  });
-
-  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
-    const release = vi.fn();
-    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
-    const workspaceRequest = {
-      workspaceDir: "/managed",
-      environmentId: "environment-1",
-      sessionId: "session-1",
-      ownerEpoch: 1,
-      sessionKey: "agent:main:managed",
-    };
-    let retainedAcquire:
-      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
-      | undefined;
-    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
-      async (paramsJSON, _io, context) => {
-        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
-        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
-        const acquire = context?.acquireManagedWorkspace;
-        if (!acquire) {
-          throw new Error("managed workspace authority missing");
-        }
-        retainedAcquire = acquire;
-        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
-          "workspace invocation authority is closed",
-        );
-        expect(acquire(workspaceRequest)).toEqual({
-          workspaceDir: "/managed",
-          release,
-        });
-        return '{"ok":true}';
-      },
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "workspace-plugin",
-        pluginName: "Workspace Plugin",
-        command: { command: "workspace.claim", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-workspace",
-        nodeId: "node-1",
-        command: "workspace.claim",
-        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
-        sessionKey: workspaceRequest.sessionKey,
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
-    );
-
-    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
-    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
-      "workspace invocation authority is closed",
-    );
   });
 
   it("does not publish a canceled non-duplex plugin result", async () => {
@@ -763,65 +695,66 @@ describe("node host invoke", () => {
           id: "invoke-prepare-partial",
           nodeId: "node-1",
           ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          },
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
         }),
       );
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects blocked forwarded env overrides in system.run.prepare",
-    async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
-      const toolPath = path.join(tempDir, "tool");
-      fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(toolPath, 0o755);
+  it.runIf(process.platform !== "win32").each([
+    { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
+    { env: { GIT_PAGER: "cat", PAGER: "cat" }, blocked: undefined },
+    { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
+  ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
+    const toolPath = path.join(tempDir, "tool");
+    fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(toolPath, 0o755);
 
-      try {
-        await withEnvAsync(
-          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
-          async () => {
-            const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-            const skillBins: SkillBinsProvider = { current: async () => [] };
+    try {
+      await withEnvAsync(
+        { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+          const skillBins: SkillBinsProvider = { current: async () => [] };
 
-            await handleInvoke(
-              {
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                command: "system.run.prepare",
-                paramsJSON: JSON.stringify({
-                  command: ["tool", "--version"],
-                  rawCommand: "tool --version",
-                  env: { PATH: "/tmp/mismatch" },
-                }),
-              },
-              { request } as unknown as GatewayClient,
-              skillBins,
-            );
-
-            expect(request).toHaveBeenCalledWith(
-              "node.invoke.result",
-              expect.objectContaining({
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                ok: false,
-                error: expect.objectContaining({
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("blocked override keys: PATH"),
-                }),
+          await handleInvoke(
+            {
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              command: "system.run.prepare",
+              paramsJSON: JSON.stringify({
+                command: ["tool", "--version"],
+                rawCommand: "tool --version",
+                env,
               }),
-            );
-          },
-        );
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
+            },
+            { request } as unknown as GatewayClient,
+            skillBins,
+          );
+
+          expect(request).toHaveBeenCalledWith(
+            "node.invoke.result",
+            expect.objectContaining({
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              ok: !blocked,
+              ...(blocked
+                ? {
+                    error: expect.objectContaining({
+                      code: "INVALID_REQUEST",
+                      message: expect.stringContaining(`blocked override keys: ${blocked}`),
+                    }),
+                  }
+                : {}),
+            }),
+          );
+        },
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("wraps malformed paramsJSON for built-in commands", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);

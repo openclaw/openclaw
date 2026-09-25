@@ -1,32 +1,22 @@
 // Gateway discovery rendering helpers for Bonjour and wide-area DNS beacon output.
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  resolveGatewayDiscoveryEndpoint,
+  type GatewayBonjourBeacon,
+} from "../../infra/bonjour-discovery.js";
 import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
-import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
   json?: boolean;
 };
 
-export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
-}
-
-export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
-  return buildGatewayDiscoveryTarget(beacon).endpoint?.host ?? null;
-}
-
-export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
-  return buildGatewayDiscoveryTarget(beacon).endpoint?.port ?? null;
-}
-
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
   for (const b of beacons) {
-    const host = pickBeaconHost(b) ?? "";
+    const host = resolveGatewayDiscoveryEndpoint(b)?.host ?? "";
     const key = [
       b.domain ?? "",
       b.instanceName ?? "",
@@ -79,7 +69,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
     lines.push(`  ${colorize(rich, theme.muted, "tls")}: ${fingerprint}`);
   }
   if (target.endpoint && target.sshPort) {
-    const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${target.endpoint.host} -p ${target.sshPort}`;
+    const ssh = `ssh -N -L 18789:127.0.0.1:${target.endpoint.port} <user>@${target.endpoint.host} -p ${target.sshPort}`;
     lines.push(`  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`);
   }
   return lines;

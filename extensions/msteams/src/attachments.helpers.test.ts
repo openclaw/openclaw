@@ -121,17 +121,10 @@ describe("msteams attachment helpers", () => {
       expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);
     });
 
-    it("preserves an inline image fact when materialization limits reject it", () => {
-      const attachments = [
-        createHtmlAttachment(`<img src="data:image/png;base64,${"A".repeat(16)}" />`),
-      ];
+    it("preserves an inline image fact for malformed base64", () => {
+      const attachments = [createHtmlAttachment('<img src="data:image/png;base64,A!AA" />')];
 
-      expect(
-        resolveMSTeamsAdvertisedMedia(attachments, {
-          maxInlineBytes: 4,
-          maxInlineTotalBytes: 4,
-        }),
-      ).toEqual([{ kind: "image" }]);
+      expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual([{ kind: "image" }]);
     });
 
     it("aligns Graph hosted-content image URLs with their fallback resource id", () => {

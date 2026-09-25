@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -98,11 +99,12 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
   branch: string;
   sourceHeadCommit: string;
   workspaceTree: string;
-  assertCurrent: () => void;
+  assertCustody: () => void;
   run: (argv: string[], options?: GitCommandOptions) => Promise<string>;
 }): Promise<void> {
+  params.assertCustody();
   const mutate = async <T>(operation: () => Promise<T>): Promise<T> => {
-    params.assertCurrent();
+    params.assertCustody();
     return await operation();
   };
   const rawIndexPath = await params.run(["git", "rev-parse", "--git-path", "index"], {
@@ -143,7 +145,7 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
   if (branchHead === params.sourceHeadCommit) {
     await mutate(async () => await fs.rm(lockPath, { force: true }));
     await mutate(async () => await fs.rm(recoveryPath, { force: true }));
-    await syncDirectory(path.dirname(indexPath));
+    await mutate(async () => await syncDirectory(path.dirname(indexPath)));
     return;
   }
   if (!(await publicationCommitMatches(params, branchHead))) {
@@ -152,7 +154,7 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
     );
   }
   await mutate(async () => await fs.rename(lockPath, indexPath));
-  await syncDirectory(path.dirname(indexPath));
+  await mutate(async () => await syncDirectory(path.dirname(indexPath)));
   await mutate(async () => await fs.rm(recoveryPath, { force: true }));
 }
 
@@ -186,15 +188,18 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
   headCommit: string;
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
+  assertCustody: () => void;
   run: (argv: string[], options?: GitCommandOptions) => Promise<string>;
   updateRef?: () => Promise<void>;
 }): Promise<void> {
+  params.assertCurrent();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-index-"));
   const replacementIndex = path.join(tempDir, "replacement-index");
   const observedIndex = path.join(tempDir, "observed-index");
   let lockPath: string | undefined;
   let recoveryPath: string | undefined;
   let ownsLock = false;
+  let ownsRecovery = false;
   let refMayHaveMoved = false;
   let installed = false;
   try {
@@ -206,8 +211,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {
       ...params.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     await params.run([...HARDENED_GIT, "read-tree", params.headCommit], {
       cwd: params.cwd,
@@ -235,6 +240,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       recoveryIndex = undefined;
     }
     if (!recoveryIndex) {
+      params.assertCurrent();
+      ownsRecovery = true;
       await writeDurableFile(recoveryPath, replacement);
       await syncDirectory(path.dirname(indexPath));
     }
@@ -244,10 +251,16 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
         { cwd: params.cwd },
       );
       if (branchHead === params.headCommit) {
+        refMayHaveMoved = true;
+        ownsLock = true;
         try {
+          params.assertCustody();
           await fs.rename(lockPath, indexPath);
+          ownsLock = false;
           installed = true;
+          params.assertCustody();
           await syncDirectory(path.dirname(indexPath));
+          params.assertCustody();
           await fs.rm(recoveryPath, { force: true });
           return;
         } catch (error) {
@@ -262,7 +275,10 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
           "GitHub publication workspace branch recovery is pending.",
         );
       }
+      params.assertCustody();
+      ownsRecovery = true;
       await fs.rm(lockPath);
+      params.assertCustody();
       await syncDirectory(path.dirname(indexPath));
     } else if (await pathExists(lockPath)) {
       throw new Error("GitHub publication workspace index is locked by another operation.");
@@ -271,6 +287,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     try {
       await fs.link(recoveryPath, lockPath);
       ownsLock = true;
+      ownsRecovery = true;
     } catch (error) {
       throw new Error("GitHub publication workspace index changed before commit.", {
         cause: error,
@@ -302,11 +319,18 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
         throw error;
       }
     }
-    params.assertCurrent();
+    if (params.updateRef) {
+      // The ref CAS accepted this exact index; closing its requester cannot strand it.
+      params.assertCustody();
+    } else {
+      params.assertCurrent();
+    }
     await fs.rename(lockPath, indexPath);
     ownsLock = false;
     installed = true;
+    params.assertCustody();
     await syncDirectory(path.dirname(indexPath));
+    params.assertCustody();
     await fs.rm(recoveryPath, { force: true });
   } catch (error) {
     if (!installed && refMayHaveMoved && ownsLock) {
@@ -317,12 +341,32 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     }
     throw error;
   } finally {
-    if (!installed && !refMayHaveMoved && ownsLock && lockPath) {
-      await fs.rm(lockPath, { force: true });
+    try {
+      const hasCustody = () => {
+        try {
+          params.assertCustody();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      if (
+        !installed &&
+        !refMayHaveMoved &&
+        ownsLock &&
+        lockPath &&
+        recoveryPath &&
+        hasCustody() &&
+        (await sameFile(recoveryPath, lockPath)) &&
+        hasCustody()
+      ) {
+        await fs.rm(lockPath, { force: true });
+      }
+      if ((installed || (!refMayHaveMoved && ownsRecovery)) && recoveryPath && hasCustody()) {
+        await fs.rm(recoveryPath, { force: true });
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
-    if ((installed || !refMayHaveMoved) && recoveryPath) {
-      await fs.rm(recoveryPath, { force: true });
-    }
-    await fs.rm(tempDir, { recursive: true, force: true });
   }
 }

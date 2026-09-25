@@ -44,24 +44,6 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   await bindingStore.mutate(identity, { kind: "clear", threadId: expectedThreadId });
 }
 
-export async function markCodexAppServerBindingCoveredThroughTurn(params: {
-  bindingStore: CodexAppServerBindingStore;
-  identity: CodexAppServerBindingIdentity;
-  threadId: string;
-  continuityCalibration?: { promptChars: number; inputTokens: number };
-}): Promise<void> {
-  await params.bindingStore.mutate(params.identity, {
-    kind: "patch",
-    threadId: params.threadId,
-    patch: {
-      historyCoveredThrough: new Date().toISOString(),
-      ...(params.continuityCalibration
-        ? { continuityCalibration: params.continuityCalibration }
-        : {}),
-    },
-  });
-}
-
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -94,10 +76,6 @@ export function isCodexActiveCompactTurnError(error: unknown): boolean {
     ? codexErrorInfo.activeTurnNotSteerable
     : undefined;
   return activeTurn?.turnKind === "compact";
-}
-
-export function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function prependCurrentInboundContext(

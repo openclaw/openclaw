@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { prepare } = vi.hoisted(() => ({ prepare: vi.fn() }));
+const { prepare, SourceChangedError } = vi.hoisted(() => ({
+  prepare: vi.fn(),
+  SourceChangedError: class extends Error {},
+}));
 vi.mock("./sqlite-readonly-location.js", () => ({
-  SQLITE_READONLY_CHILD_ARG: "--openclaw-sqlite-readonly-child",
   prepareSqliteReadOnlyLocationInProcess: prepare,
-  prepareSqliteReadOnlyLocationSyncInProcess: prepare,
+  SqliteSourceChangedError: SourceChangedError,
 }));
 
 const originalArgv = process.argv;
@@ -17,7 +19,11 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function expectWorkerFailure(error: unknown, message: string): Promise<void> {
+async function expectWorkerFailure(
+  error: unknown,
+  message: string,
+  contention = false,
+): Promise<void> {
   process.argv = [
     process.execPath,
     "sqlite-readonly-location.worker.ts",
@@ -29,11 +35,45 @@ async function expectWorkerFailure(error: unknown, message: string): Promise<voi
   prepare.mockRejectedValueOnce(error);
   await import("./sqlite-readonly-location.worker.js");
   await vi.dynamicImportSettled();
-  expect(write).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ ok: false, message }));
+  const stdout = JSON.stringify({
+    ok: false,
+    message: `${contention ? "Retryable SQLite inspection contention: " : ""}${message}`,
+  });
+  expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
   expect(process.exitCode).toBe(1);
+  const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
+    await import("./sqlite-readonly-worker-protocol.js");
+  let received: unknown;
+  try {
+    readSqliteReadOnlyWorkerValue({ stdout, stderr: "" }, "async");
+  } catch (cause) {
+    received = cause;
+  }
+  expect(received).toBeInstanceOf(Error);
+  expect(received instanceof SqliteReadOnlyInspectionContentionError).toBe(contention);
 }
 
 describe("SQLite read-only worker diagnostics", () => {
+  it("retains source contention as a typed parent error", async () => {
+    await expectWorkerFailure(new SourceChangedError("source changed"), "source changed", true);
+  });
+
+  it.each([
+    { errcode: 5, contention: true },
+    { errcode: 6, contention: true },
+    { errcode: 11, contention: false },
+    { errcode: 26, contention: false },
+  ])(
+    "classifies native inspection failure $errcode without parsing prose",
+    async ({ errcode, contention }) => {
+      await expectWorkerFailure(
+        Object.assign(new Error("inspection failed"), { errcode }),
+        `inspection failed (errcode=${errcode})`,
+        contention,
+      );
+    },
+  );
+
   it.each([
     { error: new Error(""), message: "" },
     { error: "plain failure", message: "plain failure" },

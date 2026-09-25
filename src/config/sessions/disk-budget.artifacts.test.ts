@@ -9,7 +9,7 @@ import { pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+  await fs.access(targetPath);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -34,6 +34,50 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 }
 
 describe("pruneUnreferencedSessionArtifacts", () => {
+  it.each(["legacy", "sqlite", "legacy-in-agent"] as const)(
+    "prunes only stale unreferenced artifacts through the canonical %s selector",
+    async (selector) => {
+      await withTestDir({ prefix: "openclaw-prune-selector-" }, async (dir) => {
+        const agentDir = path.join(dir, "agents", "main");
+        const sessionsDir = path.join(agentDir, "sessions");
+        const databasePath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+        const hash = "a".repeat(64);
+        const blobDir = path.join(sessionsDir, "skills-prompts", "sha256", "aa");
+        await fs.mkdir(blobDir, { recursive: true });
+        await fs.mkdir(path.dirname(databasePath), { recursive: true });
+        await fs.writeFile(databasePath, "database fixture");
+        const retainedPath = path.join(sessionsDir, "keep.jsonl");
+        const orphanPath = path.join(sessionsDir, "orphan.jsonl");
+        const freshPath = path.join(sessionsDir, "fresh.jsonl");
+        const blobPath = path.join(blobDir, `${hash}.txt`);
+        for (const filePath of [retainedPath, orphanPath, freshPath, blobPath]) {
+          await fs.writeFile(filePath, "fixture");
+        }
+        const old = new Date(Date.now() - 30 * 60_000);
+        for (const filePath of [retainedPath, orphanPath, blobPath]) {
+          await fs.utimes(filePath, old, old);
+        }
+        const storePath = {
+          legacy: path.join(sessionsDir, "sessions.json"),
+          sqlite: databasePath,
+          "legacy-in-agent": path.join(path.dirname(databasePath), "sessions.json"),
+        }[selector];
+        const result = await pruneUnreferencedSessionArtifacts({
+          store: { "agent:main:main": { sessionId: "keep", updatedAt: Date.now() } },
+          storePath,
+          olderThanMs: 60_000,
+        });
+
+        expect(result.removedFiles).toBe(2);
+        await expectPathMissing(orphanPath);
+        await expectPathMissing(blobPath);
+        await expectPathExists(retainedPath);
+        await expectPathExists(freshPath);
+        await expectPathExists(databasePath);
+      });
+    },
+  );
+
   it("reclaims stale store temp sidecars but preserves in-flight ones (#56827)", async () => {
     await withTestDir({ prefix: "openclaw-prune-temp-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -45,14 +89,18 @@ describe("pruneUnreferencedSessionArtifacts", () => {
         dir,
         "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp",
       );
+      const readEntry = vi.fn(() => ({ sessionId: "keep", updatedAt: Date.now() }));
       const store: Record<string, SessionEntry> = {
-        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
+        get "agent:main:main"() {
+          return readEntry();
+        },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
       await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
       const old = new Date(Date.now() - 30 * 60 * 1000);
       await fs.utimes(staleTemp, old, old);
+      readEntry.mockClear();
 
       const result = await pruneUnreferencedSessionArtifacts({
         store,
@@ -64,6 +112,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await expectPathExists(freshTemp);
       await expectPathExists(storePath);
       expect(result.removedFiles).toBeGreaterThanOrEqual(1);
+      expect(readEntry).not.toHaveBeenCalled();
     });
   });
 

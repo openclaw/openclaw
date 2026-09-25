@@ -138,7 +138,10 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 }
 
 /** Mint the Control-UI-scoped one-time device grant immediately before actual delivery. */
-export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
+export async function issueControlUiBrowserHandoff({
+  httpUrl,
+  wsUrl,
+}: ControlUiHandoffTarget["links"]): Promise<{
   browserUrl: string;
   expiresAtMs: number;
 }> {
@@ -148,6 +151,7 @@ export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
   const fragment = new URLSearchParams({
     bootstrapToken: issued.token,
     [CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM]: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+    gatewayUrl: wsUrl,
   });
   return {
     browserUrl: `${httpUrl}#${fragment.toString()}`,
@@ -240,8 +244,8 @@ export async function waitForControlUiDocument(params: {
         if (request.response.status !== 503 || !retryAfter || params.waitForPending === false) {
           let detail: string | undefined;
           if (request.response.status === 503 && !retryAfter) {
-            // HEAD has no body; one bounded, credential-free GET preserves the
-            // Gateway owner's configured-root/build-failure repair diagnostic.
+            // One bounded, credential-free GET may add the Gateway owner's repair
+            // diagnostic; a failed request or body must preserve the HEAD result.
             const diagnostic = await requestDocument("GET", Math.max(1, deadline - now())).catch(
               () => undefined,
             );
@@ -257,7 +261,7 @@ export async function waitForControlUiDocument(params: {
                     maxBytes: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     maxChars: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     timeoutMs: CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS,
-                  });
+                  }).catch(() => undefined);
                   detail = snippet ? sanitizeTerminalText(snippet) : undefined;
                 }
               } finally {

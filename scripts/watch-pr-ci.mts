@@ -4,6 +4,15 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { z } from "zod";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
+import {
+  createPrRollupReader,
+  FAILURE_CONCLUSIONS,
+  RollupPageSchema,
+  type RollupCheck,
+  type RollupPayload,
+  type RollupPage,
+} from "./lib/watch-pr-ci-rollup.mts";
+import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
   "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
@@ -19,57 +28,16 @@ const validArray = <T,>(schema: z.ZodType<T>) =>
   );
 const optionalString = optional(z.string());
 const optionalNumber = optional(z.number());
-const RollupCheckSchema = z.object({
-  kind: z.enum(["CheckRun", "StatusContext"]),
-  databaseId: optionalNumber,
-  name: optionalString,
-  context: optionalString,
-  status: optionalString,
-  conclusion: optionalNullable(z.string()),
-  state: optionalString,
-  checkSuite: optionalNullable(
-    z.object({
-      workflowRun: optionalNullable(
-        z.object({
-          databaseId: optionalNumber,
-          event: optionalString,
-          workflow: optional(z.object({ databaseId: optionalNumber })),
-        }),
-      ),
-    }),
-  ),
-});
-const RollupPayloadSchema = z.object({
-  state: optionalString,
-  contexts: optional(
-    z.object({
-      totalCount: optionalNumber,
-      nodes: optional(validArray(RollupCheckSchema)),
-      pageInfo: optional(
-        z.object({
-          hasNextPage: optional(z.boolean()),
-          endCursor: optionalNullable(z.string()),
-        }),
-      ),
-    }),
-  ),
-});
-const RollupPageSchema = z
-  .object({
-    state: optionalString,
-    mergeable: optional(z.union([z.boolean(), z.string()])),
-    headRefOid: optionalString,
-    statusCheckRollup: optionalNullable(RollupPayloadSchema),
-  })
-  .catch({});
-const RollupResponseSchema = z.object({
-  data: z.object({
-    repository: z.object({ pullRequest: RollupPageSchema.nullish() }).nullish(),
-  }),
-});
 const RunListItemSchema = z.object({
   id: z.number(),
   workflow_id: optionalNumber,
+  check_suite_id: optionalNumber,
+  event: optionalString,
+  head_sha: optionalString,
+  // Do not discard malformed members: that could make an ambiguous association unique.
+  pull_requests: optional(
+    z.array(z.object({ number: z.number().int().positive(), head: z.object({ sha: z.string() }) })),
+  ),
   conclusion: optionalNullable(z.string()),
 });
 const RunListSchema = z
@@ -77,7 +45,21 @@ const RunListSchema = z
   .transform((response) => response.workflow_runs)
   .catch([]);
 const RunStatusSchema = z
-  .object({ status: optionalString, conclusion: optionalNullable(z.string()) })
+  .object({
+    status: optionalString,
+    conclusion: optionalNullable(z.string()),
+    jobs: optional(
+      z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            status: z.string().min(1),
+            conclusion: z.string().nullable(),
+          }),
+        )
+        .max(1_000),
+    ),
+  })
   .catch({});
 const evidenceId = z.number().int().positive();
 const CompletedRunSchema = z.object({
@@ -105,22 +87,11 @@ const AttemptJobsPageSchema = z.object({
   jobs: z.array(AttemptJobSchema).max(100),
 });
 
-type RollupCheck = z.infer<typeof RollupCheckSchema>;
-type RollupPayload = z.infer<typeof RollupPayloadSchema>;
-type RollupPage = z.infer<typeof RollupPageSchema>;
 type RunListItem = z.infer<typeof RunListItemSchema>;
 type RunStatus = z.infer<typeof RunStatusSchema>;
 type JobIdentity = { runId: number; checkId: number };
-const FAILURE_CONCLUSIONS = new Set([
-  "ACTION_REQUIRED",
-  "CANCELLED",
-  "FAILURE",
-  "STARTUP_FAILURE",
-  "STALE",
-  "TIMED_OUT",
-]);
-const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
-const MAX_ALIAS_READS_PER_POLL = 32;
+type PrRunReplacement = { workflowId: number; checkSuites: ReadonlyMap<number, number> };
+const MAX_EVIDENCE_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
   timeout: 60_000,
@@ -216,7 +187,7 @@ function checkRunIdentity(check: RollupCheck) {
   if (typeof runId !== "number" || typeof workflowId !== "number") {
     return undefined;
   }
-  return { runId, workflowId };
+  return { runId, workflowId, event: check.checkSuite?.workflowRun?.event };
 }
 // Strict recency ordering for same-name checks: newest run wins; within one run
 // (rerun attempts reuse the run id) the newest check-run id wins.
@@ -225,8 +196,9 @@ const newerJob = (a: JobIdentity, b: JobIdentity) =>
 
 export function classifyRollup(
   rollup: RollupPayload | null | undefined,
-  runs: RunListItem[] = [],
   reconciledChecks: ReadonlyMap<number, string> = new Map(),
+  replacement?: PrRunReplacement,
+  pendingEvidence: ReadonlySet<RollupCheck> = new Set(),
 ) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
@@ -240,19 +212,14 @@ export function classifyRollup(
     check.status === "QUEUED" &&
     check.conclusion === null &&
     reconciledChecks.get(check.databaseId) === check.name;
-  const newestRunByWorkflow = new Map<number, number>();
   const bestByJob = new Map<string, JobIdentity & { reconciled: boolean }>();
   for (const check of rawNodes) {
     const identity = checkRunIdentity(check);
     if (!identity) {
       continue;
     }
-    newestRunByWorkflow.set(
-      identity.workflowId,
-      Math.max(newestRunByWorkflow.get(identity.workflowId) ?? 0, identity.runId),
-    );
     if (check.name && typeof check.databaseId === "number") {
-      const key = `${identity.workflowId}:${check.name}`;
+      const key = `${identity.workflowId}:${identity.event ?? ""}:${check.name}`;
       const reconciled = isReconciledPlaceholder(check);
       const candidate = { runId: identity.runId, checkId: check.databaseId, reconciled };
       const best = bestByJob.get(key);
@@ -263,15 +230,24 @@ export function classifyRollup(
   }
   let supersededCount = 0;
   let reconciledCount = 0;
-  // Re-triggers leave every prior run's check runs on the SHA forever and GitHub's aggregate
-  // counts them. A check is superseded when a newer same-workflow check shares its name
-  // (GitHub's latest-name-wins semantics), or when its cancelled workflow has a newer run.
-  // Actions run metadata also proves target-run supersession before a newer run posts jobs.
-  // Older-run checks with unique names stay visible so distinct invocations are not dropped.
+  // GitHub CLI deduplicates same-name checks within a workflow/event on the shared SHA.
+  // Unique jobs, including cancellations, need exact same-PR run/suite replacement proof.
   const nodes = rawNodes.filter((check) => {
     const identity = checkRunIdentity(check);
     if (!identity) {
       return true;
+    }
+    // A shared head can belong to different PR bases. Only event-bound run/suite
+    // evidence permits replacing an older graph before new job names appear.
+    const replacedSuite = replacement?.checkSuites.get(identity.runId);
+    if (
+      replacedSuite !== undefined &&
+      identity.workflowId === replacement?.workflowId &&
+      check.checkSuite?.databaseId === replacedSuite &&
+      check.checkSuite?.workflowRun?.event === "pull_request"
+    ) {
+      supersededCount += 1;
+      return false;
     }
     // Proof covers the queued observation, not a later name or outcome of the same ID.
     if (isReconciledPlaceholder(check)) {
@@ -280,7 +256,7 @@ export function classifyRollup(
       return false;
     }
     if (check.name && typeof check.databaseId === "number") {
-      const best = bestByJob.get(`${identity.workflowId}:${check.name}`);
+      const best = bestByJob.get(`${identity.workflowId}:${identity.event ?? ""}:${check.name}`);
       // A removed placeholder cannot hide a verified sibling that changed in this
       // attempt. Uncovered earlier attempts and newer runs retain normal supersession.
       const changedAlias = reconciledChecks.has(check.databaseId);
@@ -293,25 +269,20 @@ export function classifyRollup(
         return false;
       }
     }
-    const newestRun = newestRunByWorkflow.get(identity.workflowId) ?? identity.runId;
-    if (
-      check.conclusion === "CANCELLED" &&
-      (newestRun > identity.runId ||
-        (check.checkSuite?.workflowRun?.event === "pull_request_target" &&
-          runs.some((run) => run.workflow_id === identity.workflowId && run.id > identity.runId)))
-    ) {
-      supersededCount += 1;
-      return false;
-    }
     return true;
   });
   const checks = nodes.filter((check) => !isAutoResponse(check));
-  const pendingCount = checks.filter((check) =>
-    check.kind === "StatusContext"
-      ? check.state === "PENDING" || check.state === "EXPECTED"
-      : check.status !== "COMPLETED",
+  const pendingCount = checks.filter(
+    (check) =>
+      pendingEvidence.has(check) ||
+      (check.kind === "StatusContext"
+        ? check.state === "PENDING" || check.state === "EXPECTED"
+        : check.status !== "COMPLETED"),
   ).length;
   const failingChecks = checks.filter((check) => {
+    if (pendingEvidence.has(check)) {
+      return false;
+    }
     if (check.kind === "StatusContext") {
       return check.state === "ERROR" || check.state === "FAILURE";
     }
@@ -352,11 +323,13 @@ export function classifyRollup(
     }
     // A refresh can invalidate every alias proof. Unknown outcomes still block,
     // even when no placeholder was removed from this snapshot.
-    const hasUnresolvedChecks = checks.some((check) =>
-      check.kind === "StatusContext"
-        ? check.state !== "SUCCESS"
-        : check.status !== "COMPLETED" ||
-          !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? ""),
+    const hasUnresolvedChecks = checks.some(
+      (check) =>
+        pendingEvidence.has(check) ||
+        (check.kind === "StatusContext"
+          ? check.state !== "SUCCESS"
+          : check.status !== "COMPLETED" ||
+            !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? "")),
     );
     if (hasUnresolvedChecks) {
       return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
@@ -379,61 +352,63 @@ function ghReadOptions(deadline?: number) {
   return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
-const readPr = (pr: number, repo: string) =>
-  RollupPageSchema.parse(
-    execGhJson(
-      `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
-      GH_READ_OPTIONS,
-    ),
+function readPr(
+  pr: number,
+  readMetadata: ReturnType<typeof createPrMetadataReader>,
+  deadline?: number,
+) {
+  // Repository resolution and metadata share one read budget, including diagnostics.
+  const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
+  return RollupPageSchema.parse(
+    readMetadata(pr, ["state", "mergeable", "headRefOid"], () => ghReadOptions(readDeadline)),
   );
+}
 export const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
   runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));
-const findRun = (repo: string, sha: string, after?: number) =>
-  selectRunAfter(
-    RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS)),
-    after,
-  );
-const findTargetRuns = (repo: string, sha: string, deadline?: number) =>
-  RunListSchema.parse(
-    execGhJson(
-      ["api", `repos/${repo}/actions/runs?event=pull_request_target&head_sha=${sha}&per_page=100`],
-      ghReadOptions(deadline),
-    ),
-  );
-const readRun = (repo: string, runId: number, deadline?: number) =>
+function findRun(repo: string, sha: string, after?: number, pr?: number) {
+  const runs = RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS));
+  const candidates =
+    pr === undefined
+      ? runs
+      : runs.filter(
+          (run) =>
+            !run.pull_requests?.length ||
+            run.pull_requests.some((request) => request.number === pr),
+        );
+  const run = selectRunAfter(candidates, after);
+  if (!run) {
+    return undefined;
+  }
+  return { run, runs: new Map(runs.map((item) => [item.id, item])) };
+}
+const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
   RunStatusSchema.parse(
     execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion`.split(" "),
-      ghReadOptions(deadline),
+      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
+        " ",
+      ),
+      {
+        ...ghReadOptions(deadline),
+        // Revalidate changing run status instead of reusing a cached snapshot.
+        env: { ...process.env, OCTOPOOL_FRESH: "1" },
+      },
     ),
   );
 
-function classifyPrRollup(
-  pr: RollupPage,
-  repo: string,
-  headSha: string,
-  reconciledChecks?: ReadonlyMap<number, string>,
-  deadline?: number,
-) {
-  const result = classifyRollup(pr.statusCheckRollup, [], reconciledChecks);
-  if (
-    result.verdict !== "FAILING" ||
-    !pr.statusCheckRollup?.contexts?.nodes?.some(
-      (check) =>
-        check.conclusion === "CANCELLED" &&
-        check.checkSuite?.workflowRun?.event === "pull_request_target" &&
-        checkRunIdentity(check),
-    )
-  ) {
-    return result;
+function formatRunJobs(run: RunStatus) {
+  if (!run.jobs) {
+    return "jobs=unknown";
   }
-  return classifyRollup(
-    pr.statusCheckRollup,
-    findTargetRuns(repo, headSha, deadline),
-    reconciledChecks,
+  const running = run.jobs.filter((job) => job.status === "in_progress").length;
+  const queued = run.jobs.filter((job) => job.status === "queued").length;
+  const completed = run.jobs.filter((job) => job.status === "completed").length;
+  const failing = run.jobs.filter((job) =>
+    FAILURE_CONCLUSIONS.has(job.conclusion?.toUpperCase() ?? ""),
   );
+  const names = failing.slice(0, 10).map((job) => sanitizeCheckName(job.name).slice(0, 160));
+  return `jobs=${run.jobs.length} running=${running} queued=${queued} completed=${completed} other=${run.jobs.length - running - queued - completed} failing=${failing.length} failed=${JSON.stringify(names)}`;
 }
 
 function readQueuedPlaceholderEvidence(
@@ -505,7 +480,7 @@ function readQueuedPlaceholderEvidence(
     job.run_id === run.id && job.run_attempt === run.run_attempt && job.head_sha === headSha;
   const unassignedQueued = (job: z.infer<typeof AttemptJobSchema>) =>
     job.status === "queued" && job.conclusion === null && job.runner_id === null;
-  let remainingAliasReads = MAX_ALIAS_READS_PER_POLL;
+  let remainingAliasReads = MAX_EVIDENCE_READS_PER_POLL;
   for (const name of new Set(queued.map((check) => check.name))) {
     const checks = queued.filter((check) => check.name === name);
     const siblings = jobs.filter((job) => job.name === name);
@@ -586,78 +561,106 @@ export function classifyAttachedCiRun(run: RunStatus) {
     : { verdict: "FAILING", conclusion: run.conclusion ?? "unknown" };
 }
 
-export function collectRollupContexts(
-  fetchPage: (cursor: string | null) => RollupPage | null | undefined,
-) {
-  const firstPage = fetchPage(null);
-  const firstContexts = firstPage?.statusCheckRollup?.contexts;
-  if (!firstContexts) {
-    return firstPage;
+function githubPendingCount(rollup: RollupPayload | null | undefined) {
+  const { checkRunCountsByState, statusContextCountsByState } = rollup?.contexts ?? {};
+  if (!checkRunCountsByState || !statusContextCountsByState) {
+    return "unknown";
   }
-
-  const nodes = [...(firstContexts.nodes ?? [])];
-  let pageInfo = firstContexts.pageInfo;
-  let pageCount = 1;
-  // Polling work stays bounded at 1,000 contexts. Any truncation remains visible through
-  // totalCount and must classify conservatively rather than reading as success.
-  while (pageInfo?.hasNextPage && pageCount < 10) {
-    if (typeof pageInfo.endCursor !== "string") {
-      throw new Error("rollup page advertised a next page without a cursor");
-    }
-    const page = fetchPage(pageInfo.endCursor);
-    const contexts = page?.statusCheckRollup?.contexts;
-    pageCount += 1;
-    // Losing an advertised page (head moved, transient API gap) or reading a changed snapshot
-    // must not pass off the partial first page as complete; the watch loop catches this error
-    // and re-reads the rollup on its next bounded poll.
-    if (!contexts) {
-      throw new Error("rollup snapshot changed during pagination");
-    }
-    if (
-      page.headRefOid !== firstPage.headRefOid ||
-      page.statusCheckRollup?.state !== firstPage.statusCheckRollup?.state ||
-      contexts.totalCount !== firstContexts.totalCount
-    ) {
-      throw new Error("rollup snapshot changed during pagination");
-    }
-    nodes.push(...(contexts.nodes ?? []));
-    pageInfo = contexts.pageInfo;
-  }
-
-  return {
-    ...firstPage,
-    statusCheckRollup: {
-      ...firstPage.statusCheckRollup,
-      contexts: { ...firstContexts, nodes, pageInfo },
-    },
-  };
+  return [...checkRunCountsByState, ...statusContextCountsByState]
+    .filter(({ state }) =>
+      ["PENDING", "EXPECTED", "QUEUED", "WAITING", "REQUESTED", "IN_PROGRESS"].includes(state),
+    )
+    .reduce((total, { count }) => total + count, 0);
 }
 
-function readRollup(pr: number, repo: string, deadline?: number) {
-  const [owner, name] = repo.split("/");
-  return (
-    collectRollupContexts((cursor) => {
-      const queryArgs = [
-        "api",
-        "graphql",
-        "-f",
-        `query=${ROLLUP_QUERY}`,
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `name=${name}`,
-        "-F",
-        `pr=${pr}`,
-      ];
-      if (cursor !== null) {
-        queryArgs.push("-f", `cursor=${cursor}`);
+function readPrRollup(
+  args: ReturnType<typeof parseArgs>,
+  attachment: NonNullable<ReturnType<typeof findRun>>,
+  deadline: number,
+  reads: { remaining: number },
+  readRollup: ReturnType<typeof createPrRollupReader>,
+  reconciled?: ReadonlyMap<number, string>,
+  initial?: RollupPage,
+) {
+  const { run, runs } = attachment;
+  const boundToPr = (candidate: RunListItem) =>
+    candidate.event === "pull_request" &&
+    candidate.head_sha === args.headSha &&
+    candidate.pull_requests?.length === 1 &&
+    candidate.pull_requests[0]?.number === args.pr &&
+    candidate.pull_requests[0]?.head.sha === args.headSha;
+  const checkSuites = new Map<number, number>();
+  const pendingEvidence = new Set<RollupCheck>();
+  const replacement =
+    boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
+      ? { workflowId: run.workflow_id, checkSuites }
+      : undefined;
+  let nextPage = initial;
+  while (true) {
+    const pr = nextPage ?? readRollup(deadline).page;
+    // Any metadata work below requires a new observation on the next iteration.
+    nextPage = undefined;
+    const blocked = precheck(pr, args.headSha, true);
+    if (blocked !== null) {
+      return { exitCode: blocked };
+    }
+    if (pr.statusCheckRollup?.state === "SUCCESS") {
+      return { pr, result: classifyRollup(pr.statusCheckRollup, reconciled) };
+    }
+    const knownRuns = runs.size;
+    // Pending evidence belongs only to these exact observations, never a later
+    // check state or a different workflow/event sharing its run ID.
+    pendingEvidence.clear();
+    for (const check of pr.statusCheckRollup?.contexts?.nodes ?? []) {
+      const identity = checkRunIdentity(check);
+      if (
+        !replacement ||
+        !identity ||
+        identity.runId >= run.id ||
+        identity.workflowId !== replacement.workflowId ||
+        identity.event !== "pull_request" ||
+        check.checkSuite?.databaseId === undefined
+      ) {
+        continue;
       }
-      const response = RollupResponseSchema.safeParse(
-        execGhJson(queryArgs, ghReadOptions(deadline)),
-      );
-      return response.success ? response.data.data.repository?.pullRequest : undefined;
-    }) ?? {}
-  );
+      // The attachment page is not history. Resolve only rollup-referenced IDs,
+      // caching even unbound results so repeated jobs/polls do not multiply reads.
+      let previous = runs.get(identity.runId);
+      if (!previous) {
+        if (reads.remaining === 0) {
+          pendingEvidence.add(check);
+          continue;
+        }
+        reads.remaining -= 1;
+        previous = RunListItemSchema.parse(
+          execGhJson(
+            ["api", `repos/${args.repo}/actions/runs/${identity.runId}`],
+            ghReadOptions(deadline),
+          ),
+        );
+        runs.set(identity.runId, previous);
+      }
+      if (
+        previous.id === identity.runId &&
+        previous.workflow_id === replacement.workflowId &&
+        previous.check_suite_id !== undefined &&
+        boundToPr(previous)
+      ) {
+        checkSuites.set(previous.id, previous.check_suite_id);
+      }
+    }
+    // Metadata reads can span a push or new checks. Reobserve before deciding;
+    // any newly referenced IDs are resolved within the same watcher deadline.
+    if (runs.size === knownRuns) {
+      if (pendingEvidence.size > 0) {
+        console.log(`STATUS evidence=PENDING deferred-checks=${pendingEvidence.size}`);
+      }
+      return {
+        pr,
+        result: classifyRollup(pr.statusCheckRollup, reconciled, replacement, pendingEvidence),
+      };
+    }
+  }
 }
 
 const emit = (line: string, code: number) => {
@@ -689,10 +692,16 @@ export async function pollUntilDeadline<T>({
     await wait(Math.min(interval * 1000, remaining));
   }
 }
-const retry = (phase: string, error: unknown) =>
-  console.log(
-    `RETRY phase=${phase} error=${(error instanceof Error ? error.message : String(error)).replaceAll(/\s+/gu, " ")}`,
-  );
+function retry(phase: string, error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error)).replaceAll(/\s+/gu, " ");
+  // Revoked proxy credentials cannot recover while this process keeps polling.
+  if (/\bProxy Authentication Required\b/iu.test(message)) {
+    throw new Error(
+      `PROXY-AUTH-FAILED phase=${phase} status=407 hint="Restart the watcher in an active run to obtain a new proxy grant."`,
+    );
+  }
+  console.log(`RETRY phase=${phase} error=${message}`);
+}
 
 function precheck(pr: RollupPage, sha: string, midWait = false) {
   const state = (pr.state ?? "MISSING").toUpperCase();
@@ -716,28 +725,40 @@ function precheck(pr: RollupPage, sha: string, midWait = false) {
 
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  const readMetadata = createPrMetadataReader(args.repo);
+  const readRollup = createPrRollupReader(
+    args.pr,
+    args.repo,
+    (deadline) => readPr(args.pr, readMetadata, deadline),
+    ghReadOptions,
+  );
   const attachDeadline = Date.now() + args.attachTimeout * 1000;
   const attachment = await pollUntilDeadline({
     deadline: attachDeadline,
     interval: args.interval,
     poll: () => {
       try {
-        const blocked = precheck(readPr(args.pr, args.repo), args.headSha);
+        const blocked = precheck(readPr(args.pr, readMetadata), args.headSha);
         if (blocked !== null) {
           return { exitCode: blocked };
         }
-        const candidate = findRun(args.repo, args.headSha, args.after);
+        const candidate = findRun(
+          args.repo,
+          args.headSha,
+          args.after,
+          args.completion === "rollup" ? args.pr : undefined,
+        );
         if (candidate) {
           const classification = classifyRunAttachment(
-            candidate.id,
-            readRun(args.repo, candidate.id),
+            candidate.run.id,
+            readRun(args.repo, candidate.run.id),
             args.after,
           );
           if (classification.attach) {
             if (classification.warning) {
               console.log(classification.warning);
             }
-            return { run: candidate };
+            return candidate;
           }
         }
       } catch (error) {
@@ -761,22 +782,29 @@ async function main(argv = process.argv.slice(2)) {
 
   const watchDeadline = Date.now() + args.timeout * 1000;
   let lastState = "NONE";
-  let lastPending = 0;
+  let lastPending: number | "unknown" = 0;
+  let pendingLabel = "pending";
+  // Reuse the previous poll's request shape, never its check state.
+  let detailedPoll = false;
   const watchResult = await pollUntilDeadline({
     deadline: watchDeadline,
     interval: args.interval,
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(readPr(args.pr, args.repo), args.headSha, true);
+          const blocked = precheck(
+            readPr(args.pr, readMetadata, watchDeadline),
+            args.headSha,
+            true,
+          );
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId);
+          const run = readRun(args.repo, runId, watchDeadline, true);
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";
-          console.log(`STATUS run=${runStatus} conclusion=${runConclusion}`);
+          console.log(`STATUS run=${runStatus} conclusion=${runConclusion} ${formatRunJobs(run)}`);
           if (result.verdict === "FAILING") {
             return emit(`FAILING checks=CI workflow (${result.conclusion})`, 15);
           }
@@ -785,15 +813,67 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        let pr = readRollup(args.pr, args.repo);
-        const blocked = precheck(pr, args.headSha, true);
+        const initial = readRollup(watchDeadline, detailedPoll);
+        const summary = initial.page;
+        const blocked = precheck(summary, args.headSha, true);
         if (blocked !== null) {
           return blocked;
         }
-        let result = classifyPrRollup(pr, args.repo, args.headSha);
+        lastState = summary.statusCheckRollup?.state ?? "NONE";
+        const detailedObservation =
+          initial.details && ["FAILURE", "ERROR", "PENDING"].includes(lastState);
+        if (!detailedObservation && !["FAILURE", "ERROR"].includes(lastState)) {
+          const run = readRun(args.repo, runId, watchDeadline);
+          if (run.status === "completed" && run.conclusion !== "success") {
+            return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
+          }
+          if (
+            lastState !== "PENDING" ||
+            run.status !== "completed" ||
+            run.conclusion !== "success"
+          ) {
+            detailedPoll = false;
+            pendingLabel = "github_pending";
+            lastPending = githubPendingCount(summary.statusCheckRollup);
+            console.log(
+              `STATUS rollup=${lastState === "SUCCESS" ? "green" : "pending"} github_rollup=${lastState} github_pending=${lastPending}`,
+            );
+            if (lastState === "SUCCESS" && run.status === "completed") {
+              // The run read can span a push or newly published checks on the same head.
+              const current = readRollup(watchDeadline, false).page;
+              const moved = precheck(current, args.headSha, true);
+              if (moved !== null) {
+                return moved;
+              }
+              lastState = current.statusCheckRollup?.state ?? "NONE";
+              lastPending = githubPendingCount(current.statusCheckRollup);
+              if (lastState === "SUCCESS") {
+                return emit("GREEN", 0);
+              }
+            }
+            return undefined;
+          }
+        }
+        detailedPoll = true;
+        const reads = { remaining: MAX_EVIDENCE_READS_PER_POLL };
+        let observed = readPrRollup(
+          args,
+          attachment,
+          watchDeadline,
+          reads,
+          readRollup,
+          undefined,
+          detailedObservation ? summary : undefined,
+        );
+        if ("exitCode" in observed) {
+          return observed.exitCode;
+        }
+        let { pr, result } = observed;
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
-        let run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
+        pendingLabel = "pending";
+        let run =
+          result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
         if (
           result.verdict === "PENDING" &&
           result.pendingCount > 0 &&
@@ -811,20 +891,22 @@ async function main(argv = process.argv.slice(2)) {
           if (reconciled.size > 0) {
             // The evidence scan may span pushes or new checks. Reobserve the PR
             // before applying proof, then retain the ordinary final CI-run check.
-            pr = readRollup(args.pr, args.repo, watchDeadline);
-            const currentBlocked = precheck(pr, args.headSha, true);
-            if (currentBlocked !== null) {
-              return currentBlocked;
+            observed = readPrRollup(args, attachment, watchDeadline, reads, readRollup, reconciled);
+            if ("exitCode" in observed) {
+              return observed.exitCode;
             }
-            result = classifyPrRollup(pr, args.repo, args.headSha, reconciled, watchDeadline);
+            ({ pr, result } = observed);
             run =
               result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
           }
         }
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
+        detailedPoll =
+          ["FAILURE", "ERROR"].includes(lastState) ||
+          (lastState === "PENDING" && run?.status === "completed" && run.conclusion === "success");
         console.log(
-          `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
+          `STATUS rollup=${result.verdict.toLowerCase()} github_rollup=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
         );
         if (result.verdict === "FAILING") {
           return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
@@ -837,6 +919,10 @@ async function main(argv = process.argv.slice(2)) {
           run?.status === "completed" &&
           run.conclusion === "success"
         ) {
+          const moved = precheck(readPr(args.pr, readMetadata, watchDeadline), args.headSha, true);
+          if (moved !== null) {
+            return moved;
+          }
           return emit("GREEN", 0);
         }
       } catch (error) {
@@ -848,7 +934,12 @@ async function main(argv = process.argv.slice(2)) {
   if (watchResult !== undefined) {
     return watchResult;
   }
-  return emit(`TIMEOUT state=${lastState} pending=${lastPending}`, 16);
+  return emit(
+    args.completion === "rollup"
+      ? `TIMEOUT github_rollup=${lastState} ${pendingLabel}=${lastPending}`
+      : "TIMEOUT completion=ci-run",
+    16,
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

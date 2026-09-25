@@ -17,11 +17,27 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pythonExecPath = (() => {
+  for (const candidate of [
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3",
+    "python3",
+  ]) {
+    const probe = spawnSync(candidate, [
+      "-c",
+      'import tarfile; assert hasattr(tarfile, "data_filter") and hasattr(tarfile, "FilterError")',
+    ]);
+    if (probe.status === 0) {
+      return candidate;
+    }
+  }
+  throw new Error("release Telegram archive tests require Python with tarfile.data_filter");
+})();
 const tarVersion = spawnSync("tar", ["--version"], { encoding: "utf8" });
 const hasGnuTar = tarVersion.status === 0 && tarVersion.stdout?.includes("GNU tar");
 
 function runHelper(args: string[]) {
-  return spawnSync("python3", [SCRIPT, ...args], {
+  return spawnSync(pythonExecPath, [SCRIPT, ...args], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
   });
@@ -126,7 +142,7 @@ header.size = int(sys.argv[3])
 with open(sys.argv[1], "wb") as output:
     output.write(header.tobuf(format=tarfile.USTAR_FORMAT))
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath, kind, String(size)], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, kind, String(size)], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -166,7 +182,7 @@ with tarfile.open(sys.argv[1], "w", format=archive_format) as archive:
         member.linkname = long_value
         archive.addfile(member)
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath, kind], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, kind], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -204,7 +220,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
         member.size = 1
         archive.addfile(member, io.BytesIO(b"x"))
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath, String(pathCount)], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, String(pathCount)], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -233,7 +249,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
         member.pax_headers = {"comment": "x" * 400}
         archive.addfile(member)
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -267,7 +283,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     link.linkname = target.name
     archive.addfile(link)
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -312,7 +328,7 @@ with open(sys.argv[1], "wb") as output:
 
     output.write(b"\0" * 1024)
 `;
-  const result = spawnSync("python3", ["-c", python, tarPath, String(memberCount)], {
+  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, String(memberCount)], {
     encoding: "utf8",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -344,7 +360,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
         archive.addfile(member)
 `;
   const result = spawnSync(
-    "python3",
+    pythonExecPath,
     ["-c", python, tarPath, String(memberCount), String(keyCount)],
     {
       encoding: "utf8",
@@ -394,7 +410,7 @@ print(json.dumps({
     "residentKiB": resident_kib,
 }))
 `;
-  return spawnSync("python3", ["-c", launcher, python, SCRIPT, tarPath], {
+  return spawnSync(pythonExecPath, ["-c", launcher, python, SCRIPT, tarPath], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
   });
@@ -592,7 +608,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     child.size = 2
     archive.addfile(child, io.BytesIO(b"ok"))
 `;
-    const result = spawnSync("python3", ["-c", python, tarPath], {
+    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
@@ -819,7 +835,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     replacement.linkname = "file.txt"
     archive.addfile(replacement)
 `;
-    const result = spawnSync("python3", ["-c", python, tarPath], {
+    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
@@ -859,7 +875,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
         duplicate = tarfile.TarInfo("candidate/duplicate")
         archive.addfile(duplicate)
 `;
-    const result = spawnSync("python3", ["-c", python, tarPath], {
+    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
@@ -898,7 +914,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     child.size = 2
     archive.addfile(child, io.BytesIO(b"ok"))
 `;
-    const result = spawnSync("python3", ["-c", python, tarPath], {
+    const result = spawnSync(pythonExecPath, ["-c", python, tarPath], {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
@@ -934,22 +950,6 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
     ]);
     expect(JSON.parse(result.stdout)).toMatchObject({ members: 288 });
     expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
-  });
-
-  it("bounds exact names and clears the stdlib TarInfo cache", () => {
-    const source = readFileSync(SCRIPT, "utf8");
-    expect(source).toContain("seen_names");
-    expect(source).toContain("_validate_destination_paths");
-    expect(source).toContain(".lstat()");
-    expect(source).toContain("parent_name not in seen_names");
-    expect(source).toContain("_next_stream_member");
-    expect(source).toContain("archive.members.clear()");
-    expect(source).not.toContain("target_path.parent.mkdir");
-    expect(source).not.toContain("for member in archive");
-    expect(source).not.toContain("previous_sort_key");
-    expect(source).not.toContain("link_names");
-    expect(source).not.toContain("seen_parent_names");
-    expect(source).not.toContain("any(existing.startswith");
   });
 
   it("keeps TarInfo cache and resident memory bounded across 100000 members", () => {
@@ -1009,7 +1009,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
     }
     archive.addfile(sparse, io.BytesIO(b"x"))
 `;
-    const tarResult = spawnSync("python3", ["-c", python, tarPath], {
+    const tarResult = spawnSync(pythonExecPath, ["-c", python, tarPath], {
       encoding: "utf8",
     });
     expect(tarResult.status, tarResult.stderr).toBe(0);

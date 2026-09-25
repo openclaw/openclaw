@@ -5,9 +5,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
+import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
@@ -22,6 +24,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   createModelGenerationFixture,
@@ -36,7 +42,13 @@ import {
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
-import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
+import {
+  createMinimaxImageConfig,
+  ONE_PIXEL_PNG_B64,
+  resolveConfiguredImageModelForTest,
+  resolveImageModelConfigForTool,
+  testing,
+} from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -47,6 +59,7 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
       if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
@@ -145,26 +158,26 @@ function readMockAuthProfileStore(agentDir?: string): {
   }
 }
 
+function readMockRuntimeAuthProfileStore(agentDir?: string) {
+  const store = readMockAuthProfileStore(agentDir);
+  if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
+    store.profiles["openai:default"] = {
+      provider: "openai",
+      type: "oauth",
+    };
+  }
+  return store;
+}
+
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
-  ensureAuthProfileStore: (agentDir?: string) => {
-    const store = readMockAuthProfileStore(agentDir);
-    if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
-      store.profiles["openai:default"] = {
-        provider: "openai",
-        type: "oauth",
-      };
-    }
-    return store;
-  },
-  ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
-    readMockAuthProfileStore(agentDir),
-  hasAnyAuthProfileStoreSource: (agentDir?: string) => {
-    if (!agentDir) {
-      return false;
-    }
-    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
-  },
+  ensureAuthProfileStore: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntime: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntimeAsync: async (agentDir?: string) =>
+    readMockRuntimeAuthProfileStore(agentDir),
+  ensureAuthProfileStoreWithoutExternalProfiles: readMockAuthProfileStore,
+  hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+    Boolean(agentDir && fsSync.existsSync(path.join(agentDir, "auth-profiles.json"))),
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
     provider: string,
@@ -298,8 +311,6 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
   }
 }
 
-const ONE_PIXEL_PNG_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
 function createLargeColorBlockPng(size: number): Buffer {
@@ -467,22 +478,6 @@ function stubOpenAiCompletionsOkFetch(text = "ok") {
   return fetch;
 }
 
-function createMinimaxImageConfig(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: "minimax/MiniMax-M2.7" },
-        imageModel: { primary: "minimax/MiniMax-VL-01" },
-      },
-    },
-    plugins: {
-      entries: {
-        minimax: { enabled: true },
-      },
-    },
-  };
-}
-
 function createDefaultImageFallbackExpectation(primary: string) {
   return {
     primary,
@@ -624,24 +619,6 @@ const codexMediaProvider = {
   capabilities: ["image"],
   defaultModels: { image: "gpt-5.5" },
 } satisfies MediaUnderstandingProvider;
-
-const resolveConfiguredImageModelForTest: NonNullable<
-  Parameters<typeof testing.setProviderDepsForTest>[0]
->["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
-  const configuredModel = cfg?.models?.providers?.[provider]?.models?.find(
-    (candidate) => candidate.id === model || candidate.id === `${provider}/${model}`,
-  );
-  return {
-    model: {
-      ...configuredModel,
-      id: model,
-      provider,
-      input: configuredModel?.input ?? ["text", "image"],
-    } as never,
-    authStorage: {} as never,
-    modelRegistry: {} as never,
-  };
-};
 
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
@@ -1515,9 +1492,9 @@ describe("image tool implicit imageModel config", () => {
 
   it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
           "minimax-portal:default": {
             type: "oauth",
             provider: "minimax-portal",
@@ -1525,8 +1502,8 @@ describe("image tool implicit imageModel config", () => {
             refresh: "refresh-test",
             expires: Date.now() + 60_000,
           },
-        },
-      });
+        }),
+      );
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
@@ -1582,12 +1559,12 @@ describe("image tool implicit imageModel config", () => {
 
   it("pairs a custom provider when it declares an image-capable model", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
           "acme:default": { type: "api_key", provider: "acme", key: "sk-test" },
-        },
-      });
+        }),
+      );
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "acme/text-1" } } },
         models: {
@@ -1635,12 +1612,12 @@ describe("image tool implicit imageModel config", () => {
 
   it("does not double-prefix custom provider model IDs that already include the provider", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
           "kimchi:default": { type: "api_key", provider: "kimchi", key: "sk-test" },
-        },
-      });
+        }),
+      );
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "kimchi/text-1" } } },
         models: {
@@ -1664,16 +1641,12 @@ describe("image tool implicit imageModel config", () => {
 
   it("does not pair provider aliases through core normalization", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "amazon-bedrock:default": {
-            type: "api_key",
-            provider: "amazon-bedrock",
-            key: "sk-test",
-          },
-        },
-      });
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
+          "amazon-bedrock:default": createApiKeyCredential("amazon-bedrock", "sk-test"),
+        }),
+      );
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
         models: {
@@ -2026,9 +1999,9 @@ describe("image tool implicit imageModel config", () => {
   it("falls back to the generic image runtime when minimax-portal has no media provider registration", async () => {
     await withTempAgentDir(async (agentDir) => {
       installImageUnderstandingProviderStubs();
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
           "minimax-portal:default": {
             type: "oauth",
             provider: "minimax-portal",
@@ -2036,8 +2009,8 @@ describe("image tool implicit imageModel config", () => {
             refresh: "refresh-test",
             expires: Date.now() + 60_000,
           },
-        },
-      });
+        }),
+      );
       // The generic image runtime still uses global.fetch, so mock it directly.
       const fetch = vi.fn().mockImplementation(async () =>
         Response.json({
@@ -3340,6 +3313,131 @@ describe("image compression policy", () => {
     },
   );
 
+  it.each([
+    { route: "primary", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "override", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "fallback", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "primary", supplied: "ambient", expected: "ambient", maxSidePx: 192 },
+    { route: "primary", supplied: "none", expected: "ambient", maxSidePx: 192 },
+  ])(
+    "uses $supplied metadata for $route image selection and compression",
+    async ({ route, supplied, expected, maxSidePx }) => {
+      const state = await createOpenClawTestState({ label: "image-captured-planning" });
+      try {
+        const provider = "image-planning";
+        const cfg = {
+          agents: {
+            defaults: {
+              imageQuality: "high",
+              imageModel: {
+                primary: `${provider}/${route === "fallback" ? "unavailable" : "entry"}`,
+                ...(route === "fallback" ? { fallbacks: [`${provider}/entry`] } : {}),
+              },
+            },
+          },
+          models: {
+            providers: {
+              [provider]: {
+                api: "openai-completions",
+                baseUrl: "https://image-planning.example.test/v1",
+                models: [
+                  { id: "captured", side: 96 },
+                  { id: "ambient", side: 192 },
+                  { id: "unavailable", side: 256 },
+                ].map(({ id, side }) =>
+                  Object.assign(makeModelDefinition(id, ["text", "image"]), {
+                    mediaInput: { image: { maxSidePx: side, preferredSidePx: side } },
+                  }),
+                ),
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+        const generation = (modelId: string) => {
+          const fixture = createModelGenerationFixture({
+            agentDir: state.agentDir("image"),
+            workspaceDir: state.workspaceDir,
+            config: cfg,
+            label: modelId,
+            provider,
+            requestProvider: provider,
+            modelId,
+          });
+          const metadataSnapshot = createPluginMetadataSnapshot({
+            config: cfg,
+            workspaceDir: state.workspaceDir,
+            manifestRegistry: {
+              plugins: fixture.metadataSnapshot.plugins.map((plugin) => ({
+                ...plugin,
+                modelIdNormalization: {
+                  providers: { [provider]: { aliases: { entry: modelId } } },
+                },
+              })),
+              diagnostics: [],
+            },
+          });
+          metadataSnapshot.owners.modelIdNormalizationPolicies =
+            collectManifestModelIdNormalizationPolicies(metadataSnapshot.plugins);
+          return {
+            ...fixture,
+            metadataSnapshot,
+            preparedModelRuntime: { ...fixture.preparedModelRuntime, metadataSnapshot },
+          };
+        };
+        const captured = generation("captured");
+        const ambient = generation("ambient");
+        publishCurrentModelGeneration(ambient);
+        const observed: Array<{ model: string; width: number; height: number }> = [];
+        installImageUnderstandingProviderDeps(
+          [
+            {
+              id: provider,
+              capabilities: ["image"],
+              describeImage: async (request) => {
+                const dimensions =
+                  request.mime === "image/png"
+                    ? readPngDimensions(request.buffer)
+                    : readJpegDimensions(request.buffer);
+                observed.push({ model: request.model, ...dimensions });
+                if (request.model === "unavailable") {
+                  throw new Error("fixture image model unavailable");
+                }
+                return { text: "inspected", model: request.model };
+              },
+            },
+          ],
+          { useDefaultResolveModelAsync: true },
+        );
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir: state.agentDir("image"),
+          workspaceDir: state.workspaceDir,
+          ...(supplied === "none"
+            ? {}
+            : {
+                preparedModelRuntime: (supplied === "captured" ? captured : ambient)
+                  .preparedModelRuntime,
+              }),
+        });
+        const source = createLargeColorBlockPng(256);
+        const result = await withPluginRuntimeGenerationScope(ambient.preparedModelRuntime, () =>
+          tool.execute("image", {
+            path: `data:image/png;base64,${source.toString("base64")}`,
+            ...(route === "override" ? { model: `${provider}/entry` } : {}),
+          }),
+        );
+        expect.soft(result.details).toMatchObject({ model: `${provider}/${expected}` });
+        expect
+          .soft(observed.map(({ model }) => model))
+          .toEqual(route === "fallback" ? ["unavailable", expected] : [expected]);
+        expect.soft(observed.at(-1)).toMatchObject({ width: maxSidePx, height: maxSidePx });
+      } finally {
+        resetModelGenerationFixtureState();
+        await state.cleanup();
+      }
+    },
+  );
+
   it("derives model metadata, quality preference, and image count from config", async () => {
     const cfg = {
       ...cfgWithImageModelMetadata,
@@ -3403,6 +3501,7 @@ describe("image compression policy", () => {
   it("keeps runtime Anthropic media limits for dated model variants", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, model) => ({
+        logicalRef: { provider: _provider, model },
         model: {
           mediaInput: {
             image: model.includes("opus")
@@ -3439,6 +3538,7 @@ describe("image compression policy", () => {
   it("merges partial configured Anthropic media policy with runtime side limits", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        logicalRef: { provider: _provider, model: _model },
         model: {
           mediaInput: {
             image: options?.skipProviderRuntimeHooks
@@ -3523,161 +3623,4 @@ describe("image compression policy", () => {
   });
 });
 
-type MockImageLoadWebMedia = Awaited<
-  ReturnType<
-    NonNullable<
-      NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>["loadImageWebMediaRuntime"]
-    >
-  >
->["loadWebMedia"];
-
-describe("image tool run abort", () => {
-  afterEach(() => {
-    imageProviderHarness.reset();
-    testing.setProviderDepsForTest();
-  });
-
-  function makeDescribeSpies() {
-    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    return { describeImage, describeImages };
-  }
-
-  function installAbortImageDeps(
-    loadWebMedia: MockImageLoadWebMedia,
-    spies: ReturnType<typeof makeDescribeSpies>,
-    providers: MediaUnderstandingProvider[] = [minimaxProvider, moonshotProvider],
-  ) {
-    installImageUnderstandingProviderDeps(providers, {
-      loadImageWebMediaRuntime: async () => ({
-        loadWebMedia,
-        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        }),
-      }),
-      describeImageWithModel: spies.describeImage,
-      describeImagesWithModel: spies.describeImages,
-    });
-  }
-
-  it("forwards the run signal through the provider request contract", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
-      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      contentType: "image/png",
-      kind: "image" as const,
-    }));
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
-    const controller = new AbortController();
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-      await tool.execute(
-        "t1",
-        {
-          prompt: "Describe the images.",
-          paths: ["https://example.test/a.png", "https://example.test/b.png"],
-        },
-        controller.signal,
-      );
-    });
-
-    expect(spies.describeImages).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
-  });
-
-  it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
-      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      contentType: "image/png",
-      kind: "image" as const,
-    }));
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies);
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-      const controller = new AbortController();
-      controller.abort();
-
-      await expect(
-        tool.execute(
-          "t1",
-          {
-            prompt: "Describe the images.",
-            paths: ["https://example.test/a.png", "https://example.test/b.png"],
-          },
-          controller.signal,
-        ),
-      ).rejects.toThrow();
-
-      // Aborted run must not spend bandwidth on downloads or a paid vision call.
-      expect(loadWebMedia).not.toHaveBeenCalled();
-      expect(spies.describeImage).not.toHaveBeenCalled();
-      expect(spies.describeImages).not.toHaveBeenCalled();
-    });
-  });
-
-  it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const controller = new AbortController();
-    let markDownloadStarted: (() => void) | undefined;
-    const downloadStarted = new Promise<void>((resolve) => {
-      markDownloadStarted = resolve;
-    });
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
-      const downloadSignal = options?.requestInit?.signal;
-      expect(downloadSignal).toBe(controller.signal);
-      markDownloadStarted?.();
-      return await new Promise<never>((_, reject) => {
-        downloadSignal?.addEventListener(
-          "abort",
-          () => reject(new Error("aborted", { cause: downloadSignal.reason })),
-          { once: true },
-        );
-      });
-    });
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies);
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-
-      const execution = tool.execute(
-        "t1",
-        {
-          prompt: "Describe the images.",
-          paths: [
-            "https://example.test/a.png",
-            "https://example.test/b.png",
-            "https://example.test/c.png",
-          ],
-        },
-        controller.signal,
-      );
-      await downloadStarted;
-      controller.abort();
-
-      await expect(execution).rejects.toThrow();
-
-      // Only the first image is fetched; the loop exits before the rest and the
-      // paid vision provider is never called for the dead run.
-      expect(loadWebMedia).toHaveBeenCalledTimes(1);
-      expect(spies.describeImage).not.toHaveBeenCalled();
-      expect(spies.describeImages).not.toHaveBeenCalled();
-    });
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

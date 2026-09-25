@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # One-time host setup for rootless OpenClaw in Podman. Uses the current
 # non-root user throughout, builds or pulls the image into that user's Podman
 # store, writes config under ~/.openclaw by default, and uses the repo-local
@@ -114,6 +118,8 @@ control_ui = gateway.setdefault("controlUi", {})
 if not isinstance(control_ui, dict):
     raise SystemExit(f"{path}: expected gateway.controlUi object")
 allowed = control_ui.get("allowedOrigins")
+public_origin = gateway.get("publicOrigin")
+inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
 managed_localhosts = {"127.0.0.1", "localhost"}
 desired = [
     f"http://127.0.0.1:{port}",
@@ -134,7 +140,8 @@ for origin in allowed:
         if host in managed_localhosts:
             continue
     cleaned.append(normalized)
-control_ui["allowedOrigins"] = cleaned + desired
+if not inherits_public_origin:
+    control_ui["allowedOrigins"] = cleaned + desired
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
@@ -159,9 +166,9 @@ for arg in "$@"; do
   esac
 done
 if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
-  case "${OPENCLAW_PODMAN_QUADLET,,}" in
-    1|yes|true) INSTALL_QUADLET=true ;;
-    0|no|false) INSTALL_QUADLET=false ;;
+  case "$OPENCLAW_PODMAN_QUADLET" in
+    1|[yY][eE][sS]|[tT][rR][uU][eE]) INSTALL_QUADLET=true ;;
+    0|[nN][oO]|[fF][aA][lL][sS][eE]) INSTALL_QUADLET=false ;;
   esac
 fi
 if [[ "$INSTALL_QUADLET" == true && "$PLATFORM_NAME" != "Linux" ]]; then

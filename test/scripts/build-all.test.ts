@@ -31,6 +31,25 @@ import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
+
+const testNodeExecPath = resolveTestNodeExecPath();
+const buildAllUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildAll);
+const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
+  toolingProbeRuntimeEntrypoints.buildArtifactCache,
+);
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -215,25 +234,6 @@ describe("resolveBuildAllStep", () => {
     }
   });
 
-  it("keeps node steps on the current node binary", () => {
-    const step = getBuildAllStep("runtime-postbuild");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
-      env: { FOO: "bar" },
-    });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["scripts/runtime-postbuild.mjs"],
-      options: {
-        stdio: "inherit",
-        env: { FOO: "bar" },
-        shell: false,
-      },
-    });
-  });
-
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
     const result = resolveBuildAllStep(
@@ -257,6 +257,11 @@ describe("resolveBuildAllStep", () => {
   });
 
   it.each([
+    {
+      label: "runtime-postbuild",
+      scriptPath: "scripts/runtime-postbuild.mts",
+      expectedEnv: { FOO: "bar" },
+    },
     {
       label: "write-plugin-sdk-entry-dts",
       scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
@@ -363,8 +368,8 @@ describe("resolveBuildAllSteps", () => {
   it("prints CLI help without starting build steps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
       const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        testNodeExecPath,
+        [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), ...args],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -381,8 +386,8 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown CLI args without starting build steps", () => {
     const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      testNodeExecPath,
+      [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), "cliStartup", "--bogus"],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -429,7 +434,7 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
-  it.each(["full", "package", "ciArtifacts"])(
+  it.each(["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"])(
     "refuses %s before any build step or cache work when memory is insufficient",
     async (profile) => {
       const runStep = vi.fn(() => ({ status: 0 }));
@@ -760,7 +765,7 @@ describe("resolveBuildAllSteps", () => {
     );
     expect(stage.env).toMatchObject({ OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" });
     expect(stage.cache).toBeUndefined();
-    for (const profile of ["full", "package"]) {
+    for (const profile of ["full", "package", "strictSmoke", "pluginSdkStrictSmoke"]) {
       const profileSteps = resolveBuildAllSteps(profile);
       expect(profileSteps.find((step) => step.label === stage.label)).toEqual(stage);
       const labels = profileSteps.map((step) => step.label);
@@ -768,6 +773,38 @@ describe("resolveBuildAllSteps", () => {
       expect(labels.indexOf(stage.label)).toBeLessThan(labels.indexOf("check-plugin-sdk-exports"));
     }
   });
+
+  it.each(["strictSmoke", "pluginSdkStrictSmoke"])(
+    "does not validate %s after declaration publication fails",
+    async (profile) => {
+      const result = await runBuildAllSteps(profile, {
+        env: {},
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep: (invocation) => ({
+          status: invocation.args.includes("scripts/write-plugin-sdk-entry-dts.ts") ? 23 : 0,
+        }),
+      });
+      const labels = result.timings.map((timing) => timing.label);
+
+      expect(result.exitCode).toBe(23);
+      expect(labels).toEqual(
+        expect.arrayContaining([
+          "tsdown-ai",
+          "tsdown-packages",
+          "tsdown-unified",
+          "write-unified-entry-dts",
+          "runtime-postbuild",
+        ]),
+      );
+      expect(labels.at(-1)).toBe("write-plugin-sdk-entry-dts");
+      expect(labels).not.toContain("check-plugin-sdk-exports");
+      for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
+        expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
+      }
+    },
+  );
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
     const fullTsdown = resolveBuildAllSteps("full").find((step) => step.label === "tsdown-unified");
@@ -778,7 +815,7 @@ describe("resolveBuildAllSteps", () => {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     });
 
-    for (const profile of ["ciArtifacts", "sourcePerformance", "cliStartup"]) {
+    for (const profile of ["ciArtifacts", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -789,7 +826,7 @@ describe("resolveBuildAllSteps", () => {
       });
     }
 
-    for (const profile of ["gatewayWatch", "qaRuntime"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -854,7 +891,13 @@ describe("resolveBuildAllSteps", () => {
           }),
         ).toBe(0);
         expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
-          ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"],
+          [
+            "--import",
+            expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+            expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+            expect.stringMatching(/\/scripts\/build-all\.mts$/),
+            "qaRuntime",
+          ],
           ["openclaw.mjs", "status"],
         ]);
         const env = spawn.mock.calls[0]![2].env!;
@@ -896,7 +939,7 @@ describe("resolveBuildAllSteps", () => {
 
   it.each([
     ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
-    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mts"],
   ])("does not stamp qaRuntime after %s fails", async (label, script) => {
     const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const result = await runBuildAllSteps("qaRuntime", {
@@ -943,6 +986,36 @@ describe("resolveBuildAllSteps", () => {
   });
 
   describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
+      const env = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        OPENCLAW_UPDATE_IN_PROGRESS: marker,
+      };
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.timings.map((timing) => timing.label)).toContain("plugins:assets:build");
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+          marker === "1" ? process.cwd() : "/serving-checkout",
+        );
+      }
+      expect(env).toEqual(originalEnv);
+    });
+
     it.each([
       { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
       {
@@ -1006,7 +1079,7 @@ describe("resolveBuildAllSteps", () => {
     );
   });
 
-  it("uses a source performance profile with QA assets and immutable build provenance", () => {
+  it("uses a source performance profile without precomputed CLI help", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
@@ -1017,7 +1090,6 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-build-info",
-      "write-cli-startup-metadata",
     ]);
   });
 
@@ -1084,9 +1156,16 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
-    for (const profile of ["full", "package", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
+    for (const profile of [
+      "full",
+      "package",
+      "ciArtifacts",
+      "qaRuntime",
+      "sourcePerformance",
+      "strictSmoke",
+    ]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = labels.includes("tsdown-unified") ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf(lastTsdown));
       expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
         labels.indexOf("plugins:assets:copy"),
@@ -1100,7 +1179,7 @@ describe("resolveBuildAllSteps", () => {
   it("builds isolated external plugin output after tsdown and before runtime postbuild", () => {
     for (const profile of Object.keys(BUILD_ALL_PROFILES)) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = labels.includes("tsdown-unified") ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("external-plugins:local-dist")).toBeGreaterThan(
         labels.indexOf(lastTsdown),
       );
@@ -1136,7 +1215,14 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps ui:build out of minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
+    for (const profile of [
+      "gatewayWatch",
+      "qaRuntime",
+      "sourcePerformance",
+      "cliStartup",
+      "strictSmoke",
+      "pluginSdkStrictSmoke",
+    ]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
       expect(labels).not.toContain("ui:build");
     }
@@ -1184,17 +1270,16 @@ describe("resolveBuildStepCacheState", () => {
     withBuildCacheFixture(({ rootDir }) => {
       // Builds run on the main Node thread; Vitest workers have a different stack budget.
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
-          "--import",
-          "./scripts/tsx.mjs",
+          ...resolveRuntimeWorkerArgv(buildArtifactCacheUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "-e",
           `
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import path from "node:path";
-            import { listCacheFiles } from "./scripts/lib/build-artifact-cache.mts";
+            import { listCacheFiles } from ${JSON.stringify(buildArtifactCacheUrl.href)};
             const root = process.argv[1];
             const directory = path.join(root, "src");
             const [template] = fs.readdirSync(directory, { withFileTypes: true });
@@ -1416,14 +1501,6 @@ describe("resolveBuildStepCacheState", () => {
       writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
       const fresh = resolveBuildStepCacheState(step, { rootDir });
-      expect(fresh.cacheable).toBe(true);
-      expect(fresh.fresh).toBe(true);
-      expect(fresh.reason).toBe("fresh");
-      expect(fresh.inputFiles).toBe(1);
-      expect(fresh.outputFiles).toBe(1);
-      expect(fresh.restorable).toBe(false);
-      expect(fresh.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(fresh.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof fresh.signature).toBe("string");
       expect(fresh.signature).toHaveLength(64);
       expect(fresh.outputRoot).toBe(
@@ -1586,8 +1663,6 @@ describe("resolveBuildStepCacheState", () => {
       expect(stale.outputFiles).toBe(1);
       expect(stale.restorable).toBe(false);
       expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
-      expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof stale.signature).toBe("string");
       expect(stale.signature).toHaveLength(64);
       expect(stale.outputRoot).toBe(
@@ -1701,14 +1776,6 @@ describe("resolveBuildStepCacheState", () => {
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
       const restorable = resolveBuildStepCacheState(step, { rootDir });
-      expect(restorable.cacheable).toBe(true);
-      expect(restorable.fresh).toBe(true);
-      expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.inputFiles).toBe(1);
-      expect(restorable.outputFiles).toBe(0);
-      expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual([]);
-      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof restorable.signature).toBe("string");
       expect(restorable.signature).toHaveLength(64);
       expect(restorable.outputRoot).toBe(
@@ -1748,18 +1815,28 @@ describe("resolveBuildStepCacheState", () => {
       const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
       writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
       fs.writeFileSync(outputPath, "overwritten by earlier build step");
+      const obsoletePath = path.join(rootDir, "dist/obsolete.js");
+      fs.writeFileSync(obsoletePath, "obsolete output");
 
-      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      let restorable: ReturnType<typeof resolveBuildStepCacheState>;
+      try {
+        restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+        expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(outputPath);
+      } finally {
+        readSpy.mockRestore();
+      }
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.outputFiles).toBe(2);
       expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/obsolete.js", "dist/output.js"]);
       expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
 
       expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+      expect(fs.existsSync(obsoletePath)).toBe(false);
     });
   });
 

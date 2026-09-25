@@ -1,18 +1,18 @@
-// Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
@@ -37,13 +37,7 @@ import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
 
-export type SlackActionClientOpts = {
-  cfg?: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  teamId?: string;
-  client?: WebClient;
-};
+export type { SlackActionClientOpts } from "./action-context.js";
 
 export type SlackMessageSummary = {
   ts?: string;
@@ -120,39 +114,39 @@ const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
 // Unicode glyph. Models keep passing the glyph because the `emoji` param
 // reads as "an emoji"; map the common ones so the reaction is not silently
 // dropped. Unknown glyphs still pass through unchanged (no regression).
-const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
-  "✅": "white_check_mark",
-  "❌": "x",
-  "👍": "thumbsup",
-  "👎": "thumbsdown",
-  "🎉": "tada",
-  "❤": "heart",
-  "😄": "smile",
-  "😂": "joy",
-  "🚀": "rocket",
-  "👀": "eyes",
-  "🙏": "pray",
-  "🔥": "fire",
-  "💯": "100",
-  "⚠": "warning",
-  "➕": "heavy_plus_sign",
-  "➖": "heavy_minus_sign",
-  "🤔": "thinking_face",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "✍": "writing_hand",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠": "hammer_and_wrench",
-  "💻": "computer",
-};
+const SLACK_EMOJI_SHORTNAME_BY_GLYPH = new Map([
+  ["✅", "white_check_mark"],
+  ["❌", "x"],
+  ["👍", "thumbsup"],
+  ["👎", "thumbsdown"],
+  ["🎉", "tada"],
+  ["❤", "heart"],
+  ["😄", "smile"],
+  ["😂", "joy"],
+  ["🚀", "rocket"],
+  ["👀", "eyes"],
+  ["🙏", "pray"],
+  ["🔥", "fire"],
+  ["💯", "100"],
+  ["⚠", "warning"],
+  ["➕", "heavy_plus_sign"],
+  ["➖", "heavy_minus_sign"],
+  ["🤔", "thinking_face"],
+  ["👨‍💻", "male-technologist"],
+  ["👨💻", "male-technologist"],
+  ["👩‍💻", "female-technologist"],
+  ["⚡", "zap"],
+  ["🌐", "globe_with_meridians"],
+  ["😱", "scream"],
+  ["🥱", "yawning_face"],
+  ["😨", "fearful"],
+  ["⏳", "hourglass_flowing_sand"],
+  ["✍", "writing_hand"],
+  ["🗜", "compression"],
+  ["🧠", "brain"],
+  ["🛠", "hammer_and_wrench"],
+  ["💻", "computer"],
+]);
 
 function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
@@ -164,7 +158,7 @@ function normalizeSlackEmojiName(raw: string): string {
   const glyphKey = withoutColons
     .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
     .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
-  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH.get(glyphKey);
   const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
   if (!shortname || !skinTone) {
     return shortname ?? withoutColons;
@@ -220,7 +214,7 @@ function hasSlackPlatformError(err: unknown, code: string): boolean {
 }
 
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client) {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
     return opts.client;
   }
   const accountId = opts.cfg
@@ -232,9 +226,18 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   if (mode === "write") {
+    if (opts.assertDirectAdapterHandoff) {
+      return createSlackWriteClient(
+        token,
+        { teamId: opts.teamId },
+        opts.assertDirectAdapterHandoff,
+      );
+    }
     return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return createSlackLookupClient(token, { teamId: opts.teamId });
+  return opts.assertDirectAdapterHandoff
+    ? createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff)
+    : createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -310,12 +313,7 @@ export async function removeOwnSlackReactions(
     return [];
   }
   await Promise.all(
-    Array.from(toRemove, (name) =>
-      removeSlackReaction(channelId, messageId, name, {
-        ...opts,
-        client,
-      }),
-    ),
+    Array.from(toRemove, (name) => removeSlackReaction(channelId, messageId, name, { client })),
   );
   return Array.from(toRemove);
 }
@@ -373,6 +371,7 @@ export async function sendSlackMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,
     client: opts.client,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
@@ -532,43 +531,29 @@ export async function readSlackMessages(
       };
   const client = await getClient(opts);
 
-  // Use conversations.replies for thread messages, conversations.history for channel messages.
-  if (opts.threadId) {
-    // Slack pages thread roots before replies; exclude the root before its limit consumes the page.
-    const oldest = exactMessageId
-      ? exactMessageId
-      : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
-        ? exactBounds.oldest
-        : opts.threadId;
-    const result = await client.conversations.replies({
-      channel: channelId,
-      ts: opts.threadId,
-      limit: readLimit,
-      ...exactBounds,
-      oldest,
-    });
-    const messages = ((result.messages ?? []) as SlackMessageSummary[])
-      .filter((message) => {
-        if (exactMessageId) {
-          return message.ts === exactMessageId;
-        }
-        // conversations.replies includes the parent message; drop it for replies-only reads.
-        return message.ts !== opts.threadId;
-      })
-      .map(renderSlackReadMessageText);
-    return {
-      messages,
-      hasMore: exactMessageId ? false : Boolean(result.has_more),
-    };
-  }
-
-  const result = await client.conversations.history({
+  const query = {
     channel: channelId,
     limit: readLimit,
     ...exactBounds,
-  });
+  };
+  const result = opts.threadId
+    ? await client.conversations.replies({
+        ...query,
+        ts: opts.threadId,
+        // Exclude the root before it consumes the replies-only page limit.
+        oldest: exactMessageId
+          ? exactMessageId
+          : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
+            ? exactBounds.oldest
+            : opts.threadId,
+      })
+    : await client.conversations.history(query);
   const messages = ((result.messages ?? []) as SlackMessageSummary[])
-    .filter((message) => !exactMessageId || message.ts === exactMessageId)
+    .filter((message) =>
+      exactMessageId
+        ? message.ts === exactMessageId
+        : !opts.threadId || message.ts !== opts.threadId,
+    )
     .map(renderSlackReadMessageText);
   return {
     messages,
@@ -625,94 +610,45 @@ type SlackFileInfoSummary = {
   shares?: unknown;
 };
 
-type SlackFileThreadShare = {
-  channelId: string;
-  ts?: string;
-  threadTs?: string;
-};
-
-function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<string> {
-  const ids = new Set<string>();
-  for (const group of [file.channels, file.groups, file.ims]) {
-    if (!Array.isArray(group)) {
-      continue;
-    }
-    for (const entry of group) {
-      if (typeof entry !== "string") {
-        continue;
-      }
-      const normalized = normalizeOptionalString(entry);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  return ids;
-}
-
-function collectSlackShareMaps(file: SlackFileInfoSummary): Array<Record<string, unknown>> {
-  if (!file.shares || typeof file.shares !== "object" || Array.isArray(file.shares)) {
-    return [];
-  }
-  const shares = file.shares as Record<string, unknown>;
-  return [shares.public, shares.private].filter(
-    (value): value is Record<string, unknown> =>
-      Boolean(value) && typeof value === "object" && !Array.isArray(value),
-  );
-}
-
-function collectSlackShares(file: SlackFileInfoSummary): SlackFileThreadShare[] {
-  const shares: SlackFileThreadShare[] = [];
-  for (const shareMap of collectSlackShareMaps(file)) {
-    for (const [rawChannelId, rawEntries] of Object.entries(shareMap)) {
-      const channelId = normalizeOptionalString(rawChannelId);
-      if (!channelId || !Array.isArray(rawEntries)) {
-        continue;
-      }
-      for (const rawEntry of rawEntries) {
-        if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-          continue;
-        }
-        const entry = rawEntry as Record<string, unknown>;
-        const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
-        const threadTs =
-          typeof entry.thread_ts === "string"
-            ? normalizeOptionalString(entry.thread_ts)
-            : undefined;
-        if (ts || threadTs) {
-          shares.push({ channelId, ts, threadTs });
-        }
-      }
-    }
-  }
-  return shares;
-}
-
-function lacksSlackScopeProof(params: {
+function hasSlackScopeProof(params: {
   file: SlackFileInfoSummary;
   channelId: string;
   threadId?: string;
 }): boolean {
   const channelId = normalizeOptionalString(params.channelId);
   if (!channelId) {
-    return true;
-  }
-  const threadId = normalizeOptionalString(params.threadId);
-
-  const directIds = collectSlackDirectShareChannelIds(params.file);
-  const shares = collectSlackShares(params.file);
-  const inChannel =
-    directIds.has(channelId) || shares.some((entry) => entry.channelId === channelId);
-  if (!inChannel) {
-    return true;
-  }
-
-  if (!threadId) {
     return false;
   }
-  return !shares.some(
-    (entry) =>
-      entry.channelId === channelId && (entry.threadTs === threadId || entry.ts === threadId),
+  const threadId = normalizeOptionalString(params.threadId);
+  const { file } = params;
+  if (
+    !threadId &&
+    [file.channels, file.groups, file.ims].some(
+      (group) =>
+        Array.isArray(group) && group.some((entry) => normalizeOptionalString(entry) === channelId),
+    )
+  ) {
+    return true;
+  }
+  if (!isRecord(file.shares)) {
+    return false;
+  }
+  return [file.shares.public, file.shares.private].some(
+    (shareMap) =>
+      isRecord(shareMap) &&
+      Object.entries(shareMap).some(
+        ([sharedChannelId, entries]) =>
+          normalizeOptionalString(sharedChannelId) === channelId &&
+          Array.isArray(entries) &&
+          entries.some((entry) => {
+            if (!isRecord(entry)) {
+              return false;
+            }
+            const ts = normalizeOptionalString(entry.ts);
+            const threadTs = normalizeOptionalString(entry.thread_ts);
+            return threadId ? ts === threadId || threadTs === threadId : Boolean(ts || threadTs);
+          }),
+      ),
   );
 }
 
@@ -728,7 +664,7 @@ export async function downloadSlackFile(
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
   const isFileAllowed = (file: SlackFileInfoSummary) =>
-    !lacksSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
+    hasSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
   // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });

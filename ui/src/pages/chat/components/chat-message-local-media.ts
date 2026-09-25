@@ -1,4 +1,8 @@
-import { buildAssistantMediaUrl } from "../../../app/assistant-media.ts";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
+import {
+  buildAssistantMediaUrl,
+  type AssistantMediaContext,
+} from "../../../app/assistant-media.ts";
 
 export function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
@@ -10,7 +14,8 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
     /^file:/iu.test(trimmed) ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
-    /^[a-zA-Z]:[\\/]/.test(trimmed)
+    /^[a-zA-Z]:[\\/]/.test(trimmed) ||
+    (Boolean(trimmed) && !/^[a-z][a-z0-9+.-]*:/iu.test(trimmed))
   );
 }
 
@@ -30,99 +35,17 @@ export function isCanonicalInboundMediaSource(source: string): boolean {
   }
 }
 
-function normalizeLocalAttachmentPath(source: string): string | null {
-  const trimmed = source.trim();
-  if (!isLocalAssistantAttachmentSource(trimmed) || isCanonicalInboundMediaSource(trimmed)) {
-    return null;
-  }
-  if (/^file:/iu.test(trimmed)) {
-    try {
-      const url = new URL(trimmed);
-      if (url.hostname || /%2f|%5c/iu.test(url.pathname)) {
-        return null;
-      }
-      const pathname = decodeURIComponent(url.pathname);
-      if (/^\/[a-zA-Z]:\//.test(pathname)) {
-        return pathname.slice(1);
-      }
-      return pathname;
-    } catch {
-      return null;
-    }
-  }
-  if (trimmed.startsWith("~")) {
-    return null;
-  }
-  return trimmed;
-}
-
-function resolveHomeCandidatesFromRoots(localMediaPreviewRoots: readonly string[]): string[] {
-  const candidates = new Set<string>();
-  for (const root of localMediaPreviewRoots) {
-    const normalized = canonicalizeLocalPathForComparison(root.trim());
-    const unixHome = normalized.match(/^(\/Users\/[^/]+|\/home\/[^/]+)(?:\/|$)/);
-    if (unixHome?.[1]) {
-      candidates.add(unixHome[1]);
-      continue;
-    }
-    const windowsHome = normalized.match(/^([a-z]:\/Users\/[^/]+)(?:\/|$)/i);
-    if (windowsHome?.[1]) {
-      candidates.add(windowsHome[1]);
-    }
-  }
-  return [...candidates];
-}
-
-function canonicalizeLocalPathForComparison(value: string): string {
-  let slashNormalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (/^\/[a-zA-Z]:\//.test(slashNormalized)) {
-    slashNormalized = slashNormalized.slice(1);
-  }
-  if (/^[a-zA-Z]:\//.test(slashNormalized)) {
-    return slashNormalized.toLowerCase();
-  }
-  return slashNormalized;
-}
-
-export function isLocalAttachmentPreviewAllowed(
-  source: string,
-  localMediaPreviewRoots: readonly string[],
-): boolean {
-  if (isCanonicalInboundMediaSource(source)) {
-    return true;
-  }
-  const normalizedSource = normalizeLocalAttachmentPath(source);
-  const comparableSources = normalizedSource
-    ? [canonicalizeLocalPathForComparison(normalizedSource)]
-    : source.trim().startsWith("~")
-      ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, () => home)),
-        )
-      : [];
-  if (comparableSources.length === 0) {
-    return false;
-  }
-  return localMediaPreviewRoots.some((root) => {
-    const normalizedRoot = canonicalizeLocalPathForComparison(root.trim());
-    return (
-      normalizedRoot.length > 0 &&
-      comparableSources.some(
-        (comparableSource) =>
-          comparableSource === normalizedRoot || comparableSource.startsWith(`${normalizedRoot}/`),
-      )
-    );
-  });
-}
-
 export function buildAssistantAttachmentUrl(
   source: string,
   resourceBasePath?: string,
   mediaTicket?: string | null,
+  context?: AssistantMediaContext,
+  filename?: string,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket);
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
 }
 
 export function appendAttachmentUrlSearchParam(
@@ -142,4 +65,24 @@ export function appendAttachmentUrlSearchParam(
   const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
   params.set(name, value);
   return `${path}?${params.toString()}${hash}`;
+}
+
+export function applyResourceBasePath(
+  source: string,
+  resourceBasePath: string | undefined,
+): string {
+  if (!source.startsWith("/") || source.startsWith("//")) {
+    return source;
+  }
+  try {
+    const parsed = new URL(source, window.location.origin);
+    const basePath = normalizeBasePath(resourceBasePath ?? "");
+    const pathname =
+      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
+        ? `${basePath}${parsed.pathname}`
+        : parsed.pathname;
+    return `${pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return source;
+  }
 }

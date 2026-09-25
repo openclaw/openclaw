@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
   type SessionCatalogHost,
+  type SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
@@ -25,6 +27,8 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -33,9 +37,12 @@ async function withCatalog(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+    let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
     try {
-      await run(await createCatalog());
+      fixture = await createCatalog();
+      await run(fixture);
     } finally {
+      fixture?.projection.dispose();
       setActivePluginRegistry(previousRegistry);
     }
   });
@@ -132,6 +139,7 @@ async function createCatalog() {
     }) as GatewayClient;
   const owner = client(caller.id);
   const foreignOwner = client(other.id);
+  const projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
   const call = async (
     method: keyof typeof sessionCatalogHandlers = "sessions.catalog.list",
     params: Record<string, unknown> = {},
@@ -139,10 +147,13 @@ async function createCatalog() {
     broadcastToConnIds = vi.fn(),
   ) => {
     const respond = vi.fn();
-    const context = { getRuntimeConfig: () => config, broadcastToConnIds } satisfies Pick<
-      GatewayRequestContext,
-      "getRuntimeConfig" | "broadcastToConnIds"
-    >;
+    const context = bindSessionRowProjection(
+      { getRuntimeConfig: () => config, broadcastToConnIds } satisfies Pick<
+        GatewayRequestContext,
+        "getRuntimeConfig" | "broadcastToConnIds"
+      >,
+      () => projection,
+    );
     await withPluginRuntimeGatewayRequestScope(
       { client: requestClient, pluginRegistry: registry, isWebchatConnect: () => false },
       () =>
@@ -183,6 +194,9 @@ async function createCatalog() {
   };
   return {
     call,
+    config,
+    registry,
+    provider: registry.sessionCatalogs[0]!.provider,
     changeForeign,
     replaceForeign,
     enumerate,
@@ -194,6 +208,7 @@ async function createCatalog() {
     read,
     continueSession,
     archive,
+    projection,
   };
 }
 
@@ -203,6 +218,336 @@ const rows = (respond: ReturnType<typeof vi.fn>) =>
   );
 
 describe("catalog delivery uses current canonical privacy", () => {
+  it("lists remote publications without local stores while preserving mixed-request adoption", async () => {
+    await withCatalog(async ({ call, registry, read, list, enumerate, replaceForeign }) => {
+      const remoteHost: SessionCatalogHost = {
+        hostId: "node:source",
+        label: "Source",
+        kind: "node",
+        connected: true,
+        sessions: [
+          {
+            threadId: "remote",
+            status: "stored",
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      };
+      registry.sessionCatalogs.push({
+        pluginId: "publication",
+        source: import.meta.url,
+        provider: {
+          id: "publication",
+          label: "Publication",
+          audience: "session-viewers",
+          list: async () => [remoteHost],
+          read,
+        },
+      });
+      const unavailable = vi
+        .spyOn(sessionAccessor, "listSessionEntriesReadOnly")
+        .mockImplementation(() => {
+          throw new Error("Local adoption store unavailable");
+        });
+      try {
+        expect(rows(await call("sessions.catalog.list", { catalogId: "publication" }))).toEqual([
+          "remote",
+        ]);
+      } finally {
+        unavailable.mockRestore();
+      }
+
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let observed: SessionCatalogHost | undefined;
+      list.mockImplementation(async ({ sessionEntries }) => {
+        entered.resolve();
+        await release.promise;
+        observed = enumerate(sessionEntries);
+        return [observed];
+      });
+      const pending = call();
+      try {
+        await entered.promise;
+        await replaceForeign();
+      } finally {
+        release.resolve();
+      }
+      const response = await pending;
+      expect(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey).toBe(
+        "agent:main:foreign",
+      );
+      expect(rows(response)).toEqual(["owned"]);
+      expect(response.mock.calls[0]?.[1]?.catalogs[1]?.hosts).toEqual([remoteHost]);
+    });
+  });
+
+  it("uses resident delivery rows while preserving full planning and fresh identity", async () => {
+    await withCatalog(
+      async ({ call, callerId, enumerate, list, owner, replaceForeign, projection }) => {
+        for (let index = 0; index < 24; index++) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+            { sessionId: `unrelated-${index}`, updatedAt: 1 },
+          );
+        }
+        await projection.ensureMaterialized();
+        const read = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+          expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(27);
+          const host = enumerate(sessionEntries);
+          onHost?.(host);
+          await replaceForeign();
+          return [host];
+        });
+        try {
+          const broadcast = vi.fn();
+          const response = await call(
+            "sessions.catalog.list",
+            { progressId: "delivery-budget" },
+            owner,
+            broadcast,
+          );
+          const progress = broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions;
+          expect(broadcast).toHaveBeenCalledOnce();
+          expect(progress?.map((session: { threadId: string }) => session.threadId)).toEqual([
+            "foreign",
+            "owned",
+          ]);
+          expect(
+            progress?.find((session: { threadId: string }) => session.threadId === "owned"),
+          ).toMatchObject({ createdActor: { id: callerId } });
+          expect(rows(response)).toEqual(["owned"]);
+          expect(read).not.toHaveBeenCalled();
+        } finally {
+          read.mockRestore();
+        }
+      },
+    );
+  });
+
+  it.each([
+    { audience: "session-viewers", others: undefined, profiled: true, visible: true },
+    { audience: "session-viewers", others: undefined, profiled: false, visible: false },
+    { audience: "session-viewers", others: "view", profiled: true, visible: true },
+    { audience: "session-viewers", others: "suggest", profiled: true, visible: true },
+    { audience: "session-viewers", others: "write", profiled: true, visible: true },
+    { audience: "session-viewers", others: "none", profiled: true, visible: false },
+    { audience: "session-viewers", others: "view", profiled: false, visible: false },
+    { audience: undefined, others: "view", profiled: true, visible: false },
+  ] as const)(
+    "gates native $audience rows and reads for others=$others, profiled=$profiled",
+    async ({ audience, others, profiled, visible }) =>
+      withCatalog(async ({ call, config, provider, owner, host, list, read }) => {
+        provider.audience = audience;
+        if (others === undefined) {
+          delete config.gateway!.roles;
+        } else {
+          config.gateway!.roles!.definitions.writer!.sessions!.others = others;
+        }
+        const requestClient = profiled ? owner : { ...owner, authenticatedUserProfile: undefined };
+        const publishedHost: SessionCatalogHost = {
+          ...host,
+          sessions: [
+            {
+              threadId: "published-native",
+              status: "stored",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+              createdActor: {
+                type: "human",
+                id: "remote-human",
+                label: "Published Person",
+                identity: {
+                  type: "remote",
+                  pluginId: "fixture",
+                  domain: "source",
+                  idKind: "profile",
+                  id: "remote-human",
+                },
+              },
+            },
+          ],
+        };
+        list.mockImplementation(async ({ onHost }) => {
+          onHost?.(publishedHost);
+          return [publishedHost];
+        });
+        const broadcast = vi.fn();
+        const listed = await call(
+          "sessions.catalog.list",
+          { progressId: "published" },
+          requestClient,
+          broadcast,
+        );
+        const expectedRows = visible ? publishedHost.sessions : [];
+        expect
+          .soft(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions)
+          .toEqual(expectedRows);
+        expect.soft(broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions).toEqual(expectedRows);
+        const transcript = await call(
+          "sessions.catalog.read",
+          {
+            catalogId: "fixture",
+            hostId: host.hostId,
+            threadId: "published-native",
+          },
+          requestClient,
+        );
+        if (visible) {
+          expect(transcript).toHaveBeenCalledWith(true, {
+            hostId: host.hostId,
+            threadId: "published-native",
+            items: [],
+          });
+        } else {
+          expect(transcript).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
+          );
+          expect(read).not.toHaveBeenCalled();
+        }
+      }),
+  );
+
+  it("keeps adopted catalogs owner-only on multi-identity gateways without roles", async () => {
+    await withCatalog(async ({ call, config, host, read }) => {
+      delete config.gateway!.roles;
+      expect(rows(await call())).toEqual(["owned"]);
+      const locator = { catalogId: "fixture", hostId: host.hostId };
+      expect(
+        await call("sessions.catalog.read", { ...locator, threadId: "foreign" }),
+      ).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
+      );
+      expect(read).not.toHaveBeenCalled();
+      const owned = await call("sessions.catalog.read", { ...locator, threadId: "owned" });
+      expect(owned.mock.calls[0]?.[0]).toBe(true);
+    });
+  });
+
+  it("rechecks published visibility on each delivery after a role cap changes", async () => {
+    await withCatalog(async ({ call, config, provider, host, list }) => {
+      provider.audience = "session-viewers";
+      list.mockResolvedValue([
+        {
+          ...host,
+          sessions: [
+            {
+              threadId: "published-native",
+              status: "stored",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+            },
+          ],
+        },
+      ]);
+      const role = config.gateway!.roles!.definitions.writer!;
+      role.sessions!.others = "view";
+      expect(rows(await call())).toEqual(["published-native"]);
+      role.sessions!.others = "none";
+      expect(rows(await call())).toEqual([]);
+      role.sessions!.others = "view";
+      expect(rows(await call())).toEqual(["published-native"]);
+      expect(list).toHaveBeenCalledTimes(3);
+      delete config.gateway!.roles;
+      expect(rows(await call())).toEqual(["published-native"]);
+      expect(list).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  it("rechecks published read visibility after a role cap changes during provider read", async () => {
+    await withCatalog(async ({ call, config, provider, host, read }) => {
+      provider.audience = "session-viewers";
+      const role = config.gateway!.roles!.definitions.writer!;
+      role.sessions!.others = "view";
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      read.mockImplementation(async ({ hostId, threadId }) => {
+        entered.resolve();
+        await release.promise;
+        return {
+          hostId,
+          threadId,
+          items: [{ type: "userMessage", text: "published transcript" }],
+        };
+      });
+      const pending = call("sessions.catalog.read", {
+        catalogId: "fixture",
+        hostId: host.hostId,
+        threadId: "published-native",
+      });
+      await entered.promise;
+      role.sessions!.others = "none";
+      release.resolve();
+      const denied = await pending;
+      expect(denied).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.FORBIDDEN,
+          message: "session catalog thread is not visible to this caller",
+        }),
+      );
+    });
+  });
+
+  it("never adopts a published source key or grants mutation authority through it", async () => {
+    await withCatalog(async ({ call, provider, host, list, continueSession, archive }) => {
+      provider.audience = "session-viewers";
+      const createdActor = { type: "agent" as const, id: "publisher", label: "Source Agent" };
+      list.mockResolvedValue([
+        {
+          ...host,
+          sessions: [
+            {
+              threadId: "published-native",
+              sessionKey: "agent:main:owned",
+              createdActor,
+              status: "stored",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+            },
+          ],
+        },
+      ]);
+      const listed = await call();
+      expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
+        {
+          threadId: "published-native",
+          createdActor,
+          status: "stored",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        },
+      ]);
+      for (const method of ["sessions.catalog.continue", "sessions.catalog.archive"] as const) {
+        const result = await call(method, {
+          catalogId: "fixture",
+          hostId: host.hostId,
+          threadId: "published-native",
+          ...(method === "sessions.catalog.archive" ? { confirmNoOtherRunner: true } : {}),
+        });
+        expect(result).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
+        );
+      }
+      expect(continueSession).not.toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps caller-bound provider enumeration separate while sharing the same caller's work", async () => {
     await withCatalog(async ({ call, owner, foreignOwner, host, list }) => {
       const release = createDeferredCore();
@@ -228,46 +573,41 @@ describe("catalog delivery uses current canonical privacy", () => {
       });
       expect.soft(list).toHaveBeenCalledTimes(4);
       await call();
-      expect.soft(list).toHaveBeenCalledTimes(4);
+      expect.soft(list).toHaveBeenCalledTimes(5);
       owner.connect.scopes = ["operator.read"];
       await call();
-      expect(list).toHaveBeenCalledTimes(5);
+      expect(list).toHaveBeenCalledTimes(6);
     });
   });
 
   it.each([{ visibility: "draft" as const }, { incognito: true as const }])(
-    "rechecks settled provider results after privacy changes to %j",
+    "rechecks provider results after privacy changes to %j",
     async (patch) =>
       withCatalog(async ({ call, changeForeign, list, callerId }) => {
         expect(rows(await call())).toEqual(["foreign", "owned"]);
         await changeForeign(patch);
         expect.soft(rows(await call())).toEqual(["owned"]);
-        expect(list).toHaveBeenCalledOnce();
-        expect(rows(await call("sessions.catalog.list", { search: "cold" }))).toEqual(["owned"]);
         expect(list).toHaveBeenCalledTimes(2);
+        expect(rows(await call("sessions.catalog.list", { search: "cold" }))).toEqual(["owned"]);
+        expect(list).toHaveBeenCalledTimes(3);
         linkEmail("catalog-other@example.test", callerId);
         expect(rows(await call())).toEqual(
           "visibility" in patch ? ["foreign", "owned"] : ["owned"],
         );
-        expect(list).toHaveBeenCalledTimes(3);
+        expect(list).toHaveBeenCalledTimes(4);
       }),
   );
 
-  it("does not transfer a cached native thread to a replacement session at the same key", async () => {
-    await withCatalog(async ({ call, changeForeign, replaceForeign, list }) => {
+  it("does not transfer a native thread to a replacement session at the same key", async () => {
+    await withCatalog(async ({ call, changeForeign, replaceForeign }) => {
       await changeForeign({ visibility: "draft" });
       expect(rows(await call())).toEqual(["owned"]);
       await replaceForeign();
-      expect.soft(rows(await call())).toEqual(["owned"]);
-      expect(list).toHaveBeenCalledOnce();
-      expect(rows(await call("sessions.catalog.list", { search: "cold-replacement" }))).toEqual([
-        "owned",
-      ]);
-      expect(list).toHaveBeenCalledTimes(2);
+      expect(rows(await call())).toEqual(["owned"]);
     });
   });
 
-  it("rechecks recorded plugin ownership without discarding same-instance cache work", async () => {
+  it("rechecks recorded plugin ownership on each list", async () => {
     await withCatalog(async ({ call, list }) => {
       expect(rows(await call())).toEqual(["foreign", "owned"]);
       const scope = { agentId: "main", sessionKey: "agent:main:owned" };
@@ -275,19 +615,32 @@ describe("catalog delivery uses current canonical privacy", () => {
       expect(rows(await call())).toEqual(["foreign"]);
       await upsertSessionEntryCore(scope, { pluginOwnerId: "fixture" });
       expect(rows(await call())).toEqual(["foreign", "owned"]);
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
     });
   });
 
-  it.each([true, false])(
-    "retains the original adoption across replacement before publication (prefetch=%s)",
-    async (prefetch) =>
+  it.each([
+    { prefetch: true, late: false },
+    { prefetch: false, late: false },
+    { prefetch: true, late: true },
+  ])(
+    "retains the original adoption across replacement (prefetch=$prefetch, late=$late)",
+    async ({ prefetch, late }) =>
       withCatalog(async ({ call, changeForeign, replaceForeign, enumerate, list, owner }) => {
         await changeForeign({ visibility: "draft" });
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let observed: SessionCatalogHost | undefined;
-        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+        let publication: Promise<void> | undefined;
+        list.mockImplementation(async ({ sessionEntries, onHost, waitUntil }) => {
+          if (late) {
+            const prepared = enumerate(sessionEntries);
+            observed = prepared;
+            publication = release.promise.then(() => onHost?.(prepared));
+            waitUntil?.(publication);
+            entered.resolve();
+            return [];
+          }
           if (prefetch) {
             observed = enumerate(sessionEntries);
           }
@@ -297,95 +650,141 @@ describe("catalog delivery uses current canonical privacy", () => {
           onHost?.(observed);
           return [observed];
         });
-        const broadcast = vi.fn();
+        const delivered = createDeferredCore();
+        const broadcast = vi.fn<(_event: string, payload: SessionsCatalogHostEvent) => void>(() =>
+          delivered.resolve(),
+        );
         const pending = call(
           "sessions.catalog.list",
           { progressId: "replacement" },
           owner,
           broadcast,
         );
-        await entered.promise;
-        await replaceForeign();
-        release.resolve();
-        const result = await pending;
-        // The provider's request snapshot keeps the original adoption even when first read
-        // after its await; publication must reject that now-replaced instance independently.
-        expect
-          .soft(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey)
-          .toBe("agent:main:foreign");
-        expect.soft(rows(result)).toEqual(["owned"]);
-        expect(broadcast).toHaveBeenCalledOnce();
-        expect
-          .soft(
-            broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
-              (session: { threadId: string }) => session.threadId,
-            ),
-          )
-          .toEqual(["owned"]);
+        try {
+          await entered.promise;
+          if (late) {
+            const initial = await pending;
+            expect(initial.mock.calls[0]?.[1]?.catalogs[0]?.hosts).toEqual([]);
+          }
+          await replaceForeign();
+          release.resolve();
+          const result = await pending;
+          await publication;
+          await delivered.promise;
+          // The provider's request snapshot keeps the original adoption even when first read
+          // after its await; publication must reject that now-replaced instance independently.
+          expect
+            .soft(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey)
+            .toBe("agent:main:foreign");
+          if (!late) {
+            expect.soft(rows(result)).toEqual(["owned"]);
+          }
+          expect(broadcast).toHaveBeenCalledOnce();
+          expect
+            .soft(
+              broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
+                (session: { threadId: string }) => session.threadId,
+              ),
+            )
+            .toEqual(["owned"]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending, publication]);
+        }
       }),
   );
 
   it("rechecks each follower at progress and final delivery after provider awaits", async () => {
-    await withCatalog(async ({ call, changeForeign, owner, foreignOwner, host, list }) => {
-      const entered = createDeferredCore();
-      const progress = createDeferredCore();
-      const finish = createDeferredCore();
-      list.mockImplementation(async ({ sessionEntries, onHost }) => {
-        sessionEntries?.entriesForCatalog?.();
-        entered.resolve();
-        await progress.promise;
-        onHost?.(host);
-        await finish.promise;
-        return [host];
-      });
-      const leaderBroadcast = vi.fn();
-      const followerBroadcast = vi.fn();
-      const sameCallerBroadcast = vi.fn();
-      const leader = call(
-        "sessions.catalog.list",
-        { progressId: "leader" },
-        owner,
-        leaderBroadcast,
-      );
-      await entered.promise;
-      const sameCaller = call(
-        "sessions.catalog.list",
-        { progressId: "same-caller" },
-        owner,
-        sameCallerBroadcast,
-      );
-      const follower = call(
-        "sessions.catalog.list",
-        { progressId: "follower" },
-        foreignOwner,
-        followerBroadcast,
-      );
-      await changeForeign({ visibility: "draft" });
-      progress.resolve();
-      await vi.waitFor(() => {
-        expect(leaderBroadcast).toHaveBeenCalledOnce();
-        expect(followerBroadcast).toHaveBeenCalledOnce();
-        expect(sameCallerBroadcast).toHaveBeenCalledOnce();
-      });
-      const progressRows = (broadcast: typeof leaderBroadcast) =>
-        broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
-          (row: { threadId: string }) => row.threadId,
+    await withCatalog(
+      async ({ call, changeForeign, owner, foreignOwner, host, list, provider }) => {
+        const entered = createDeferredCore();
+        const progress = createDeferredCore();
+        const finish = createDeferredCore();
+        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+          sessionEntries?.entriesForCatalog?.();
+          entered.resolve();
+          await progress.promise;
+          onHost?.(host);
+          return [host];
+        });
+        provider.createListOperation = (params) => {
+          let hosts: SessionCatalogHost[] | undefined;
+          return {
+            async next() {
+              if (!hosts) {
+                hosts = await list(params);
+                return { done: false };
+              }
+              await finish.promise;
+              return { done: true, hosts };
+            },
+            close() {},
+          };
+        };
+        const leaderDelivered = createDeferredCore();
+        const followerDelivered = createDeferredCore();
+        const sameCallerDelivered = createDeferredCore();
+        const leaderBroadcast = vi.fn().mockImplementation(() => leaderDelivered.resolve());
+        const followerBroadcast = vi.fn().mockImplementation(() => followerDelivered.resolve());
+        const sameCallerBroadcast = vi.fn().mockImplementation(() => sameCallerDelivered.resolve());
+        const leader = call(
+          "sessions.catalog.list",
+          { progressId: "leader" },
+          owner,
+          leaderBroadcast,
         );
-      expect.soft(progressRows(leaderBroadcast)).toEqual(["owned"]);
-      expect.soft(progressRows(followerBroadcast)).toEqual(["foreign"]);
-      expect.soft(progressRows(sameCallerBroadcast)).toEqual(["owned"]);
-      await changeForeign({ incognito: true });
-      finish.resolve();
-      const [leaderResult, followerResult, sameCallerResult] = await Promise.all([
-        leader,
-        follower,
-        sameCaller,
-      ]);
-      expect.soft(rows(leaderResult)).toEqual(["owned"]);
-      expect.soft(rows(followerResult)).toEqual([]);
-      expect.soft(rows(sameCallerResult)).toEqual(["owned"]);
-      expect(list).toHaveBeenCalledTimes(2);
-    });
+        const pending = [leader];
+        try {
+          await entered.promise;
+          const sameCaller = call(
+            "sessions.catalog.list",
+            { progressId: "same-caller" },
+            owner,
+            sameCallerBroadcast,
+          );
+          pending.push(sameCaller);
+          const follower = call(
+            "sessions.catalog.list",
+            { progressId: "follower" },
+            foreignOwner,
+            followerBroadcast,
+          );
+          pending.push(follower);
+          await changeForeign({ visibility: "draft" });
+          progress.resolve();
+          await Promise.all([
+            leaderDelivered.promise,
+            followerDelivered.promise,
+            sameCallerDelivered.promise,
+          ]);
+          expect(leaderBroadcast).toHaveBeenCalledOnce();
+          expect(followerBroadcast).toHaveBeenCalledOnce();
+          expect(sameCallerBroadcast).toHaveBeenCalledOnce();
+          const progressRows = (broadcast: typeof leaderBroadcast) =>
+            broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
+              (row: { threadId: string }) => row.threadId,
+            );
+          expect.soft(progressRows(leaderBroadcast)).toEqual(["owned"]);
+          expect.soft(progressRows(followerBroadcast)).toEqual(["foreign"]);
+          expect.soft(progressRows(sameCallerBroadcast)).toEqual(["owned"]);
+          await changeForeign({ incognito: true });
+          finish.resolve();
+          const [leaderResult, followerResult, sameCallerResult] = await Promise.all([
+            leader,
+            follower,
+            sameCaller,
+          ]);
+          expect.soft(rows(leaderResult)).toEqual(["owned"]);
+          expect.soft(rows(followerResult)).toEqual([]);
+          expect.soft(rows(sameCallerResult)).toEqual(["owned"]);
+          expect(list).toHaveBeenCalledTimes(2);
+        } finally {
+          progress.resolve();
+          finish.resolve();
+          await Promise.allSettled(pending);
+        }
+      },
+    );
   });
 
   it.each(

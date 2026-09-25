@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { FailoverError } from "../failover/error.js";
+import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
 import {
   resolveProviderModelMaterializationAuthMode,
   resolveProviderModelRouteMaterializationAuthMode,
@@ -23,19 +26,20 @@ function modelMatchesPreparedTarget(params: {
   model: RuntimeRouteModel;
   provider: string;
   modelId: string;
-  route: NonNullable<AgentRuntimeAuthPlan["modelRoute"]>;
+  route?: AgentRuntimeAuthPlan["modelRoute"];
 }): boolean {
   const modelId = canonicalizeProviderModelId(params.provider, params.model.id ?? "");
   const targetModelId = canonicalizeProviderModelId(params.provider, params.modelId);
   return (
     normalizeProviderId(params.model.provider ?? "") === normalizeProviderId(params.provider) &&
     modelId === targetModelId &&
-    modelMatchesProviderModelRoute({
-      provider: params.provider,
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-      route: params.route,
-    })
+    (!params.route ||
+      modelMatchesProviderModelRoute({
+        provider: params.provider,
+        api: params.model.api,
+        baseUrl: params.model.baseUrl,
+        route: params.route,
+      }))
   );
 }
 
@@ -45,24 +49,17 @@ type PreparedRuntimeModelRequest = {
   authProfileMode?: ProviderModelRouteMaterializationAuthMode;
 };
 
-/** Resolves the exact model tuple selected by a prepared runtime auth plan. */
-export async function materializePreparedRuntimeModel<Model extends RuntimeRouteModel>(params: {
-  plan: AgentRuntimeAuthPlan;
+type PreparedRuntimeModelTarget = {
   provider: string;
   modelId: string;
   config?: OpenClawConfig;
-  model?: Model;
-  /** Re-resolve when a later auth candidate changes credential-scoped model metadata. */
-  forceResolve?: boolean;
-  rejectMismatchedModel?: boolean;
-  resolveModel(
-    request: PreparedRuntimeModelRequest,
-  ): Promise<{ model?: Model | null; error?: string }>;
-}): Promise<Model | undefined> {
-  const route = params.plan.modelRoute;
-  if (!route && !params.forceResolve) {
-    return params.model;
-  }
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  route?: AgentRuntimeAuthPlan["modelRoute"];
+};
+
+function validatePreparedTarget(params: PreparedRuntimeModelTarget): void {
+  const { route } = params;
   if (
     route &&
     (normalizeProviderId(route.provider) !== normalizeProviderId(params.provider) ||
@@ -73,20 +70,68 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
       `Prepared runtime auth route ${route.provider}/${route.modelId} does not match target ${params.provider}/${params.modelId}.`,
     );
   }
+}
+
+/** Validates supplied final metadata without preparing credentials or resolving another model. */
+export function validatePreparedRuntimeModel<Model extends RuntimeRouteModel>(
+  params: PreparedRuntimeModelTarget & { model: Model },
+): Model {
+  validatePreparedTarget(params);
+  const { model, route } = params;
+  if (route && !modelMatchesPreparedTarget({ ...params, route })) {
+    throw new Error(
+      `Caller-provided ${params.provider}/${params.modelId} metadata does not match its prepared ${route.authRequirement} route.`,
+    );
+  }
+  const suppression = resolveBuiltInModelSuppressionFromManifest({
+    provider: model.provider ?? params.provider,
+    id: model.id ?? params.modelId,
+    baseUrl: model.baseUrl,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  if (suppression?.retirement) {
+    throw new FailoverError(suppression.errorMessage, {
+      reason: "model_not_found",
+      provider: model.provider ?? params.provider,
+      model: model.id ?? params.modelId,
+    });
+  }
+  return model;
+}
+
+/** Resolves the exact model tuple selected by a prepared runtime auth plan. */
+export async function materializePreparedRuntimeModel<Model extends RuntimeRouteModel>(params: {
+  plan: AgentRuntimeAuthPlan;
+  provider: string;
+  modelId: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  model?: Model;
+  /** Re-resolve when a later auth candidate changes credential-scoped model metadata. */
+  forceResolve?: boolean;
+  rejectMismatchedModel?: boolean;
+  resolveModel(
+    request: PreparedRuntimeModelRequest,
+  ): Promise<{ model?: Model | null; error?: string }>;
+}): Promise<Model | undefined> {
+  const route = params.plan.modelRoute;
+  const config = route
+    ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
+    : params.config;
+  const target = { ...params, route, config };
+  const validateFinalModel = (model: Model | undefined): Model | undefined =>
+    model ? validatePreparedRuntimeModel({ ...target, model }) : undefined;
+  if (!route && !params.forceResolve) {
+    return validateFinalModel(params.model);
+  }
+  validatePreparedTarget(target);
   const callerModelMatches =
-    params.model !== undefined &&
-    normalizeProviderId(params.model.provider ?? "") === normalizeProviderId(params.provider) &&
-    canonicalizeProviderModelId(params.provider, params.model.id ?? "") ===
-      canonicalizeProviderModelId(params.provider, params.modelId) &&
-    (!route ||
-      modelMatchesPreparedTarget({
-        model: params.model,
-        provider: params.provider,
-        modelId: params.modelId,
-        route,
-      }));
+    params.model !== undefined && modelMatchesPreparedTarget({ ...target, model: params.model });
   if (callerModelMatches && !params.forceResolve) {
-    return params.model;
+    return validateFinalModel(params.model);
   }
   if (params.model && !callerModelMatches && params.rejectMismatchedModel) {
     throw new Error(
@@ -97,13 +142,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   }
 
   const resolved = await params.resolveModel({
-    config: route
-      ? projectProviderModelRouteConfig({
-          provider: params.provider,
-          config: params.config,
-          route,
-        })
-      : (params.config ?? {}),
+    config: config ?? {},
     authProfileId: params.plan.forwardedAuthProfileId,
     authProfileMode: route
       ? resolveProviderModelRouteMaterializationAuthMode({
@@ -112,19 +151,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
         })
       : resolveProviderModelMaterializationAuthMode(params.plan.selectedAuthMode),
   });
-  if (
-    !resolved.model ||
-    normalizeProviderId(resolved.model.provider ?? "") !== normalizeProviderId(params.provider) ||
-    canonicalizeProviderModelId(params.provider, resolved.model.id ?? "") !==
-      canonicalizeProviderModelId(params.provider, params.modelId) ||
-    (route &&
-      !modelMatchesPreparedTarget({
-        model: resolved.model,
-        provider: params.provider,
-        modelId: params.modelId,
-        route,
-      }))
-  ) {
+  if (!resolved.model || !modelMatchesPreparedTarget({ ...target, model: resolved.model })) {
     throw new Error(
       resolved.error ??
         (route
@@ -132,5 +159,6 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
           : `Unable to rematerialize ${params.provider}/${params.modelId} for its resolved auth profile.`),
     );
   }
-  return resolved.model;
+  // Validate only the final route: an API credential may replace retired subscription metadata.
+  return validateFinalModel(resolved.model);
 }

@@ -17,7 +17,6 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
-  normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
   normalizeCronToolsAllowExecTarget,
   normalizeCronToolsAllowExecTargetRequirement,
@@ -29,6 +28,7 @@ import {
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
+import { normalizeCronToolsAllowProvenance } from "./tools-allow-provenance.js";
 import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -122,6 +122,10 @@ function coerceSchedule(schedule: UnknownRecord) {
   const staggerMs = normalizeCronStaggerMs(next.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
+  } else if (next.kind === "cron" && next.staggerMs !== undefined) {
+    // Dropping an authored invalid value would silently apply a default on create
+    // or retain the previous stagger on update before request validation runs.
+    throw new TypeError("schedule.staggerMs must be a valid number or non-negative integer string");
   } else if ("staggerMs" in next) {
     delete next.staggerMs;
   }
@@ -396,60 +400,23 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("scheduledToolPolicy" in base) {
-    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
-    if (scheduledToolPolicy) {
-      next.scheduledToolPolicy = scheduledToolPolicy;
-    } else {
-      delete next.scheduledToolPolicy;
+  // Preserve omitted patch fields; each authority owner decides whether an
+  // authored value is retained, discarded, or converted to recovery state.
+  for (const [field, normalize] of [
+    ["scheduledToolPolicy", normalizeCronScheduledToolPolicy],
+    ["toolsAllowProvenance", normalizeCronToolsAllowProvenance],
+    ["toolsAllowExecTarget", normalizeCronToolsAllowExecTarget],
+    ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
+    ["runtimeAuthority", normalizeCronRuntimeAuthority],
+  ] as const) {
+    if (!(field in base)) {
+      continue;
     }
-  }
-
-  if ("toolsAllowProvenance" in base) {
-    const provenance = isRecord(base.toolsAllowProvenance)
-      ? snapshotOwnCronRecord(base.toolsAllowProvenance)
-      : undefined;
-    if (
-      isRecord(provenance) &&
-      provenance.version === 1 &&
-      provenance.source === "final-executable-surface"
-    ) {
-      next.toolsAllowProvenance = {
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: normalizeCronScheduledToolCallerOrigin(provenance.callerOrigin),
-      };
+    const value = normalize(base[field]);
+    if (value) {
+      next[field] = value;
     } else {
-      delete next.toolsAllowProvenance;
-    }
-  }
-
-  if ("toolsAllowExecTarget" in base) {
-    const execTarget = normalizeCronToolsAllowExecTarget(base.toolsAllowExecTarget);
-    if (execTarget) {
-      next.toolsAllowExecTarget = execTarget;
-    } else {
-      delete next.toolsAllowExecTarget;
-    }
-  }
-
-  if ("toolsAllowExecTargetRequirement" in base) {
-    const requirement = normalizeCronToolsAllowExecTargetRequirement(
-      base.toolsAllowExecTargetRequirement,
-    );
-    if (requirement) {
-      next.toolsAllowExecTargetRequirement = requirement;
-    } else {
-      delete next.toolsAllowExecTargetRequirement;
-    }
-  }
-
-  if ("runtimeAuthority" in base) {
-    const runtimeAuthority = normalizeCronRuntimeAuthority(base.runtimeAuthority);
-    if (runtimeAuthority) {
-      next.runtimeAuthority = runtimeAuthority;
-    } else {
-      delete next.runtimeAuthority;
+      delete next[field];
     }
   }
   if (base.runtimeAuthorityRecoveryRequired === true) {

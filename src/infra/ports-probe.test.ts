@@ -1,24 +1,24 @@
 // Tests local port probing and availability detection.
 import net from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(
+  skip: TestContext["skip"],
   cb: (address: net.AddressInfo) => Promise<void>,
   host = "127.0.0.1",
 ): Promise<void> {
-  const server = net.createServer();
+  await using server = net.createServer();
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, host, () => resolve());
     });
   } catch (err) {
-    if (
-      (err as NodeJS.ErrnoException).code === "EPERM" ||
-      (err as NodeJS.ErrnoException).code === "EADDRNOTAVAIL"
-    ) {
-      return;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EADDRNOTAVAIL") {
+      skip(`TCP listener bind unavailable: ${code}`);
     }
     throw err;
   }
@@ -27,13 +27,7 @@ async function withListeningServer(
     throw new Error("expected tcp address");
   }
 
-  try {
-    await cb(address);
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
+  await cb(address);
 }
 
 describe("tryListenOnPort", () => {
@@ -52,42 +46,53 @@ describe("tryListenOnPort", () => {
     ).rejects.toBe(reason);
   });
 
-  it("can bind and release an ephemeral loopback port", async () => {
-    let port;
+  it("returns an ephemeral port only after its listener closes", async ({ skip }) => {
+    const { promise: closeSignaled, resolve: signalClose } = createDeferred();
+    const { promise: closeReleased, resolve: releaseClose } = createDeferred();
+    const closeSpy = vi.spyOn(net.Server.prototype, "close").mockImplementation(function (
+      this: net.Server,
+      callback?: (error?: Error) => void,
+    ) {
+      closeSpy.mockRestore();
+      return this.close((error?: Error) => {
+        signalClose();
+        void closeReleased.then(() => callback?.(error));
+      });
+    });
+
     try {
-      port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EPERM") {
-        return;
+      let settled = false;
+      const portPromise = tryListenOnPort({
+        port: 0,
+        host: "127.0.0.1",
+        exclusive: true,
+      }).then((port) => {
+        settled = true;
+        return port;
+      });
+
+      const firstEvent = await Promise.race([
+        closeSignaled.then(() => "closing" as const),
+        portPromise.then(
+          () => "settled" as const,
+          (error: unknown) => error,
+        ),
+      ]);
+      if (firstEvent instanceof Error && (firstEvent as NodeJS.ErrnoException).code === "EPERM") {
+        skip("TCP listener bind unavailable: EPERM");
       }
-      throw err;
+      expect(firstEvent).toBe("closing");
+      expect(settled).toBe(false);
+      releaseClose();
+      await expect(portPromise).resolves.toBeGreaterThan(0);
+    } finally {
+      releaseClose();
+      closeSpy.mockRestore();
     }
-    expect(port).toBeGreaterThan(0);
-    // Release proof stays tied to the allocated port: a lingering listener
-    // would accept this probe, a released port refuses it. A rebind assertion
-    // instead collides with any foreign outbound socket occupying the port on
-    // busy runners (EADDRINUSE flake) without detecting leaks any better.
-    await expect(
-      new Promise<"accepted" | "unavailable">((resolve, reject) => {
-        const socket = net.connect({ port, host: "127.0.0.1" });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve("accepted");
-        });
-        socket.once("error", (err) => {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code === "ECONNREFUSED" || code === "ECONNRESET") {
-            resolve("unavailable");
-            return;
-          }
-          reject(err);
-        });
-      }),
-    ).resolves.toBe("unavailable");
   });
 
-  it("rejects when the port is already in use", async () => {
-    await withListeningServer(async (address) => {
+  it("rejects when the port is already in use", async ({ skip }) => {
+    await withListeningServer(skip, async (address) => {
       let rejection: NodeJS.ErrnoException | undefined;
       try {
         await tryListenOnPort({ port: address.port, host: "127.0.0.1" });
@@ -108,16 +113,71 @@ describe("tryListenOnPort", () => {
 });
 
 describe("probePortUsage", () => {
-  it("reports an IPv4-only loopback listener as busy", async () => {
-    await withListeningServer(async (address) => {
+  it("does not open a listener after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("settle deadline expired");
+    controller.abort(reason);
+    const bind = vi.spyOn(net, "createServer");
+    try {
+      await expect(probePortUsage(0, ["127.0.0.1"], controller.signal)).rejects.toBe(reason);
+      expect(bind).not.toHaveBeenCalled();
+    } finally {
+      bind.mockRestore();
+    }
+  });
+
+  it("cancels a bind before TCP confirmation or another host probe", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const close = vi.spyOn(net.Server.prototype, "close").mockImplementation(function (
+      this: net.Server,
+      callback?: (error?: Error) => void,
+    ) {
+      close.mockRestore();
+      return this.close((error?: Error) => {
+        entered.resolve();
+        void release.promise.then(() => callback?.(error));
+      });
+    });
+    const connect = vi.spyOn(net, "connect");
+    const bind = vi.spyOn(net, "createServer");
+    try {
+      const result = probePortUsage(0, ["127.0.0.1", "127.0.0.2"], controller.signal).catch(
+        (error: unknown) => error,
+      );
+      const first = await Promise.race([entered.promise.then(() => "closing"), result]);
+      expect(first).toBe("closing");
+      const reason = new Error("settle deadline expired");
+      controller.abort(reason);
+      release.resolve();
+      expect(await result).toBe(reason);
+      expect(connect).not.toHaveBeenCalled();
+      expect(bind).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      close.mockRestore();
+      connect.mockRestore();
+      bind.mockRestore();
+    }
+  });
+
+  it("reports an IPv4-only loopback listener as busy", async ({ skip }) => {
+    await withListeningServer(skip, async (address) => {
       await expect(probePortUsage(address.port)).resolves.toBe("busy");
     });
   });
 
-  it("can scope a probe to a free loopback address when another address owns the port", async () => {
-    await withListeningServer(async (address) => {
-      await expect(probePortUsage(address.port)).resolves.toBe("busy");
-      await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
-    }, "127.0.0.2");
+  it("can scope a probe to a free loopback address when another address owns the port", async ({
+    skip,
+  }) => {
+    await withListeningServer(
+      skip,
+      async (address) => {
+        await expect(probePortUsage(address.port)).resolves.toBe("busy");
+        await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
+      },
+      "127.0.0.2",
+    );
   });
 });

@@ -1,17 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { createScriptTestHarness } from "./test-helpers.js";
+import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
-const { createTempDir } = createScriptTestHarness();
 const sourceRoot = process.cwd();
 export const loader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 export const declarationInputs = [
@@ -26,15 +28,20 @@ export const declarationInputs = [
   { file: "src/actual.cts", name: "EmittedCts" },
 ] as const;
 
-export function runFixture(
-  root: string,
-  args: string[],
-  privateQa = false,
-  env: NodeJS.ProcessEnv = {},
-) {
-  return spawnSync(process.execPath, args, {
+export function createDeclarationTest() {
+  const test = createCommandTest();
+  test.beforeAll(() => {
+    // Each writer can own multiple native compilers, including on small Windows runners.
+    vi.setConfig({ maxConcurrency: Math.min(2, availableParallelism()) });
+    return () => vi.resetConfig();
+  });
+  return test;
+}
+
+function fixtureOptions(root: string, privateQa = false, env: NodeJS.ProcessEnv = {}) {
+  return {
     cwd: root,
-    encoding: "utf8",
+    encoding: "utf8" as const,
     env: {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
@@ -48,7 +55,26 @@ export function runFixture(
       // Use the build owner's existing direct-tool path, without a fixture pnpm shim.
       OPENCLAW_BUILD_ALL_NO_PNPM: "1",
     },
-  });
+  };
+}
+
+export function runFixture(
+  command: CommandFixture,
+  root: string,
+  args: string[],
+  privateQa = false,
+  env: NodeJS.ProcessEnv = {},
+) {
+  return command.run(process.execPath, args, fixtureOptions(root, privateQa, env));
+}
+
+export function runFixtureModule(
+  command: CommandFixture,
+  root: string,
+  source: string,
+  privateQa = false,
+) {
+  return runFixture(command, root, ["--input-type=module", "--eval", source], privateQa);
 }
 
 type ConfigEntries = {
@@ -64,11 +90,9 @@ function readConfigEntries(
   privateQa: boolean,
   groups: readonly string[],
 ): ConfigEntries {
-  const result = runFixture(
-    root,
+  const result = spawnSync(
+    process.execPath,
     [
-      "--import",
-      loader,
       "--input-type=module",
       "--eval",
       `
@@ -85,7 +109,7 @@ const inputs = configs.filter(config => config.name === "openclaw-unified")
 process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
 `,
     ],
-    privateQa,
+    fixtureOptions(root, privateQa),
   );
   expect(result.status, result.stdout + result.stderr).toBe(0);
   const entries = JSON.parse(result.stdout) as ConfigEntries;
@@ -101,26 +125,31 @@ process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
   };
 }
 
-export function createFixture(
+export function createDeclarationFixture(
+  command: Pick<CommandFixture, "createTempDir">,
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-  root = path.join(fs.realpathSync(createTempDir("openclaw-sdk-declarations-")), "Project"),
+  root = path.join(fs.realpathSync(command.createTempDir("openclaw-sdk-declarations-")), "Project"),
 ) {
+  return createFixture(groups, root);
+}
+
+export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
   // Link the selected graph's real toolchain and runtime packages: each writer
   // validates the fixture's entire dependency topology before and after emit.
   for (const name of [
     ".bin",
-    "@anthropic-ai/claude-agent-sdk",
     "@openclaw/fs-safe",
-    "@typescript/native-preview",
+    "@silvia-odwyer/photon-node",
+    "koffi",
     "playwright-core",
-    "tsdown",
+    "web-tree-sitter",
+    "tree-sitter-bash",
     "tsx",
-    "typescript",
-    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
-      ? ["@types/node", "apache-arrow", "pretty-ms"]
-      : []),
+    "esbuild",
+    "import-meta-resolve",
+    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
   ]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -130,6 +159,7 @@ export function createFixture(
       "junction",
     );
   }
+  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -166,11 +196,20 @@ export function createFixture(
   fs.cpSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), {
     recursive: true,
   });
-  // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
+  // Keep the generator's source owners and import.meta.url lookups inside the fixture.
   const runtimeEntryOwners = new Set([
-    "src/infra/runtime-process-entrypoints.ts",
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+    ...Object.values(runtimeProcessDeclarationEntries),
+    "scripts/lib/managed-windows-job-launcher.mts",
+    "src/process/supervisor/service-child-windows-job-native.ts",
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
+    "src/infra/update-managed-service-handoff-native-loader.ts",
+    "src/shared/deferred.ts",
+    "src/shared/freebsd-process-identity.ts",
+    "src/infra/node-runtime-executable.ts",
+    "src/infra/runtime-dependency-ownership.ts",
+    "src/shared/non-packaged-plugin-dirs.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    "packages/normalization-core/src/record-coerce.ts",
   ]);
   for (const source of runtimeEntryOwners) {
     write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));
@@ -185,8 +224,15 @@ export function createFixture(
   // The full config resolves these runtime inputs before selecting declaration groups.
   for (const source of [
     "src/worker/worker-deploy-browser-runtime.ts",
+    "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "src/infra/command-explainer/tree-sitter-runtime.ts",
+    "packages/gateway-client/src/websocket.ts",
+    "src/gateway/desktop/node-stream-broker.ts",
+    "src/gateway/desktop/observe-bridge.ts",
+    "src/gateway/server-runtime-state.ts",
+    "src/realtime-transcription/websocket-session.ts",
   ]) {
     write(source, "export {};\n");
   }
@@ -298,21 +344,25 @@ export function createFixture(
   };
 }
 
-export function runWriter(root: string, privateQa = false, env: NodeJS.ProcessEnv = {}) {
+export function runWriter(
+  command: CommandFixture,
+  root: string,
+  privateQa = false,
+  env: NodeJS.ProcessEnv = {},
+) {
   return runFixture(
+    command,
     root,
-    ["--import", loader, path.join(root, "scripts/write-plugin-sdk-entry-dts.ts")],
+    [path.join(root, "scripts/write-plugin-sdk-entry-dts.ts")],
     privateQa,
     env,
   );
 }
 
-export function runUnifiedBuild(root: string) {
-  return runFixture(root, [
-    "--import",
-    loader,
-    "--input-type=module",
-    "--eval",
+export function runUnifiedBuild(command: CommandFixture, root: string) {
+  return runFixtureModule(
+    command,
+    root,
     `
 import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
@@ -323,13 +373,18 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   process.exitCode = result.exitCode;
 });
 `,
-  ]);
+  );
 }
 
-export function runUnifiedWriter(root: string, env: NodeJS.ProcessEnv = {}) {
+export function runUnifiedWriter(
+  command: CommandFixture,
+  root: string,
+  env: NodeJS.ProcessEnv = {},
+) {
   return runFixture(
+    command,
     root,
-    ["--import", loader, path.join(root, "scripts/write-unified-entry-dts.ts")],
+    [path.join(root, "scripts/write-unified-entry-dts.ts")],
     false,
     env,
   );
@@ -386,7 +441,9 @@ export function expectStagingClean(root: string) {
   expect(
     fs
       .readdirSync(path.join(root, ".artifacts"))
-      .filter((name) => name.startsWith("plugin-sdk-staging-")),
+      .filter(
+        (name) => name.startsWith("plugin-sdk-staging-") || name.startsWith("native-declarations-"),
+      ),
   ).toEqual([]);
   expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(false);
 }

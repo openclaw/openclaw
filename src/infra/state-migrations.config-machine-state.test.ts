@@ -1,45 +1,55 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("legacy config machine-state migration", () => {
-  it("imports machine-owned values and keeps existing database state", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    writeConfigMachineState("config.lastTouchedAt", "canonical", { env });
+  it.each(["canonical", "legacy", "both"])(
+    "imports %s TTS settings and keeps existing database state",
+    (shape) => {
+      const stateDir = tempDirs.make("openclaw-config-machine-state-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      writeConfigMachineState("config.lastTouchedAt", "canonical", { env });
 
-    const result = migrateLegacyConfigMachineState({
-      env,
-      config: {
-        meta: { lastTouchedVersion: "legacy", lastTouchedAt: "legacy-time" },
-        hooks: { internal: { installs: { pack: { source: "npm" } } } },
-        plugins: { bundledDiscovery: "compat" },
-        tts: { prefsPath: "/tmp/tts.json" },
-        cron: { store: "/tmp/jobs.json" },
-      } as never,
-    });
+      const result = migrateLegacyConfigMachineState({
+        env,
+        config: {
+          meta: { lastTouchedVersion: "legacy", lastTouchedAt: "legacy-time" },
+          hooks: { internal: { installs: { pack: { source: "npm" } } } },
+          plugins: { bundledDiscovery: "compat" },
+          ...(shape !== "legacy" ? { tts: { prefsPath: "/tmp/tts.json" } } : {}),
+          ...(shape !== "canonical"
+            ? {
+                messages: {
+                  tts: { prefsPath: shape === "both" ? "/tmp/ignored-tts.json" : "/tmp/tts.json" },
+                },
+              }
+            : {}),
+          cron: { store: "/tmp/jobs.json" },
+        } as never,
+      });
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain("Kept existing shared SQLite config.lastTouchedAt state");
-    expect(readConfigMachineState("config.lastTouchedAt", { env })).toBe("canonical");
-    expect(readConfigMachineState("hooks.internal.installs", { env })).toEqual({
-      pack: { source: "npm" },
-    });
-    expect(readConfigMachineState("plugins.bundledDiscovery", { env })).toBe("compat");
-    expect(readConfigMachineState("tts.prefsPath", { env })).toBe("/tmp/tts.json");
-    expect(readConfigMachineState("cron.store", { env })).toBe("/tmp/jobs.json");
-  });
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toContain("Kept existing shared SQLite config.lastTouchedAt state");
+      expect(readConfigMachineState("config.lastTouchedAt", { env })).toBe("canonical");
+      expect(readConfigMachineState("hooks.internal.installs", { env })).toEqual({
+        pack: { source: "npm" },
+      });
+      expect(readConfigMachineState("plugins.bundledDiscovery", { env })).toBe("compat");
+      expect(readConfigMachineState("tts.prefsPath", { env })).toBe("/tmp/tts.json");
+      expect(readConfigMachineState("cron.store", { env })).toBe("/tmp/jobs.json");
+    },
+  );
 
   it("merges legacy hook installs while canonical records win conflicts", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const stateDir = tempDirs.make("openclaw-config-machine-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     writeConfigMachineState(
       "hooks.internal.installs",
@@ -69,7 +79,7 @@ describe("legacy config machine-state migration", () => {
   });
 
   it("conservatively preserves compatibility for an unstamped plugin allowlist", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const stateDir = tempDirs.make("openclaw-config-machine-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
     migrateLegacyConfigMachineState({ env, config: { plugins: { allow: ["telegram"] } } });
@@ -78,7 +88,7 @@ describe("legacy config machine-state migration", () => {
   });
 
   it("preserves compatibility discovery for a pre-cutover plugin allowlist", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const stateDir = tempDirs.make("openclaw-config-machine-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
     migrateLegacyConfigMachineState({
@@ -93,7 +103,7 @@ describe("legacy config machine-state migration", () => {
   });
 
   it("does not infer compatibility discovery after the fixed cutover release", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const stateDir = tempDirs.make("openclaw-config-machine-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
     migrateLegacyConfigMachineState({
@@ -108,7 +118,7 @@ describe("legacy config machine-state migration", () => {
   });
 
   it("does not re-report inferred bundledDiscovery on second pass with beta version", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const stateDir = tempDirs.make("openclaw-config-machine-state-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
     // First pass: infer compat and write to SQLite

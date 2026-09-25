@@ -1,6 +1,6 @@
 // Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
+import { analyzeMatrixSpoilers } from "./format-spoiler-ranges.js";
 import {
   MATRIX_FORMAT_PROFILE,
   markdownToMatrixBody,
@@ -134,7 +134,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("does not treat pipes in link destinations as spoiler delimiters", () => {
     const markdown = "[docs\nmore](https://example.test/a(b)||literal||) ||secret||";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([
       markdown.indexOf("||secret||"),
       markdown.lastIndexOf("||"),
     ]);
@@ -237,7 +237,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("leaves compact empty-cell pipes to native table grammar", () => {
     const markdown = "| A | B | C |\n|---|---|---|\n| x || y || z |";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([]);
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([]);
     expect(markdownToMatrixHtml(markdown)).toContain("<table>");
     expect(markdownToMatrixBody(markdown)).toBe(markdown);
   });
@@ -285,9 +285,10 @@ describe("markdownToMatrixHtml", () => {
     expect(html).toBe("<p>alt</p>");
   });
 
-  it("preserves line breaks", () => {
-    const html = markdownToMatrixHtml("line1\nline2");
-    expect(html).toBe("<p>line1<br>\nline2</p>");
+  it.each(["\n", "\r\n", "\r"])("preserves %j line breaks in text and HTML", (newline) => {
+    const markdown = `line1${newline}line2`;
+    expect(markdownToMatrixBody(markdown)).toBe("line1\nline2");
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>line1<br>\nline2</p>");
   });
 
   it("compacts loose ordered lists without paragraph tags", () => {
@@ -540,6 +541,16 @@ describe("markdownToMatrixHtml", () => {
       name: "keeps escaped mentions literal after escaped backticks",
       markdown: "\\`literal then \\@alice:example.org",
       html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "keeps escaped mentions literal after unmatched backticks",
+      markdown: "`literal then \\@alice:example.org",
+      html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "keeps escaped room mentions literal after unmatched double backticks",
+      markdown: "``literal then \\@room",
+      html: "<p>``literal then @room</p>",
     },
     {
       name: "restores escaped mentions in markdown link labels without linking them",

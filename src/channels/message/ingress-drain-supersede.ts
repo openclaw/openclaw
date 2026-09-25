@@ -1,6 +1,8 @@
 import { activeClaimKey, type ActiveHandlerState } from "./ingress-drain-state.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.js";
 
+export type IngressSupersedeDecision = boolean | (() => boolean);
+
 type SupersedeActiveStatesParams<TPayload, TMetadata> = {
   candidate: ChannelIngressQueueRecord<TPayload, TMetadata>;
   laneKey: string;
@@ -11,7 +13,7 @@ type SupersedeActiveStatesParams<TPayload, TMetadata> = {
       | ChannelIngressQueueRecord<TPayload, TMetadata>
       | ChannelIngressQueueClaim<TPayload, TMetadata>,
     pending: ChannelIngressQueueClaim<TPayload, TMetadata>,
-  ) => boolean | Promise<boolean>;
+  ) => IngressSupersedeDecision | Promise<IngressSupersedeDecision>;
   clearStallTimer: (state: ActiveHandlerState<TPayload, TMetadata>) => void;
   completeClaim: (claim: ChannelIngressQueueClaim<TPayload, TMetadata>) => Promise<void>;
   formatError: (error: unknown) => string;
@@ -44,7 +46,9 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
 
   let supersededAny = false;
   for (const pending of states) {
-    if (!(await params.shouldSupersedePending?.(params.candidate, pending.claim))) {
+    const decision = await params.shouldSupersedePending?.(params.candidate, pending.claim);
+    // Async policy can expire before the drain resumes; check it at the effect boundary.
+    if (!(typeof decision === "function" ? decision() : decision)) {
       continue;
     }
     // Revalidate after the async predicate so a late true cannot kill adopted or replaced work.

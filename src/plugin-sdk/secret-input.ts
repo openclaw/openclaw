@@ -1,35 +1,29 @@
 // Secret input helpers normalize credential prompt definitions for plugin setup flows.
 import { z } from "zod";
-import {
-  hasConfiguredSecretInput,
-  isSecretRef,
-  coerceSecretRef,
-  resolveSecretInputString,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "../config/types.secrets.js";
-import { isBuiltInDefaultSecretProviderRef, isValidSecretRef } from "../secrets/ref-contract.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import "../config/types.secrets.js";
+import "../secrets/ref-contract.js";
+import "../utils/normalize-secret-input.js";
 import { buildSecretInputSchema, registerSensitiveConfigSchema } from "./secret-input-schema.js";
-
-export type {
-  SecretInput,
-  SecretInputStringResolution,
-  SecretInputStringResolutionMode,
-} from "../config/types.secrets.js";
 export {
-  buildSecretInputSchema,
-  registerSensitiveConfigSchema,
-  coerceSecretRef,
   hasConfiguredSecretInput,
-  isBuiltInDefaultSecretProviderRef,
   isSecretRef,
-  isValidSecretRef,
+  coerceSecretRef,
   resolveSecretInputString,
   normalizeResolvedSecretInputString,
-  normalizeSecretInput,
   normalizeSecretInputString,
-};
+  type SecretInput,
+  type SecretInputStringResolution,
+  type SecretInputStringResolutionMode,
+} from "../config/types.secrets.js";
+export { isBuiltInDefaultSecretProviderRef, isValidSecretRef } from "../secrets/ref-contract.js";
+export { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+
+export {
+  readProviderEnvValue,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "../secrets/provider-credential-values.js";
+
+export { buildSecretInputSchema, registerSensitiveConfigSchema };
 
 /**
  * Builds an optional secret-input schema for config fields that may be omitted.

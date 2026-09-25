@@ -42,7 +42,7 @@ const hoisted = await vi.hoisted(async () => {
 });
 const generatedVendorAssets = generateExportHtmlVendorAssets();
 
-vi.mock("../../acp/runtime/session-meta.js", () => ({
+vi.mock("../../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
 }));
 
@@ -110,7 +110,7 @@ vi.mock("node:fs/promises", async () => {
           return contents;
         }
       }
-      return actual.readFile(filePath, encoding);
+      return actual.readFile(filePath, { encoding });
     }),
   };
   return {

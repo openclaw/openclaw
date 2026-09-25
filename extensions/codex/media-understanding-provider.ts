@@ -11,24 +11,19 @@ import type {
   StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  runBoundedCodexAppServerTurn,
-  type CodexBoundedTurnOptions,
-} from "./src/app-server/bounded-turn.js";
+import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
 
 const CODEX_MEDIA_PROVIDER_ID = "codex";
-const DEFAULT_CODEX_IMAGE_MODEL = "gpt-5.6-sol";
+const DEFAULT_CODEX_IMAGE_MODEL = "gpt-6-astra";
 const DEFAULT_CODEX_IMAGE_PROMPT = "Describe the image.";
-
-type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;
 
 /**
  * Builds the media-understanding provider that delegates image tasks to an
  * isolated Codex app-server session.
  */
 export function buildCodexMediaUnderstandingProvider(
-  options: CodexMediaUnderstandingProviderOptions = {},
+  options: CodexBoundedTurnOptions = {},
 ): MediaUnderstandingProvider {
   return {
     id: CODEX_MEDIA_PROVIDER_ID,
@@ -65,14 +60,15 @@ export function buildCodexMediaUnderstandingProvider(
 
 async function describeCodexImages(
   req: ImagesDescriptionRequest,
-  options: CodexMediaUnderstandingProviderOptions,
+  options: CodexBoundedTurnOptions,
 ): Promise<ImagesDescriptionResult> {
   const model = req.model.trim();
   if (!model) {
     throw new Error("Codex image understanding requires model id.");
   }
   req.signal?.throwIfAborted();
-
+  const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
@@ -101,7 +97,7 @@ async function describeCodexImages(
 
 async function extractCodexStructured(
   req: StructuredExtractionRequest,
-  options: CodexMediaUnderstandingProviderOptions,
+  options: CodexBoundedTurnOptions,
 ): Promise<StructuredExtractionResult> {
   const model = req.model.trim();
   if (!model) {
@@ -118,7 +114,8 @@ async function extractCodexStructured(
     throw new Error("Codex structured extraction requires at least one image input.");
   }
   req.signal?.throwIfAborted();
-
+  const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
@@ -133,7 +130,7 @@ async function extractCodexStructured(
     developerInstructions:
       "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
     input: buildCodexStructuredInput(req),
-    requiredModalities: requiredStructuredModalities(),
+    requiredModalities: ["text", "image"],
     isolation: "configured-transport",
   });
   return normalizeStructuredExtractionResult({ text, model, provider: req.provider, req });
@@ -145,10 +142,6 @@ function buildCodexImagePrompt(req: ImagesDescriptionRequest): string {
     return prompt;
   }
   return `${prompt}\n\nAnalyze all ${req.images.length} images together.`;
-}
-
-function requiredStructuredModalities(): string[] {
-  return ["text", "image"];
 }
 
 function buildCodexStructuredInput(req: StructuredExtractionRequest): CodexUserInput[] {

@@ -32,6 +32,15 @@ describe("DraftSessionStartup", () => {
     expect(startup.resume()).toEqual({ kind: "wait" });
   });
 
+  it("retains background disposition outside the RPC parameters", () => {
+    const gateway = { connected: true, sessionCreateScope: "gateway:principal:boot-a" };
+    const startup = new DraftSessionStartup(gateway);
+    const params = startup.start({ agentId: "main", message: "background intent" }, true);
+    expect(params).not.toHaveProperty("background");
+    startup.interrupt();
+    expect(startup.resume()).toMatchObject({ kind: "resume", params, background: true });
+  });
+
   it("fails closed and unlocks when the Gateway scope or process boot changes", () => {
     const { gateway, startup } = createStartup();
     startup.interrupt();

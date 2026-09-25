@@ -14,7 +14,7 @@ export function isBundleCapabilitySupported(
     return true;
   }
   // Only the Claude reader merges agent directories into the runtime skill roots
-  // (`resolveClaudeSkillDirs`); Cursor detects `.cursor/agents` but never loads it.
+  // during manifest loading; Cursor detects `.cursor/agents` but never loads it.
   if (capability === "agents") {
     return format === "claude";
   }

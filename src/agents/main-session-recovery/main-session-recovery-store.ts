@@ -16,7 +16,8 @@ import {
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
 
-type MainSessionRecoveryStoreTarget = {
+export type MainSessionRecoveryStoreTarget = {
+  agentId?: string;
   sessionKey: string;
   storePath: string;
 };
@@ -75,25 +76,19 @@ export async function commitMainSessionRecovery(params: {
     params.command.kind === "validate_foreground" || params.command.kind === "release_foreground"
       ? params.command.claim
       : undefined;
-  const scansAliases = Boolean(
-    params.scanAliases || reservationCleanup || recoveryAdmission || exactOwnerClaim,
-  );
-  return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
+  const result = await applySessionEntryReplacements<MainSessionRecoveryStoreResult | undefined>({
+    agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
-    ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
+    ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
     update: (entries) => {
-      // Recheck inside the synchronous commit: shutdown can begin while this
-      // recovery owner is waiting to acquire the session-store transaction.
-      if (params.shouldContinue?.() === false) {
-        return {
-          result: {
-            transition: { kind: "rejected", reason: "stale_generation" },
-          },
-        };
-      }
+      // Recheck after entering write admission: shutdown can begin while this
+      // recovery owner is waiting, including between exact and moved-key lookups.
       const expectedGeneration = currentGenerationRequiredBy(params.command);
-      if (expectedGeneration && expectedGeneration !== getAgentEventLifecycleGeneration()) {
+      if (
+        params.shouldContinue?.() === false ||
+        (expectedGeneration && expectedGeneration !== getAgentEventLifecycleGeneration())
+      ) {
         return {
           result: {
             transition: { kind: "rejected", reason: "stale_generation" },
@@ -107,34 +102,46 @@ export async function commitMainSessionRecovery(params: {
           ? undefined
           : selected;
       if (reservationCleanup) {
-        candidate =
-          entries.find(({ entry }) => matchesReservation(entry, reservationCleanup)) ?? selected;
+        candidate = entries.find(({ entry }) => matchesReservation(entry, reservationCleanup));
       } else if (recoveryAdmission) {
         // Canonical session-key migration may happen between reservation and
         // Gateway admission; the reservation identity remains authoritative.
-        candidate =
-          entries.find(({ entry }) => {
-            const reservation = (entry as SessionEntry).mainRestartRecovery?.reservation;
-            return (
-              entry.sessionId === recoveryAdmission.sessionId &&
-              reservation?.runId === recoveryAdmission.runId &&
-              reservation.lifecycleGeneration === recoveryAdmission.lifecycleGeneration
-            );
-          }) ?? selected;
+        candidate = entries.find(({ entry }) => {
+          const reservation = (entry as SessionEntry).mainRestartRecovery?.reservation;
+          return (
+            entry.sessionId === recoveryAdmission.sessionId &&
+            reservation?.runId === recoveryAdmission.runId &&
+            reservation.lifecycleGeneration === recoveryAdmission.lifecycleGeneration
+          );
+        });
       } else if (exactOwnerClaim) {
-        candidate =
-          entries.find(({ entry }) => {
-            const state = (entry as SessionEntry).mainRestartRecovery;
-            return (
-              state?.cycleId === exactOwnerClaim.cycleId &&
-              state.foregroundClaims?.lifecycleGeneration === exactOwnerClaim.lifecycleGeneration &&
-              state.foregroundClaims.tokens.includes(exactOwnerClaim.claimId)
-            );
-          }) ?? selected;
+        candidate = entries.find(({ entry }) => {
+          const state = (entry as SessionEntry).mainRestartRecovery;
+          return (
+            state?.cycleId === exactOwnerClaim.cycleId &&
+            state.foregroundClaims?.lifecycleGeneration === exactOwnerClaim.lifecycleGeneration &&
+            state.foregroundClaims.tokens.includes(exactOwnerClaim.claimId)
+          );
+        });
       } else if (ownerClaim && (!selected || selected.entry.sessionId !== ownerClaim.sessionId)) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
       } else if (params.scanAliases && params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
+      }
+      if (
+        !candidate &&
+        !params.scanAliases &&
+        (reservationCleanup ||
+          recoveryAdmission ||
+          exactOwnerClaim ||
+          ownerClaim ||
+          params.command.kind === "inspect")
+      ) {
+        // Discover moved identities only after the exact key misses.
+        return { result: undefined };
+      }
+      if (reservationCleanup || recoveryAdmission || exactOwnerClaim) {
+        candidate ??= selected;
       }
       if (!candidate) {
         return {
@@ -147,20 +154,13 @@ export async function commitMainSessionRecovery(params: {
       }
       const entry = candidate.entry as SessionEntry;
       const previousRecoveryState = entry.mainRestartRecovery;
-      let command: MainSessionRecoveryCommand;
-      if (ownerClaim) {
-        command =
-          ownerClaim.sessionKey === candidate.sessionKey
-            ? ownerClaim
-            : { ...ownerClaim, sessionKey: candidate.sessionKey };
-      } else if (
-        (params.command.kind === "observe" || params.command.kind === "inspect") &&
+      const command =
+        (params.command.kind === "claim_foreground" ||
+          params.command.kind === "observe" ||
+          params.command.kind === "inspect") &&
         params.command.sessionKey !== candidate.sessionKey
-      ) {
-        command = { ...params.command, sessionKey: candidate.sessionKey };
-      } else {
-        command = params.command;
-      }
+          ? { ...params.command, sessionKey: candidate.sessionKey }
+          : params.command;
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         previousRecoveryState !== entry.mainRestartRecovery ||
@@ -174,6 +174,7 @@ export async function commitMainSessionRecovery(params: {
       };
     },
   });
+  return result ?? commitMainSessionRecovery({ ...params, scanAliases: true });
 }
 
 export async function refreshMainSessionRecoveryOwner(
@@ -209,35 +210,26 @@ export async function claimMainSessionRecoveryOwner(params: {
   runId?: string;
   target: MainSessionRecoveryStoreTarget;
 }) {
-  const command = {
-    kind: "claim_foreground" as const,
-    cycleId: randomUUID(),
-    lifecycleGeneration: params.lifecycleGeneration,
-    sessionId: params.sessionId,
-    sessionKey: params.target.sessionKey,
-    claimId: randomUUID(),
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-  let claim = await commitMainSessionRecovery({
-    command,
+  const claim = await commitMainSessionRecovery({
+    command: {
+      kind: "claim_foreground",
+      cycleId: randomUUID(),
+      lifecycleGeneration: params.lifecycleGeneration,
+      sessionId: params.sessionId,
+      sessionKey: params.target.sessionKey,
+      claimId: randomUUID(),
+      ...(params.runId ? { runId: params.runId } : {}),
+    },
     requireWriteSuccess: true,
     target: params.target,
   });
-  if (claim.transition.kind === "rejected" && claim.transition.reason === "session_replaced") {
-    claim = await commitMainSessionRecovery({
-      command,
-      requireWriteSuccess: true,
-      scanAliases: true,
-      target: params.target,
-    });
-  }
   if (claim.transition.kind === "foreground_claimed") {
     if (!claim.entry || !claim.sessionKey) {
       return { kind: "invalidated", reason: "state_changed" } as const;
     }
     return {
       kind: "claimed",
-      lease: { ...claim.transition.claim, storePath: params.target.storePath },
+      lease: { ...params.target, ...claim.transition.claim },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
     } as const;
@@ -248,7 +240,7 @@ export async function claimMainSessionRecoveryOwner(params: {
   if (!claim.entry && (params.allowMissingSession || params.replacementSessionId)) {
     // A fresh explicit session has no predecessor. An automatic rollover can
     // also lose its predecessor before admission. Either way, no row remains to fence.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const healthyExpectedSession =
     claim.entry &&
@@ -262,12 +254,12 @@ export async function claimMainSessionRecoveryOwner(params: {
     claim.sessionKey &&
     !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey)
   ) {
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   if (healthyExpectedSession) {
     // A healthy completion may clear recovery between the caller's read and this
     // transaction. Only that fully clean same-session state can proceed unclaimed.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;
@@ -279,26 +271,16 @@ export async function inspectMainSessionRecoveryRequired(params: {
   lifecycleGeneration: string;
   target: MainSessionRecoveryStoreTarget;
 }) {
-  const command = {
-    kind: "inspect" as const,
-    lifecycleGeneration: params.lifecycleGeneration,
-    sessionKey: params.target.sessionKey,
-  };
-  let result = await commitMainSessionRecovery({
-    command,
+  const result = await commitMainSessionRecovery({
+    command: {
+      kind: "inspect",
+      lifecycleGeneration: params.lifecycleGeneration,
+      sessionKey: params.target.sessionKey,
+    },
     expectedSessionId: params.expectedSessionId,
     requireWriteSuccess: true,
     target: params.target,
   });
-  if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
-    result = await commitMainSessionRecovery({
-      command,
-      expectedSessionId: params.expectedSessionId,
-      requireWriteSuccess: true,
-      scanAliases: true,
-      target: params.target,
-    });
-  }
   if (result.transition.kind === "observed") {
     return result.transition.view.status === "inactive"
       ? { kind: "not_required" }
@@ -337,7 +319,12 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   ) {
     return undefined;
   }
-  return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
+  return {
+    agentId: lease.agentId,
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: lease.storePath,
+  };
 }
 
 export async function releaseMainSessionRecoveryOwner(

@@ -1,7 +1,5 @@
-import {
-  isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -19,10 +17,8 @@ import {
   hasExecApprovalPayload,
   hasExecApprovalUnavailablePayload,
 } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -30,7 +26,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    dispatcher,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
@@ -42,6 +37,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     shouldRouteToOriginating,
     shouldSendToolSummaries,
     shouldSendVerboseProgressMessages,
+    shouldSuppressProgressDelivery,
     turnLedger,
   } = state;
   // When automatic source delivery is suppressed, still let the agent process
@@ -54,7 +50,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }
 
   let didSendPlanStatusNotice = false;
-  const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
+  const formatPlanUpdateText = (payload: {
+    explanation?: string;
+    explanationFormat?: "plain";
+    steps?: AgentPlanStep[];
+  }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
       .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
@@ -65,10 +65,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         maxLineChars: 120,
       }).join("\n");
     }
-    return explanation || "Planning next steps.";
+    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
+    return payload.explanationFormat === "plain"
+      ? "Progress updated"
+      : explanation || "Planning next steps.";
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
   }): Promise<void> => {
     if (
@@ -99,7 +103,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     acceptedReplyPayload: false,
     blockCount: 0,
     channelTransformSuppressed: false,
-    hasPendingDirectBlockReplyDelivery: false,
+    pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
@@ -123,16 +127,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     ) {
       return null;
     }
-    if (shouldSendToolSummaries()) {
-      return payload;
-    }
-    if (hasExecApprovalPayload(payload) || hasExecApprovalUnavailablePayload(payload)) {
-      return payload;
-    }
-    if (hasAskUserPayload(payload)) {
-      return payload;
-    }
-    if (isFastModeAutoProgressPayload(payload)) {
+    if (
+      shouldSendToolSummaries() ||
+      hasExecApprovalPayload(payload) ||
+      hasExecApprovalUnavailablePayload(payload) ||
+      hasAskUserPayload(payload)
+    ) {
       return payload;
     }
     // Group/native flows intentionally suppress tool summary text, but media-only
@@ -149,9 +149,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     originatingChannel: state.routeReplyChannel,
     systemEvent: shouldRouteToOriginating,
   });
-  const shouldSuppressProgressDelivery = () =>
-    state.sendPolicyDenied ||
-    (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -165,16 +162,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     options?.requiresToolSummaryVisibility === true &&
     (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
       options.allowWhenToolSummariesHidden === true);
-  const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
-    if (!progressState.hasPendingDirectBlockReplyDelivery) {
-      return;
-    }
-    // Direct block replies are queued asynchronously so lightweight replies do
-    // not wait for dispatcher idle. Flush only before later tool/progress
-    // callbacks and final completion where external ordering is visible.
-    progressState.hasPendingDirectBlockReplyDelivery = false;
-    await waitForReplyDispatcherIdle(dispatcher, abortSignal);
-  };
+  const waitForPendingDirectBlockReplyDelivery = (abortSignal?: AbortSignal) =>
+    waitForReplyDispatcherIdle(
+      { waitForIdle: () => progressState.pendingDirectBlockReplyDelivery },
+      abortSignal,
+    );
   const shouldForwardProgressCallback = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     forwardWhenSourceDeliverySuppressed?: boolean;
@@ -273,6 +265,25 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     };
   };
 
+  const reasoningCallback = params.replyOptions?.onReasoningStream;
+  const onReasoningStream = reasoningCallback
+    ? wrapProgressCallback(
+        (payload: Parameters<NonNullable<GetReplyOptions["onReasoningStream"]>>[0]) => {
+          // Preview callbacks bypass queued delivery. Clean the outward snapshot,
+          // not provider reasoning or the archived source used for replay.
+          const text = sanitizeUserFacingText(payload.text, {
+            conversationContext: ctx.BodyForAgent ?? ctx.Body,
+            streaming: true,
+          });
+          const visible = { ...payload, text };
+          if (!text.trim() && !resolveSendableOutboundReplyParts(visible).hasMedia) {
+            return false;
+          }
+          return reasoningCallback(visible);
+        },
+      )
+    : undefined;
+
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
@@ -314,10 +325,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             : undefined,
       })
     : undefined;
-  const canCaptureCliPreambleEvents =
-    Boolean(params.replyOptions?.onItemEvent) && shouldBridgeCliPreambleEvents(params.replyOptions);
-  const canConsumeItemEvents =
-    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureCliPreambleEvents;
+  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
   // CLI runners classify preambles as item events only when this handler exists.
   // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent = canConsumeItemEvents
@@ -352,12 +360,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : runtimeReplyConfig,
   );
   state.recordAgentDispatchStarted();
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     sendPlanUpdate,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
     typing,
-    shouldSuppressProgressDelivery,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,
@@ -366,6 +373,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     shouldForwardProgressCallback,
     preserveProgressCallbackStartOrder,
     wrapProgressCallback,
+    onReasoningStream,
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,

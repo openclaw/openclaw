@@ -19,40 +19,15 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output: OpenAICompletionsOutput = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output: OpenAICompletionsOutput = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              reasoning_details: [
-                { type: "reasoning.text", text: "I need to think about this." },
-                { type: "reasoning.text", text: " Let me analyze." },
-              ],
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: null,
-          },
+      makeCompletionsChunk({
+        reasoning_details: [
+          { type: "reasoning.text", text: "I need to think about this." },
+          { type: "reasoning.text", text: " Let me analyze." },
         ],
       }),
       makeCompletionsChunk({
@@ -61,13 +36,7 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({}, "stop"),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     const thinkingBlock = expectDefined(output.content[0], "output.content[0] test invariant") as {
       type: string;
@@ -93,51 +62,20 @@ describe("openai completions stream", () => {
       baseUrl: "https://api.mistral.ai/v1",
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              content: [
-                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
-                { type: "text", content: "Visible answer." },
-              ],
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: null,
-          },
+      makeCompletionsChunk({
+        content: [
+          { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+          { type: "text", content: "Visible answer." },
         ],
       }),
       makeCompletionsChunk({}, "stop"),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.content).toEqual([
       { type: "thinking", thinking: "Need to think." },
@@ -281,23 +219,7 @@ describe("openai completions stream", () => {
       contextWindow: 128000,
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
@@ -314,13 +236,7 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({}, "tool_call"),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     const toolCall = (output.content as Array<{ type?: string }>).find(

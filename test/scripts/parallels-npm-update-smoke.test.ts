@@ -23,7 +23,13 @@ import {
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createDeferred } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
@@ -101,18 +107,25 @@ function runPrerequisiteCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   for (const name of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "OPENAI_API_KEY"]) {
     delete childEnv[name];
   }
-  return spawnSync(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...childEnv,
-      ...env,
-      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
-      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
-      OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+  return spawnSync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptProcessEntrypoints.npmUpdateSmoke)),
+      ...args,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...childEnv,
+        ...env,
+        OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
+        OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
+        OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+      },
+      timeout: 10_000,
     },
-    timeout: 10_000,
-  });
+  );
 }
 
 function runFrozenPrerequisiteHelper(env: NodeJS.ProcessEnv = {}) {
@@ -432,13 +445,17 @@ exit 1
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
   });
 
-  it("uses one macOS guest identity to write and execute update scripts", async () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "prlctl.log");
-    const prlctlPath = path.join(root, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
+  it.each([0, 7])(
+    "uses one macOS guest identity through upload, streamed exit %i, and cleanup",
+    async (exitCode) => {
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
+      const logPath = path.join(root, "prlctl.log");
+      const runArgsPath = path.join(root, "run-args");
+      const uploadedScriptPath = path.join(root, "uploaded-script");
+      const prlctlPath = path.join(root, "prlctl");
+      writeFileSync(
+        prlctlPath,
+        `#!/usr/bin/env bash
 set -euo pipefail
 log_path=${JSON.stringify(logPath)}
 printf '%s\\n' "$*" >>"$log_path"
@@ -448,7 +465,7 @@ if [[ "$args" == *" --current-user whoami "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
-  cat >/dev/null
+  cat >${JSON.stringify(uploadedScriptPath)}
   exit 0
 fi
 if [[ "$args" == *" /bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
@@ -457,62 +474,76 @@ fi
 if [[ "$args" == *" /usr/sbin/chown desktop-user /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
   exit 0
 fi
+if [[ "$args" == *" /bin/bash /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  printf '%s\\0' "$@" >${JSON.stringify(runArgsPath)}
+  printf 'update-output\\n'
+  printf 'update-diagnostic\\n' >&2
+  exit ${exitCode}
+fi
 if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
   exit 0
 fi
 exit 1
 `,
-    );
-    chmodSync(prlctlPath, 0o755);
+      );
+      chmodSync(prlctlPath, 0o755);
+      const output: string[] = [];
 
-    await withEnvAsync(
-      {
-        OPENAI_API_KEY: "test-key",
-        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      async () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const stream = vi.fn().mockResolvedValue(0);
-        Reflect.set(smoke, "runStreamingToJobLog", stream);
-        const guestMacos = Reflect.get(smoke, "guestMacos") as (
-          script: string,
-          timeoutMs: number,
-          ctx: { append: (chunk: string) => void },
-        ) => Promise<void>;
-        const ctx = { append: vi.fn() };
+      await withEnvAsync(
+        {
+          OPENAI_API_KEY: "test-key",
+          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        async () => {
+          const smoke = new NpmUpdateSmoke({
+            ...TEST_AUTH,
+            dependencyTarballs: [],
+            registryPackageTarballs: [],
+            json: false,
+            packageSpec: "openclaw@latest",
+            platforms: new Set<Platform>(["macos"]),
+            provider: "openai",
+            updateTarget: "local-main",
+          });
+          const result = smoke["guestMacos"]("echo update", 30_000, {
+            append: (chunk) =>
+              output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
+            logPath: path.join(root, "update.log"),
+            signal: new AbortController().signal,
+          });
+          if (exitCode === 0) {
+            await expect(result).resolves.toBeUndefined();
+          } else {
+            await expect(result).rejects.toThrow(
+              `macOS update command failed with exit code ${exitCode}`,
+            );
+          }
+        },
+      );
 
-        await guestMacos.call(smoke, "echo update", 30_000, ctx);
-
-        const call = stream.mock.calls.at(0);
-        expect(call?.[0]).toBe("prlctl");
-        expect(call?.[1]).toEqual([
-          "exec",
-          "macOS Tahoe",
-          "--current-user",
-          "/usr/bin/env",
-          expect.stringMatching(/^PATH=/),
-          "/bin/bash",
-          expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
-        ]);
-      },
-    );
-
-    const log = readFileSync(logPath, "utf8");
-    expect(log).toContain("--current-user whoami");
-    expect(log).toContain("--current-user /usr/bin/env PATH=");
-    expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
-    expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
-    expect(log).toContain("/usr/sbin/chown desktop-user");
-  });
+      expect(readFileSync(runArgsPath, "utf8").split("\0").slice(0, -1)).toEqual([
+        "exec",
+        "macOS Tahoe",
+        "--current-user",
+        "/usr/bin/env",
+        expect.stringMatching(/^PATH=/),
+        "/bin/bash",
+        expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
+      ]);
+      expect(readFileSync(uploadedScriptPath, "utf8")).toBe("echo update");
+      expect(output.join("")).toContain("update-output\n");
+      expect(output.join("")).toContain("update-diagnostic\n");
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("--current-user whoami");
+      expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
+      expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
+      expect(log).toContain("/usr/sbin/chown desktop-user");
+      expect(log.match(/\/bin\/bash \/tmp\/openclaw-parallels-npm-update-macos-/g)).toHaveLength(1);
+      expect(log.trim().split("\n").at(-1)).toMatch(
+        /^exec macOS Tahoe \/bin\/rm -f \/tmp\/openclaw-parallels-npm-update-macos-/,
+      );
+    },
+  );
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
@@ -885,8 +916,8 @@ ${script}`,
     const descendantPidPath = path.join(root, "descendant.pid");
     const descendantScript = [
       "import { writeFileSync } from 'node:fs';",
-      `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
       "process.on('SIGTERM', () => {});",
+      `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
     writeFileSync(
@@ -903,11 +934,49 @@ ${script}`,
       "utf8",
     );
 
-    const code = await spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
-      timeoutKillGraceMs: 25,
-      timeoutLabel: "fresh lane test",
-      timeoutMs: 250,
-    });
+    // Hold only the initial deadline while real child startup reaches signal readiness.
+    const deadlineReady = createDeferred();
+    const realSetTimeout = globalThis.setTimeout;
+    let commandSettled = false;
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementationOnce((callback, delay, ...args) =>
+        realSetTimeout(() => {
+          void deadlineReady.promise.then(() => {
+            if (!commandSettled) {
+              callback(...args);
+            }
+          });
+        }, delay),
+      );
+    let command: Promise<number> | undefined;
+    let code: number | undefined;
+    try {
+      try {
+        command = spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+          timeoutKillGraceMs: 25,
+          timeoutLabel: "fresh lane test",
+          timeoutMs: 250,
+        });
+        void command.then(
+          () => {
+            commandSettled = true;
+          },
+          () => {
+            commandSettled = true;
+          },
+        );
+        expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 250);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+      await waitFor(() => existsSync(descendantPidPath), "fresh lane descendant readiness");
+    } finally {
+      deadlineReady.resolve();
+      if (command) {
+        code = await command;
+      }
+    }
 
     expect(code).toBe(124);
     expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
@@ -1408,16 +1477,6 @@ exit 7
     );
   });
 
-  it("writes macOS update scripts through the desktop user transport", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
-    expect(script).toContain('{ execArgs: macosUpdateExec.execArgs, mode: "700" }');
-    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
-    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath]');
-    expect(script).toContain("ownerUser: user");
-  });
-
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
     const windowsScript = windowsUpdateScript({
@@ -1523,14 +1582,15 @@ exit 7
     }
     expect(staleImportLine).toContain("$updateText -match 'ERR_MODULE_NOT_FOUND'");
     expect(staleImportLine).toContain(`$updateText -match '${staleImportPattern}'`);
-    expect(staleImportPattern).toBe(
-      String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`,
-    );
     expect(staleImportPattern).not.toContain("node_modules\\openclaw\\dist\\");
     expect(staleImportPattern.match(/\\\\/g)).toHaveLength(4);
-    const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.js' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
     const generatedRegex = new RegExp(staleImportPattern);
-    expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
-    expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.js`)).toBe(false);
+    for (const extension of ["js", "mjs"]) {
+      const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.${extension}' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
+      expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
+      expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.${extension}`)).toBe(
+        false,
+      );
+    }
   });
 });

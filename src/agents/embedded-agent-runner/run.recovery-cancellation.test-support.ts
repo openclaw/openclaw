@@ -27,10 +27,11 @@ import type {
   EmbeddedRunAttemptInternalParams,
 } from "./run/internal-params.js";
 
-function timeoutAttempt() {
+function timeoutAttempt(sessionIdUsed = "test-session") {
   const assistant = makeAssistantMessageFixture();
   assistant.usage = { ...assistant.usage, input: 180_000, totalTokens: 180_000 };
   return makeAttemptResult({
+    sessionIdUsed,
     terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
     assistantTexts: [],
     lastAssistant: assistant,
@@ -65,6 +66,55 @@ describe("recovery cancellation through the public run owner", () => {
     contextEngine.info.ownsCompaction = false;
     await session?.cleanup();
     session = undefined;
+  });
+
+  it("fences retired foreground budget observers across physical retries", async () => {
+    const workspaceDir = tempDirs.make("openclaw-request-budget-retry-");
+    const sessionManager = SessionManager.inMemory(workspaceDir);
+    const firstBudget = {
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      fixedTokens: 4_000,
+      pendingTokens: 100,
+    };
+    const retryBudget = { ...firstBudget, fixedTokens: 4_100, pendingTokens: 0 };
+    const observed =
+      vi.fn<NonNullable<EmbeddedRunAttemptInternalParams["onCompactionRequestBudget"]>>();
+    let retiredObserver: EmbeddedRunAttemptInternalParams["onCompactionRequestBudget"];
+    type BudgetObservedAttempt = Parameters<typeof mockedRunEmbeddedAttempt>[0] &
+      Pick<EmbeddedRunAttemptInternalParams, "onCompactionRequestBudget">;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt: BudgetObservedAttempt) => {
+      retiredObserver = attempt.onCompactionRequestBudget;
+      retiredObserver?.(firstBudget);
+      return makeAttemptResult({ promptError: makeOverflowError(), assistantTexts: [] });
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Prior work", tokensAfter: 40 }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt: BudgetObservedAttempt) => {
+      attempt.onCompactionRequestBudget?.(retryBudget);
+      retiredObserver?.(firstBudget);
+      return makeAttemptResult({ assistantTexts: ["Done."] });
+    });
+
+    await runEmbeddedAgent({
+      ...createOverflowRunParams({ workspaceDir }),
+      provider: "anthropic",
+      model: "test-model",
+      sessionId: sessionManager.getSessionId(),
+      sessionManager,
+      sessionPersistence: "detached",
+      onCompactionRequestBudget: observed,
+    });
+    retiredObserver?.(firstBudget);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(observed.mock.calls.map(([budget]) => budget)).toEqual([
+      undefined,
+      firstBudget,
+      undefined,
+      retryBudget,
+    ]);
   });
 
   describe.each(["caller", "subscription"] as const)("%s accounting owner", (owner) => {
@@ -160,7 +210,7 @@ describe("recovery cancellation through the public run owner", () => {
       let replacement: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
       const abort = new AbortController();
       const callerError = new Error("caller stopped after owner changed");
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(timeoutAttempt());
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(timeoutAttempt(runParams.sessionId));
       mockedCompactDirect.mockResolvedValueOnce(
         makeCompactionSuccess({ summary: "Committed before owner change", tokensAfter: 40 }),
       );
@@ -260,7 +310,7 @@ describe("recovery cancellation through the public run owner", () => {
               throw attemptError;
             }
             return {
-              ...timeoutAttempt(),
+              ...timeoutAttempt(attempt.sessionId),
               compactionCount: harness.subscription.getCompactionCount(),
               compactionTokensAfter: 80,
             };
@@ -283,7 +333,7 @@ describe("recovery cancellation through the public run owner", () => {
             harness.emit({ type: "message_start", message: assistant });
             harness.emit({ type: "message_end", message: assistant });
             await harness.subscription.waitForPendingEvents();
-            return makeAttemptResult();
+            return makeAttemptResult({ sessionIdUsed: attempt.sessionId });
           } finally {
             harness.subscription.unsubscribe();
           }
@@ -501,6 +551,7 @@ describe("recovery cancellation through the public run owner", () => {
       const beforeFinalization = sessionAccessor.loadSessionEntry(sessionTarget);
 
       await updateSessionStoreAfterAgentRun({
+        agentId: sessionTarget.agentId,
         cfg: {},
         agentDir: path.dirname(sessionTarget.storePath),
         sessionId,

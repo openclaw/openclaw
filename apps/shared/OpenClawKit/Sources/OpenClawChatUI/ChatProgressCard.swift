@@ -32,8 +32,10 @@ private struct ChatProgressCardSurface: ViewModifier {
 }
 
 struct ChatProgressCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let steps: [ProgressCardStep]
     let markdown: String?
+    var isInline = false
 
     @State private var isExpanded = false
 
@@ -63,15 +65,27 @@ struct ChatProgressCard: View {
     }
 
     var body: some View {
+        Group {
+            if self.isInline {
+                self.content
+            } else {
+                self.content
+                    .modifier(ChatProgressCardSurface(cornerRadius: self.isExpanded ? 16 : 18))
+            }
+        }
+        .foregroundStyle(OpenClawChatTheme.assistantText)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                     self.isExpanded.toggle()
                 }
             } label: {
                 self.summary
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, self.isExpanded ? 11 : 9)
+                    .padding(.horizontal, self.isInline ? 0 : 12)
+                    .padding(.vertical, self.isInline ? 4 : (self.isExpanded ? 11 : 9))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -84,9 +98,9 @@ struct ChatProgressCard: View {
                     .padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 9) {
                     if let markdown {
-                        OpenClawChatMarkdownView(
+                        ChatMarkdownRenderer(
                             text: markdown,
-                            isUserMessage: false,
+                            context: .assistant,
                             variant: .compact,
                             textColor: OpenClawChatTheme.assistantText)
                     }
@@ -102,8 +116,6 @@ struct ChatProgressCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(ChatProgressCardSurface(cornerRadius: self.isExpanded ? 16 : 18))
-        .foregroundStyle(OpenClawChatTheme.assistantText)
     }
 
     private var summaryAccessibilityLabel: String {
@@ -116,7 +128,16 @@ struct ChatProgressCard: View {
 
     private var summary: some View {
         HStack(spacing: 8) {
-            if let currentStep {
+            if self.isInline, !self.steps.isEmpty, self.completedCount == self.steps.count {
+                Image(systemName: "checkmark")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(OpenClawChatTheme.success)
+                Text(verbatim: self.completedCount == 1
+                    ? String(localized: "1 step completed")
+                    : String(format: String(localized: "%lld steps completed"), self.completedCount))
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            } else if let currentStep {
                 Text(Self.marker(for: currentStep.status))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(Self.markerColor(for: currentStep.status))
@@ -130,16 +151,21 @@ struct ChatProgressCard: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Spacer(minLength: 8)
-            if !self.steps.isEmpty {
+            if !self.isInline {
+                Spacer(minLength: 8)
+            }
+            if !self.steps.isEmpty, !self.isInline || self.completedCount != self.steps.count {
                 Text(verbatim: "\(self.completedCount)/\(self.steps.count)")
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(OpenClawChatTheme.muted)
             }
-            Image(systemName: "chevron.down")
+            Image(systemName: self.isInline ? "chevron.right" : "chevron.down")
                 .font(OpenClawChatTypography.caption2)
                 .foregroundStyle(OpenClawChatTheme.muted)
-                .rotationEffect(.degrees(self.isExpanded ? 180 : 0))
+                .rotationEffect(.degrees(self.isExpanded ? (self.isInline ? 90 : 180) : 0))
+            if self.isInline {
+                Spacer(minLength: 0)
+            }
         }
     }
 

@@ -20,6 +20,7 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
@@ -180,7 +181,7 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("uses the attempt-scoped Codex config before the live Gateway config", async () => {
-    runCodexAppServerAttempt.mockResolvedValueOnce({ stopReason: "stop" });
+    runCodexAppServerAttempt.mockResolvedValueOnce({ terminal: { kind: "ok" } });
     const attemptHarness = createCodexAppServerAgentHarness({
       bindingStore: testCodexAppServerBindingStore,
       pluginConfig: { appServer: { homeScope: "agent" } },
@@ -465,6 +466,31 @@ describe("Codex agent harness supports()", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("revalidates remote inference against the harness's current configured endpoint", async () => {
+    const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+    const { captureCodexConfiguredConnection, finalizeCodexConfiguredConnection } =
+      await import("./src/app-server/runtime-artifact-connection.js");
+    let pluginConfig = {
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:1234" },
+    };
+    const remoteHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      resolvePluginConfig: () => pluginConfig,
+    });
+    const startOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig }).start;
+    const binding = finalizeCodexConfiguredConnection({
+      before: captureCodexConfiguredConnection(startOptions),
+      startOptions,
+      runtimeIdentity: { serverVersion: "0.153.4", userAgent: "codex-test" },
+    });
+    if (!remoteHarness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(true);
+    pluginConfig = { appServer: { transport: "websocket", url: "ws://127.0.0.1:5678" } };
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(false);
+  });
 });
 
 describe("Codex agent harness reset()", () => {
@@ -572,103 +598,120 @@ describe("Codex agent harness reset()", () => {
     }
   });
 
-  it("removes deleted session bindings before the post-delete reset event", async () => {
-    const state = createCodexTestBindingStateStore();
-    const bindingStore = createCodexAppServerBindingStore(state);
-    const identity = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:main",
-    });
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-    const harness = createCodexAppServerAgentHarness({ bindingStore });
-
-    await harness.withSessionDeletion?.(
-      {
+  it.each(["withSessionDeletion", "withSessionContextReset"] as const)(
+    "%s removes bindings at the session commit boundary",
+    async (hook) => {
+      const state = createCodexTestBindingStateStore();
+      const bindingStore = createCodexAppServerBindingStore(state);
+      const identity = sessionBindingIdentity({
         agentId: "worker",
         sessionId: "session-1",
         sessionKey: "agent:worker:main",
-        assertCurrent() {},
-      },
-      async (mutation) => {
-        mutation.commit();
-        expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
-      },
-    );
+      });
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+      const harness = createCodexAppServerAgentHarness({ bindingStore });
 
-    await harness.reset?.({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:main",
-      reason: "deleted",
-    });
-
-    expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
-  });
-
-  it("rejects supervised deletion before invoking the session transaction", async () => {
-    const bindingStore = createCodexTestBindingStore();
-    const identity = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "supervised",
-      sessionKey: "agent:worker:main",
-    });
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      binding: {
-        threadId: "thread-supervised",
-        cwd: "/repo",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "thread-source",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        preserveNativeModel: true,
-        conversationSourceTransferComplete: true,
-      },
-    });
-    const harness = createCodexAppServerAgentHarness({ bindingStore });
-    const run = vi.fn();
-    await expect(
-      harness.withSessionDeletion?.(
+      await harness[hook]?.(
         {
           agentId: "worker",
-          sessionId: "supervised",
+          sessionId: "session-1",
           sessionKey: "agent:worker:main",
           assertCurrent() {},
         },
-        run,
-      ),
-    ).rejects.toThrow("owned by supervision");
-    expect(run).not.toHaveBeenCalled();
-    expect(bindingStore.read(identity)).toMatchObject({
-      threadId: "thread-supervised",
-    });
-  });
+        async (mutation) => {
+          mutation.commit();
+          expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+        },
+      );
+
+      await harness.reset?.({
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey: "agent:worker:main",
+        reason: "deleted",
+      });
+
+      expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+    },
+  );
+
+  it.each(["withSessionDeletion", "withSessionContextReset"] as const)(
+    "%s rejects supervision before invoking the session transaction",
+    async (hook) => {
+      const bindingStore = createCodexTestBindingStore();
+      const identity = sessionBindingIdentity({
+        agentId: "worker",
+        sessionId: "supervised",
+        sessionKey: "agent:worker:main",
+      });
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        binding: {
+          threadId: "thread-supervised",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-source",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          preserveNativeModel: true,
+          conversationSourceTransferComplete: true,
+        },
+      });
+      const harness = createCodexAppServerAgentHarness({ bindingStore });
+      const run = vi.fn();
+      await expect(
+        harness[hook]?.(
+          {
+            agentId: "worker",
+            sessionId: "supervised",
+            sessionKey: "agent:worker:main",
+            assertCurrent() {},
+          },
+          run,
+        ),
+      ).rejects.toThrow("owned by supervision");
+      expect(run).not.toHaveBeenCalled();
+      expect(bindingStore.read(identity)).toMatchObject({
+        threadId: "thread-supervised",
+      });
+    },
+  );
 });
 
 describe("Codex agent harness dispose()", () => {
-  it("uses the preloaded shared-client lifecycle seam", async () => {
-    const sharedDisposer = Symbol.for("openclaw.codexAppServerClientDisposer");
-    const state = globalThis as typeof globalThis & {
-      [sharedDisposer]?: () => Promise<void>;
-    };
-    const previous = state[sharedDisposer];
-    const dispose = vi.fn(async () => {});
-    state[sharedDisposer] = dispose;
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
+  it("runs this build's shared-client disposer and ignores a bare-name one", async () => {
+    // The disposer slot is keyed by plugin version like the client table: an old build's
+    // harness must close that build's clients even after a newer build's module evaluated.
+    const versionedSlot = Symbol.for(
+      `openclaw.codexAppServerClientDisposer@${codexPluginPackage.version}`,
+    );
+    const bareSlot = Symbol.for("openclaw.codexAppServerClientDisposer");
+    const globalState = globalThis as Record<symbol, unknown>;
+    const previous = { versioned: globalState[versionedSlot], bare: globalState[bareSlot] };
+    const versioned = vi.fn(async () => {});
+    const bare = vi.fn(async () => {});
+    globalState[versionedSlot] = versioned;
+    globalState[bareSlot] = bare;
     try {
+      const harness = createCodexAppServerAgentHarness({
+        bindingStore: createCodexTestBindingStore(),
+      });
       await harness.dispose?.();
-      expect(dispose).toHaveBeenCalledOnce();
+      expect(versioned).toHaveBeenCalledTimes(1);
+      expect(bare).not.toHaveBeenCalled();
     } finally {
-      if (previous) {
-        state[sharedDisposer] = previous;
-      } else {
-        delete state[sharedDisposer];
+      for (const [slot, value] of [
+        [versionedSlot, previous.versioned],
+        [bareSlot, previous.bare],
+      ] as const) {
+        if (value === undefined) {
+          delete globalState[slot];
+        } else {
+          globalState[slot] = value;
+        }
       }
     }
   });

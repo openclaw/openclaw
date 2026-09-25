@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
@@ -28,7 +29,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { requireValidConfigFileSnapshot } from "../config-validation.js";
+import {
+  requireValidConfigFileSnapshot,
+  requireValidConfigForWrite,
+} from "../config-validation.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
@@ -194,7 +198,7 @@ async function resolveChannelReports(params: {
   const reports: ChannelCapabilitiesReport[] = [];
 
   for (const accountId of accountIds) {
-    const resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+    const resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(resolvedAccount, cfg)
       : Boolean(resolvedAccount);
@@ -276,7 +280,12 @@ export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const canInstall = Boolean(rawChannel && rawChannel !== "all");
+  const writeSnapshot = canInstall ? await requireValidConfigForWrite(runtime) : null;
+  const configSnapshot = canInstall
+    ? writeSnapshot?.snapshot
+    : await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
   }
@@ -285,7 +294,6 @@ export async function channelsCapabilitiesCommand(
     parseTimeoutMsWithFallback(opts.timeout, 10_000, { invalidType: "error" }),
     CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS,
   );
-  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if ((!rawChannel || rawChannel === "all") && (opts.account || rawTarget)) {
@@ -313,6 +321,7 @@ export async function channelsCapabilitiesCommand(
               cfg: resolved.cfg,
               pluginInstalled: resolved.pluginInstalled,
               baseHash: configSnapshot.hash,
+              writeOptions: writeSnapshot?.writeOptions,
               runtime,
             });
             // The writer refreshes the active runtime snapshot; probes must use that prepared

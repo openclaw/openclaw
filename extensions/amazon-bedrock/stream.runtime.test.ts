@@ -501,6 +501,43 @@ describe("Bedrock thinking request composition", () => {
   } as never;
 
   it.each([
+    ...[
+      { id: "anthropic.claude-fable-5", name: "Claude Fable 5" },
+      { id: "us.anthropic.claude-fable-5-1", name: "Claude Fable 5.1" },
+      {
+        id: "production-fable-5",
+        name: "Production deployment",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+      {
+        id: "production-fable-5-1",
+        name: "Production deployment",
+        params: { canonicalModelId: "claude-fable-5-1" },
+      },
+      {
+        id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdefghijk",
+        name: "US Claude Fable 5.1",
+      },
+    ].map((modelOverrides) => ({
+      name: `${modelOverrides.id} default`,
+      model: () =>
+        bedrockModel({ ...modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      reasoning: undefined,
+      expectedMaxTokens: 128_000,
+      expectedEffort: "medium",
+    })),
+    {
+      name: "Fable 5 explicit off",
+      model: () =>
+        bedrockModel({
+          id: "anthropic.claude-fable-5",
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+        }),
+      reasoning: "off" as const,
+      expectedMaxTokens: 128_000,
+      expectedEffort: "low",
+    },
     {
       name: "Opus 5 default",
       model: () =>
@@ -882,19 +919,27 @@ describe("Bedrock Fable contract", () => {
     ]);
   });
 
-  it("discards partial output when the Fable stream ends without messageStop", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { text: "unsafe partial output" },
-          },
+  it.each([
+    { label: "ends without messageStop", transportDrop: false },
+    { label: "loses its connection", transportDrop: true },
+  ])("discards partial output when the Fable stream $label", async ({ transportDrop }) => {
+    async function* incompleteStream() {
+      yield { messageStart: { role: ConversationRole.ASSISTANT } };
+      yield {
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { text: "unsafe partial output" },
         },
-      ]),
+      };
+      if (transportDrop) {
+        throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      }
+    }
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: incompleteStream(),
     } as never);
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
 
     const stream = streamSimpleBedrock(fableModel(), context());
     const eventTypes: string[] = [];
@@ -904,8 +949,18 @@ describe("Bedrock Fable contract", () => {
     const result = await stream.result();
 
     expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
-    expect(result.errorMessage).toContain("ended before messageStop");
+    expect(result.diagnostics).toBeUndefined();
+    if (transportDrop) {
+      expect(result.errorMessage).toBe("socket hang up");
+      expect(result.errorCode).toBe("ECONNRESET");
+    } else {
+      expect(result.errorMessage).toContain("ended before messageStop");
+    }
+    expect(send).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
   });
 
   it("reports activity while Fable events are buffered", async () => {

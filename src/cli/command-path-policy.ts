@@ -1,14 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Resolves CLI command path policy from the declarative command catalog.
 import { getCommandPathWithRootOptions } from "./argv.js";
-import {
-  cliCommandCatalog,
-  type CliCommandPathPolicy,
-  type CliNetworkProxyPolicy,
-} from "./command-catalog.js";
+import type { CliCommandPathPolicy, CliNetworkProxyPolicy } from "./command-catalog-types.js";
+import { cliCommandCatalog } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
-import { resolveParentAwareCommandPath } from "./parent-command-path.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   configGuard: "run",
@@ -36,24 +33,18 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
   return resolvedPolicy;
 }
 
-function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]): boolean {
-  return pattern.every((segment, index) => commandPath[index] === segment);
-}
-
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
-  const gatewayPath = resolveGatewayCatalogCommandPath(argv);
-  const parentPath = resolveParentAwareCommandPath(argv);
-  if (!gatewayPath && parentPath) {
-    return parentPath;
-  }
-  const tokens = gatewayPath ?? getCommandPathWithRootOptions(argv, argv.length);
+  const tokens =
+    resolveGatewayCatalogCommandPath(argv) ??
+    resolveCliParentCommandPath(argv) ??
+    getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {
     return [];
   }
   let bestMatch: readonly string[] | null = null;
   for (const entry of cliCommandCatalog) {
-    if (!isCommandPathPrefix(tokens, entry.commandPath)) {
+    if (!matchesCommandPath(tokens, entry.commandPath)) {
       continue;
     }
     if (!bestMatch || entry.commandPath.length > bestMatch.length) {

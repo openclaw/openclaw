@@ -1,20 +1,21 @@
 // Regresses task registry maintenance behavior for issue 60299.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import {
   CRON_HISTORY_KEEP_PER_JOB,
   getInspectableActiveTaskRestartBlockers,
   getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
-  setTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
+import {
+  createTaskRegistryMaintenanceHarness,
+  resetTaskRegistryMaintenanceMocks,
+} from "./task-registry.maintenance.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -43,158 +44,11 @@ function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
   };
 }
 
-type TaskRegistryMaintenanceRuntime = Parameters<
-  typeof setTaskRegistryMaintenanceRuntimeForTests
->[0];
-
-afterEach(() => {
-  stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+afterEach(async () => {
+  await stopTaskRegistryMaintenance();
+  resetTaskRegistryMaintenanceMocks();
   resetDetachedTaskLifecycleRuntimeForTests();
 });
-
-function createTaskRegistryMaintenanceHarness(params: {
-  tasks: TaskRecord[];
-  sessionStore?: Record<string, SessionEntry>;
-  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
-  resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
-  deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
-  acpEntry?: AcpSessionStoreEntry["entry"];
-  activeCronJobIds?: string[];
-  activeRunIds?: string[];
-  activeAcpSessionKeys?: string[];
-  durableCronTaskRows?: Record<string, TaskRecord[]>;
-  runtimeAuthoritative?: boolean;
-}) {
-  const sessionStore = params.sessionStore ?? {};
-  const acpEntry = params.acpEntry;
-  const activeCronJobIds = new Set(params.activeCronJobIds ?? []);
-  const activeRunIds = new Set(params.activeRunIds ?? []);
-  const activeAcpSessionKeys = new Set(params.activeAcpSessionKeys ?? []);
-  const durableCronTaskRows = params.durableCronTaskRows ?? {};
-  const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
-
-  const runtime: TaskRegistryMaintenanceRuntime = {
-    listAcpSessionEntries: async () => [],
-    readAcpSessionEntry: () =>
-      acpEntry !== undefined
-        ? ({
-            cfg: {} as never,
-            storePath: "",
-            sessionKey: "",
-            storeSessionKey: "",
-            entry: acpEntry,
-            storeReadFailed: false,
-          } satisfies AcpSessionStoreEntry)
-        : ({
-            cfg: {} as never,
-            storePath: "",
-            sessionKey: "",
-            storeSessionKey: "",
-            entry: undefined,
-            storeReadFailed: false,
-          } satisfies AcpSessionStoreEntry),
-    listSessionEntries:
-      params.listSessionEntries ??
-      (() =>
-        Object.entries(sessionStore).map(([sessionKey, entry]) => ({
-          sessionKey,
-          entry,
-        }))),
-    resolveStorePath: params.resolveStorePath ?? (() => ""),
-    ...(params.deriveSessionChatTypeFromKey
-      ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
-      : {}),
-    isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
-    getAgentRunContext: (runId: string) =>
-      activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
-    hasActiveAcpTurn: (sessionKey: string) => activeAcpSessionKeys.has(sessionKey),
-    parseAgentSessionKey: (sessionKey: string | null | undefined): ParsedAgentSessionKey | null => {
-      if (!sessionKey) {
-        return null;
-      }
-      const [kind, agentId, ...rest] = sessionKey.split(":");
-      return kind === "agent" && agentId && rest.length > 0
-        ? { agentId, rest: rest.join(":") }
-        : null;
-    },
-    hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
-      const normalized = sessionKey.trim().toLowerCase();
-      return Array.from(currentTasks.values()).some(
-        (task) =>
-          task.taskId !== excludeTaskId &&
-          (task.status === "queued" || task.status === "running") &&
-          task.childSessionKey?.trim().toLowerCase() === normalized,
-      );
-    },
-    deleteTaskRecordById: (taskId: string) => currentTasks.delete(taskId),
-    ensureTaskRegistryReady: () => {},
-    getTaskById: (taskId: string) => currentTasks.get(taskId),
-    listTaskRecords: () => Array.from(currentTasks.values()),
-    markTaskLostById: (patch) => {
-      const current = currentTasks.get(patch.taskId);
-      if (!current) {
-        return null;
-      }
-      const next = {
-        ...current,
-        status: "lost" as const,
-        endedAt: patch.endedAt,
-        lastEventAt: patch.lastEventAt ?? patch.endedAt,
-        ...(patch.error !== undefined ? { error: patch.error } : {}),
-        ...(patch.cleanupAfter !== undefined ? { cleanupAfter: patch.cleanupAfter } : {}),
-      };
-      currentTasks.set(patch.taskId, next);
-      return next;
-    },
-    markTaskTerminalById: (patch) => {
-      const current = currentTasks.get(patch.taskId);
-      if (!current) {
-        return null;
-      }
-      const next = {
-        ...current,
-        status: patch.status,
-        endedAt: patch.endedAt,
-        lastEventAt: patch.lastEventAt ?? patch.endedAt,
-        ...(patch.terminalSummary !== undefined
-          ? {
-              terminalSummary: patch.preserveTerminalSummary
-                ? (patch.terminalSummary ?? undefined)
-                : patch.terminalSummary?.replace(/\s+/g, " ").trim() || undefined,
-            }
-          : {}),
-        ...(patch.detail !== undefined ? { detail: patch.detail } : {}),
-      } satisfies TaskRecord;
-      if (Object.hasOwn(patch, "error")) {
-        if (patch.error === undefined) {
-          delete next.error;
-        } else {
-          next.error = patch.error;
-        }
-      }
-      currentTasks.set(patch.taskId, next);
-      return next;
-    },
-    maybeDeliverTaskTerminalUpdate: async () => null,
-    resolveTaskForLookupToken: () => undefined,
-    setTaskCleanupAfterById: (patch) => {
-      const current = currentTasks.get(patch.taskId);
-      if (!current) {
-        return null;
-      }
-      const next = { ...current, cleanupAfter: patch.cleanupAfter };
-      currentTasks.set(patch.taskId, next);
-      return next;
-    },
-    isRuntimeAuthoritative: () => params.runtimeAuthoritative ?? true,
-    listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: ({ sourceId }) =>
-      sourceId ? (durableCronTaskRows[sourceId] ?? []) : Object.values(durableCronTaskRows).flat(),
-  };
-
-  setTaskRegistryMaintenanceRuntimeForTests(runtime);
-  return { currentTasks };
-}
 
 function expectMaintenanceCounts(
   result: Awaited<ReturnType<typeof runTaskRegistryMaintenance>>,
@@ -223,7 +77,7 @@ function expectTaskStatus(
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session entry lists across stale subagent task checks in one pass", async () => {
+  it("batches backing reads across stale subagent task checks in one pass", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -231,17 +85,70 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const listSessionEntriesMock = vi.fn(() => []);
+    const readSessionBackingFactsInWorker = vi.fn(
+      async (scopes: readonly { sessionKeys: readonly string[] }[]) => scopes.map(() => []),
+    );
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      listSessionEntries: listSessionEntriesMock,
+      readSessionBackingFactsInWorker,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
-    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
+    expect(readSessionBackingFactsInWorker.mock.calls[0]?.[0]).toEqual([
+      {
+        storePath: "/tmp/openclaw-test-sessions-main.json",
+        sessionKeys: tasks.map((task) => task.childSessionKey),
+      },
+    ]);
   });
+
+  it("does not open backing stores when process liveness already retains the task", async () => {
+    const task = makeStaleTask({
+      runtime: "cli",
+      runId: "live-cli",
+      childSessionKey: "agent:main:subagent:retained",
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeRunIds: ["live-cli"],
+      readSessionBackingFactsInWorker: async () => {
+        throw new Error("unneeded backing store is unavailable");
+      },
+    });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it.each(["batch", "recovery"] as const)(
+    "retains a child whose backing changes during the %s read",
+    async (stage) => {
+      const task = makeStaleTask({
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:repaired",
+      });
+      let reads = 0;
+      const { currentTasks } = createTaskRegistryMaintenanceHarness({
+        tasks: [task],
+        readSessionBackingFactsInWorker: async (scopes) => {
+          reads += 1;
+          if (reads === (stage === "batch" ? 1 : 2)) {
+            sessionChanges.emit({ sessionKey: task.childSessionKey! });
+          }
+          return scopes.map(() => []);
+        },
+      });
+      if (stage === "recovery") {
+        setDetachedTaskLifecycleRuntime({
+          ...getDetachedTaskLifecycleRuntime(),
+          tryRecoverTaskBeforeMarkLost: async () => ({ recovered: false }),
+        });
+      }
+      expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+      expectTaskStatus(currentTasks, task.taskId, "running");
+    },
+  );
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
     const childSessionKey = "agent:main:discord:direct:user-1";
@@ -382,6 +289,7 @@ describe("task-registry maintenance issue #60299", () => {
     const activeRunning = makeStaleTask({
       taskId: "task-running-live",
       runtime: "cli",
+      taskKind: "exec",
       status: "running",
       createdAt: now,
       startedAt: now,
@@ -410,6 +318,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(blockers[0]?.taskId).toBe("task-running-live");
     expect(blockers[0]?.status).toBe("running");
     expect(blockers[0]?.runtime).toBe("cli");
+    expect(blockers[0]?.taskKind).toBe("exec");
     expect(blockers[0]?.runId).toBe("run-running-live");
   });
 
@@ -458,6 +367,60 @@ describe("task-registry maintenance issue #60299", () => {
     expect(storedTask.error).toBe(
       "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
     );
+  });
+
+  it.each(["live worker", "non-authoritative process", "failed owner lookup"] as const)(
+    "does not lose a registry-backed subagent through a %s",
+    async (scenario) => {
+      const runId = "run-owned-subagent";
+      const task = makeStaleTask({
+        runtime: "subagent",
+        runId,
+        childSessionKey: "agent:main:subagent:owned",
+        detail: createSubagentTaskBackingDetail(1),
+      });
+      const hasSubagentTaskOwner = vi.fn(() => {
+        if (scenario === "failed owner lookup") {
+          throw new Error("registry read unavailable");
+        }
+        return false;
+      });
+      const { currentTasks } = createTaskRegistryMaintenanceHarness({
+        tasks: [task],
+        activeRunIds: scenario === "live worker" ? [runId] : [],
+        runtimeAuthoritative: scenario !== "non-authoritative process",
+        hasSubagentTaskOwner,
+      });
+      expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+      expectTaskStatus(currentTasks, task.taskId, "running");
+      if (scenario !== "failed owner lookup") {
+        expect(hasSubagentTaskOwner).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rechecks subagent ownership after the recovery hook yields", async () => {
+    let owned = false;
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId: "run-owner-race",
+      childSessionKey: "agent:main:subagent:owner-race",
+      detail: createSubagentTaskBackingDetail(1),
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      hasSubagentTaskOwner: () => owned,
+      runtimeAuthoritative: true,
+    });
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      tryRecoverTaskBeforeMarkLost: async () => {
+        owned = true;
+        return { recovered: false };
+      },
+    });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
@@ -530,6 +493,38 @@ describe("task-registry maintenance issue #60299", () => {
     expect(storedTask.endedAt).toBe(startedAt + 1250);
     expect(storedTask.terminalSummary).toBe("done");
     expect(storedTask.detail).toEqual({ kind: "cron-run", status: "ok", durationMs: 1250 });
+  });
+
+  it("recovers a durable cron result that arrives while the recovery hook yields", async () => {
+    const sourceId = "cron-job-late-result";
+    const task = makeStaleTask({ runtime: "cron", sourceId, runId: "cron-late-result" });
+    const endedAt = Date.now();
+    const durableCronTaskRows: Record<string, TaskRecord[]> = { [sourceId]: [] };
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows,
+    });
+    const recoveryHook = vi.fn(async () => {
+      await Promise.resolve();
+      durableCronTaskRows[sourceId] = [
+        { ...task, status: "succeeded", endedAt, lastEventAt: endedAt, terminalSummary: "done" },
+      ];
+      return { recovered: false };
+    });
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      tryRecoverTaskBeforeMarkLost: recoveryHook,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    expect(recoveryHook).toHaveBeenCalledOnce();
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "succeeded",
+      endedAt,
+      lastEventAt: endedAt,
+      terminalSummary: "done",
+    });
+    expect(currentTasks.get(task.taskId)).not.toHaveProperty("error");
   });
 
   it("recovers cancelled cron tasks with exact durable summaries", async () => {

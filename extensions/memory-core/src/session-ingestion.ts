@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   buildSessionEntry,
   loadMemorySessionMetadata,
+  matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -14,7 +15,7 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
-  normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeSessionIngestionState,
@@ -30,6 +31,7 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
 
@@ -154,16 +156,10 @@ export function resolveAdmissionPolicy(
   if (!exclusions) {
     return undefined;
   }
-  const values = (key: keyof SessionAdmissionPolicy): string[] =>
-    Array.isArray(exclusions[key])
-      ? normalizeStringEntries(
-          exclusions[key].filter((value): value is string => typeof value === "string"),
-        )
-      : [];
   const policy = {
-    hookExternalContentSources: values("hookExternalContentSources"),
-    channels: values("channels"),
-    chatTypes: values("chatTypes"),
+    hookExternalContentSources: normalizeTrimmedStringList(exclusions.hookExternalContentSources),
+    channels: normalizeTrimmedStringList(exclusions.channels),
+    chatTypes: normalizeTrimmedStringList(exclusions.chatTypes),
   };
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }
@@ -241,7 +237,10 @@ async function statSessionSource(source: SessionIngestionSource) {
     try {
       const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
       return stat
-        ? { mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)), size: Math.floor(stat.size) }
+        ? {
+            mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
+            size: Math.floor(stat.size),
+          }
         : null;
     } catch {
       return undefined;
@@ -298,7 +297,7 @@ export async function scanSessionIngestionSource(params: {
     return emptyScan("unavailable", params.previous);
   }
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
     size: Math.floor(Math.max(0, entry.size)),
   };
   const lines = entry.content ? entry.content.split("\n") : [];
@@ -320,12 +319,19 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const sameContent =
-    params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
-    params.previous.size === fileFingerprint.size &&
-    params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length;
-  const startIndex = sameContent
+  // Reuse the full hash for unchanged capped scans; only appends need a prefix hash.
+  const previousSnapshotMatches =
+    params.previous !== undefined &&
+    params.previous.contentHash.length > 0 &&
+    ((params.previous.lineCount === lines.length &&
+      params.previous.contentHash === terminalState.contentHash) ||
+      (params.previous.lineCount < lines.length &&
+        matchesSessionEntryPrefixHash(
+          entry,
+          params.previous.lineCount,
+          params.previous.contentHash,
+        )));
+  const startIndex = previousSnapshotMatches
     ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
     : 0;
   const seen = new Set(params.seenMessages[params.source.scope] ?? []);
@@ -487,22 +493,11 @@ export async function appendSessionCorpusLines(params: {
     SESSION_CORPUS_RELATIVE_DIR,
     `${params.day}.txt`,
   );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const existing = await fs.readFile(absolutePath, "utf-8").catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  });
-  const normalized = existing.replace(/\r\n/g, "\n");
-  const existingLines = normalized
-    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
-    : 0;
-  await appendRegularFile({
-    filePath: absolutePath,
-    content: `${params.lines.map((entry) => entry.rendered).join("\n")}\n`,
-    rejectSymlinkParents: true,
-  });
+  const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const existingLines = files
+    ? await files.appendCorpus(absolutePath, content)
+    : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,
     startLine: existingLines + index + 1,
@@ -513,4 +508,25 @@ export async function appendSessionCorpusLines(params: {
     provenance: entry.provenance,
     ...(entry.sessionOrigin ? { sessionOrigin: entry.sessionOrigin } : {}),
   }));
+}
+
+/** Native file append; session admission and checkpoints stay with the caller. */
+export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  const normalized = existing.replace(/\r\n/g, "\n");
+  const existingLines = normalized
+    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
+    : 0;
+  await appendRegularFile({
+    filePath,
+    content,
+    rejectSymlinkParents: true,
+  });
+  return existingLines;
 }

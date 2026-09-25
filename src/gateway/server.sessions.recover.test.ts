@@ -12,7 +12,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -180,8 +183,8 @@ test("sessions.recover settles its active placement before archiving a real sess
           });
           return placement as Extract<WorkerSessionPlacementRecord, { state: "draining" }>;
         },
-        reclaim: async (worktreePath, _placement, reauthorize) => {
-          expect(worktreePath).toBe(worktree.path);
+        reclaim: async (workspace, _placement, reauthorize) => {
+          expect(workspace).toEqual({ kind: "local", path: worktree.path });
           reclaimStarted.resolve();
           await reclaimGate.promise;
           reauthorize?.();

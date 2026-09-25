@@ -19,6 +19,7 @@ import {
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
   projectReplayPayload,
+  userText,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
@@ -188,7 +189,7 @@ export function createAttemptTranscriptJournal(params: {
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
     const message = structuredClone(write.message) as TranscriptMessage;
-    const originalReplayPayload = structuredClone(projectReplayPayload(message));
+    const originalReplayPayload = projectReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
@@ -696,17 +697,4 @@ function isSameUserTurn(
     candidate.timestamp === current.timestamp &&
     userText(candidate.content) === userText(current.content)
   );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

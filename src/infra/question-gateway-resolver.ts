@@ -3,6 +3,7 @@ import type {
   QuestionGetResult,
   QuestionResolveResult,
 } from "../../packages/gateway-protocol/src/schema/questions.js";
+import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 
@@ -12,6 +13,15 @@ export type ResolveQuestionOverGatewayResult =
   | { status: "answered"; questionId: string; optionValue: string }
   | { status: "custom-input"; questionId: string }
   | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
+
+/**
+ * Re-checked after the awaited question read and immediately before the resolve
+ * write, so access lost during that window cannot answer.
+ */
+export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Only a caller that supplies an authorizer can receive this. */
+export type ResolveQuestionOverGatewayDenial = { status: "denied" };
 
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
@@ -55,10 +65,23 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
   return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
 }
 
+/** Params for the overload that re-checks access before the resolve write. */
+export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
+  authorize: QuestionResolutionAuthorizer;
+};
+
 /** Resolves one rendered choice or validates a custom-input transition. */
+// Only the authorized overload widens the result, so callers that never opt in
+// keep the result union they already exhaust.
+export async function resolveQuestionOverGateway(
+  params: AuthorizedResolveQuestionOverGatewayParams,
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial>;
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
-): Promise<ResolveQuestionOverGatewayResult> {
+): Promise<ResolveQuestionOverGatewayResult>;
+export async function resolveQuestionOverGateway(
+  params: ResolveQuestionOverGatewayParams & { authorize?: QuestionResolutionAuthorizer },
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
@@ -79,9 +102,12 @@ export async function resolveQuestionOverGateway(
     clientDisplayName:
       params.clientDisplayName ?? `Question (${params.senderId?.trim() || "unknown"})`,
   };
+  const request = params.gatewayUrl?.trim()
+    ? callGateway
+    : bindAgentToolGatewayRequest({ hostedOnly: true });
   let getResult: QuestionGetResult;
   try {
-    getResult = await callGateway<QuestionGetResult>({
+    getResult = await request<QuestionGetResult>({
       ...gatewayOptions,
       method: "question.get",
       params: { id: params.questionId },
@@ -112,8 +138,11 @@ export async function resolveQuestionOverGateway(
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
   }
+  if (params.authorize && !(await params.authorize())) {
+    return { status: "denied" };
+  }
   try {
-    await callGateway<QuestionResolveResult>({
+    await request<QuestionResolveResult>({
       ...gatewayOptions,
       method: "question.resolve",
       params: {

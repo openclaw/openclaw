@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs a prepared OpenClaw npm tarball in Docker and proves live ClawHub
 # skill install works while uploaded archive installs stay disabled.
 set -euo pipefail
@@ -25,9 +29,9 @@ run_logged_print \
   docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  -e "OPENCLAW_SKILL_INSTALL_E2E_QUERY=${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-homeassistant}" \
+  -e "OPENCLAW_SKILL_INSTALL_E2E_QUERY=${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-}" \
   -e "OPENCLAW_SKILL_INSTALL_E2E_SLUG=${OPENCLAW_SKILL_INSTALL_E2E_SLUG:-}" \
-  -e "OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG=${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-homeassistant-skill}" \
+  -e "OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG=${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash scripts/e2e/lib/skills/clawhub-install-proof.sh

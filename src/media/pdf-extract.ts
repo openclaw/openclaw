@@ -11,7 +11,7 @@ export type PdfExtractedImage = DocumentExtractedImage;
 /** Text and extracted image payloads returned by PDF extraction callers. */
 export type PdfExtractedContent = DocumentExtractionResult;
 
-/** Extracts PDF content through the configured document extractor and hides extractor metadata. */
+/** Extracts PDF content through the configured document extractor without exposing its owner id. */
 export async function extractPdfContent(params: {
   buffer: Buffer;
   maxPages: number;
@@ -19,29 +19,20 @@ export async function extractPdfContent(params: {
   minTextChars: number;
   password?: string;
   pageNumbers?: number[];
+  signal?: AbortSignal;
   config?: OpenClawConfig;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
+  // The document owner strips config and loader-only fields before plugin dispatch.
   const extracted = await extractDocumentContent({
-    buffer: params.buffer,
+    ...params,
     mimeType: "application/pdf",
-    maxPages: params.maxPages,
-    maxPixels: params.maxPixels,
-    minTextChars: params.minTextChars,
-    ...(params.password ? { password: params.password } : {}),
-    ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.onImageExtractionError
-      ? { onImageExtractionError: params.onImageExtractionError }
-      : {}),
   });
   if (!extracted) {
     throw new Error(
       "PDF extraction disabled or unavailable: enable the document-extract plugin to process application/pdf files.",
     );
   }
-  return {
-    text: extracted.text,
-    images: extracted.images,
-  };
+  const { extractor: _extractor, ...content } = extracted;
+  return content;
 }

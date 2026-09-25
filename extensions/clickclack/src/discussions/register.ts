@@ -17,12 +17,8 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   const service = new ClickClackDiscussionService(api.runtime);
   api.registerService({
     id: "clickclack-discussion-session-events",
-    start: ({ gatewayEvents }) => {
-      service.bindGatewayEvents(gatewayEvents);
-    },
-    stop: () => {
-      service.cleanup();
-    },
+    start: ({ gatewayEvents }) => service.bindGatewayEvents(gatewayEvents),
+    stop: () => service.cleanup(),
   });
   api.registerTool((context) =>
     createClickClackDiscussionTool({ service, sessionKey: context.sessionKey }),
@@ -46,9 +42,17 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   api.lifecycle.registerRuntimeLifecycle({
     id: "clickclack-discussions",
     description: "Stops the lifecycle reconciler for managed ClickClack discussions.",
-    cleanup: () => {
-      unregisterSessionAccess();
-      service.cleanup();
+    cleanup: ({ reason, sessionKey, runId }) => {
+      // Session cleanup shares this hook; only plugin retirement owns the service.
+      if (
+        sessionKey === undefined &&
+        runId === undefined &&
+        (reason === "restart" || reason === "disable")
+      ) {
+        unregisterSessionAccess();
+        return service.cleanup();
+      }
+      return undefined;
     },
   });
 }

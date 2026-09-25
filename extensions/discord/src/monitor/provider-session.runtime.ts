@@ -8,6 +8,6 @@ export {
 export { createDiscordMessageHandler } from "./message-handler.js";
 export {
   createNoopThreadBindingManager,
-  createThreadBindingManager,
   reconcileAcpThreadBindingsOnStartup,
 } from "./thread-bindings.js";
+export { createThreadBindingManager } from "./thread-bindings.manager.js";

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
@@ -47,11 +48,7 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
   };
 }
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 describe("ensureGatewayReadyForOperation", () => {
   beforeEach(() => {

@@ -1,5 +1,8 @@
 // Synthetic setup module handles plugin onboarding behavior.
-import { createModelCatalogPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  createModelCatalogPresetAppliers,
+  createProviderConnectionPresetAppliers,
+} from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -9,16 +12,20 @@ import {
 
 export { SYNTHETIC_DEFAULT_MODEL_REF };
 
-export const {
-  applyConfig: applySyntheticConfig,
-  applyProviderConfig: applySyntheticProviderConfig,
-} = createModelCatalogPresetAppliers<[]>({
+const syntheticPreset = {
   primaryModelRef: SYNTHETIC_DEFAULT_MODEL_REF,
   resolveParams: () => ({
     providerId: "synthetic",
     api: "anthropic-messages",
     baseUrl: SYNTHETIC_BASE_URL,
-    catalogModels: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
+    catalogModels: () => SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
     aliases: [{ modelRef: SYNTHETIC_DEFAULT_MODEL_REF, alias: "MiniMax M3" }],
   }),
-});
+} satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];
+
+export const {
+  applyConfig: applySyntheticConfig,
+  applyProviderConfig: applySyntheticProviderConfig,
+} = createModelCatalogPresetAppliers(syntheticPreset);
+export const { applyConfig: applySyntheticConnectionConfig } =
+  createProviderConnectionPresetAppliers(syntheticPreset);

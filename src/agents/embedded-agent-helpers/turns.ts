@@ -1,10 +1,50 @@
 /**
  * Normalizes embedded-agent conversation turn ordering for provider contracts.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
+import { isAnthropicApi } from "./anthropic-api.js";
+
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+/** Return true when a provider family owns signed thinking blocks. */
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
+/** Decide whether signed thinking can be replayed under the current provider policy. */
+export function shouldAllowProviderOwnedThinkingReplay(params: {
+  modelApi?: string | null;
+  provider?: string | null;
+  policy: Pick<
+    TranscriptPolicy,
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >;
+}): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
+  return (
+    isAnthropicApi(params.modelApi) &&
+    params.policy.validateAnthropicTurns &&
+    hasProviderOwnedSignedThinking &&
+    !params.policy.dropThinkingBlocks
+  );
+}
+
+/**
+ * Bedrock Converse still requires strict role alternation, so only the direct
+ * Messages API keeps consecutive user turns separate under append-only replay.
+ */
+export function shouldMergeConsecutiveUserTurns(
+  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): boolean {
+  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
+}
 
 type AnthropicContentBlock = {
   type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
@@ -313,7 +353,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     lastRole = msgRole;
   }
 
-  return result;
+  return result.length === messages.length ? messages : result;
 }
 
 function mergeConsecutiveAssistantTurns(
@@ -375,6 +415,9 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
+export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+
 /**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
@@ -402,9 +445,5 @@ export function validateAnthropicTurns(
   if (options.mergeConsecutiveUserTurns === false) {
     return stripped;
   }
-  return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
-    role: "user",
-    merge: mergeConsecutiveUserTurns,
-  });
+  return mergeConsecutiveUserMessages(stripped);
 }

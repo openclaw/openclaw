@@ -2,6 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
 
@@ -12,25 +16,23 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
-// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
+  "agents-home",
   "dashboards",
   "usage",
   "cron",
   "tasks",
   "sessions",
+  "systems",
   "activity",
   "meetings",
   "plugins",
   "apps",
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
-
-// `route:workboard` shipped in browser and synced preferences before Workboard
-// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
-const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
@@ -53,22 +55,22 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+export type PersistedSidebarRoute = SidebarNavRoute;
 
-export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
-  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+  return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
 }
 
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
-  | { type: "workboard"; boardId: string }
+  | { type: "plugin"; key: string }
   | { type: "session"; key: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["dashboards", "cron", "plugins"].map((route) =>
-  serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
-);
+export const DEFAULT_SIDEBAR_ENTRIES = (
+  ["agents-home", "dashboards", "systems", "cron", "plugins"] as const
+).map((route) => serializeSidebarEntry({ type: "route", route }));
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -79,6 +81,9 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
+    if (route === "workboard") {
+      return { type: "plugin", key: "workboard/workboard" };
+    }
     return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
@@ -87,7 +92,17 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("workboard:")) {
     const boardId = value.slice("workboard:".length).trim();
-    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+    // Normalize the shipped Workboard pin format at the preference boundary.
+    return isValidWorkboardBoardId(boardId)
+      ? { type: "plugin", key: `workboard/board-${boardId}` }
+      : null;
+  }
+  if (value.startsWith("plugin:")) {
+    const key = value.slice("plugin:".length);
+    // Descriptor ids are opaque, unlike native registration ids. The catalog
+    // controls availability; preserving a key never grants access to a plugin.
+    const separator = key.indexOf("/");
+    return separator > 0 && separator < key.length - 1 ? { type: "plugin", key } : null;
   }
   return null;
 }
@@ -96,7 +111,7 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "route") {
     return `route:${entry.route}`;
   }
-  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
+  return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
 }
 
 /**
@@ -186,13 +201,23 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "communications", "talk", "devices", "cloud-workers"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
+    routes: [
+      "agents",
+      "model-providers",
+      "search",
+      "plugin-settings",
+      "skill-settings",
+      "mcp",
+      "memory",
+      "automation",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -200,49 +225,96 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
+    routes: ["infrastructure", "labs", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
-  {
-    labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "talk", "devices"],
-  },
-  {
-    labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "memory"],
-  },
-  { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
-  {
-    labelKey: "nav.settingsGroupSystem",
-    routes: ["advanced", "debug", "logs", "about"],
-  },
-] as const satisfies readonly SettingsNavigationGroup[];
+const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "profile",
+  "appearance",
+  "notifications",
+  "connection",
+  "channels",
+  "talk",
+  "devices",
+  "agents",
+  "model-providers",
+  "search",
+  "plugin-settings",
+  "skill-settings",
+  "memory",
+  "approvals",
+  "advanced",
+  "debug",
+  "logs",
+  "about",
+]);
 
 export function isSettingsNavigationRouteVisible(
   routeId: NavigationRouteId,
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
-  return (
-    canAdmin ||
-    NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
-      group.routes.some((candidate) => candidate === routeId),
-    )
-  );
+  if (routeId === "device") {
+    return nativeDeviceSettings !== null;
+  }
+  if (routeId === "device-permissions") {
+    const snapshot = nativeDeviceSettings?.snapshot;
+    return Boolean(
+      snapshot &&
+      (snapshot.permissions.entries.length > 0 ||
+        snapshot.permissions.location ||
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined),
+    );
+  }
+  if (routeId === "updates") {
+    return canAdmin || nativeDeviceSettings !== null;
+  }
+  return canAdmin || NON_ADMIN_SETTINGS_ROUTES.has(routeId);
+}
+
+export function deviceSettingsGroupLabelKey(
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  const device = snapshot?.device;
+  if (device?.platform === "macos") {
+    return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "linux" || device?.platform === "windows") {
+    return "nav.settingsGroupThisComputer";
+  }
+  if (device?.platform === "ios") {
+    if (device.formFactor === "phone") {
+      return "nav.settingsGroupThisIPhone";
+    }
+    if (device.formFactor === "pad") {
+      return "nav.settingsGroupThisIPad";
+    }
+  }
+  return "nav.settingsGroupThisDevice";
 }
 
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): readonly SettingsNavigationGroup[] {
-  return canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
+  return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    labelKey:
+      group.labelKey === "nav.settingsGroupDevice"
+        ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
+        : group.labelKey,
+    routes: group.routes.filter((route) =>
+      isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+    ),
+  })).filter((group) => group.routes.length > 0);
 }
 
 // Settings subpages render with settings chrome but stay out of the sidebar.
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
@@ -260,59 +332,76 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_SUBPAGE_ROUTES,
 ]);
 
+function navigationPresentation(icon: IconName, key: string): NavigationPresentation {
+  return [icon, `tabs.${key}`, `subtitles.${key}`];
+}
+
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
-  agents: ["bot", "tabs.agents", "subtitles.agents"],
-  activity: ["activity", "tabs.activity", "subtitles.activity"],
-  meetings: ["book", "tabs.meetings", "subtitles.meetings"],
-  apps: ["layoutGrid", "tabs.apps", "subtitles.apps"],
-  portals: ["monitor", "tabs.portals", "subtitles.portals"],
-  approvals: ["badgeCheck", "tabs.approvals", "subtitles.approvals"],
-  workboard: ["kanban", "tabs.workboard", "subtitles.workboard"],
-  worktrees: ["folder", "tabs.worktrees", "subtitles.worktrees"],
-  channels: ["link", "tabs.channels", "subtitles.channels"],
-  connection: ["radio", "tabs.connection", "subtitles.connection"],
-  sessions: ["fileText", "tabs.sessions", "subtitles.sessions"],
-  usage: ["coins", "tabs.usage", "subtitles.usage"],
-  cron: ["calendarClock", "tabs.cron", "subtitles.cron"],
-  tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
-  skills: ["zap", "tabs.skills", "subtitles.skills"],
-  plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
-  "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
-  devices: ["monitorSmartphone", "tabs.devices", "subtitles.devices"],
-  "cloud-workers": ["server", "tabs.cloudWorkers", "subtitles.cloudWorkers"],
-  chat: ["messageSquare", "tabs.chat", "subtitles.chat"],
-  dashboard: ["layoutDashboard", "tabs.chat", "subtitles.chat"],
-  dashboards: ["layoutDashboard", "tabs.dashboards", "subtitles.dashboards"],
-  custodian: ["lobster", "tabs.custodian", "subtitles.custodian"],
+  settings: ["settings", "nav.settings", "common.settingsSections"],
+  "agents-home": navigationPresentation("bot", "agentsHome"),
+  agents: navigationPresentation("bot", "agents"),
+  activity: navigationPresentation("activity", "activity"),
+  meetings: navigationPresentation("book", "meetings"),
+  apps: navigationPresentation("layoutGrid", "apps"),
+  portals: navigationPresentation("monitor", "portals"),
+  approvals: navigationPresentation("badgeCheck", "approvals"),
+  workboard: navigationPresentation("kanban", "workboard"),
+  worktrees: navigationPresentation("folder", "worktrees"),
+  channels: navigationPresentation("link", "channels"),
+  connection: navigationPresentation("radio", "connection"),
+  sessions: navigationPresentation("fileText", "sessions"),
+  systems: navigationPresentation("monitor", "systems"),
+  usage: navigationPresentation("coins", "usage"),
+  cron: navigationPresentation("calendarClock", "cron"),
+  tasks: navigationPresentation("listChecks", "tasks"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
+  plugins: navigationPresentation("plug", "plugins"),
+  "plugin-settings": navigationPresentation("plug", "plugins"),
+  "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
+  device: navigationPresentation("monitor", "device"),
+  "device-permissions": navigationPresentation("shieldCheck", "devicePermissions"),
+  devices: navigationPresentation("monitorSmartphone", "devices"),
+  "cloud-workers": navigationPresentation("server", "cloudWorkers"),
+  chat: navigationPresentation("messageSquare", "chat"),
+  terminal: ["terminal", "terminal.title", "terminal.open"],
+  dashboard: navigationPresentation("layoutDashboard", "chat"),
+  dashboards: navigationPresentation("layoutDashboard", "dashboards"),
+  custodian: navigationPresentation("lobster", "custodian"),
   config: ["settings", "nav.settings", "subtitles.config"],
-  profile: ["circleUser", "tabs.profile", "subtitles.profile"],
-  communications: ["send", "tabs.communications", "subtitles.communications"],
-  appearance: ["palette", "tabs.appearance", "subtitles.appearance"],
-  lobsterdex: ["bug", "tabs.lobsterdex", "subtitles.lobsterdex"],
-  automation: ["terminal", "tabs.automation", "subtitles.automation"],
-  mcp: ["wrench", "tabs.mcp", "subtitles.mcp"],
-  memory: ["book", "tabs.memory", "subtitles.memory"],
-  talk: ["mic", "tabs.talk", "subtitles.talk"],
-  infrastructure: ["globe", "tabs.infrastructure", "subtitles.infrastructure"],
-  labs: ["flaskConical", "tabs.labs", "subtitles.labs"],
-  updates: ["download", "tabs.updates", "subtitles.updates"],
-  about: ["fileText", "tabs.about", "subtitles.about"],
-  "ai-agents": ["brain", "tabs.aiAgents", "subtitles.aiAgents"],
-  "model-setup": ["spark", "tabs.modelSetup", "subtitles.modelSetup"],
+  profile: navigationPresentation("circleUser", "profile"),
+  communications: navigationPresentation("send", "communications"),
+  appearance: navigationPresentation("palette", "appearance"),
+  lobsterdex: navigationPresentation("bug", "lobsterdex"),
+  automation: navigationPresentation("terminal", "automation"),
+  mcp: navigationPresentation("wrench", "mcp"),
+  memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
+  talk: navigationPresentation("mic", "talk"),
+  infrastructure: navigationPresentation("globe", "infrastructure"),
+  labs: navigationPresentation("flaskConical", "labs"),
+  updates: navigationPresentation("download", "updates"),
+  about: navigationPresentation("fileText", "about"),
+  "ai-agents": navigationPresentation("brain", "aiAgents"),
+  "model-setup": navigationPresentation("spark", "modelSetup"),
   "model-providers": ["box", "routeTitles.modelProviders", "subtitles.modelProviders"],
-  "memory-import": ["download", "tabs.memoryImport", "subtitles.memoryImport"],
+  "memory-import": navigationPresentation("download", "memoryImport"),
   notifications: ["bell", "routeTitles.notifications", "subtitles.notifications"],
-  security: ["shieldCheck", "tabs.security", "subtitles.security"],
+  security: navigationPresentation("shieldCheck", "security"),
   secrets: ["key", "tabs.secrets", "secretsStore.hint"],
   advanced: ["fileCode", "routeTitles.advanced", "subtitles.advanced"],
-  debug: ["bug", "tabs.debug", "subtitles.debug"],
-  logs: ["scrollText", "tabs.logs", "subtitles.logs"],
-  plugin: ["puzzle", "tabs.plugin", "subtitles.plugin"],
+  debug: navigationPresentation("bug", "debug"),
+  logs: navigationPresentation("scrollText", "logs"),
+  plugin: navigationPresentation("plug", "plugin"),
   "new-session": ["plus", "newSession.title", "newSession.hint"],
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
+  return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
 export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
@@ -378,23 +467,18 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
  * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable) and carries the pending-outbox total; titles already ending in the brand
+ * actionable); titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   gatewayDisconnected?: boolean;
-  queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
   if (options.gatewayDisconnected) {
-    const queued =
-      options.queuedCount && options.queuedCount > 0
-        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
-        : "";
-    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;
@@ -402,7 +486,13 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
+export function settingsNavigationLabelForRoute(
+  routeId: NavigationRouteId,
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  if (routeId === "device" && snapshot) {
+    return t(deviceSettingsGroupLabelKey(snapshot));
+  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }

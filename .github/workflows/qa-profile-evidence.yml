@@ -32,6 +32,11 @@ on:
         type: boolean
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       ref:
         description: OpenClaw branch, tag, or SHA to run
         required: true
@@ -99,6 +104,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
+  # Package-candidate builds run after shard concurrency starts and need the same explicit
+  # heap authority as the initial private-QA build on Blacksmith runners.
+  OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
   OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
@@ -106,7 +114,7 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -156,13 +164,19 @@ jobs:
     name: Validate selected ref
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
       # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
       - name: Resolve job workflow identity
@@ -288,7 +302,7 @@ jobs:
   plan_qa_profile:
     name: Plan QA profile shards
     needs: validate_selected_ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     outputs:
@@ -455,7 +469,7 @@ jobs:
   run_qa_profile_shard:
     name: Generate QA profile evidence (${{ matrix.id }})
     needs: [validate_selected_ref, plan_qa_profile]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 150
     permissions:
       contents: read
@@ -618,6 +632,19 @@ jobs:
           [[ -f "$playwright_script" ]] || playwright_script="scripts/ensure-playwright-chromium.mjs"
           node --import tsx "$playwright_script"
 
+      - name: Prepare Docker sandbox image when selected
+        env:
+          SCENARIO_IDS_JSON: ${{ toJSON(matrix.scenarioIds) }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          if jq -e '
+            index("openclaw-sandbox-workspace-isolation") != null or
+            index("agent-sandboxed-exec-behavior") != null
+          ' <<<"$SCENARIO_IDS_JSON" >/dev/null; then
+            scripts/sandbox-setup.sh
+          fi
+
       - name: Run QA profile shard
         id: run_profile
         env:
@@ -634,7 +661,6 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
-          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
         working-directory: selected
         run: |
           set -euo pipefail
@@ -762,7 +788,7 @@ jobs:
     name: Aggregate QA profile evidence
     needs: [validate_selected_ref, plan_qa_profile, run_qa_profile_shard]
     if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     timeout-minutes: 30
@@ -898,6 +924,7 @@ jobs:
         working-directory: selected
 
       - name: Download QA profile shard evidence
+        id: download_shards
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -944,19 +971,8 @@ jobs:
             shardCount: Number(process.env.SHARD_COUNT),
           });
           NODE
-          jq -s \
-            --arg profile "$QA_PROFILE" \
-            --argjson exitCode "$qa_exit_code" \
-            '{
-              target: .[0].target,
-              profile: $profile,
-              run: .[0].run,
-              shards: map(.shard + {exitCode, timedOut, timeoutOutcome, completedAt}),
-              exitCode: $exitCode,
-              timedOut: false,
-              timeoutOutcome: "none",
-              completedAt: (map(.completedAt) | max)
-            }' "${status_paths[@]}" > "$OUTPUT_DIR/qa-profile-run-status.json"
+          # Preserve the former status assembly's admission checks; projection is advisory below.
+          jq -s --argjson exitCode "$qa_exit_code" 'map(.shard + {})' "${status_paths[@]}" >/dev/null
           echo "output_dir=${OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
@@ -1025,6 +1041,46 @@ jobs:
           echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
           echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
+
+      # Diagnostics use the frozen harness even when candidate aggregation cannot start.
+      # They never produce a manifest or participate in qualification outputs.
+      - name: Collect QA profile diagnostics
+        id: collect_diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          INPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-profile-shards
+          OUTPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          PLAN_MATRIX_JSON: ${{ needs.plan_qa_profile.outputs.matrix }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          PROTOCOL_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+          QA_EXIT_CODE: ${{ steps.aggregate.outputs.qa_exit_code }}
+          SHARD_JOB_OUTCOME: ${{ needs.run_qa_profile_shard.result }}
+          DOWNLOAD_OUTCOME: ${{ steps.download_shards.outcome }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+          node scripts/qa/qa-profile-run-status.mjs
+
+      - name: Upload QA profile diagnostics
+        id: upload_diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-profile-diagnostics-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}/qa-profile-run-status.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Warn if QA profile diagnostics were not retained
+        if: always() && (steps.collect_diagnostics.outcome == 'failure' || steps.upload_diagnostics.outcome == 'failure')
+        run: echo "::warning::QA profile diagnostics collection or upload failed; inspect the original shard artifacts and job logs."
 
       - name: Upload QA profile evidence
         if: always() && steps.evidence.outcome == 'success'

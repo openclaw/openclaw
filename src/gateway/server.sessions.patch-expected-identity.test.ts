@@ -1,9 +1,10 @@
 // Compare-and-swap session patches must reject reset replacements atomically.
 import { afterEach, expect, test, vi } from "vitest";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -15,7 +16,8 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -433,6 +435,75 @@ test.each([
     markedUnreadAt: 10,
     sessionId: "conditional-unread-label",
   });
+});
+
+test.each([
+  {
+    name: "automatic read acknowledgement",
+    method: "sessions.patch",
+    patch: { unread: false },
+    identity: { expectedMarkedUnreadAt: null },
+    expected: { lastReadAt: expect.any(Number) },
+  },
+  {
+    name: "label",
+    method: "sessions.patch",
+    patch: { label: "Active session" },
+    identity: {},
+    expected: { label: "Active session" },
+  },
+  {
+    name: "batch pin",
+    method: "sessions.patchMany",
+    patch: { pinned: true },
+    identity: {},
+    expected: { pinnedAt: expect.any(Number) },
+  },
+])("preserves $name and an interleaved lifecycle write", async (scenario) => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:patch-lifecycle-race";
+  const keys =
+    scenario.method === "sessions.patchMany" ? [sessionKey, `${sessionKey}-sibling`] : [sessionKey];
+  await writeSessionStore({
+    entries: Object.fromEntries(keys.map((key) => [key, sessionStoreEntry(key)])),
+  });
+
+  const authorizePatch = createDeferred();
+  // Register outside the handler so this independent writer cannot borrow its
+  // reentrant admission context when authorization releases the gate.
+  const lifecycleWrite = authorizePatch.promise.then(() =>
+    patchSessionEntryCore({ sessionKey, storePath }, () => ({
+      status: "running",
+      lifecycleRunId: "interleaved-run",
+    })),
+  );
+  const assertCurrent = () => authorizePatch.resolve();
+  const targets = keys.map((key) => ({ key, ...scenario.identity }));
+  const params =
+    scenario.method === "sessions.patchMany"
+      ? { targets, patch: scenario.patch }
+      : { ...targets[0], ...scenario.patch };
+  const patched = directSessionReq(scenario.method, params, {
+    sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+  });
+  try {
+    const result = await patched;
+    await lifecycleWrite;
+    expect(result).toMatchObject({ ok: true });
+    if (scenario.method === "sessions.patchMany") {
+      expect(result.payload).toMatchObject({ outcomes: keys.map((key) => ({ key, ok: true })) });
+    }
+    for (const key of keys) {
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject(scenario.expected);
+    }
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      lifecycleRunId: "interleaved-run",
+    });
+  } finally {
+    authorizePatch.resolve();
+    await Promise.allSettled([patched, lifecycleWrite]);
+  }
 });
 
 test("sessions.patch keeps explicit unread markers strictly advancing", async () => {

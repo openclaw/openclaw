@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -64,6 +65,11 @@ async function scenario(
   const storePath = path.join(root, "sessions.sqlite");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
+  // Recovery reads real result refs, so this managed-worktree fixture owns its Git root.
+  const initialized = await runCommandWithTimeout(["git", "-C", worktreePath, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code).toBe(0);
   const entry = {
     sessionId: REQUEST.sessionId,
     worktree: { id: "task-worktree", branch: "test", repoRoot: worktreePath },
@@ -124,7 +130,7 @@ async function scenario(
     },
   });
   let reconciliations = 0;
-  const harness = createHarness(placements, {
+  const harness = createHarness(database, placements, {
     workspacePath: worktreePath,
     ...(failedRetry ? { failAt: "sync" as const } : {}),
     runReclaimPreparation: barriers.runReclaimPreparation,
@@ -154,7 +160,11 @@ async function scenario(
       async (...args: Parameters<typeof originalStartTunnel>) => {
         const tunnel = await originalStartTunnel(...args);
         const originalReconcile = tunnel.reconcileWorkspace.bind(tunnel);
-        tunnel.reconcileWorkspace = vi.fn(async (request) => {
+        tunnel.reconcileWorkspace = vi.fn<typeof originalReconcile>(async (request) => {
+          if (request.source.kind !== "local" || !request.source.stagedResult) {
+            throw new Error("Expected a staged local workspace reclaim");
+          }
+          const { journal, stagedResult } = request.source;
           const result = await originalReconcile(request);
           const raw = JSON.stringify({ version: 1, baseCommit: null, entries: [] });
           const ref = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
@@ -163,14 +173,14 @@ async function scenario(
           await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
             root: worktreePath,
             stagingRoot: payloadRoot,
-            stagedResultRef: request.stagedResult!.ref,
+            stagedResultRef: stagedResult.ref,
             baseManifestRef: ref,
             currentManifestRef: ref,
             baseManifestRaw: raw,
             currentManifestRaw: raw,
           });
-          request.stagedResult!.record(request.stagedResult!.ref);
-          request.journal.commit(ref);
+          stagedResult.record(stagedResult.ref);
+          journal.commit(ref);
 
           return { ...result, manifestRef: ref, changed: false };
         });
@@ -200,7 +210,7 @@ async function scenario(
   const provisionEntered = createDeferred();
   const releaseProvision = createDeferred();
   if (pendingDispatch) {
-    vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
+    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async () => {
       provisionEntered.resolve();
       await releaseProvision.promise;
       return harness.ready;
@@ -637,7 +647,7 @@ it.each(["missing", "local"] as const)(
       cancelSessionWork: cancel,
       revokeSessionAuthority: vi.fn(),
     });
-    const harness = createHarness(placements, {
+    const harness = createHarness(database, placements, {
       workspacePath: root,
       runReclaimPreparation: barriers.runReclaimPreparation,
       runReclaimBarrier: barriers.runReclaimBarrier,
@@ -705,7 +715,7 @@ it.each(["missing", "local"] as const)(
       await setImmediate();
       expect(dispatchSettled).toBe(true);
       expect(stopped).toBe(false);
-      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     } finally {
       cancellationLoad.resolve();
       release.resolve();
@@ -714,7 +724,7 @@ it.each(["missing", "local"] as const)(
       clearAgentRunContext(runId, admitted.value.lifecycleGeneration);
     }
     expect(await dispatch).toBe("cancelled");
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     const transcript = await loadTranscriptEvents({ storePath, ...REQUEST });
     expect(transcript.filter((event) => asRecord(event)?.type === "message")).toEqual([

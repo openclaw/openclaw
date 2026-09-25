@@ -1,7 +1,6 @@
 // Verifies Vercel AI Gateway auth marker resolution from env and profiles.
 import { beforeAll, describe, expect, it, vi } from "vitest";
-
-let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 async function loadModules() {
@@ -10,11 +9,7 @@ async function loadModules() {
   vi.doUnmock("../plugins/provider-runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
-  const [markersModule, secretsModule] = await Promise.all([
-    import("./model-auth-markers.js"),
-    import("./models-config.providers.secrets.js"),
-  ]);
-  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
+  const secretsModule = await import("./models-config.providers.secrets.js");
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
 

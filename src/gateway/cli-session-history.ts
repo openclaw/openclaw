@@ -1,6 +1,6 @@
 // Gateway CLI session history importer.
 // Augments local chat history with bound external Claude CLI transcripts.
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { readClaudeCliSessionMessagesAsync } from "./cli-session-history.claude-snapshot.js";
@@ -41,10 +41,11 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
 export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistoryParams): {
   messages: unknown[];
   imported: boolean;
+  expanded: boolean;
 } {
   const binding = resolveEligibleCliSessionBinding(params);
   if (!binding) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
   const importedMessages =
     params.preparedImportedMessages ??
@@ -55,15 +56,19 @@ export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistor
       reseedReceipt: binding.reseedReceipt,
     });
   if (importedMessages.length === 0) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
   const messages = mergeImportedChatHistoryMessages({
     localMessages: params.localMessages,
     importedMessages,
   });
-  return messages.length > params.localMessages.length
-    ? { messages, imported: true }
-    : { messages: params.localMessages, imported: false };
+  return messages === params.localMessages
+    ? { messages, imported: false, expanded: false }
+    : {
+        messages,
+        imported: true,
+        expanded: messages.length > params.localMessages.length,
+      };
 }
 
 /** Acquires one request-local redacted view of the process-owned external snapshot. */

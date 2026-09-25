@@ -1,11 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
-import {
-  isProviderAuthProfileConfigured,
-  resolveProviderAuthProfileApiKey,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
-  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
@@ -17,8 +12,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   toOpenAICompatibleRealtimeAudioFormat,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
@@ -29,12 +23,23 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
-  resolveOpenAIChatGptSubscriptionAuth,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
+import {
+  OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+  OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+} from "./realtime-quicksilver-redaction.js";
+import {
+  OPENAI_GPT_LIVE_MODELS,
+  isOpenAIGptLiveSubscriptionModel,
+  resolveOpenAIQuicksilverVoiceCapabilities,
+} from "./realtime-quicksilver.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
@@ -78,8 +83,7 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
 };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
-// Picker suggestions surfaced through talk.catalog; each value is live-verified
-// against the OpenAI realtime APIs. Free-form model values are still accepted.
+// Picker suggestions surfaced through talk.catalog. Free-form model values are still accepted.
 export const OPENAI_REALTIME_MODELS = [
   "gpt-realtime-2.1",
   "gpt-realtime-2.1-mini",
@@ -91,7 +95,10 @@ export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
   voicesByModel: Record<string, readonly string[]>;
 } = {
   voicesByModel: Object.fromEntries(
-    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
+    OPENAI_GPT_LIVE_MODELS.map((model) => [
+      model,
+      resolveOpenAIQuicksilverVoiceCapabilities(model).voices,
+    ]),
   ),
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
@@ -172,57 +179,8 @@ export type RealtimeEvent = {
   error?: unknown;
 };
 
-export type RealtimeTurnDetectionConfig = {
-  type: "server_vad";
-  threshold: number;
-  prefix_padding_ms: number;
-  silence_duration_ms: number;
-  create_response: boolean;
-  interrupt_response?: boolean;
-};
-
-type RealtimeGaSessionPolicy = {
-  type: "realtime";
-  model: string;
-  instructions?: string;
-  output_modalities: string[];
-  audio: {
-    input: {
-      format: OpenAICompatibleRealtimeAudioFormat;
-      turn_detection: RealtimeTurnDetectionConfig;
-      noise_reduction: { type: "near_field" } | null;
-      transcription: { model: string; language?: string };
-    };
-    output: {
-      format: OpenAICompatibleRealtimeAudioFormat;
-      voice: OpenAIRealtimeVoice;
-    };
-  };
-  reasoning?: { effort: string };
-  tools?: RealtimeVoiceTool[];
-  tool_choice?: string;
-};
-
-export type RealtimeGaSessionUpdate = {
-  type: "session.update";
-  session: RealtimeGaSessionPolicy;
-};
-
-export type RealtimeAzureDeploymentSessionUpdate = {
-  type: "session.update";
-  session: {
-    modalities: string[];
-    instructions?: string;
-    voice: OpenAIRealtimeVoice;
-    input_audio_format: "g711_ulaw" | "pcm16";
-    output_audio_format: "g711_ulaw" | "pcm16";
-    input_audio_transcription?: { model: string; language?: string };
-    turn_detection: RealtimeTurnDetectionConfig;
-    temperature: number;
-    tools?: RealtimeVoiceTool[];
-    tool_choice?: string;
-  };
-};
+export type RealtimeTurnDetectionConfig = ReturnType<typeof buildOpenAIRealtimeTurnDetectionConfig>;
+type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
 export function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
@@ -262,10 +220,6 @@ type OpenAIRealtimeApiKeyResolution =
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
-const OPENAI_GPT_LIVE_AUTH_REQUIRED =
-  "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
-const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
-  "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
 export const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 export const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -391,6 +345,7 @@ export function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefine
 
 export function normalizeOpenAIRealtimeTools(
   tools: RealtimeVoiceTool[] | undefined,
+  warn: OpenAIRealtimeHost["warn"],
   maxNameLength?: number,
 ): RealtimeVoiceTool[] | undefined {
   const normalized: RealtimeVoiceTool[] = [];
@@ -431,10 +386,10 @@ export function buildOpenAIRealtimeTurnDetectionConfig(params: {
   prefixPaddingMs?: number;
   silenceDurationMs?: number;
   vadThreshold?: number;
-}): RealtimeTurnDetectionConfig {
+}) {
   const configuredAutoResponse = params.autoRespondToAudio ?? true;
   return {
-    type: "server_vad",
+    type: "server_vad" as const,
     threshold: params.vadThreshold ?? 0.5,
     prefix_padding_ms: params.prefixPaddingMs ?? 300,
     silence_duration_ms: params.silenceDurationMs ?? 500,
@@ -461,12 +416,12 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   tools?: RealtimeVoiceTool[];
   vadThreshold?: number;
   voice: OpenAIRealtimeVoice;
-}): RealtimeGaSessionPolicy {
+}) {
   const format = toOpenAICompatibleRealtimeAudioFormat(
     params.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   );
   return {
-    type: "realtime",
+    type: "realtime" as const,
     model: params.model,
     ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
     output_modalities: ["audio"],
@@ -497,11 +452,14 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   };
 }
 
-export async function resolveOpenAIRealtimePlatformAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): Promise<OpenAIRealtimeApiKeyResolution> {
+export async function resolveOpenAIRealtimePlatformAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeApiKeyResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
     configured.status === "available" ||
@@ -510,6 +468,7 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
     return configured;
   }
 
+  const { resolveProviderAuthProfileApiKey, resolveAgentDir } = runtime;
   const profileApiKey = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: params.cfg,
@@ -529,52 +488,82 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
   return { status: "missing" };
 }
 
-export async function requireOpenAIRealtimePlatformAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
-  const resolved = await resolveOpenAIRealtimePlatformAuth(params);
+export async function requireOpenAIRealtimePlatformAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
+  const resolved = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (resolved.status === "available") {
     return resolved;
   }
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
-export async function resolveOpenAIQuicksilverBridgeAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}) {
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-    cfg: params.cfg,
-    agentDir:
-      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-  });
-  if (subscriptionAuth) {
-    return subscriptionAuth;
+export async function resolveOpenAIQuicksilverBridgeAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
+    agentId?: string;
+    model: string;
+  },
+  runtime: OpenAIRealtimeHost,
+) {
+  if (isOpenAIGptLiveSubscriptionModel(params.model)) {
+    const { resolveAgentDir } = runtime;
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+      {
+        cfg: params.cfg,
+        agentDir:
+          params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+      },
+      runtime,
+    );
+    if (subscriptionAuth) {
+      return subscriptionAuth;
+    }
   }
-  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params);
+  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };
   }
   if (
-    hasOpenAIRealtimePlatformAuthInput({
-      configuredApiKey: params.configuredApiKey,
-      cfg: params.cfg,
-      agentId: params.agentId,
-    })
+    hasOpenAIRealtimePlatformAuthInput(
+      {
+        configuredApiKey: params.configuredApiKey,
+        cfg: params.cfg,
+        agentId: params.agentId,
+      },
+      runtime,
+    )
   ) {
-    throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
+    throw new Error(
+      isOpenAIGptLiveSubscriptionModel(params.model)
+        ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
+        : OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+    );
   }
-  throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+  throw new Error(
+    isOpenAIGptLiveSubscriptionModel(params.model)
+      ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED
+      : OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  );
 }
 
-export function hasOpenAIRealtimePlatformAuthInput(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): boolean {
+export function hasOpenAIRealtimePlatformAuthInput(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  {
+    isProviderAuthProfileConfigured,
+    resolveAgentDir,
+  }: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured" | "resolveAgentDir">,
+): boolean {
   if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
   }
@@ -594,10 +583,16 @@ export function hasOpenAIRealtimePlatformAuthInput(params: {
   return hasOpenAIRealtimeApiKeyInput(undefined);
 }
 
-export function hasOpenAIChatGptSubscriptionAuthInput(params: {
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): boolean {
+export function hasOpenAIChatGptSubscriptionAuthInput(
+  params: {
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  {
+    isProviderAuthProfileConfigured,
+    resolveAgentDir,
+  }: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured" | "resolveAgentDir">,
+): boolean {
   return isProviderAuthProfileConfigured({
     provider: "openai",
     cfg: params.cfg,

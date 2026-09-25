@@ -15,6 +15,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import { resolveLineQuoteToken } from "./quote-tokens.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
@@ -76,6 +77,19 @@ describe("buildLineMessageContext", () => {
     tokenSource: "config",
     config: {},
   };
+
+  const buildMessageContext = (
+    event: MessageEvent,
+    overrides: Partial<Omit<Parameters<typeof buildLineMessageContext>[0], "event">> = {},
+  ) =>
+    buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      ...overrides,
+    });
 
   const createMessageEvent = (
     source: MessageEvent["source"],
@@ -142,13 +156,7 @@ describe("buildLineMessageContext", () => {
   it("routes group message replies to the group id", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
@@ -167,14 +175,55 @@ describe("buildLineMessageContext", () => {
       },
     } as Partial<MessageEvent>);
 
-  it("describes a sticker with the keywords LINE sent for it", async () => {
-    const context = await buildLineMessageContext({
-      event: stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
+  it.each([
+    { kind: "a text message", overrides: {}, chatId: "user-1" },
+    {
+      kind: "a group message",
+      overrides: { source: { type: "group", groupId: "Cgroup-1", userId: "user-1" } },
+      chatId: "Cgroup-1",
+    },
+  ])("remembers the token that quotes $kind it hands the agent", async ({ overrides, chatId }) => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-quotable", type: "text", text: "hello", quoteToken: "token-quotable" },
+      ...overrides,
+    } as Partial<MessageEvent>);
+
+    await buildMessageContext(event);
+
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId, messageId: "m-quotable" }),
+    ).toBe("token-quotable");
+  });
+
+  it("remembers nothing for a message kind LINE attaches no quote token to", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-audio", type: "audio", duration: 1, contentProvider: { type: "line" } },
+    } as Partial<MessageEvent>);
+
+    await buildMessageContext(event, {
+      allMedia: [{ path: "/tmp/line-audio.m4a", contentType: "audio/mp4" }],
     });
+
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "user-1", messageId: "m-audio" }),
+    ).toBeUndefined();
+  });
+
+  it("remembers nothing for a message that never reaches the agent", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: { id: "m-empty", type: "text", text: "", quoteToken: "token-empty" },
+    } as Partial<MessageEvent>);
+
+    expect(await buildMessageContext(event)).toBeNull();
+    expect(
+      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "user-1", messageId: "m-empty" }),
+    ).toBeUndefined();
+  });
+
+  it("describes a sticker with the keywords LINE sent for it", async () => {
+    const context = await buildMessageContext(
+      stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
+    );
 
     // Only LINE's own sticker facts reach the agent; the package id names no
     // package that a webhook carries.
@@ -186,8 +235,8 @@ describe("buildLineMessageContext", () => {
     // Its package id is one the deleted table claimed to know, and LINE's own
     // keywords identify the sticker as a different character than that entry
     // named — so the shipped shape, not a hand-made one, pins this projection.
-    const context = await buildLineMessageContext({
-      event: stickerEvent({
+    const context = await buildMessageContext(
+      stickerEvent({
         id: "629316390784598646",
         stickerId: "52002734",
         packageId: "11537",
@@ -210,23 +259,13 @@ describe("buildLineMessageContext", () => {
           "Surprised",
         ],
       }),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    );
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
   });
 
   it("uses the sender's own text for a message sticker", async () => {
-    const context = await buildLineMessageContext({
-      event: stickerEvent({ text: "See you tomorrow" }),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(stickerEvent({ text: "See you tomorrow" }));
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
   });
@@ -235,44 +274,28 @@ describe("buildLineMessageContext", () => {
     ["  See you tomorrow  ", "[Sent a sticker:   See you tomorrow  ]"],
     ["   ", "[Sent a sticker:    ]"],
   ])("preserves sender-authored sticker whitespace", async (text, expected) => {
-    const context = await buildLineMessageContext({
-      event: stickerEvent({ text, keywords: ["fallback"] }),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(stickerEvent({ text, keywords: ["fallback"] }));
 
     expect(context?.ctxPayload.RawBody).toBe(expected);
   });
 
   it("prefers message-sticker text over experimental keywords", async () => {
     // LINE's official message-sticker webhook example carries both properties.
-    const context = await buildLineMessageContext({
-      event: stickerEvent({
+    const context = await buildMessageContext(
+      stickerEvent({
         stickerId: "738839",
         packageId: "12287",
         stickerResourceType: "MESSAGE",
         keywords: ["Anticipation", "Sparkle", "Straight face", "Staring", "Thinking"],
         text: "Let's\nhang out\nthis weekend!",
       }),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    );
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Let's\nhang out\nthis weekend!]");
   });
 
   it("still reports a sticker that carries neither keywords nor text", async () => {
-    const context = await buildLineMessageContext({
-      event: stickerEvent({}),
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(stickerEvent({}));
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
   });
@@ -292,13 +315,7 @@ describe("buildLineMessageContext", () => {
       },
     } as Partial<MessageEvent>);
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.CommandBody).toBe("/status");
     expect(context?.ctxPayload.BodyForCommands).toBe("/status");
@@ -319,13 +336,7 @@ describe("buildLineMessageContext", () => {
       },
     } as Partial<MessageEvent>);
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.CommandBody).toBe("@Alice look at /status");
   });
@@ -333,13 +344,7 @@ describe("buildLineMessageContext", () => {
   it("skips media metadata projection for text-only messages", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.media).toEqual([]);
     expect(toInboundMediaFactsWithMetadataMock).not.toHaveBeenCalled();
@@ -348,12 +353,7 @@ describe("buildLineMessageContext", () => {
   it("passes the caller-provided inbound history through to the context payload", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
+    const context = await buildMessageContext(event, {
       inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
     });
 
@@ -368,16 +368,15 @@ describe("buildLineMessageContext", () => {
       ...cfg,
       agents: { defaults: { envelopeTimestamp: "off" } },
     };
-    await buildLineMessageContext({
-      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+    await buildMessageContext(
+      createMessageEvent({ type: "user", userId: "user-1" }, {
         timestamp,
         message: { id: "baseline", type: "text", text: "BODY_MARKER" },
       } as Partial<MessageEvent>),
-      allMedia: [],
-      cfg: logCfg,
-      account,
-      commandAuthorized: true,
-    });
+      {
+        cfg: logCfg,
+      },
+    );
     // Identity lookups log their own misses, so select the preview line by shape
     // rather than by call order.
     const baselineLog =
@@ -390,16 +389,15 @@ describe("buildLineMessageContext", () => {
     const rawBody = `${"x".repeat(199 - markerIndex)}🚀tail`;
     logVerboseMock.mockClear();
 
-    await buildLineMessageContext({
-      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+    await buildMessageContext(
+      createMessageEvent({ type: "user", userId: "user-1" }, {
         timestamp,
         message: { id: "1", type: "text", text: rawBody },
       } as Partial<MessageEvent>),
-      allMedia: [],
-      cfg: logCfg,
-      account,
-      commandAuthorized: true,
-    });
+      {
+        cfg: logCfg,
+      },
+    );
     const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;
     const formattedBodyLength = markerIndex + rawBody.length;
 
@@ -417,13 +415,8 @@ describe("buildLineMessageContext", () => {
       },
     } as Partial<MessageEvent>);
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
+    const context = await buildMessageContext(event, {
       mediaUnavailable: true,
-      cfg,
-      account,
-      commandAuthorized: true,
     });
 
     expect(context?.ctxPayload.RawBody).toBe("");
@@ -435,6 +428,48 @@ describe("buildLineMessageContext", () => {
     });
   });
 
+  it("tells the agent how much of a multi-image send never arrived", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildMessageContext(event, {
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 2,
+    });
+
+    // Without this the turn reads as the whole send and the agent answers
+    // confidently about images the sender can see are missing.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 2 more images in this send were not delivered]",
+    );
+  });
+
+  it("counts a single missing image in the singular", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildMessageContext(event, {
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 1,
+    });
+
+    // A media-only send has no other text, so this sentence is the whole body the
+    // model reads; it has to be a sentence.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 1 more image in this send was not delivered]",
+    );
+  });
+
   it("keeps materialized media-only text empty and projects structured media facts", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-image" }, {
       message: {
@@ -444,11 +479,8 @@ describe("buildLineMessageContext", () => {
       },
     } as Partial<MessageEvent>);
 
-    const context = await buildLineMessageContext({
-      event,
+    const context = await buildMessageContext(event, {
       allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
-      cfg,
-      account,
       commandAuthorized: false,
     });
 
@@ -493,10 +525,7 @@ describe("buildLineMessageContext", () => {
   it("resolves prefixed-only group config through the inbound message context", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
+    const context = await buildMessageContext(event, {
       account: {
         ...account,
         config: {
@@ -507,7 +536,6 @@ describe("buildLineMessageContext", () => {
           },
         },
       },
-      commandAuthorized: true,
     });
 
     expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed group config");
@@ -516,10 +544,7 @@ describe("buildLineMessageContext", () => {
   it("resolves prefixed-only room config through the inbound message context", async () => {
     const event = createMessageEvent({ type: "room", roomId: "room-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
+    const context = await buildMessageContext(event, {
       account: {
         ...account,
         config: {
@@ -530,7 +555,6 @@ describe("buildLineMessageContext", () => {
           },
         },
       },
-      commandAuthorized: true,
     });
 
     expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
@@ -539,10 +563,7 @@ describe("buildLineMessageContext", () => {
   it("carries a group's configured skill scope on the inbound context", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
+    const context = await buildMessageContext(event, {
       account: {
         ...account,
         config: {
@@ -551,7 +572,6 @@ describe("buildLineMessageContext", () => {
           },
         },
       },
-      commandAuthorized: true,
     });
 
     expect(context?.skillFilter).toEqual(["triage"]);
@@ -561,12 +581,8 @@ describe("buildLineMessageContext", () => {
   it("keeps an empty group skill scope as a scope rather than dropping it", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
+    const context = await buildMessageContext(event, {
       account: { ...account, config: { groups: { "group-1": { skills: [] } } } },
-      commandAuthorized: true,
     });
 
     expect(context?.skillFilter).toEqual([]);
@@ -588,12 +604,8 @@ describe("buildLineMessageContext", () => {
   it("leaves a direct chat without a group skill scope", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
+    const context = await buildMessageContext(event, {
       account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
-      commandAuthorized: true,
     });
 
     expect(context?.skillFilter).toBeUndefined();
@@ -607,11 +619,7 @@ describe("buildLineMessageContext", () => {
       },
     );
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
+    const context = await buildMessageContext(event, {
       commandAuthorized: false,
     });
 
@@ -621,13 +629,7 @@ describe("buildLineMessageContext", () => {
   it("sets CommandAuthorized=true when authorized", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-auth" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(true);
   });
@@ -686,11 +688,7 @@ describe("buildLineMessageContext", () => {
   it("sets CommandAuthorized=false when not authorized", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-noauth" });
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
+    const context = await buildMessageContext(event, {
       commandAuthorized: false,
     });
 
@@ -703,15 +701,12 @@ describe("buildLineMessageContext", () => {
       session: { store: storePath, dmScope: "per-channel-peer" },
     };
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
+    const context = await buildMessageContext(event, {
       cfg: directCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-1"] },
       },
-      commandAuthorized: true,
     });
 
     expect(context?.route.sessionKey).toBe("agent:main:line:direct:user-1");
@@ -762,12 +757,8 @@ describe("buildLineMessageContext", () => {
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
+    const context = await buildMessageContext(event, {
       cfg: bindingCfg,
-      account,
-      commandAuthorized: true,
     });
     expect(context?.route.agentId).toBe("line-group-agent");
     expect(context?.route.matchedBy).toBe("binding.peer");
@@ -799,12 +790,8 @@ describe("buildLineMessageContext", () => {
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
 
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
+    const context = await buildMessageContext(event, {
       cfg: bindingCfg,
-      account,
-      commandAuthorized: true,
     });
     expect(context?.route.agentId).toBe("line-room-agent");
     expect(context?.route.matchedBy).toBe("binding.peer");
@@ -872,17 +859,19 @@ describe("buildLineMessageContext", () => {
     });
 
     const event = createMessageEvent({ type: "user", userId });
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.route.agentId).toBe("codex");
     expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
     expect(context?.route.matchedBy).toBe("binding.channel");
+    if (!context) {
+      throw new Error("expected a bound LINE message context");
+    }
+    const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
+    expect(routeMetadataKeys).not.toHaveLength(0);
+    for (const key of routeMetadataKeys) {
+      expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+    }
   });
 
   it("gives the agent the sender's and the group's name instead of their ids", async () => {
@@ -894,13 +883,7 @@ describe("buildLineMessageContext", () => {
       groupId: "C5aeb18d690759492f1a8c391c37549a0",
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.SenderName).toBe("Sora");
     expect(context?.ctxPayload.GroupSubject).toBe("Release Squad");
@@ -916,13 +899,7 @@ describe("buildLineMessageContext", () => {
       groupId: "C5aeb18d690759492f1a8c391c37549a0",
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildMessageContext(event);
 
     expect(context?.ctxPayload.SenderName).toBeUndefined();
     expect(context?.ctxPayload.GroupSubject).toBe("C5aeb18d690759492f1a8c391c37549a0");
@@ -934,13 +911,7 @@ describe("buildLineMessageContext", () => {
       groupId: "C5aeb18d690759492f1a8c391c37549a0",
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
-    await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    await buildMessageContext(event);
 
     expect(getUserProfileMock).toHaveBeenCalledWith(
       "U47f0bbc534dc503c4e4cadc86e619b63",
@@ -983,8 +954,8 @@ describe("buildLineMessageContext", () => {
   ])(
     "projects LINE emoji metadata without losing text: $text",
     async ({ text, spans, expected, mention }) => {
-      const context = await buildLineMessageContext({
-        event: createMessageEvent(
+      const context = await buildMessageContext(
+        createMessageEvent(
           { type: "user", userId: "user-1" },
           {
             message: {
@@ -1002,11 +973,7 @@ describe("buildLineMessageContext", () => {
             },
           },
         ),
-        allMedia: [],
-        cfg,
-        account,
-        commandAuthorized: true,
-      });
+      );
 
       expect(context?.ctxPayload.BodyForAgent).toBe(expected);
       expect(context?.ctxPayload.RawBody).toBe(expected);

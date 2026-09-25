@@ -133,11 +133,6 @@ struct ControlChannelCompatibilityAlerts {
 final class ControlChannel {
     static let shared = ControlChannel()
 
-    enum Mode {
-        case local
-        case remote(target: String, identity: String)
-    }
-
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
@@ -172,6 +167,11 @@ final class ControlChannel {
     private(set) var lastPingMs: Double?
     private(set) var authSourceLabel: String?
 
+    var lastHeartbeatEvent: ControlHeartbeatEvent? {
+        guard let heartbeat, self.gateway.serverLeaseMatchesCurrentRoute(heartbeat.lease) else { return nil }
+        return heartbeat.event
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "control")
     let gateway: GatewayConnection
     private let endpointRevision: @Sendable () -> UInt64
@@ -180,14 +180,16 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
     private var compatibilityAlerts = ControlChannelCompatibilityAlerts()
-    private var activityServerLease: GatewayConnection.ServerLease?
+    private var eventServerLease: GatewayConnection.ServerLease?
+    private var heartbeat: (event: ControlHeartbeatEvent, lease: GatewayConnection.ServerLease)?
+    private var heartbeatReadTask: Task<Void, Never>?
 
     private func synchronizeRouteGeneration() -> UInt64 {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.
         if self.compatibilityAlerts.observeEndpoint(revision: self.endpointRevision()) {
             self.cancelPendingStateTask()
             self.cancelRecovery()
-            self.retireActivity()
+            self.retireEventState()
         }
         return self.compatibilityAlerts.routeGeneration
     }
@@ -261,34 +263,11 @@ final class ControlChannel {
         self.eventTask?.cancel()
         self.recoveryTask?.cancel()
         self.pendingStateTask?.cancel()
+        self.heartbeatReadTask?.cancel()
     }
 
     func configure() async {
-        self.logger.info("control channel configure mode=local")
         await self.refreshEndpoint(reason: "configure")
-    }
-
-    func configure(mode: Mode = .local) async throws {
-        switch mode {
-        case .local:
-            await self.configure()
-        case let .remote(target, identity):
-            let generation = self.synchronizeRouteGeneration()
-            do {
-                _ = (target, identity)
-                let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                self.logger.info(
-                    "control channel configure mode=remote " +
-                        "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.setStateThrottled(.connecting)
-                _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                await self.refreshEndpoint(reason: "configure", generation: generation)
-            } catch {
-                guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
-                self.setStateThrottled(.degraded(error.localizedDescription), generation: generation)
-                throw error
-            }
-        }
     }
 
     func endpointDidChange(_ state: GatewayEndpointState) {
@@ -333,7 +312,7 @@ final class ControlChannel {
         self.cancelRecovery()
         self.eventTask?.cancel()
         self.eventTask = nil
-        self.retireActivity()
+        self.retireEventState()
         self.setStateThrottled(.disconnected)
         await self.gateway.shutdown()
     }
@@ -370,11 +349,6 @@ final class ControlChannel {
             if let connected { return connected }
             return try await self.gateway.acquireServerLease()
         }
-    }
-
-    func lastHeartbeat() async throws -> ControlHeartbeatEvent? {
-        let data = try await self.request(method: "last-heartbeat")
-        return try JSONDecoder().decode(ControlHeartbeatEvent?.self, from: data)
     }
 
     func request(
@@ -482,7 +456,9 @@ final class ControlChannel {
 
         let mode = ConnectionModeResolver.resolve(root: configRoot).mode
         let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
-        let localPort = GatewayEnvironment.gatewayPort()
+        let localPort = mode == .remote
+            ? RemotePortTunnel.localPort(root: configRoot)
+            : GatewayEnvironment.gatewayPort()
         let directURL = mode == .remote && transport.transport == .direct ? transport.directURL : nil
         let endpoint = if let url = directURL, let host = url.host,
                           let port = GatewayRemoteConfig.defaultPort(for: url)
@@ -611,7 +587,7 @@ final class ControlChannel {
                     "mode=\(String(describing: mode), privacy: .public) " +
                     "reason=\(reasonText, privacy: .public)")
             if mode == .local {
-                GatewayProcessManager.shared.setActive(true)
+                GatewayProcessManager.shared.setActive(true, source: .recovery)
             }
             if mode == .remote {
                 do {
@@ -675,8 +651,9 @@ final class ControlChannel {
         }
     }
 
-    private func retireActivity() {
-        self.activityServerLease = nil
+    private func retireEventState() {
+        self.eventServerLease = nil
+        self.heartbeatReadTask?.cancel()
         // Keep the last known main key until a current hello replaces it.
         // Retired deliveries cannot use that metadata to recreate old work.
         WorkActivityStore.shared.reset()
@@ -687,18 +664,19 @@ final class ControlChannel {
         guard delivery.isCurrent, delivery.serverLease.endpointRevision == self.endpointRevision() else { return }
         guard let push = delivery.push else {
             guard case let .disconnected(reason) = delivery.event else { return }
-            self.retireActivity()
+            self.retireEventState()
             self.setStateThrottled(reason.map(ConnectionState.degraded) ?? .disconnected, generation: generation)
             return
         }
         // Agent events may precede the ordinary hello notification. Adopt the
         // admitted handshake once, before any current work can be projected.
-        if self.activityServerLease != delivery.serverLease {
+        if self.eventServerLease != delivery.serverLease {
             WorkActivityStore.shared.reset()
             if let mainSessionKey = delivery.mainSessionKey {
                 WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
             }
-            self.activityServerLease = delivery.serverLease
+            self.eventServerLease = delivery.serverLease
+            self.refreshHeartbeat(delivery: delivery)
         }
         switch push {
         case let .event(evt) where evt.event == "agent":
@@ -710,10 +688,10 @@ final class ControlChannel {
             }
         case let .event(evt) where evt.event == "heartbeat":
             if let payload = evt.payload,
-               let heartbeat = try? GatewayPayloadDecoding.decode(payload, as: ControlHeartbeatEvent.self),
-               let data = try? JSONEncoder().encode(heartbeat)
+               let heartbeat = try? GatewayPayloadDecoding.decode(payload, as: ControlHeartbeatEvent.self)
             {
-                NotificationCenter.default.post(name: .controlHeartbeat, object: data)
+                self.heartbeatReadTask?.cancel()
+                self.heartbeat = (heartbeat, delivery.serverLease)
             }
         case let .event(evt) where evt.event == "shutdown":
             self.setStateThrottled(.degraded("gateway shutdown"))
@@ -727,6 +705,24 @@ final class ControlChannel {
             self.refreshProfileAccent(delivery: delivery)
         default:
             break
+        }
+    }
+
+    private func refreshHeartbeat(delivery: GatewayConnection.PushDelivery) {
+        self.heartbeatReadTask?.cancel()
+        self.heartbeatReadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let data = try await self.request(
+                    method: "last-heartbeat", ifCurrentServerLease: delivery.serverLease)
+                // A newer push wins over this initial read, even on the same socket.
+                guard !Task.isCancelled, delivery.isCurrent else { return }
+                // GatewayChannel represents a successful null payload as empty data.
+                self.heartbeat = data.isEmpty ? nil : try JSONDecoder()
+                    .decode(ControlHeartbeatEvent?.self, from: data).map { ($0, delivery.serverLease) }
+            } catch {
+                // Keep the last good event across same-Gateway reconnects; the getter fences replaced routes.
+            }
         }
     }
 
@@ -754,10 +750,7 @@ final class ControlChannel {
                 params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
                 timeoutMs: 8000,
                 ifCurrentServerLease: serverLease)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(data)
         } catch {
             return nil
         }
@@ -813,5 +806,4 @@ final class ControlChannel {
 
 extension Notification.Name {
     static let controlChannelStateDidChange = Notification.Name("openclaw.control-channel.state-did-change")
-    static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
 }

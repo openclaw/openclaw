@@ -1,16 +1,19 @@
-// Signal tests cover monitor.tool result.pairs uuid only senders uuid allowlist entry plugin behavior.
 import { Buffer } from "node:buffer";
+import * as timers from "node:timers/promises";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   config,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
-  toSignalToolResultTestError,
   waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
+vi.mock("node:timers/promises", { spy: true });
+const nativeTimers =
+  await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const { replyMock, sendMock, streamMock, signalRpcRequestMock, upsertPairingRequestMock } =
@@ -129,8 +132,39 @@ describe("monitorSignalProvider tool results", () => {
     }
   });
 
-  it("cancels a pending reply-session conflict retry when the monitor stops", async () => {
+  it("cancels a pending reply-session conflict retry when the monitor stops", async ({
+    signal,
+  }) => {
     const abortController = new AbortController();
+    const retryStarted = Promise.withResolvers<AbortSignal | undefined>();
+    let releaseRetry: (() => void) | undefined;
+    let retryAborted = false;
+    const onTestAbort = () => {
+      retryStarted.reject(new Error("Test stopped before retry", { cause: signal.reason }));
+      releaseRetry?.();
+    };
+    signal.addEventListener("abort", onTestAbort, { once: true });
+    const sleep = vi.mocked(timers.setTimeout).mockImplementation((delay, value, options) => {
+      if (replyMock.mock.calls.length === 0 || options?.ref !== false) {
+        return nativeTimers.setTimeout(delay, value, options);
+      }
+      const retrySignal = options.signal;
+      retryStarted.resolve(retrySignal);
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          retryAborted = true;
+          reject(new Error("retry cancelled", { cause: retrySignal?.reason }));
+        };
+        releaseRetry = () => {
+          retrySignal?.removeEventListener("abort", onAbort);
+          resolve(value);
+        };
+        retrySignal?.addEventListener("abort", onAbort, { once: true });
+        if (retrySignal?.aborted) {
+          onAbort();
+        }
+      });
+    });
     replyMock.mockRejectedValue(
       new Error(
         "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
@@ -148,40 +182,54 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
-      await new Promise<void>((resolve) => {
-        abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await waitForAbortSignal(abortSignal);
     });
 
     const monitorPromise = monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
+      abortSignal: AbortSignal.any([abortController.signal, signal]),
     });
-    let waitError: Error | undefined;
     try {
-      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    } catch (error) {
-      waitError = toSignalToolResultTestError(error, "Signal reply was not dispatched");
+      const retrySignal = await Promise.race([
+        retryStarted.promise,
+        monitorPromise.then(() => {
+          throw new Error("Signal monitor stopped before scheduling its retry");
+        }),
+      ]);
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      expect(retrySignal?.aborted).toBe(false);
+      abortController.abort(new Error("monitor stopped"));
+      await monitorPromise;
+      expect(retryAborted).toBe(true);
+      expect(replyMock).toHaveBeenCalledTimes(1);
     } finally {
       abortController.abort(new Error("monitor stopped"));
+      signal.removeEventListener("abort", onTestAbort);
+      releaseRetry?.();
+      try {
+        await monitorPromise;
+      } finally {
+        sleep.mockImplementation(nativeTimers.setTimeout);
+      }
     }
-    await monitorPromise;
-    if (waitError) {
-      throw waitError;
-    }
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("drains an inline inbound message accepted before the monitor stops", async () => {
+  it("drains an inline inbound message accepted before the monitor stops", async ({ signal }) => {
     const abortController = new AbortController();
+    const sendStarted = Promise.withResolvers<void>();
+    const sendCompleted = Promise.withResolvers<void>();
     setSignalToolResultTestConfig({
+      messages: { visibleReplies: "automatic" },
       channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
     });
     replyMock.mockResolvedValue({ text: "accepted reply" });
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      await onEvent({
+    sendMock.mockImplementation(async () => {
+      sendStarted.resolve();
+      await sendCompleted.promise;
+    });
+    streamMock.mockImplementation(async ({ onEvent, abortSignal }) => {
+      onEvent({
         event: "receive",
         data: JSON.stringify({
           envelope: {
@@ -192,17 +240,30 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
-      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
-      abortController.abort(new Error("monitor stopped"));
+      await waitForAbortSignal(abortSignal);
     });
 
-    await monitorSignalProvider({
+    const monitorPromise = monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
+      abortSignal: AbortSignal.any([abortController.signal, signal]),
     });
+    try {
+      await Promise.race([
+        sendStarted.promise,
+        monitorPromise.then(() => {
+          throw new Error("Signal monitor stopped before delivering the accepted reply");
+        }),
+      ]);
+      abortController.abort(new Error("monitor stopped"));
+    } finally {
+      abortController.abort(new Error("monitor stopped"));
+      sendCompleted.resolve();
+      await monitorPromise;
+    }
 
     expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith("+15550001111", "accepted reply", expect.anything());
   });
 
@@ -249,6 +310,7 @@ describe("monitorSignalProvider tool results", () => {
     const maxBytes = 2 * 1024 * 1024;
     const expectedMaxResponseBytes = Math.ceil((maxBytes * 4) / 3) + 64 * 1024;
     setSignalToolResultTestConfig({
+      messages: { visibleReplies: "automatic" },
       channels: {
         signal: {
           transport: { kind: "container", url: "http://container:8080" },

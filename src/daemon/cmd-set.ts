@@ -16,27 +16,14 @@ function escapeCmdSetAssignmentComponent(value: string, delayedExpansion: boolea
 }
 
 function unescapeCmdSetAssignmentComponent(value: string): string {
-  let out = "";
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i];
-    const next = value[i + 1];
-    if (ch === "^" && (next === "^" || next === '"' || next === "!")) {
-      out += next;
-      i += 1;
-      continue;
-    }
-    if (ch === "%" && next === "%") {
-      out += "%";
-      i += 1;
-      continue;
-    }
-    out += ch;
-  }
-  return out;
+  return value.replace(/\^([\^"!])|%%/g, (_match, escaped: string | undefined) => escaped ?? "%");
 }
 
-export function parseCmdSetAssignment(line: string): CmdSetAssignment | null {
-  const raw = line.trim();
+export function parseCmdSetAssignment(
+  line: string,
+  requireLiteral = false,
+): CmdSetAssignment | null {
+  const raw = requireLiteral ? line.trimStart() : line.trim();
   if (!raw) {
     return null;
   }
@@ -47,17 +34,28 @@ export function parseCmdSetAssignment(line: string): CmdSetAssignment | null {
     return null;
   }
   const key = assignment.slice(0, index).trim();
-  const value = assignment.slice(index + 1).trim();
+  const value = requireLiteral ? assignment.slice(index + 1) : assignment.slice(index + 1).trim();
   if (!key) {
     return null;
   }
-  if (!quoted) {
+  // Batch expansions and caret/quote decoding depend on the command processor.
+  // Strict service inspection must not report those expressions as effective facts.
+  if (
+    requireLiteral &&
+    (key !== assignment.slice(0, index) ||
+      /[%!^"]/.test(assignment.replace(/%%/g, "")) ||
+      (!quoted && (assignment.startsWith("/") || /[&|<>()]/.test(assignment))))
+  ) {
+    return null;
+  }
+  if (!quoted && !requireLiteral) {
     return { key, value };
   }
-  // Quoted cmd set lines were produced by renderCmdSetAssignment, so undo only
-  // the expansion escapes that renderer emits.
+  // Recovery decodes managed-script escapes; validated literal input can only
+  // contain paired percent escapes, including in unquoted assignments.
   return {
-    key: unescapeCmdSetAssignmentComponent(key),
+    // Windows names are case-insensitive; strict maps keep the last assignment.
+    key: unescapeCmdSetAssignmentComponent(requireLiteral ? key.toUpperCase() : key),
     value: unescapeCmdSetAssignmentComponent(value),
   };
 }

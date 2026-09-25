@@ -1,6 +1,6 @@
 /** Per-registry command execution admission and retirement drain. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { getPluginRegistryResourceOwner, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type PluginCommandExecutionState = {
@@ -26,7 +26,8 @@ function getExecutionState(registry: PluginRegistry): PluginCommandExecutionStat
   return created;
 }
 
-export function getPluginCommandExecutionCount(registry: PluginRegistry): number {
+export function getPluginCommandExecutionCount(registryView: PluginRegistry): number {
+  const registry = getPluginRegistryResourceOwner(registryView);
   return executionStates.get(registry)?.count ?? 0;
 }
 
@@ -53,16 +54,18 @@ function endPluginCommandExecution(registry: PluginRegistry): void {
   }
 }
 
-export function isPluginCommandExecutionActiveHere(registry: PluginRegistry): boolean {
+export function isPluginCommandExecutionActiveHere(registryView: PluginRegistry): boolean {
+  const registry = getPluginRegistryResourceOwner(registryView);
   return [...(executionContext.getStore() ?? [])].some(
     (token) => token.registry === registry && token.active,
   );
 }
 
 export async function withPluginCommandExecution<T>(
-  registry: PluginRegistry,
+  registryView: PluginRegistry,
   run: () => T | Promise<T>,
 ): Promise<{ admitted: true; value: T } | { admitted: false }> {
+  const registry = getPluginRegistryResourceOwner(registryView);
   if (!beginPluginCommandExecution(registry)) {
     return { admitted: false };
   }
@@ -79,7 +82,8 @@ export async function withPluginCommandExecution<T>(
   }
 }
 
-export async function waitForPluginCommandExecutions(registry: PluginRegistry): Promise<void> {
+export async function waitForPluginCommandExecutions(registryView: PluginRegistry): Promise<void> {
+  const registry = getPluginRegistryResourceOwner(registryView);
   const state = getExecutionState(registry);
   if (state.count === 0) {
     return;

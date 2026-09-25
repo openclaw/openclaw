@@ -1,9 +1,14 @@
-import {
-  formatErrorMessage,
-  type NormalizedUsage,
-  type AgentHarnessAttemptParamsV2,
+import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import type {
+  NormalizedUsage,
+  AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { CodexAsyncQuestion } from "./async-questions.js";
+import {
+  codexProviderRefusalDetails,
+  type CodexProviderRefusal,
+} from "./event-projector-values.js";
 import {
   resolveCodexLocalRuntimeAttribution,
   type CodexLocalRuntimeAttributionParams,
@@ -17,34 +22,15 @@ type CodexAssistantAttribution = {
   api?: AssistantMessage["api"];
 };
 
-type CodexAssistantUsage = Usage & {
-  // Codex is a managed runtime; keep reasoning telemetry private to managed consumers.
-  reasoningTokens?: number;
-};
-
 export type AssistantMessageOptions = {
   tokenUsage: NormalizedUsage | undefined;
   aborted: boolean;
   promptError: unknown;
+  providerRefusal?: CodexProviderRefusal;
 };
 
 export type CodexAsyncAssistantMessage = AssistantMessage & {
-  openclawAsyncDelivery: { itemId: string };
-};
-
-const ZERO_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
+  openclawAsyncDelivery: { itemId: string; questions?: CodexAsyncQuestion[] };
 };
 
 export function createAssistantMessage(
@@ -66,38 +52,28 @@ export function createAttributedCodexAssistantMessage(
   text: string,
   options: AssistantMessageOptions,
 ): AssistantMessage {
-  const usage: CodexAssistantUsage = options.tokenUsage
-    ? {
-        input: options.tokenUsage.input ?? 0,
-        output: options.tokenUsage.output ?? 0,
-        cacheRead: options.tokenUsage.cacheRead ?? 0,
-        cacheWrite: options.tokenUsage.cacheWrite ?? 0,
-        ...(options.tokenUsage.reasoningTokens !== undefined
-          ? { reasoningTokens: options.tokenUsage.reasoningTokens }
-          : {}),
-        ...(options.tokenUsage.contextUsage
-          ? { contextUsage: options.tokenUsage.contextUsage }
-          : {}),
-        totalTokens:
-          options.tokenUsage.total ??
-          (options.tokenUsage.input ?? 0) +
-            (options.tokenUsage.output ?? 0) +
-            (options.tokenUsage.cacheRead ?? 0) +
-            (options.tokenUsage.cacheWrite ?? 0),
-        cost: ZERO_USAGE.cost,
-      }
-    : ZERO_USAGE;
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: attribution.modelId,
-    usage,
-    stopReason: options.aborted ? "aborted" : options.promptError ? "error" : "stop",
-    errorMessage: options.promptError ? formatErrorMessage(options.promptError) : undefined,
-    timestamp: Date.now(),
-  };
+  const refusal = options.providerRefusal;
+  return createAgentHarnessAssistantMessage(
+    { ...attribution, api: attribution.api ?? "openai-chatgpt-responses" },
+    text,
+    {
+      tokenUsage: options.tokenUsage,
+      aborted: options.aborted,
+      promptError: options.promptError,
+      errorMessage: refusal?.message,
+      ...(refusal
+        ? {
+            diagnostics: [
+              {
+                type: "provider_refusal",
+                timestamp: Date.now(),
+                details: codexProviderRefusalDetails(refusal),
+              },
+            ],
+          }
+        : {}),
+    },
+  );
 }
 
 export function createAssistantCommentaryMessage(
@@ -106,18 +82,10 @@ export function createAssistantCommentaryMessage(
   itemId: string,
   timestamp: number,
 ): AssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   const message: AssistantMessage & {
     openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
   } = {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
     // Keep this unphased: gateway history hides commentary-phase assistant rows.
     // The keyed fallback persists Control UI narration without channel delivery.
     openclawStreamFallback: {
@@ -134,18 +102,11 @@ export function createAssistantAsyncMessage(
   text: string,
   itemId: string,
   timestamp: number,
+  questions?: CodexAsyncQuestion[],
 ): CodexAsyncAssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
-    openclawAsyncDelivery: { itemId },
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
+    openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
   };
 }
 
@@ -153,16 +114,23 @@ export function createAssistantReasoningMessage(
   params: CodexAssistantMessageParams,
   text: string,
 ): AssistantMessage {
+  // Shared history and visibility controls need reasoning, not final-answer text.
+  return createNonterminalAssistantMessage(params, [{ type: "thinking", thinking: text }]);
+}
+
+function createNonterminalAssistantMessage(
+  params: CodexAssistantMessageParams,
+  content: AssistantMessage["content"],
+  timestamp?: number,
+): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
-  return {
-    role: "assistant",
-    // Shared history and visibility controls need reasoning, not final-answer text.
-    content: [{ type: "thinking", thinking: text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
+  return createAgentHarnessAssistantMessage(
+    {
+      ...attribution,
+      api: attribution.api ?? "openai-chatgpt-responses",
+      modelId: params.modelId,
+    },
+    "",
+    { content, aborted: false, timestamp },
+  );
 }

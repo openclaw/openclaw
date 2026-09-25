@@ -150,7 +150,11 @@ describe("resolveCopilotForwardCompatModel", () => {
   it("creates synthetic Gemini models with Chat Completions compatibility", () => {
     const result = requireResolvedModel(createMockCtx("gemini-3.1-pro-preview"));
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-completions");
+    // The manifest row now declares its conservative code-mode tier explicitly
+    // (shared-upstream-model contract), and the static override passes the full
+    // manifest compat through to the resolved model.
     expect((result as unknown as Record<string, unknown>).compat).toEqual({
+      codeMode: "capable",
       supportsStore: false,
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
@@ -362,10 +366,7 @@ describe("github-copilot runtime auth", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
-        new Response(
-          JSON.stringify({ endpoints: { api: "https://api.individual.githubcopilot.com/" } }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+        Response.json({ endpoints: { api: "https://api.individual.githubcopilot.com/" } }),
       );
 
     const auth = await resolveCopilotRuntimeAuth({
@@ -391,12 +392,9 @@ describe("github-copilot runtime auth", () => {
   });
 
   it("accepts an account endpoint under the configured data-residency tenant", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ endpoints: { api: "https://copilot-api.acme.ghe.com" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(Response.json({ endpoints: { api: "https://copilot-api.acme.ghe.com" } }));
 
     const auth = await resolveCopilotRuntimeAuth({
       githubToken: "tenant-source-token",
@@ -409,12 +407,7 @@ describe("github-copilot runtime auth", () => {
   });
 
   it("uses a domain-safe fallback when account metadata omits the API endpoint", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ copilot_plan: "individual" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json({ copilot_plan: "individual" }));
 
     await expect(
       resolveCopilotRuntimeAuth({
@@ -432,12 +425,7 @@ describe("github-copilot runtime auth", () => {
     "https://api.individual.githubcopilot.com.attacker.test",
     "https://user@api.individual.githubcopilot.com",
   ])("rejects an untrusted account endpoint: %s", async (api) => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ endpoints: { api } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json({ endpoints: { api } }));
 
     await expect(
       resolveCopilotRuntimeAuth({

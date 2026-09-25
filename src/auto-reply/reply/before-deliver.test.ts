@@ -4,17 +4,48 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
+import {
+  createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
+} from "../../infra/outbound/payloads.js";
+import { preserveReplyPayloadMediaSelectionCore } from "../../infra/outbound/reply-media-entries.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { captureDeliveredTranscriptMirror } from "./dispatch-from-config.transcript.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   createReplyDispatcher,
   prepareReplyPayloadForDispatcher,
 } from "./reply-dispatcher.js";
+
+function planReply(payload: ReplyPayload): OutboundPayloadPlan {
+  const [plan] = createStructuredOutboundPayloadPlan([payload]);
+  if (!plan) {
+    throw new Error("expected a sendable prepared reply");
+  }
+  return plan;
+}
+
+function sendFinal(
+  dispatcher: ReturnType<typeof createReplyDispatcher>,
+  operation: "raw" | "prepared",
+  payload: ReplyPayload,
+) {
+  return operation === "raw"
+    ? dispatcher.sendFinalReply(payload)
+    : dispatcher.sendPreparedReply("final", planReply(payload));
+}
 
 async function makePendingFinalFixture() {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dispatcher-pending-final-"));
@@ -51,6 +82,266 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it.each(["raw", "prepared"] as const)(
+    "retains an in-place media selection through %s dispatch recovery",
+    async (operation) => {
+      const delivered: ReplyPayload[] = [];
+      const deliver = async (payload: ReplyPayload) => {
+        delivered.push(
+          preserveReplyPayloadMediaSelectionCore(payload, {
+            ...payload,
+            text: "Recovered full text",
+            mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          }),
+        );
+      };
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          payload.mediaUrl = undefined;
+          payload.mediaUrls?.splice(0, 1);
+          payload.attachments?.splice(0, 1);
+          return payload;
+        },
+        deliver,
+        deliverPrepared: async (plan) => deliver(plan.payload),
+      });
+      expect(
+        sendFinal(dispatcher, operation, {
+          text: "Short answer",
+          mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          attachments: [{ name: "rejected" }, { name: "selected" }],
+        }),
+      ).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: "Recovered full text",
+          mediaUrls: ["/tmp/selected.png"],
+          attachments: [{ name: "selected" }],
+        }),
+      ]);
+    },
+  );
+
+  it.each(["[[reply_to:example-id]]` literally.", "[[audio_as_voice]]` literally."])(
+    "preserves prepared literal %s and rebuilds projections after modifiers",
+    async (text) => {
+      const delivered: OutboundPayloadPlan[] = [];
+      const deliver = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: "[bot]",
+        beforeDeliver: async (payload) => ({
+          ...payload,
+          text: `${payload.text} Updated.`,
+          mediaUrl: undefined,
+          mediaUrls: ["/tmp/updated.png"],
+        }),
+        deliver,
+        deliverPrepared: async (plan) => {
+          delivered.push(plan);
+        },
+      });
+      const plan = { ...planReply({ text, mediaUrl: "/tmp/original.png" }), sourceIndex: 3 };
+      const outcome = captureReplyDispatchDeliveryOutcome(plan.payload);
+
+      expect(dispatcher.sendPreparedReply("block", plan)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        sourceIndex: 3,
+        payload: { text: `[bot] ${text} Updated.` },
+        parts: { text: `[bot] ${text} Updated.`, mediaUrls: ["/tmp/updated.png"] },
+      });
+      expect(delivered[0]?.payload.replyToId).toBeUndefined();
+      expect(delivered[0]?.payload.audioAsVoice).toBeUndefined();
+      expect(outcome.isTracked()).toBe(true);
+      await expect(outcome.promise).resolves.toBe("delivered");
+    },
+  );
+
+  it.each(["tool", "block", "final"] as const)(
+    "retains raw %s delivery when prepared egress is available",
+    async (kind) => {
+      const delivered: ReplyPayload[] = [];
+      const deliverPrepared = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(...createOutboundPayloadPlan([payload]).map((plan) => plan.payload));
+        },
+        deliverPrepared,
+      });
+      const send = {
+        tool: dispatcher.sendToolResult,
+        block: dispatcher.sendBlockReply,
+        final: dispatcher.sendFinalReply,
+      }[kind];
+
+      expect(send({ text: "[[reply_to:real-id]] Raw reply" })).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(deliverPrepared).not.toHaveBeenCalled();
+      expect(delivered).toMatchObject([{ text: "Raw reply", replyToId: "real-id" }]);
+    },
+  );
+
+  it("passes prepared payloads to a legacy adapter without prepared egress", async () => {
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => ({ ...payload, text: `${payload.text} Updated.` }),
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+    const plan = planReply({ text: "[[reply_to:example-id]]` literally." });
+
+    expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toMatchObject([{ text: "[[reply_to:example-id]]` literally. Updated." }]);
+    expect(delivered[0]?.replyToId).toBeUndefined();
+  });
+
+  it("keeps prepared capture owners separate after hook rewrites on one dispatcher", async () => {
+    const delivered: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => ({ ...payload, text: `Edited ${payload.text}` }),
+      deliver: async () => {
+        throw new Error("expected prepared delivery");
+      },
+      deliverPrepared: async (plan) => {
+        delivered.push(plan.parts.text);
+      },
+    });
+    const captures = ["first", "second"].map((text) => {
+      const captureToken = {};
+      const metadata = { sessionKey: "agent:test:session", idempotencyKey: "source-reply", text };
+      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
+      const plan = planReply(
+        setReplyPayloadMetadata(
+          { text },
+          { finalDeliveryCapture: captureToken, sourceReplyTranscriptMirror: metadata },
+        ),
+      );
+      return { capture, plan };
+    });
+
+    for (const { plan } of captures) {
+      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+    }
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual(["Edited first", "Edited second"]);
+    expect(captures.map(({ capture }) => capture()?.text)).toEqual(delivered);
+  });
+
+  it.each([false, true])(
+    "preserves prepared BTW text through prefixes and hook replacement (%s)",
+    async (replaceText) => {
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: "[bot]",
+        beforeDeliver: async (payload) => ({
+          ...payload,
+          text: replaceText ? "Replacement answer" : `${payload.text} Updated.`,
+        }),
+        deliver: async () => {
+          throw new Error("expected prepared delivery");
+        },
+        deliverPrepared: async (plan) => {
+          delivered.push(plan.parts.text);
+        },
+      });
+      const [plan] = createOutboundPayloadPlan([{ text: "Answer", btw: { question: "Q" } }]);
+      if (!plan) {
+        throw new Error("expected a planned BTW reply");
+      }
+      const captureToken = {};
+      const metadata = { sessionKey: "agent:test:session", idempotencyKey: "btw-reply" };
+      setReplyPayloadMetadata(plan.payload, {
+        finalDeliveryCapture: captureToken,
+        sourceReplyTranscriptMirror: metadata,
+      });
+      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
+
+      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      const expected = replaceText
+        ? "Replacement answer"
+        : "[bot] BTW\nQuestion: Q\n\nAnswer Updated.";
+      expect(delivered).toEqual([expected]);
+      expect(capture()?.text).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "unconfirmed send",
+      result: { visibleReplySent: true, ambiguous: true },
+      state: "unknown",
+      count: "failedAfterSend",
+      fallback: true,
+    },
+    {
+      name: "channel transform",
+      result: { visibleReplySent: false, suppression: { reason: "channel_transform" } },
+      state: "suppressed",
+      count: "deliveredNotVisible",
+      fallback: true,
+    },
+    {
+      name: "confirmed send",
+      result: { visibleReplySent: true },
+      state: "delivered",
+      count: "delivered",
+      fallback: true,
+    },
+    {
+      name: "ordinary invisible result",
+      result: { visibleReplySent: false },
+      state: "delivered",
+      count: "deliveredNotVisible",
+      fallback: false,
+    },
+  ] as const)(
+    "records callback settlement for $name before reopening",
+    async ({ result, state, count, fallback }) => {
+      const fixture = await makePendingFinalFixture();
+      const deliver = vi.fn(async () => result);
+      try {
+        if (fallback) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "fallback" });
+        }
+        const dispatcher = createReplyDispatcher({ deliver });
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
+        closeOpenClawAgentDatabasesForTest();
+        expect(
+          (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state }]);
+        expect(receipt?.counts.final[count]).toBe(1);
+
+        const replay = createReplyDispatcher({ deliver });
+        replay.sendFinalReply(fixture.payload);
+        replay.markComplete();
+        await replay.waitForIdle();
+        expect(deliver).toHaveBeenCalledOnce();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("settles explicitly non-visible delivery in the dispatcher receipt", async () => {
     const dispatcher = createReplyDispatcher({
       deliver: async () => ({ visibleReplySent: false }),
@@ -88,26 +379,38 @@ describe("beforeDeliver in reply dispatcher", () => {
     });
   });
 
-  it("delivers the attached fallback when the primary payload is cancelled", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const outcome = captureReplyDispatchDeliveryOutcome(primary);
-    const dispatcher = createReplyDispatcher({
-      beforeDeliver: (payload) => (payload.mediaUrl ? null : payload),
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-    });
+  it.each(["raw", "prepared"] as const)(
+    "delivers the attached %s fallback when the primary payload is cancelled",
+    async (operation) => {
+      const delivered: string[] = [];
+      const plan = planReply({ text: "caption", mediaUrl: "/tmp/voice.ogg" });
+      const primary = plan.payload;
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const outcome = captureReplyDispatchDeliveryOutcome(primary);
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => (payload.mediaUrl ? null : payload),
+        deliver: async (payload) => {
+          delivered.push(`raw:${payload.text}`);
+        },
+        deliverPrepared: async (entry) => {
+          delivered.push(`prepared:${entry.parts.text}`);
+        },
+      });
 
-    expect(dispatcher.sendFinalReply(primary)).toBe(true);
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+      expect(
+        operation === "raw"
+          ? dispatcher.sendFinalReply(primary)
+          : dispatcher.sendPreparedReply("final", plan),
+      ).toBe(true);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual(["caption"]);
-    await expect(outcome.promise).resolves.toBe("delivered");
-    expect(receipt?.counts.final.cancelled).toBe(0);
-  });
+      expect(delivered).toEqual([`${operation}:caption`]);
+      expect(outcome.isTracked()).toBe(true);
+      await expect(outcome.promise).resolves.toBe("delivered");
+      expect(receipt?.counts.final.cancelled).toBe(0);
+    },
+  );
 
   it("does not resurrect fallback text after a channel transform veto", async () => {
     const delivered: ReplyPayload[] = [];
@@ -130,34 +433,56 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(skipped).toEqual(["channel_transform"]);
   });
 
-  it("delivers the attached fallback after a proven pre-transport failure", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        if (payload.mediaUrl) {
-          throw Object.assign(new Error("connect failed"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          });
-        }
-        delivered.push(payload.text ?? "");
-      },
-    });
+  it.each([
+    { queueCustody: undefined, deferred: false },
+    { queueCustody: "held", deferred: false },
+    { queueCustody: "released", deferred: false },
+    { queueCustody: undefined, deferred: true },
+    { queueCustody: "held", deferred: true },
+    { queueCustody: "released", deferred: true },
+  ] as const)(
+    "retries a proven pre-transport failure only without held queue custody ($queueCustody, deferred=$deferred)",
+    async ({ queueCustody, deferred }) => {
+      const delivered: string[] = [];
+      const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (payload.mediaUrl) {
+            const cause = Object.assign(new Error("connect failed"), {
+              code: "ECONNREFUSED",
+              syscall: "connect",
+            });
+            const error = Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
+              queueCustody,
+            });
+            if (deferred) {
+              return { finalization: Promise.reject(error) };
+            }
+            throw error;
+          }
+          delivered.push(payload.text ?? "");
+          return undefined;
+        },
+        propagateRetryableNoSendFailure: true,
+      });
 
-    dispatcher.sendFinalReply(primary);
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+      dispatcher.sendFinalReply(primary);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual(["caption"]);
-    expect(receipt?.counts.final.failedBeforeSend).toBe(0);
-  });
+      expect(delivered).toEqual(queueCustody === "held" ? [] : ["caption"]);
+      expect(receipt?.counts.final.failedBeforeSend).toBe(queueCustody === "held" ? 1 : 0);
+      expect(receipt?.counts.final.failedAfterSend).toBe(0);
+      expect(receipt?.anyVisibleDelivered).toBe(queueCustody !== "held");
+    },
+  );
 
   it("does not duplicate text after an ambiguous transport failure", async () => {
     const delivered: string[] = [];
     const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
     attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+    const capture = captureReplyDispatchDeliveryOutcome(primary);
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload.text ?? "");
@@ -171,6 +496,27 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(delivered).toEqual(["caption"]);
     expect(receipt?.counts.final.failedAfterSend).toBe(1);
+    expect(receipt?.hasPendingDelivery).toBe(true);
+    expect(capture.hasPendingDelivery()).toBe(true);
+  });
+
+  it("does not call a proven permanent rejection pending", async () => {
+    const payload: ReplyPayload = { text: "rejected", mediaUrl: "/tmp/voice.ogg" };
+    attachReplyDispatchUndeliveredFallback(payload, { text: "rejected" });
+    const capture = captureReplyDispatchDeliveryOutcome(payload);
+    const deliver = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("rejected before dispatch", {
+        cause: undefined,
+        retryable: false,
+      });
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(payload);
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(receipt?.hasPendingDelivery).toBeUndefined();
+    expect(capture.hasPendingDelivery()).toBe(false);
   });
 
   it("cancels delivery before queueing when transformReplyPayload returns null", async () => {
@@ -404,43 +750,112 @@ describe("beforeDeliver in reply dispatcher", () => {
     }
   });
 
-  it.each([
-    {
-      label: "proven pre-send failure",
-      error: () =>
-        Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
-      expected: "prepared",
-    },
-    {
-      label: "ambiguous provider failure",
-      error: () => new Error("send outcome unknown"),
-      expected: "unknown",
-    },
-  ] as const)("records $label before reporting the error", async ({ error, expected }) => {
-    const fixture = await makePendingFinalFixture();
-    try {
-      const dispatcher = createReplyDispatcher({
-        deliver: async () => {
-          throw error();
-        },
-      });
+  it.each(
+    [
+      {
+        label: "proven pre-send failure",
+        error: () =>
+          Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
+        expected: "prepared",
+        failedBeforeSend: true,
+      },
+      {
+        label: "ambiguous provider failure",
+        error: () => new Error("send outcome unknown"),
+        expected: "unknown",
+        failedBeforeSend: false,
+      },
+      {
+        label: "queue-owned pre-send failure",
+        error: () =>
+          Object.assign(
+            new OutboundDeliveryError("connect failed", {
+              cause: Object.assign(new Error("connect failed"), {
+                code: "ECONNREFUSED",
+                syscall: "connect",
+              }),
+            }),
+            { queueCustody: "held" },
+          ),
+        expected: "queued",
+        failedBeforeSend: true,
+      },
+      {
+        label: "queue-owned wrapped partial send",
+        error: () =>
+          createChannelPartialDeliveryError(
+            Object.assign(
+              new OutboundDeliveryError("remaining send failed", {
+                cause: new Error("remaining send failed"),
+                results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+              }),
+              { queueCustody: "held" },
+            ),
+            { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+          ),
+        expected: "queued",
+        failedBeforeSend: false,
+      },
+    ].flatMap((entry) => [
+      { ...entry, deferred: false },
+      { ...entry, deferred: true },
+    ]),
+  )(
+    "records $label before reporting the error (deferred=$deferred)",
+    async ({ error, expected, failedBeforeSend, deferred }) => {
+      const fixture = await makePendingFinalFixture();
+      const failure = error();
+      const onError = vi.fn();
+      try {
+        const deliver = vi.fn(async () => {
+          if (deferred) {
+            return { finalization: Promise.reject(failure) };
+          }
+          throw failure;
+        });
+        const dispatcher = createReplyDispatcher({ deliver, onError });
+        const capture = captureReplyDispatchDeliveryOutcome(fixture.payload);
+        const pending = expected !== "prepared";
+        if (pending) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "duplicate fallback" });
+        }
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
+        await expect(capture.promise).resolves.toBe(
+          !failedBeforeSend
+            ? "failed-deliver"
+            : pending
+              ? "recovery-owned"
+              : "failed-before-deliver",
+        );
+        expect(capture.hasPendingDelivery()).toBe(pending);
+        expect(receipt?.hasPendingDelivery).toBe(pending ? true : undefined);
+        expect(deliver).toHaveBeenCalledTimes(1);
 
-      dispatcher.sendFinalReply(fixture.payload);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+        if (deferred) {
+          expect(onError).not.toHaveBeenCalled();
+        } else {
+          expect(onError.mock.calls[0]?.[0]).toBe(failure);
+        }
+        expect(receipt?.counts.final).toMatchObject({
+          failedBeforeSend: failedBeforeSend ? 1 : 0,
+          failedAfterSend: failedBeforeSend ? 0 : 1,
+        });
 
-      expect(
-        (
-          loadSessionEntry({
-            sessionKey: fixture.sessionKey,
-            storePath: fixture.storePath,
-          }) as InternalSessionEntry
-        )?.pendingFinalDelivery?.deliveries,
-      ).toEqual([{ id: "delivery-1", state: expected }]);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(
+          (
+            loadSessionEntry({
+              sessionKey: fixture.sessionKey,
+              storePath: fixture.storePath,
+            }) as InternalSessionEntry
+          )?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state: expected }]);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("restores prepared custody when a pre-I/O admitted send proves no-send", async () => {
     const fixture = await makePendingFinalFixture();
@@ -475,56 +890,71 @@ describe("beforeDeliver in reply dispatcher", () => {
     }
   });
 
-  it("suppresses a second direct call after the exact delivery is terminal", async () => {
-    const fixture = await makePendingFinalFixture();
-    const deliver = vi.fn(async () => {});
-    try {
-      const first = createReplyDispatcher({ deliver });
-      first.sendFinalReply(fixture.payload);
-      first.markComplete();
-      await first.waitForIdle();
+  it.each(["raw", "prepared"] as const)(
+    "suppresses a second %s call after the exact delivery is terminal",
+    async (operation) => {
+      const fixture = await makePendingFinalFixture();
+      const deliver = vi.fn(async () => {});
+      const options = {
+        beforeDeliver: async () => ({ text: "rewritten final" }),
+        deliver,
+        deliverPrepared: async () => deliver(),
+      };
+      try {
+        const first = createReplyDispatcher(options);
+        expect(sendFinal(first, operation, fixture.payload)).toBe(true);
+        first.markComplete();
+        await first.waitForIdle();
 
-      const second = createReplyDispatcher({ deliver });
-      second.sendFinalReply(fixture.payload);
-      second.markComplete();
-      const receipt = await second.waitForIdle();
+        const second = createReplyDispatcher(options);
+        expect(sendFinal(second, operation, fixture.payload)).toBe(true);
+        second.markComplete();
+        const receipt = await second.waitForIdle();
 
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(receipt?.counts.final.cancelled).toBe(1);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(receipt?.counts.final.cancelled).toBe(1);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it("suppresses a direct call whose persisted owner was replaced", async () => {
-    const fixture = await makePendingFinalFixture();
-    const current = loadSessionEntry({
-      sessionKey: fixture.sessionKey,
-      storePath: fixture.storePath,
-    }) as InternalSessionEntry;
-    await replaceSessionEntry(
-      { sessionKey: fixture.sessionKey, storePath: fixture.storePath },
-      {
-        ...current,
-        pendingFinalDelivery: {
-          ...current.pendingFinalDelivery!,
-          intentId: "replacement-intent",
+  it.each(["raw", "prepared"] as const)(
+    "suppresses a %s call whose persisted owner was replaced",
+    async (operation) => {
+      const fixture = await makePendingFinalFixture();
+      const current = loadSessionEntry({
+        sessionKey: fixture.sessionKey,
+        storePath: fixture.storePath,
+      }) as InternalSessionEntry;
+      await replaceSessionEntry(
+        { sessionKey: fixture.sessionKey, storePath: fixture.storePath },
+        {
+          ...current,
+          pendingFinalDelivery: {
+            ...current.pendingFinalDelivery!,
+            intentId: "replacement-intent",
+          },
         },
-      },
-    );
-    const deliver = vi.fn(async () => {});
-    try {
-      const dispatcher = createReplyDispatcher({ deliver });
-      dispatcher.sendFinalReply(fixture.payload);
-      dispatcher.markComplete();
-      const receipt = await dispatcher.waitForIdle();
+      );
+      const deliver = vi.fn(async () => {});
+      try {
+        const dispatcher = createReplyDispatcher({
+          beforeDeliver: async () => ({ text: "rewritten final" }),
+          deliver,
+          deliverPrepared: async () => deliver(),
+        });
+        expect(sendFinal(dispatcher, operation, fixture.payload)).toBe(true);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
 
-      expect(deliver).not.toHaveBeenCalled();
-      expect(receipt?.counts.final.cancelled).toBe(1);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(deliver).not.toHaveBeenCalled();
+        expect(receipt?.counts.final.cancelled).toBe(1);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("records policy suppression before awaiting cancellation observers", async () => {
     const fixture = await makePendingFinalFixture();

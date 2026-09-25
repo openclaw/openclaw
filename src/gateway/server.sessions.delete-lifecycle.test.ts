@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -18,7 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -95,6 +96,26 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
     reason: "session-delete",
   });
 }
+
+test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
+  testState.sessionConfig = { scope: "global" };
+  const target = { agentId: "ops", sessionKey: "global", storePath };
+  await replaceSessionEntry(target, sessionStoreEntry("sole-global"));
+  const before = loadSessionEntry(target);
+  embeddedRunMock.activeIds.add("sole-global");
+  embeddedRunMock.waitResults.set("sole-global", true);
+
+  const result = await directSessionReq("sessions.delete", { key: "global", agentId: "ops" });
+
+  expect(result.ok).toBe(false);
+  expect(result.error?.message).toBe("Cannot delete the main session (global).");
+  expect(loadSessionEntry(target)).toEqual(before);
+  expect(embeddedRunMock.abortCalls).not.toContain("sole-global");
+  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+});
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -325,10 +346,8 @@ test.each(["session id", "updated at"] as const)(
       },
     });
     let releaseBlockingMutation = () => {};
-    let markBlockingMutationStarted = () => {};
-    const blockingMutationStarted = new Promise<void>((resolve) => {
-      markBlockingMutationStarted = resolve;
-    });
+    const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
+      createDeferred();
     const blockingMutation = runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: [sessionKey],
@@ -501,10 +520,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   });
   await runtimeCleanupStarted;
   let patchSettled = false;
-  let markPatchPreflight = () => {};
-  const patchPreflight = new Promise<void>((resolve) => {
-    markPatchPreflight = resolve;
-  });
+  const { promise: patchPreflight, resolve: markPatchPreflight } = createDeferred();
   const patch = directSessionReq(
     "sessions.patch",
     {
@@ -548,10 +564,7 @@ test("sessions.patch waits for an in-flight session lifecycle mutation", async (
     },
   });
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const mutation = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],
@@ -708,30 +721,47 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
-test("sessions.delete scopes selected global deletes to the requested agent", async () => {
-  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
-
-  await expectSessionDeleteSucceeds({
-    key: "global",
-    agentId: "work",
-    deleteTranscript: false,
-  });
-  expect(
-    loadSessionEntry({
+test.each(["sessions.delete", "sessions.reset"] as const)(
+  "%s scopes selected global cleanup to the requested agent",
+  async (method) => {
+    const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
+    const mainTarget = {
       agentId: "main",
       sessionKey: "global",
       storePath: globalStores.mainStorePath,
-    })?.sessionId,
-  ).toBe("sess-main-global");
-  expect(
-    loadSessionEntry({
-      agentId: "work",
-      sessionKey: "global",
-      storePath: globalStores.workStorePath,
-    }),
-  ).toBeUndefined();
-  await resetConfiguredGlobalAgentSessionStore(globalStores);
-});
+    };
+    const workTarget = { ...mainTarget, agentId: "work", storePath: globalStores.workStorePath };
+    for (const target of [mainTarget, workTarget]) {
+      await replaceSessionEntry(
+        target,
+        sessionStoreEntry(`sess-${target.agentId}-global`, {
+          pluginExtensions: { fixture: { state: { owner: target.agentId } } },
+        }),
+      );
+    }
+    const mainBefore = loadSessionEntry(mainTarget);
+    const { ws } = await openClient();
+    try {
+      const result = await rpcReq(ws, method, {
+        key: "global",
+        agentId: "work",
+        ...(method === "sessions.delete" ? { deleteTranscript: false } : {}),
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(loadSessionEntry(mainTarget)).toEqual(mainBefore);
+      const workAfter = loadSessionEntry(workTarget);
+      if (method === "sessions.delete") {
+        expect(workAfter).toBeUndefined();
+      } else {
+        expect(workAfter?.sessionId).toBe("sess-work-global");
+        expect(workAfter?.pluginExtensions).toBeUndefined();
+      }
+    } finally {
+      ws.close();
+      await resetConfiguredGlobalAgentSessionStore(globalStores);
+    }
+  },
+);
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
   const { dir } = await createSessionStoreDir();

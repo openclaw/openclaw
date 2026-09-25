@@ -7,7 +7,12 @@
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/scripts.tsbuildinfo"
   },
-  "include": ["scripts/**/*", "src/**/*.d.ts", "packages/**/*.d.ts"],
+  "include": [
+    "scripts/**/*",
+    "src/**/*.d.ts",
+    "packages/**/*.d.ts",
+    "ui/src/i18n/virtual-locale.d.ts"
+  ],
   "exclude": [
     "node_modules",
     "dist",

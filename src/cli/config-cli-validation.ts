@@ -1,9 +1,12 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type {
+  ConfigFileSnapshot,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
-import { visitConfigValueTree } from "../config/io.read-helpers.js";
-import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { ConfigValidationIssue } from "../config/types.js";
@@ -18,10 +21,12 @@ import {
   collectUnsupportedSecretRefPolicyIssues,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { assertSecureExecCommandPath } from "../secrets/exec-provider-path-validation.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -32,16 +37,15 @@ import {
   isValidExecSecretRefId,
   secretRefKey,
 } from "../secrets/ref-contract.js";
-import { resolveSecretRefValue } from "../secrets/resolve.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
-import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
-import { formatCliJsonFailure } from "./failure-output.js";
+import { writeInvalidConfigCliJson } from "./config-validation-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 function formatInvalidConfigRepairHint(
@@ -62,10 +66,7 @@ export function ensureValidConfigSnapshotForCli(
     return;
   }
   if (options.json) {
-    writeRuntimeJson(runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
+    writeInvalidConfigCliJson(runtime, snapshot);
     exitCliAfterOutput(runtime, 1);
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
@@ -84,20 +85,20 @@ export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRunti
 
 export { formatInvalidConfigRepairHint };
 
-export async function strictlyValidateConfigSnapshotForCli(
-  snapshot: ConfigFileSnapshot,
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+export async function finishConfigValidationForCli(
+  read: ReadConfigFileSnapshotWithPluginMetadataResult,
 ): Promise<ConfigFileSnapshot> {
-  if (!snapshot.valid) {
+  const { snapshot, strictIssues } = read;
+  if (!snapshot.valid || !snapshot.exists) {
     return snapshot;
   }
-  const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
-    semanticValidation: "strict",
-    pluginMetadataSnapshot,
-  });
-  const issues = validated.ok
-    ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
-    : validated.issues;
+  if (!strictIssues) {
+    throw new Error("Config validation requires its prepared source result.");
+  }
+  const issues =
+    strictIssues.length === 0
+      ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
+      : strictIssues;
   return issues.length === 0 ? snapshot : { ...snapshot, valid: false, issues };
 }
 
@@ -202,6 +203,7 @@ async function collectDryRunResolvabilityErrors(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
 }): Promise<ConfigSetDryRunError[]> {
+  const { resolveSecretRefValue } = await import("../secrets/resolve.js");
   const failures: ConfigSetDryRunError[] = [];
   for (const ref of params.refs) {
     try {
@@ -278,10 +280,12 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
 function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(config, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
+    deferredPluginMigrations,
   });
   if (validated.ok) {
     return [];
@@ -295,8 +299,13 @@ function collectStrictConfigErrors(
 export function assertStrictConfigForMutation(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): void {
-  const errors = collectStrictConfigErrors(config, pluginMetadataSnapshot);
+  const errors = collectStrictConfigErrors(
+    config,
+    pluginMetadataSnapshot,
+    deferredPluginMigrations,
+  );
   if (errors.length === 0) {
     return;
   }
@@ -352,33 +361,31 @@ async function collectConfigSecretProviderErrors(params: {
   return issues;
 }
 
-function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
-  const deduped: ConfigSetDryRunError[] = [];
-  const seen = new Set<string>();
-  for (const error of errors) {
-    const key =
-      error.kind === "resolvability"
-        ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
-        : `${error.kind}\u0000${error.message}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(error);
-    }
-  }
-  return deduped;
-}
-
 /** Validates one final candidate and decides whether the runner may preview, skip, or write it. */
 export async function validateConfigMutation(params: {
   config: OpenClawConfig;
+  /** Keep authored model comparisons and their resolution environment together. */
+  modelValidation?: {
+    config: OpenClawConfig;
+    previousConfig: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    previousEnv?: NodeJS.ProcessEnv;
+  };
   previousConfig: OpenClawConfig;
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
   configPath: string;
   unchanged: boolean;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 }): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
   const { config, operations, options, pluginMetadataSnapshot } = params;
+  assertDeferredPluginMigrationConfigEditAllowed({
+    sourceConfig: params.previousConfig,
+    nextConfig: config,
+    pending: params.deferredPluginMigrations ?? [],
+    editedPaths: operations.map((operation) => operation.setPath),
+  });
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,
   }).map((line) => line.trim());
@@ -406,14 +413,18 @@ export async function validateConfigMutation(params: {
       );
     }
     if (params.unchanged) {
-      assertStrictConfigForMutation(config, pluginMetadataSnapshot);
+      assertStrictConfigForMutation(
+        config,
+        pluginMetadataSnapshot,
+        params.deferredPluginMigrations,
+      );
       return { kind: "unchanged" };
     }
   }
 
+  const { checkTouchedTextModelRefs } = await import("./config-model-validation.js");
   const modelCheck = await checkTouchedTextModelRefs({
-    config,
-    previousConfig: params.previousConfig,
+    ...(params.modelValidation ?? { config, previousConfig: params.previousConfig }),
     touchedPaths: operations.map(({ setPath }) => setPath),
     redactDependencyValues: true,
   });
@@ -446,7 +457,9 @@ export async function validateConfigMutation(params: {
   }
   errors.push(...providerErrors);
   if (requiresFullSchema) {
-    errors.push(...collectStrictConfigErrors(config, pluginMetadataSnapshot));
+    errors.push(
+      ...collectStrictConfigErrors(config, pluginMetadataSnapshot, params.deferredPluginMigrations),
+    );
   }
   if (checksRefs) {
     errors.push(
@@ -454,7 +467,11 @@ export async function validateConfigMutation(params: {
       ...(await collectDryRunResolvabilityErrors({ refs: refsToResolve, config })),
     );
   }
-  const failures = dedupeDryRunErrors(errors);
+  const failures = dedupeByKey(errors, (error) =>
+    error.kind === "resolvability"
+      ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
+      : `${error.kind}\u0000${error.message}`,
+  );
   return {
     kind: "dry-run",
     result: {

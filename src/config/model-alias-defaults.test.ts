@@ -157,6 +157,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
+            "anthropic/claude-opus-5-5": {},
             "anthropic/claude-opus-5": {},
             "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
@@ -166,7 +167,8 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
@@ -192,8 +194,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-            "anthropic/claude-opus-5": {},
+            "anthropic/claude-opus-5": { alias: "Opus" },
+            "anthropic/claude-opus-5-5": {},
           },
         },
       },
@@ -201,8 +203,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBeUndefined();
   });
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
@@ -265,25 +267,39 @@ describe("applyModelDefaults", () => {
     });
   });
 
-  it("normalizes retired Gemini primary and fallback refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["google-vertex/gemini-3-pro-preview", "google-vertex/gemini-3.1-pro-preview"],
+    ["google-gemini-cli/gemini-3-pro-preview", "google-gemini-cli/gemini-3.1-pro-preview"],
+    ["myproxy/google/gemini-3-pro-preview", "myproxy/google/gemini-3.1-pro-preview"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])(
+    "normalizes primary, fallback, and policy refs without merging literal namespaces: %s",
+    (authored, replacement) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: {
+              primary: authored,
+              fallbacks: [authored, "custom/model"],
+            },
+            models: { [authored]: { alias: "Selected" }, "custom/model": { alias: "Control" } },
           },
         },
-      },
-    } satisfies OpenClawConfig;
+      } satisfies OpenClawConfig;
 
-    const next = applyModelDefaults(cfg);
+      const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
-    });
-  });
+      expect(next.agents?.defaults?.model).toEqual({
+        primary: replacement,
+        fallbacks: [replacement, "custom/model"],
+      });
+      expect(next.agents?.defaults?.models).toEqual({
+        [replacement]: { alias: "Selected" },
+        "custom/model": { alias: "Control" },
+      });
+    },
+  );
 
   it("normalizes the retired Together default primary and fallback refs", () => {
     const cfg = {

@@ -69,11 +69,23 @@ describe("parseMentions", () => {
     expect(result.entities).toHaveLength(0);
   });
 
-  it("handles mention with spaces in name", () => {
-    const result = parseMentions("@[John Peter Smith](28:a1b2c3)");
+  it.each([
+    { label: "spaces", source: "John Peter Smith", name: "John Peter Smith" },
+    {
+      label: "literal backslash",
+      source: String.raw`DOMAIN\Alice`,
+      name: String.raw`DOMAIN\Alice`,
+    },
+    {
+      label: "escaped brackets and backslash",
+      source: String.raw`DOMAIN\\Alice \[Ops\]`,
+      name: String.raw`DOMAIN\Alice [Ops]`,
+    },
+  ])("handles a mention name with $label", ({ source, name }) => {
+    const result = parseMentions(`@[${source}](28:a1b2c3)`);
 
-    expect(result.text).toBe("<at>John Peter Smith</at>");
-    expect(requireFirstEntity(result).mentioned.name).toBe("John Peter Smith");
+    expect(result.text).toBe(`<at>${name}</at>`);
+    expect(requireOnlyEntity(result).mentioned.name).toBe(name);
   });
 
   it("trims whitespace from id and name", () => {

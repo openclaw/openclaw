@@ -11,6 +11,13 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(repoRoot, "ui/package.json"));
+const COMPARISON_BUILD_ENV = {
+  GIT_BRANCH: "ci/control-ui-performance",
+  GIT_COMMIT: "0123456789abcdef0123456789abcdef01234567",
+  OPENCLAW_BUILD_TIMESTAMP: "2026-09-01T00:00:00.000Z",
+  OPENCLAW_CONTROL_UI_BUILD_ID: "control-ui-performance-comparison",
+  OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+} satisfies NodeJS.ProcessEnv;
 
 function run(command: string, args: string[], cwd = repoRoot, env = process.env): void {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
@@ -44,11 +51,31 @@ function linkDependencies(baseRoot: string): void {
       }
     }
   }
+  const workspaceRoots = new Map(
+    roots.map((root) => [fs.realpathSync(path.join(repoRoot, root)), root]),
+  );
   for (const root of roots) {
     const dependencies = path.join(repoRoot, root, "node_modules");
     const destinationRoot = path.join(baseRoot, root);
     if (fs.existsSync(dependencies) && fs.existsSync(destinationRoot)) {
-      fs.symlinkSync(dependencies, path.join(destinationRoot, "node_modules"), "junction");
+      // An outer node_modules link resolves workspace packages back into the candidate.
+      // Share installed third-party packages, but keep workspace source in the archived tree.
+      const packages = fs.readdirSync(dependencies).flatMap((name) => {
+        if (name.startsWith(".") && name !== ".bin") {
+          return [];
+        }
+        return name.startsWith("@")
+          ? fs.readdirSync(path.join(dependencies, name)).map((child) => path.join(name, child))
+          : [name];
+      });
+      for (const name of packages) {
+        const installed = fs.realpathSync(path.join(dependencies, name));
+        const workspace = workspaceRoots.get(installed);
+        const target = workspace === undefined ? installed : path.join(baseRoot, workspace);
+        const destination = path.join(destinationRoot, "node_modules", name);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.symlinkSync(target, destination, "junction");
+      }
     }
   }
 }
@@ -76,22 +103,21 @@ function main(): void {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-performance-base-"));
   try {
     const baseRoot = path.join(temporaryRoot, "source");
-    const archive = path.join(temporaryRoot, "source.tar");
+    const archive = path.join(temporaryRoot, "source.tar.gz");
+    const buildEnv = {
+      ...process.env,
+      ...COMPARISON_BUILD_ENV,
+      GIT_DIR: path.join(temporaryRoot, "git-disabled"),
+    };
     fs.mkdirSync(baseRoot);
-    run("git", ["archive", "--format=tar", "--output", archive, base]);
-    run("tar", ["-xf", archive, "-C", baseRoot]);
+    run("git", ["archive", "--format=tar.gz", "-1", "--output", archive, base]);
+    run("tar", ["-xzf", archive, "-C", baseRoot]);
     linkDependencies(baseRoot);
 
     // Both builds use the candidate's dependency installation. Calling Vite
-    // directly keeps the base's historical budget policy out of the comparison.
-    for (const [root, commit] of [
-      [repoRoot, head],
-      [baseRoot, base],
-    ] as const) {
-      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), {
-        ...process.env,
-        GIT_COMMIT: commit,
-      });
+    // directly keeps historical policy out; one identity isolates source bytes.
+    for (const root of [repoRoot, baseRoot]) {
+      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
     }
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [

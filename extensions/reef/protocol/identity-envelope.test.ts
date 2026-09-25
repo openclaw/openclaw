@@ -4,7 +4,7 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { describe, expect, it } from "vitest";
 import { canonicalBytes } from "./canonical.js";
-import { base64, base64url, fromBase64url, utf8 } from "./encoding.js";
+import { base64, fromBase64url, utf8 } from "./encoding.js";
 import {
   BadSignatureError,
   MalformedError,
@@ -14,15 +14,8 @@ import {
   TooLargeError,
   type Envelope,
 } from "./envelope.js";
-import {
-  fingerprint,
-  formatHandleEpoch,
-  generateIdentity,
-  parseHandleEpoch,
-  signRotation,
-  verifyRotation,
-} from "./identity.js";
-import { MemoryReplayStore } from "./replay.js";
+import { fingerprint, formatHandleEpoch, generateIdentity, parseHandleEpoch } from "./identity.js";
+import { MemoryReplayStore } from "./memory-stores.test-support.js";
 
 const now = 1_752_300_000;
 const id = "01JZ0000000000000000000000";
@@ -45,7 +38,7 @@ function fixture() {
 }
 
 async function openFixture(
-  envelope: Envelope,
+  envelope: Parameters<typeof open>[0]["envelope"],
   alice: ReturnType<typeof generateIdentity>,
   bob: ReturnType<typeof generateIdentity>,
   self = "bob#1",
@@ -72,39 +65,6 @@ describe("identity", () => {
       fingerprint(identity.signing.publicKey, identity.encryption.publicKey),
     );
     expect(fingerprint(identity.signing.publicKey)).toMatch(/^(?:[0-9a-f]{4} ){15}[0-9a-f]{4}$/);
-  });
-
-  it("authenticates planned rotation with the old signing key", () => {
-    const oldIdentity = generateIdentity();
-    const next = generateIdentity();
-    const rotation = signRotation(
-      {
-        newEd25519Pub: next.signing.publicKey,
-        newX25519Pub: next.encryption.publicKey,
-        newEpoch: 2,
-      },
-      oldIdentity.signing.secretKey,
-    );
-    expect(verifyRotation(rotation, oldIdentity.signing.publicKey)).toBe(true);
-    expect(verifyRotation({ ...rotation, newEpoch: 3 }, oldIdentity.signing.publicKey)).toBe(false);
-    const legacyStatement = {
-      newEd25519Pub: next.signing.publicKey,
-      newX25519Pub: next.encryption.publicKey,
-      newEpoch: 2,
-    };
-    const legacy = {
-      ...legacyStatement,
-      signature: base64url(
-        ed25519.sign(canonicalBytes(legacyStatement), fromBase64url(oldIdentity.signing.secretKey)),
-      ),
-    };
-    expect(verifyRotation(legacy, oldIdentity.signing.publicKey)).toBe(false);
-    expect(
-      verifyRotation(
-        { ...rotation, domain: "attacker-domain" } as typeof rotation,
-        oldIdentity.signing.publicKey,
-      ),
-    ).toBe(false);
   });
 });
 
@@ -175,8 +135,8 @@ describe("envelope", () => {
 
   it("verifies every signed field before acting on it", async () => {
     const { alice, bob, envelope } = fixture();
-    const mutations: Envelope[] = [
-      { ...envelope, v: 2 as 1 },
+    const mutations: Array<Parameters<typeof open>[0]["envelope"]> = [
+      { ...envelope, v: 2 },
       { ...envelope, id: `${envelope.id.slice(0, -1)}1` },
       { ...envelope, from: "mallory#1" },
       { ...envelope, to: "mallory#1" },

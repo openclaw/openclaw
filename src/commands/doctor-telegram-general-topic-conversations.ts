@@ -13,6 +13,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -89,7 +90,11 @@ function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversat
 }
 
 function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(cfg, { env }),
+    env,
+    cfg,
+  ).map((target) => {
     const scope = resolveSqliteReadScope({
       agentId: target.agentId,
       env,
@@ -321,23 +326,27 @@ export async function repairTelegramGeneralTopicConversations(params: {
   const env = params.env ?? process.env;
   let repaired = 0;
   for (const { scope } of resolveRepairScopes(params.cfg, env)) {
-    await runExclusiveSqliteSessionWrite(scope, async () => {
-      repaired += runOpenClawAgentWriteTransaction(
-        (database) => {
-          // Detection is advisory. Re-read every candidate after BEGIN so a live
-          // session write cannot turn the doctor repair into a stale merge.
-          let databaseRepairs = 0;
-          for (const row of listLegacyRows(database.db)) {
-            if (repairLegacyRow(database, row.conversation_id)) {
-              databaseRepairs += 1;
+    await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        repaired += runOpenClawAgentWriteTransaction(
+          (database) => {
+            // Detection is advisory. Re-read every candidate after BEGIN so a live
+            // session write cannot turn the doctor repair into a stale merge.
+            let databaseRepairs = 0;
+            for (const row of listLegacyRows(database.db)) {
+              if (repairLegacyRow(database, row.conversation_id)) {
+                databaseRepairs += 1;
+              }
             }
-          }
-          return databaseRepairs;
-        },
-        toDatabaseOptions(scope),
-        { operationLabel: "doctor-telegram-general-topic" },
-      );
-    });
+            return databaseRepairs;
+          },
+          toDatabaseOptions(scope),
+          { operationLabel: "doctor-telegram-general-topic" },
+        );
+      },
+      "doctor-telegram-general-topic",
+    );
   }
   return repaired;
 }

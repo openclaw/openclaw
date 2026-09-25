@@ -22,7 +22,7 @@ import {
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
+import { executeNodeCommandAction } from "./nodes-tool-commands.js";
 import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
@@ -60,10 +60,6 @@ const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
-function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
-}
-
 async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
   requestId: string,
@@ -86,7 +82,7 @@ async function resolveNodePairApproveScopes(
       return scopes;
     }
   }
-  return resolveApproveScopes(match?.commands);
+  return resolveNodePairApprovalScopes(match?.commands);
 }
 
 // Flattened schema: runtime validates per-action requirements.
@@ -258,16 +254,11 @@ export function createNodesTool(options?: {
             });
             return jsonResult({ ok: true });
           }
-          case "camera_snap": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "photos_latest": {
+          case "camera_snap":
+          case "photos_latest":
+          case "camera_clip":
+          case "screen_record":
+          case "screen_snapshot": {
             return await executeNodeMediaAction({
               action,
               params,
@@ -282,73 +273,10 @@ export function createNodesTool(options?: {
           case "device_status":
           case "device_info":
           case "device_permissions":
-          case "device_health": {
-            return await executeNodeCommandAction({
-              action: action as NodeCommandAction,
-              input: params,
-              gatewayOpts,
-              agentSessionKey: options?.agentSessionKey,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
-          case "notifications_action": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              agentSessionKey: options?.agentSessionKey,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
-          case "camera_clip": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "screen_record": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "screen_snapshot": {
-            return await executeNodeMediaAction({
-              action,
-              params,
-              gatewayOpts,
-              modelHasVision: options?.modelHasVision,
-              imageSanitization,
-            });
-          }
-          case "location_get": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              agentSessionKey: options?.agentSessionKey,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
-          case "which": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              agentSessionKey: options?.agentSessionKey,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
-            });
-          }
+          case "device_health":
+          case "notifications_action":
+          case "location_get":
+          case "which":
           case "invoke": {
             return await executeNodeCommandAction({
               action,

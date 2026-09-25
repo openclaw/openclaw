@@ -5,10 +5,9 @@
  */
 import { statSync } from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -26,6 +25,7 @@ import {
 } from "./render-utils.js";
 import type { GrepToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { grepSchema } from "./tool-schemas.js";
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -34,24 +34,11 @@ import {
   truncateLine,
 } from "./truncate.js";
 
-const grepSchema = Type.Object({
-  pattern: Type.String({ description: "Regex/literal pattern." }),
-  path: Type.Optional(Type.String({ description: "File/dir; default cwd." })),
-  glob: Type.Optional(Type.String({ description: "File glob, e.g. *.ts." })),
-  ignoreCase: Type.Optional(Type.Boolean({ description: "Ignore case; default false." })),
-  literal: Type.Optional(
-    Type.Boolean({
-      description: "Literal, not regex; default false.",
-    }),
-  ),
-  context: Type.Optional(
-    Type.Number({
-      description: "Context lines each side; default 0.",
-    }),
-  ),
-  limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
-});
 const DEFAULT_LIMIT = 100;
+const GREP_JSON_RECORD_MAX_BYTES = 1024 * 1024;
+const GREP_JSON_CARRIAGE_RETURN = Buffer.from([0x0d]);
+const GREP_JSON_RECORD_OVERSIZED_ERROR =
+  "grep stopped because ripgrep emitted a JSON record larger than 1 MiB; narrow the path or pattern, exclude generated/minified files, or inspect the file with a bounded read";
 
 type RipgrepJsonText = { text?: string; bytes?: string };
 
@@ -127,7 +114,7 @@ function formatGrepResult(
 export function createGrepToolDefinition(
   cwd: string,
   options?: GrepToolOptions,
-): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
+): ToolDefinition<typeof grepSchema, GrepToolDetails> {
   const customOps = options?.operations;
   const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -173,10 +160,8 @@ export function createGrepToolDefinition(
             }
           | undefined;
         let childClosed = false;
-        let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
         const cleanup = () => {
-          rl?.close();
           signal?.removeEventListener("abort", onAbort);
         };
         const settle = (fn: () => void): boolean => {
@@ -264,15 +249,24 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
-            rl = createInterface({ input: spawnedChild.stdout });
+            if (spawnedChild.pid === undefined) {
+              await waitForCommandSpawn(spawnedChild);
+            }
+            if (settled) {
+              stopChild();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             let stderr = "";
             let stderrDroppedBytes = 0;
             let matchCount = 0;
             let matchLimitReached = false;
             let linesTruncated = false;
             const outputLines: string[] = [];
+            let recordParts: Buffer[] = [];
+            let recordBytes = 0;
+            let pendingCarriageReturn = false;
 
             // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
             // cannot split multibyte characters into U+FFFD replacement noise.
@@ -290,9 +284,6 @@ export function createGrepToolDefinition(
                 stopChild();
               }
             };
-            // readline re-emits input failures, then drops its input listener on close.
-            // Keep the direct guard until child exit so later stdout errors stay handled.
-            rl.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
@@ -303,7 +294,7 @@ export function createGrepToolDefinition(
               lineText?: string;
             }> = [];
             const nativeFiles = new Map<string, Map<number, string>>();
-            rl.on("line", (line) => {
+            const handleJsonRecord = (line: string) => {
               if (!line.trim() || settled || killedDueToLimit) {
                 return;
               }
@@ -362,6 +353,73 @@ export function createGrepToolDefinition(
               if (matchLimitReached && (customOps || !inLastWindow || lineNumber === windowEnd)) {
                 stopChild(true);
               }
+            };
+            const appendRecordPart = (part: Buffer): boolean => {
+              if (part.length === 0) {
+                return true;
+              }
+              const nextBytes = recordBytes + part.length;
+              if (nextBytes > GREP_JSON_RECORD_MAX_BYTES) {
+                recordParts = [];
+                recordBytes = 0;
+                if (settle(() => reject(new Error(GREP_JSON_RECORD_OVERSIZED_ERROR)))) {
+                  stopChild();
+                }
+                return false;
+              }
+              recordParts.push(part);
+              recordBytes = nextBytes;
+              return true;
+            };
+            const emitRecord = () => {
+              const line = Buffer.concat(recordParts, recordBytes).toString("utf8");
+              recordParts = [];
+              recordBytes = 0;
+              handleJsonRecord(line);
+            };
+            spawnedChild.stdout?.on("data", (chunk: Buffer) => {
+              if (settled || killedDueToLimit) {
+                return;
+              }
+              let offset = 0;
+              if (pendingCarriageReturn) {
+                pendingCarriageReturn = false;
+                if (chunk[0] === 0x0a) {
+                  emitRecord();
+                  if (settled || killedDueToLimit) {
+                    return;
+                  }
+                  offset = 1;
+                } else if (!appendRecordPart(GREP_JSON_CARRIAGE_RETURN)) {
+                  return;
+                }
+              }
+              for (let index = offset; index < chunk.length; index += 1) {
+                if (chunk[index] !== 0x0a) {
+                  continue;
+                }
+                let recordEnd = index;
+                if (index > offset && chunk[index - 1] === 0x0d) {
+                  recordEnd -= 1;
+                }
+                if (!appendRecordPart(chunk.subarray(offset, recordEnd))) {
+                  return;
+                }
+                emitRecord();
+                if (settled || killedDueToLimit) {
+                  return;
+                }
+                offset = index + 1;
+              }
+              const tail = chunk.subarray(offset);
+              if (tail.at(-1) === 0x0d) {
+                if (!appendRecordPart(tail.subarray(0, -1))) {
+                  return;
+                }
+                pendingCarriageReturn = true;
+                return;
+              }
+              appendRecordPart(tail);
             });
 
             spawnedChild.nodeChildProcess.on("error", (error) => {
@@ -370,6 +428,10 @@ export function createGrepToolDefinition(
             });
             spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
+              pendingCarriageReturn = false;
+              if (recordBytes > 0 && !settled && !killedDueToLimit) {
+                emitRecord();
+              }
               void (async () => {
                 if (settled) {
                   return;
@@ -384,7 +446,7 @@ export function createGrepToolDefinition(
                   settle(() =>
                     resolve({
                       content: [{ type: "text", text: "No matches found" }],
-                      details: undefined,
+                      details: { content: "No matches found" },
                     }),
                   );
                   return;
@@ -439,10 +501,10 @@ export function createGrepToolDefinition(
 
                 const rawOutput = outputLines.join("\n");
                 // Apply byte truncation. There is no line limit here because the match limit already capped rows.
-                const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-                let output = truncation.content;
-                const details: GrepToolDetails = {};
-                // Build actionable notices for truncation and match limits.
+                const { content, ...truncation } = truncateHead(rawOutput, {
+                  maxLines: Number.MAX_SAFE_INTEGER,
+                });
+                const details: GrepToolDetails = { content };
                 const notices: string[] = [];
                 if (matchLimitReached) {
                   notices.push(
@@ -459,12 +521,12 @@ export function createGrepToolDefinition(
                   details.linesTruncated = true;
                 }
                 if (notices.length > 0) {
-                  output += `\n\n[${notices.join(". ")}]`;
+                  details.content += `\n\n[${notices.join(". ")}]`;
                 }
                 settle(() =>
                   resolve({
-                    content: [{ type: "text", text: output }],
-                    details: Object.keys(details).length > 0 ? details : undefined,
+                    content: [{ type: "text", text: details.content }],
+                    details,
                   }),
                 );
               })().catch((err: unknown) => {
@@ -492,6 +554,6 @@ export function createGrepToolDefinition(
 export function createGrepTool(
   cwd: string,
   options?: GrepToolOptions,
-): AgentTool<typeof grepSchema> {
+): AgentTool<typeof grepSchema, GrepToolDetails> {
   return wrapToolDefinition(createGrepToolDefinition(cwd, options));
 }

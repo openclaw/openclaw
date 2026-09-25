@@ -155,15 +155,6 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
   );
 }
 
-function ensureChatSendTimingEntries(host: ChatSendTimingHost): Map<string, ChatSendTimingEntry> {
-  if (host.chatSendTimingsByRun) {
-    return host.chatSendTimingsByRun;
-  }
-  const entries = new Map<string, ChatSendTimingEntry>();
-  host.chatSendTimingsByRun = entries;
-  return entries;
-}
-
 export function registerChatSendTiming(
   host: ChatSendTimingHost,
   item: Pick<
@@ -173,7 +164,7 @@ export function registerChatSendTiming(
   runId: string,
   requestStartedAtMs: number,
 ) {
-  ensureChatSendTimingEntries(host).set(runId, {
+  (host.chatSendTimingsByRun ??= new Map()).set(runId, {
     runId,
     sessionKey: item.sessionKey,
     agentId: item.agentId,
@@ -194,14 +185,11 @@ export function updateChatSendAckTiming(
   >,
   requestStartedAtMs: number,
 ) {
-  const entries = ensureChatSendTimingEntries(host);
+  const entries = (host.chatSendTimingsByRun ??= new Map());
   const existing = entries.get(requestedRunId);
   const submittedAtMs = existing?.submittedAtMs ?? item.sendSubmittedAtMs ?? requestStartedAtMs;
   const next: ChatSendTimingEntry = {
     ...(existing ?? {
-      runId: ack.runId,
-      sessionKey: item.sessionKey,
-      agentId: item.agentId,
       sendAttempts: item.sendAttempts ?? 0,
       sendState: item.sendState,
       submittedAtMs,
@@ -239,6 +227,7 @@ function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
     typeof item.sendSubmittedAtMs === "number" &&
     (item.sendState === "waiting-model" ||
       item.sendState === "waiting-idle" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
       item.sendState === "waiting-reconnect")
   );
@@ -254,7 +243,7 @@ export function schedulePendingSendPaintTiming(
   if (!sendRunId || startedAtMs == null) {
     return;
   }
-  scheduleControlUiAfterPaint(host as Parameters<typeof scheduleControlUiAfterPaint>[0], () => {
+  scheduleControlUiAfterPaint(host, () => {
     if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
       return;
     }

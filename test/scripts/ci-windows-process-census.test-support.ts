@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { withCiCheckoutFixture } from "./ci-checkout.test-support.js";
+import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
 export function censusPreload(root: string, extra = "", delayed = false) {
   const preload = path.join(root, "census-preload.mjs");
@@ -14,7 +14,7 @@ export function censusPreload(root: string, extra = "", delayed = false) {
 import cp from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const root = process.argv[3];
 const delayed = ` +
       JSON.stringify(delayed) +
@@ -35,11 +35,11 @@ cp.spawn = (command, args, options) => {
   }
   return child;
 };
-syncBuiltinESMExports();
+syncFixtureBuiltinExports();
 ` +
       extra,
   );
-  return { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
+  return fixturePreloadEnv(preload);
 }
 
 export function expectCensusClosed(root: string, actorPids: number[]) {
@@ -114,7 +114,7 @@ else if (fault !== "retire") console.log(JSON.stringify({ ready: true }));
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
 const [moduleUrl, fault, sampler] = process.argv.slice(1);
@@ -174,7 +174,7 @@ cp.spawn = (command, args, options) => {
   }
   return child;
 };
-syncBuiltinESMExports();
+syncFixtureBuiltinExports();
 const { createWindowsProcessCensus, requestWindowsProcessCensus } = await import(moduleUrl);
 const failures = [];
 const owner = createWindowsProcessCensus({ root, token: "owned", onFailure: error => failures.push(String(error)) });
@@ -230,7 +230,12 @@ fs.rmSync(root, { recursive: true });
       child.stdout?.on("data", (data) => (stdout += String(data)));
       child.stderr?.on("data", (data) => (stderr += String(data)));
       const result = await completion;
-      expect(result, stdout + stderr).toEqual({ code: 0, signal: null });
+      // Simulated census faults do not revoke the outer process owner's actual join.
+      expect(result, stdout + stderr).toEqual({
+        code: 0,
+        signal: null,
+        groupJoined: process.platform !== "win32",
+      });
       expect(JSON.parse(stdout)).toMatchObject({ fault, accepted: fault === "ready" });
     },
     55_000,
@@ -244,7 +249,7 @@ fs.rmSync(root, { recursive: true });
         (root) => {
           writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
           const sampler = String.raw`
-import json, pathlib, runpy, sys
+import json, runpy, sys
 fault = sys.argv[3]
 if fault == "startup":
     raise RuntimeError("injected sampler startup failure")
@@ -254,7 +259,6 @@ for line in sys.stdin:
         raise RuntimeError("injected native query failure")
     request = json.loads(line)
     observations = runpy.run_path(sys.argv[2])["read_processes"](request["pids"])
-    pathlib.Path(sys.argv[1], "lease").write_text("replacement")
     print(json.dumps(dict(id=request["id"], observations=observations)), flush=True)
 `;
           return censusPreload(
@@ -263,9 +267,30 @@ for line in sys.stdin:
               ? 'if (process.argv[2] === "sentinel") throw new Error("injected sentinel startup failure");\n'
               : `if (process.argv[2] === "supervise") {
   const censusSpawn = cp.spawn;
-  cp.spawn = (command, args, options) => censusSpawn(command, command === "python"
-    ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
-  syncBuiltinESMExports();
+  cp.spawn = (command, args, options) => {
+    const child = censusSpawn(command, command === "python"
+      ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
+    if (command === "python" && ${JSON.stringify(fault)} === "lease") {
+      let buffered = "", retired = false;
+      child.stdout.on("data", chunk => {
+        buffered += String(chunk);
+        for (;;) {
+          const newline = buffered.indexOf("\\n");
+          if (newline < 0) break;
+          const reply = JSON.parse(buffered.slice(0, newline));
+          buffered = buffered.slice(newline + 1);
+          if (!retired && reply.observations) {
+            retired = true;
+            // This listener precedes the broker's reply handler. The supervisor's
+            // synchronous writer closes before its teardown can unlink the lease.
+            fs.writeFileSync(path.join(root, "lease"), "replacement");
+          }
+        }
+      });
+    }
+    return child;
+  };
+  syncFixtureBuiltinExports();
 }`,
           );
         },
@@ -327,7 +352,7 @@ if (mode === "supervise") {
     }
     return child;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `,
         );
@@ -472,7 +497,7 @@ if (mode === "supervise") {
     };
   }
   process.once("exit", code => recordBoundary({ event: "supervisor-exit", code }));
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `,
           );

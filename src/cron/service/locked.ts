@@ -4,14 +4,27 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronServiceState } from "./state.js";
 
 const cronOperations = new KeyedAsyncQueue();
-const pendingSessionCleanups = new Map<string, Map<string, Promise<void>>>();
+type PendingCronSessionCleanup = { done: Promise<void>; agentId: string };
+const pendingSessionCleanups = new Map<string, Map<string, PendingCronSessionCleanup>>();
 
 /** Returns cleanup that must finish before the same durable job identity can be reused. */
 export function getPendingCronSessionCleanup(
   state: CronServiceState,
   jobId: string,
 ): Promise<void> | undefined {
-  return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId);
+  return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId)?.done;
+}
+
+/** Deferred session cleanup remains a filesystem owner after its cron row disappears. */
+export function hasPendingCronSessionCleanupForAgent(agentId: string): boolean {
+  for (const jobs of pendingSessionCleanups.values()) {
+    for (const cleanup of jobs.values()) {
+      if (cleanup.agentId === agentId) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Registers cleanup at the store-partition owner shared by sibling service instances. */
@@ -19,16 +32,17 @@ export function registerPendingCronSessionCleanup(
   state: CronServiceState,
   jobId: string,
   done: Promise<void>,
+  agentId: string,
 ): () => void {
   const storeKey = cronStoreKey(state.deps.storePath);
   let byJobId = pendingSessionCleanups.get(storeKey);
   if (!byJobId) {
-    byJobId = new Map<string, Promise<void>>();
+    byJobId = new Map<string, PendingCronSessionCleanup>();
     pendingSessionCleanups.set(storeKey, byJobId);
   }
-  byJobId.set(jobId, done);
+  byJobId.set(jobId, { done, agentId });
   return () => {
-    if (byJobId.get(jobId) !== done) {
+    if (byJobId.get(jobId)?.done !== done) {
       return;
     }
     byJobId.delete(jobId);
@@ -45,10 +59,18 @@ const resolveChain = (promise: Promise<unknown>) =>
   );
 
 /** Serializes operations by their actual SQLite partition and service-local order. */
-export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
+export async function locked<T>(
+  state: CronServiceState,
+  fn: () => Promise<T>,
+  opts?: { readOnly?: boolean },
+): Promise<T> {
   const previous = state.op;
   const next = cronOperations.enqueue(cronStoreKey(state.deps.storePath), async () => {
     await resolveChain(previous);
+    if (!opts?.readOnly) {
+      // Include scheduler-local changes that deliberately do not commit a store revision.
+      state.listPageSnapshot = undefined;
+    }
     return await fn();
   });
   state.op = resolveChain(next);

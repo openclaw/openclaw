@@ -11,9 +11,17 @@ import {
   createCronStreamWatcherFixture,
   createWatchers,
   exitResult,
+  fakeSupervisor,
   job,
   settle,
 } from "./cron-stream-watchers.test-helpers.js";
+
+vi.mock("./cron-stream-matcher.js", () => ({
+  matchCronStreamLines: async (pattern: string, lines: string[]) => {
+    const matcher = new RegExp(pattern);
+    return lines.some((line) => matcher.test(line));
+  },
+}));
 
 describe("cron stream output", () => {
   afterEach(() => {
@@ -70,24 +78,27 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
-  it("matches an over-cap line identically whether or not callbacks split it", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.start(createCronStreamMatchingJob("^keep"));
+  it.each([false, true])(
+    "matches a complete long line before truncating its batch (split callbacks: %s)",
+    async (split) => {
+      vi.useFakeTimers();
+      const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+      await watchers.start(createCronStreamMatchingJob("^build-start .* build-complete$"));
 
-    // A complete 1.9 KB line arriving in two callbacks must match exactly
-    // like the same line in one callback: pipe chunking is not semantics.
-    fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(1_500)}`);
-    await settle();
-    fake.inputs[0]?.onStdout?.(`${"x".repeat(400)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
-    expect(fireBatch).toHaveBeenCalledOnce();
-    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^keep x/u);
-    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
-    await watchers.stopAll("shutdown");
-  });
+      const line = `build-start ${"x".repeat(3_000)} build-complete\n`;
+      const chunks = split ? [line.slice(0, 1_500), line.slice(1_500)] : [line];
+      for (const chunk of chunks) {
+        fake.inputs[0]?.onStdout?.(chunk);
+        await settle();
+      }
+      await vi.advanceTimersByTimeAsync(100);
+      await settle();
+      expect(fireBatch).toHaveBeenCalledOnce();
+      expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^build-start x/u);
+      expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
+      await watchers.stopAll("shutdown");
+    },
+  );
 
   it("treats a line over the intake bound as an unprovable prefix even when callbacks split it", async () => {
     vi.useFakeTimers();
@@ -208,10 +219,15 @@ describe("cron stream output", () => {
   it("buffers output emitted before the asynchronous spawn call resolves", async () => {
     vi.useFakeTimers();
     const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
+    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
     const run: ManagedRun = {
+      activity,
       runId: "early-output",
       startedAtMs: Date.now(),
-      cancel: vi.fn(() => resolveWait(exitResult({ reason: "manual-cancel" }))),
+      cancel: vi.fn(() => {
+        activity.resultSettled = true;
+        resolveWait(exitResult({ reason: "manual-cancel" }));
+      }),
       detachOutput: vi.fn(),
       wait: () => wait,
     };
@@ -220,10 +236,8 @@ describe("cron stream output", () => {
       return run;
     });
     const supervisor = {
+      ...fakeSupervisor().supervisor,
       spawn,
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     } satisfies ProcessSupervisor;
     const fireBatch = vi.fn(async () => "fired" as const);
     const watchers = createWatchers({

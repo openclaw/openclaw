@@ -1,55 +1,39 @@
 // @vitest-environment node
 // Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
-import {
-  resolveToolCallKind,
-  resolveToolCallView,
-  unwrapShellWrapperCommand,
-} from "./tool-call-view.ts";
+import { resolveToolCallView } from "./tool-call-view.ts";
 
 const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_tool"] as const;
 
-describe("resolveToolCallKind", () => {
+describe("tool detail kinds", () => {
   it.each([
     ["bash", undefined, "command"],
     ["exec", undefined, "command"],
-    ["Read", undefined, "read"],
-    ["read_file", undefined, "read"],
-    ["edit", undefined, "edit"],
-    ["edit_file", undefined, "edit"],
-    ["apply_patch", undefined, "edit"],
-    ["write", undefined, "write"],
-    ["create_file", undefined, "write"],
-    ["grep", undefined, "search"],
-    ["glob", undefined, "search"],
-    ["web_fetch", undefined, "fetch"],
+    ["Read", { path: "file.ts" }, "read"],
+    ["read_file", { path: "file.ts" }, "read"],
+    ["edit", { path: "file.ts" }, "edit"],
+    ["edit_file", { path: "file.ts" }, "edit"],
+    ["apply_patch", { changes: [{ path: "file.ts", kind: "update", diff: "+line" }] }, "edit"],
+    ["write", { path: "file.ts" }, "write"],
+    ["create_file", { path: "file.ts" }, "write"],
+    ["grep", { pattern: "line" }, "search"],
+    ["glob", { pattern: "*.ts" }, "search"],
+    ["web_fetch", { url: "https://example.test" }, "fetch"],
     ["mcp__linear__create_issue", undefined, "generic"],
-    // Arg-shape fallback: unknown tool with a small command payload is a command.
     ["run_shell", { command: "ls" }, "command"],
     ["run_shell", { command: "ls", a: 1, b: 2, c: 3 }, "generic"],
-  ])("classifies %s with args %o as %s", (name, args, expected) => {
-    expect(resolveToolCallKind(name, args)).toBe(expected);
+  ] as const)("classifies %s with args %o as %s", (name, args, expected) => {
+    expect(resolveToolCallView({ name, args }).kind).toBe(expected);
   });
 
-  it.each(
-    TEXT_EDITOR_TOOL_NAMES.flatMap(
-      (name) =>
-        [
-          [name, { command: "view" }, "read"],
-          [name, { command: "str_replace" }, "edit"],
-          [name, { command: "create" }, "write"],
-          [name, { command: "insert" }, "edit"],
-          [name, { command: "undo_edit" }, "edit"],
-          [name, {}, "generic"],
-          [name, { command: "rename" }, "generic"],
-        ] as const,
-    ),
-  )("classifies command-discriminated editor %s args %o as %s", (name, args, expected) => {
-    expect(resolveToolCallKind(name, args)).toBe(expected);
+  it.each(TEXT_EDITOR_TOOL_NAMES)("keeps unsupported %s editor commands generic", (name) => {
+    for (const args of [{}, { command: "rename" }]) {
+      expect(resolveToolCallView({ name, args }).kind).toBe("generic");
+    }
   });
 });
 
-describe("unwrapShellWrapperCommand", () => {
+describe("shell command views", () => {
   it.each([
     ["/bin/zsh -lc 'pnpm test ui'", "pnpm test ui"],
     ['/bin/bash -c "git status"', "git status"],
@@ -57,13 +41,9 @@ describe("unwrapShellWrapperCommand", () => {
     ["pnpm test ui", "pnpm test ui"],
     ["/bin/zsh -lc unquoted", "/bin/zsh -lc unquoted"],
   ])("unwraps %s", (wrapped, expected) => {
-    expect(unwrapShellWrapperCommand(wrapped)).toBe(expected);
-  });
-
-  it("unwraps the shell wrapper in command views", () => {
-    expect(
-      resolveToolCallView({ name: "bash", args: { command: "/bin/zsh -lc 'node --version'" } }),
-    ).toEqual({ kind: "command", command: "node --version" });
+    expect(resolveToolCallView({ name: "bash", args: { command: wrapped } }).command).toBe(
+      expected,
+    );
   });
 });
 

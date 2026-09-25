@@ -1,14 +1,17 @@
 // Playback transcode policy and lazy media-store cache ownership.
 import { createHash } from "node:crypto";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { fileStore } from "@openclaw/fs-safe/store";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { fileStore } from "../infra/file-store.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
@@ -160,32 +163,6 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
     .digest("hex");
 }
 
-async function readPlaybackSourceBounded(
-  handle: Pick<FileHandle, "read">,
-  expectedSize: number,
-  maxBytes: number,
-): Promise<Buffer> {
-  const maxReadBytes = Math.min(maxBytes + 1, expectedSize + 1);
-  const buffer = Buffer.allocUnsafe(maxReadBytes);
-  let totalBytes = 0;
-  while (totalBytes < maxReadBytes) {
-    const { bytesRead } = await handle.read(
-      buffer,
-      totalBytes,
-      maxReadBytes - totalBytes,
-      totalBytes,
-    );
-    if (bytesRead === 0) {
-      break;
-    }
-    totalBytes += bytesRead;
-  }
-  if (totalBytes > maxBytes || totalBytes !== expectedSize) {
-    throw new Error("Playback source changed during bounded read");
-  }
-  return buffer.subarray(0, totalBytes);
-}
-
 /** Returns whether a sniffed audio/video type needs the cross-client playback target. */
 function resolvePlaybackMode(
   mimeType: string,
@@ -204,7 +181,6 @@ function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
-    readPlaybackSourceBounded,
     getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }
@@ -253,18 +229,11 @@ async function probePlaybackSource(
   source: PlaybackSourceIdentity,
   kind: PlaybackMediaKind,
 ): Promise<PlaybackMediaProbeResult | null> {
-  const opened = await openLocalFileSafely({ filePath: source.path }).catch(() => null);
-  if (!opened) {
+  await using opened = await openLocalFileSafely({ filePath: source.path }).catch(() => null);
+  if (!opened || !playbackSourceIdentityMatches(source, opened)) {
     return null;
   }
-  try {
-    if (!playbackSourceIdentityMatches(source, opened)) {
-      return null;
-    }
-    return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
-  } finally {
-    await opened.handle.close().catch(() => {});
-  }
+  return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
 }
 
 async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
@@ -388,18 +357,10 @@ async function resolveCachedPlaybackPath(params: {
     mode: 0o600,
     maxBytes: params.maxBytes,
   });
-  const opened = await store
+  await using opened = await store
     .open(playbackCacheRelativePath(params.cacheKey, params.extension))
     .catch(() => null);
-  if (!opened?.stat.isFile()) {
-    await opened?.handle.close().catch(() => {});
-    return null;
-  }
-  try {
-    return opened.realPath;
-  } finally {
-    await opened.handle.close().catch(() => {});
-  }
+  return opened?.realPath ?? null;
 }
 
 function makePlaybackInputFileName(sourcePath: string, mimeType: string): string {
@@ -437,7 +398,12 @@ function buildPlaybackFfmpegArgs(params: {
   outputPath: string;
   videoStreamIndex?: number;
 }): string[] {
-  const common = [
+  const audioOnly = params.kind === "audio";
+  const primaryStreamIndex = audioOnly ? params.audioStreamIndex : params.videoStreamIndex;
+  if (primaryStreamIndex === undefined) {
+    throw new Error(`Playback ${audioOnly ? "audio" : "video"} stream is missing`);
+  }
+  return [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -460,53 +426,28 @@ function buildPlaybackFfmpegArgs(params: {
     "-1",
     "-map_chapters",
     "-1",
-  ];
-  if (params.kind === "audio") {
-    if (params.audioStreamIndex === undefined) {
-      throw new Error("Playback audio stream is missing");
-    }
-    return [
-      ...common,
-      "-map",
-      `0:${params.audioStreamIndex}`,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      "-f",
-      "ipod",
-      "-fs",
-      String(params.maxOutputBytes + 1),
-      params.outputPath,
-    ];
-  }
-  if (params.videoStreamIndex === undefined) {
-    throw new Error("Playback video stream is missing");
-  }
-  return [
-    ...common,
     "-map",
-    `0:${params.videoStreamIndex}`,
-    ...(params.audioStreamIndex === undefined ? [] : ["-map", `0:${params.audioStreamIndex}`]),
+    `0:${primaryStreamIndex}`,
+    ...(!audioOnly && params.audioStreamIndex !== undefined
+      ? ["-map", `0:${params.audioStreamIndex}`]
+      : []),
+    ...(audioOnly ? ["-vn"] : []),
     "-sn",
     "-dn",
     "-t",
     String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-    "-vf",
-    "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-    "-c:v",
-    "libx264",
-    "-threads",
-    String(PLAYBACK_TRANSCODE_THREADS),
-    "-pix_fmt",
-    "yuv420p",
+    ...(audioOnly
+      ? []
+      : [
+          "-vf",
+          "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+          "-c:v",
+          "libx264",
+          "-threads",
+          String(PLAYBACK_TRANSCODE_THREADS),
+          "-pix_fmt",
+          "yuv420p",
+        ]),
     "-c:a",
     "aac",
     "-b:a",
@@ -514,7 +455,7 @@ function buildPlaybackFfmpegArgs(params: {
     "-movflags",
     "+faststart",
     "-f",
-    "mp4",
+    audioOnly ? "ipod" : "mp4",
     "-fs",
     String(params.maxOutputBytes + 1),
     params.outputPath,
@@ -532,86 +473,107 @@ async function transcodePlaybackSource(params: {
   videoStreamIndex?: number;
 }): Promise<void> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
-  const opened = await openLocalFileSafely({ filePath: params.source.path });
-  try {
-    if (!playbackSourceIdentityMatches(params.source, opened)) {
-      throw new Error("Playback source changed before transcode");
-    }
-    const sourceBuffer = await readPlaybackSourceBounded(
-      opened.handle,
-      params.source.size,
-      params.maxBytes,
-    );
-    const postReadStat = await opened.handle.stat();
-    if (
-      !playbackSourceIdentityMatches(params.source, {
-        realPath: opened.realPath,
-        stat: postReadStat,
-      })
-    ) {
-      throw new Error("Playback source changed during transcode read");
-    }
-
-    const outputBuffer = await withTempWorkspace(
-      {
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "playback-transcode-",
-      },
-      async (workspace) => {
-        const inputPath = await workspace.write(
-          makePlaybackInputFileName(params.source.path, params.mimeType),
-          sourceBuffer,
-        );
-        const outputPath = workspace.path(`output${policy.target.extension}`);
-        const inputFormat = resolvePlaybackInputFormat(policy, params.mimeType);
-        if (!inputFormat) {
-          throw new Error("Playback transcode input format is not allowed");
-        }
-        await runFfmpeg(
-          buildPlaybackFfmpegArgs({
-            ...(params.audioStreamIndex !== undefined
-              ? { audioStreamIndex: params.audioStreamIndex }
-              : {}),
-            inputPath,
-            inputFormat,
-            kind: params.kind,
-            maxOutputBytes: params.maxBytes,
-            outputPath,
-            ...(params.videoStreamIndex !== undefined
-              ? { videoStreamIndex: params.videoStreamIndex }
-              : {}),
-          }),
-        );
-        const outputStat = await fs.stat(outputPath);
-        if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > params.maxBytes) {
-          throw new Error("Playback transcode output exceeds its media limit");
-        }
-        const outputHandle = await fs.open(outputPath, "r");
-        let outputProbe: PlaybackMediaProbeResult | null;
-        try {
-          outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, params.kind);
-        } finally {
-          await outputHandle.close().catch(() => {});
-        }
-        if (
-          !outputProbe?.durationMs ||
-          !playbackDurationsMatch(params.sourceDurationMs, outputProbe.durationMs)
-        ) {
-          throw new Error("Playback transcode output duration does not match its source");
-        }
-        return await fs.readFile(outputPath);
-      },
-    );
-
-    await writePlaybackTranscodeCache({
-      buffer: outputBuffer,
-      fileName: path.basename(playbackCacheRelativePath(params.cacheKey, policy.target.extension)),
-      maxBytes: params.maxBytes,
-      tempPrefix: `.${params.cacheKey}`,
-    });
-  } finally {
-    await opened.handle.close().catch(() => {});
+  await using opened = await openLocalFileSafely({ filePath: params.source.path });
+  if (!playbackSourceIdentityMatches(params.source, opened)) {
+    throw new Error("Playback source changed before transcode");
   }
+  const outputBuffer = await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "playback-transcode-",
+    },
+    async (workspace) => {
+      const inputName = makePlaybackInputFileName(params.source.path, params.mimeType);
+      const stagingName = `.${inputName}.stage`;
+      // Keep private-store admission without its full-payload buffering path.
+      await workspace.write(stagingName, "");
+      const inputRoot = await workspace.store.root();
+      let inputPath: string;
+      {
+        await using staged = await inputRoot.openWritable(stagingName, {
+          writeMode: "update",
+          mode: 0o600,
+          mkdir: false,
+        });
+        const inputIdentity = await staged.handle.stat({ bigint: true });
+        const copiedBytes = await copyFileHandle(opened.handle, staged.handle, {
+          maxBytes: Math.min(params.source.size, params.maxBytes),
+        });
+        if (
+          copiedBytes !== params.source.size ||
+          !playbackSourceIdentityMatches(params.source, {
+            realPath: opened.realPath,
+            stat: await opened.handle.stat(),
+          })
+        ) {
+          throw new Error("Playback source changed during transcode read");
+        }
+        await staged.handle.sync().catch((error: unknown) => {
+          if (!hasErrnoCode(error, "EPERM")) {
+            throw error;
+          }
+        });
+        // Keep the writer live so replacement cannot reuse its inode before verification.
+        await inputRoot.move(stagingName, inputName);
+        await using input = await inputRoot.open(inputName);
+        const stat = await input.handle.stat({ bigint: true });
+        // The move owns its path checks; bind its result to our completed writer.
+        if (
+          !sameFileIdentity(inputIdentity, stat) ||
+          stat.size !== BigInt(params.source.size) ||
+          (process.platform !== "win32" && (stat.mode & 0o7777n) !== 0o600n)
+        ) {
+          throw new Error("Playback staged input changed before transcode");
+        }
+        inputPath = input.realPath;
+      }
+      const outputPath = workspace.path(`output${policy.target.extension}`);
+      const inputFormat = resolvePlaybackInputFormat(policy, params.mimeType);
+      if (!inputFormat) {
+        throw new Error("Playback transcode input format is not allowed");
+      }
+      await runFfmpeg(
+        buildPlaybackFfmpegArgs({
+          ...(params.audioStreamIndex !== undefined
+            ? { audioStreamIndex: params.audioStreamIndex }
+            : {}),
+          inputPath,
+          inputFormat,
+          kind: params.kind,
+          maxOutputBytes: params.maxBytes,
+          outputPath,
+          ...(params.videoStreamIndex !== undefined
+            ? { videoStreamIndex: params.videoStreamIndex }
+            : {}),
+        }),
+      );
+      const outputStat = await fs.stat(outputPath);
+      if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > params.maxBytes) {
+        throw new Error("Playback transcode output exceeds its media limit");
+      }
+      const outputHandle = await fs.open(outputPath, "r");
+      let outputProbe: PlaybackMediaProbeResult | null;
+      try {
+        outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, params.kind);
+      } finally {
+        await outputHandle.close().catch(() => {});
+      }
+      if (
+        !outputProbe?.durationMs ||
+        !playbackDurationsMatch(params.sourceDurationMs, outputProbe.durationMs)
+      ) {
+        throw new Error("Playback transcode output duration does not match its source");
+      }
+      return await fs.readFile(outputPath);
+    },
+  );
+
+  await writePlaybackTranscodeCache({
+    buffer: outputBuffer,
+    fileName: path.basename(playbackCacheRelativePath(params.cacheKey, policy.target.extension)),
+    maxBytes: params.maxBytes,
+    tempPrefix: `.${params.cacheKey}`,
+  });
 }
 
 /** Resolves a native, pending, cached, or failed playback rendition without blocking on ffmpeg. */

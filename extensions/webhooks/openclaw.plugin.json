@@ -1,5 +1,6 @@
 {
   "id": "webhooks",
+  "categories": ["integrations"],
   "activation": {
     "onStartup": true
   },
@@ -16,6 +17,14 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "webhook-routes",
+      "title": "Webhook routes",
+      "order": 10,
+      "properties": ["routes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

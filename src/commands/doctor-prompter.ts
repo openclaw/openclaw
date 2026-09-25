@@ -33,11 +33,12 @@ export type DoctorPrompter = {
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
+  signal?: AbortSignal;
 }): DoctorPrompter {
   const repairMode = resolveDoctorRepairMode(params.options);
-  const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
-    if (shouldAutoApproveDoctorFix(repairMode)) {
-      return true;
+  const confirmPrompt = async (p: DoctorConfirmParams) => {
+    if (params.signal?.aborted) {
+      return false;
     }
     if (repairMode.nonInteractive) {
       return false;
@@ -47,14 +48,23 @@ export function createDoctorPrompter(params: {
     }
     // Exit 130 (SIGINT convention) so the installer can distinguish
     // user cancellation from normal doctor failures.
-    return guardCancel(
-      await confirm({
-        ...p,
-        message: stylePromptMessage(p.message),
-      }),
-      params.runtime,
-      130,
-    );
+    const answer = await confirm({
+      ...p,
+      signal: params.signal
+        ? p.signal
+          ? AbortSignal.any([p.signal, params.signal])
+          : params.signal
+        : p.signal,
+      message: stylePromptMessage(p.message),
+    });
+    // Maintenance interruption declines new consent without abandoning restoration.
+    return params.signal?.aborted ? false : guardCancel(answer, params.runtime, 130);
+  };
+  const confirmDefault = async (p: DoctorConfirmParams) => {
+    if (shouldAutoApproveDoctorFix(repairMode)) {
+      return true;
+    }
+    return confirmPrompt(p);
   };
 
   return {
@@ -64,23 +74,10 @@ export function createDoctorPrompter(params: {
       if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
         return true;
       }
-      if (repairMode.nonInteractive) {
-        return false;
-      }
       if (repairMode.shouldRepair && !repairMode.shouldForce) {
         return false;
       }
-      if (!repairMode.canPrompt) {
-        return p.initialValue ?? false;
-      }
-      return guardCancel(
-        await confirm({
-          ...p,
-          message: stylePromptMessage(p.message),
-        }),
-        params.runtime,
-        130,
-      );
+      return confirmPrompt(p);
     },
     confirmRuntimeRepair: async (p) => {
       const { requiresInteractiveConfirmation, ...confirmParams } = p;
@@ -93,20 +90,7 @@ export function createDoctorPrompter(params: {
       if (requiresInteractiveConfirmation === true && !repairMode.canPrompt) {
         return false;
       }
-      if (repairMode.nonInteractive) {
-        return false;
-      }
-      if (!repairMode.canPrompt) {
-        return confirmParams.initialValue ?? false;
-      }
-      return guardCancel(
-        await confirm({
-          ...confirmParams,
-          message: stylePromptMessage(confirmParams.message),
-        }),
-        params.runtime,
-        130,
-      );
+      return confirmPrompt(confirmParams);
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
       if (!repairMode.canPrompt || repairMode.shouldRepair) {

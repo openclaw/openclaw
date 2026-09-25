@@ -6,19 +6,17 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMetaForEntry,
-  resolveSessionStorePathForAcp,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import {
   resolveAuthoredModelContextTokens,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
 } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredPrimaryProviderFallback } from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -95,10 +93,13 @@ function resolveConfiguredStatusModelRef(params: {
     }
   }
 
-  const fallbackProvider = resolveConfiguredProviderFallback({
+  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
   if (fallbackProvider) {
     return fallbackProvider;
@@ -157,18 +158,11 @@ function resolveStatusModelComparisonLabel(params: {
 }
 
 function resolveSessionModelRef(
-  cfg: OpenClawConfig,
+  resolved: { provider: string; model: string },
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = resolveConfiguredStatusModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    agentId,
-  });
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
   const providerlessPersisted =
     resolveProviderlessPersistedStatusModelRef({
@@ -227,7 +221,7 @@ function resolveSessionRuntime(params: {
   });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,

@@ -9,11 +9,7 @@ import {
 
 describe("matrix sync helpers", () => {
   it("primes the Matrix sync cursor without recording observed events", async () => {
-    const fetchImpl: typeof fetch = async () =>
-      new Response(JSON.stringify({ next_batch: "primed-sync-cursor" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+    const fetchImpl: typeof fetch = async () => Response.json({ next_batch: "primed-sync-cursor" });
 
     await expect(
       primeMatrixQaRoom({
@@ -26,28 +22,25 @@ describe("matrix sync helpers", () => {
 
   it("returns a typed no-match result while preserving the latest sync token", async () => {
     const fetchImpl: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$driver",
-                      sender: "@driver:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "hello", msgtype: "m.text" },
-                    },
-                  ],
-                },
+      Response.json({
+        next_batch: "next-batch-2",
+        rooms: {
+          join: {
+            "!room:matrix-qa.test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$driver",
+                    sender: "@driver:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "hello", msgtype: "m.text" },
+                  },
+                ],
               },
             },
           },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+        },
+      });
 
     const observedEvents: MatrixQaObservedEvent[] = [];
 
@@ -91,34 +84,31 @@ describe("matrix sync helpers", () => {
 
   it("keeps recording later same-batch events after the first match", async () => {
     const fetchImpl: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$sut",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "target", msgtype: "m.text" },
-                    },
-                    {
-                      event_id: "$driver",
-                      sender: "@driver:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "trailing event", msgtype: "m.text" },
-                    },
-                  ],
-                },
+      Response.json({
+        next_batch: "next-batch-2",
+        rooms: {
+          join: {
+            "!room:matrix-qa.test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$sut",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "target", msgtype: "m.text" },
+                  },
+                  {
+                    event_id: "$driver",
+                    sender: "@driver:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "trailing event", msgtype: "m.text" },
+                  },
+                ],
               },
             },
           },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+        },
+      });
 
     const observedEvents: MatrixQaObservedEvent[] = [];
 
@@ -184,51 +174,48 @@ describe("matrix sync helpers", () => {
     let calls = 0;
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      return new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$preview",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: {
-                        body: "preview",
-                        msgtype: "m.notice",
-                        "m.relates_to": {
-                          rel_type: "m.thread",
-                          event_id: "$root",
-                          is_falling_back: true,
-                          "m.in_reply_to": { event_id: "$driver" },
-                        },
+      return Response.json({
+        next_batch: "next-batch-2",
+        rooms: {
+          join: {
+            "!room:matrix-qa.test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$preview",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: {
+                      body: "preview",
+                      msgtype: "m.notice",
+                      "m.relates_to": {
+                        rel_type: "m.thread",
+                        event_id: "$root",
+                        is_falling_back: true,
+                        "m.in_reply_to": { event_id: "$driver" },
                       },
                     },
-                    {
-                      event_id: "$final",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: {
-                        body: "final",
-                        msgtype: "m.text",
-                        "m.new_content": { body: "final", msgtype: "m.text" },
-                        "m.relates_to": {
-                          rel_type: "m.replace",
-                          event_id: "$preview",
-                        },
+                  },
+                  {
+                    event_id: "$final",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: {
+                      body: "final",
+                      msgtype: "m.text",
+                      "m.new_content": { body: "final", msgtype: "m.text" },
+                      "m.relates_to": {
+                        rel_type: "m.replace",
+                        event_id: "$preview",
                       },
                     },
-                  ],
-                },
+                  },
+                ],
               },
             },
           },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+        },
+      });
     };
     const observedEvents: MatrixQaObservedEvent[] = [];
     const observer = createMatrixQaRoomObserver({
@@ -269,28 +256,25 @@ describe("matrix sync helpers", () => {
     let calls = 0;
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      return new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!main:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$main-reply",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "main reply", msgtype: "m.text" },
-                    },
-                  ],
-                },
+      return Response.json({
+        next_batch: "next-batch-2",
+        rooms: {
+          join: {
+            "!main:matrix-qa.test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$main-reply",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "main reply", msgtype: "m.text" },
+                  },
+                ],
               },
             },
           },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+        },
+      });
     };
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -337,34 +321,31 @@ describe("matrix sync helpers", () => {
       calls += 1;
       markFetchStarted();
       await fetchCanComplete;
-      return new Response(
-        JSON.stringify({
-          next_batch: "next-batch-2",
-          rooms: {
-            join: {
-              "!room:matrix-qa.test": {
-                timeline: {
-                  events: [
-                    {
-                      event_id: "$reply",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "reply", msgtype: "m.text" },
-                    },
-                    {
-                      event_id: "$notice",
-                      sender: "@sut:matrix-qa.test",
-                      type: "m.room.message",
-                      content: { body: "notice", msgtype: "m.notice" },
-                    },
-                  ],
-                },
+      return Response.json({
+        next_batch: "next-batch-2",
+        rooms: {
+          join: {
+            "!room:matrix-qa.test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$reply",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "reply", msgtype: "m.text" },
+                  },
+                  {
+                    event_id: "$notice",
+                    sender: "@sut:matrix-qa.test",
+                    type: "m.room.message",
+                    content: { body: "notice", msgtype: "m.notice" },
+                  },
+                ],
               },
             },
           },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+        },
+      });
     };
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",

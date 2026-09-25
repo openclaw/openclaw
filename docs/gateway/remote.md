@@ -27,6 +27,11 @@ The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gatewa
 
 For the always-on and laptop setups, prefer keeping `gateway.bind: "loopback"` and using **Tailscale Serve** for the Control UI, or a trusted LAN/Tailnet bind with `gateway.remote.transport: "direct"`. SSH tunnel is the fallback that works from any machine.
 
+Application previews need their own private ingress. A tunnel that forwards only
+the Gateway port does not forward portals. Use [managed private Serve or wildcard
+portal ingress](/gateway/portals#remote-access); the browser and application must
+use the service's returned portal URLs without replacing their host or port.
+
 ## Command flow (what runs where)
 
 One Gateway owns state and channels; nodes are peripherals. Example (Telegram message routed to a node tool):
@@ -49,7 +54,12 @@ With the tunnel up, `openclaw health` and `openclaw status --deep` reach the rem
 To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
 
 <Note>
-Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
+The first port is local; the final port is the remote Gateway destination. To keep
+the local URL above, replace only the remote destination with your
+configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`). For example,
+`ssh -N -L 18789:127.0.0.1:29443 user@gateway-host` reaches a Gateway on remote port
+`29443` through the same local URL. Discovery and onboarding use the resolved
+Gateway service port for this destination.
 </Note>
 
 <Warning>
@@ -279,7 +289,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 openclaw config set gateway.remote.token "<your-token>"
 ```
 
-Use `gateway.remote.password` instead if the remote Gateway uses password auth. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
+The Gateway accepts its configured secret in either field: `gateway.remote.token` or `gateway.remote.password` both work, including for password-mode Gateways. The server's `gateway.auth.mode` selects which configured secret to use. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
 
 #### Step 4: create the LaunchAgent
 
@@ -346,3 +356,5 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) — authenticating remote access through a reverse proxy
+- [Network](/network) — the hub for how OpenClaw connects, pairs, and secures devices across localhost, LAN, and tailnet

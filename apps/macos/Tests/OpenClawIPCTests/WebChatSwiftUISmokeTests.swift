@@ -168,33 +168,83 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "same-gateway",
-                name: "Same Gateway",
-                url: #require(URL(string: "wss://same.example")))
-
-            try await manager.show(profile: profile)
-            try await manager.show(profile: profile)
+        try await withIsolatedWebChatProfile { manager, profile in
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
             let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
             #expect(manager._testSessionObserverVisible(connection: connection))
             manager.resetPrimaryConnections()
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
             #expect(manager._testSessionObserverVisible(connection: connection))
-            await manager.closeGatewayWindows(profileID: profile.id)
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
+            manager.closeGatewayWindows(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
             #expect(!manager._testSessionObserverVisible(connection: connection))
         }
     }
 
-    @Test func `closing chat retires a profile window still waiting for its connection`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "pending-window-\(UUID().uuidString)",
-                name: "Pending Gateway",
-                url: #require(URL(string: "wss://pending.example")))
+    @Test(arguments: [false, true])
+    func `hiding retains the window and its draft while removing it from the Dock and Window menu`(
+        minimized: Bool) async throws
+    {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            initialDraft: "Keep this draft",
+            transport: TestTransport())
+        defer { controller.close() }
+        let window = try #require(controller._testWindow)
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+        }
+        #expect(controller.isWindowOpen)
+
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+            }
+        } else {
+            controller.hide()
+        }
+        #expect(controller._testWindow === window)
+        #expect(!controller.isWindowOpen)
+        #expect(!window.isVisible)
+        #expect(!window.isMiniaturized)
+        #expect(window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+                controller.show()
+            }
+        }
+        #expect(controller._testWindow === window)
+        #expect(controller.isWindowOpen)
+        #expect(!window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+    }
+
+    @Test(arguments: ["close", "hide", "reuse"])
+    func `pending profile opens honor window lifetime and ordinary opens reuse the admitted window`(
+        action: String) async throws
+    {
+        try await withIsolatedWebChatProfile { manager, profile in
             let fleet = MacGatewayConnectionFleet.shared
             let release = DispatchSemaphore(value: 0)
             let gateEntered = AsyncStream.makeStream(of: Void.self)
@@ -207,24 +257,23 @@ struct WebChatSwiftUISmokeTests {
             var gateIterator = gateEntered.stream.makeAsyncIterator()
             await gateIterator.next()
 
-            let openStarted = AsyncStream.makeStream(of: Void.self)
-            let pendingOpen = Task { @MainActor in
-                openStarted.continuation.yield()
-                openStarted.continuation.finish()
-                try await manager.show(profile: profile)
+            let first = manager.openGatewayWindow(for: .profile(profile.id))
+            let second = manager.openGatewayWindow(for: .profile(profile.id))
+            // Let both production entrypoints reach the held connection owner.
+            await Task.yield()
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
+            switch action {
+            case "close": manager.close()
+            case "hide": manager.hideWindows()
+            default: break
             }
-            var openIterator = openStarted.stream.makeAsyncIterator()
-            await openIterator.next()
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-            manager.close()
             release.signal()
             #expect(await blockedFleet.value)
+            await first.value
+            await second.value
 
-            if case let .failure(error) = await pendingOpen.result, !(error is CancellationError) {
-                Issue.record("Pending window failed unexpectedly: \(error)")
-            }
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-            await manager.closeGatewayWindows(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == (action == "reuse" ? 1 : 0))
+            #expect(manager.hasVisibleWindows == (action == "reuse"))
         }
     }
 

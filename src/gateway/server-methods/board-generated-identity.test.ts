@@ -1,21 +1,28 @@
 import { afterEach, expect, it } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createBoardHarness } from "./board.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
   resetPluginRuntimeStateForTest();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -33,10 +40,7 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     env,
   };
   let arrivals = 0;
-  let releaseReaders: (() => void) | undefined;
-  const readersReady = new Promise<void>((resolve) => {
-    releaseReaders = resolve;
-  });
+  const { promise: readersReady, resolve: releaseReaders } = createDeferred();
   const readCanvasDocument = async (docId: string) => {
     arrivals += 1;
     if (arrivals === 2) {
@@ -88,7 +92,9 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     broadcast.mock.calls.map(([, event]) => (event as { widget?: string }).widget).filter(Boolean),
   ).toEqual(expect.arrayContaining(committedNames));
 
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const reloaded = createBoardHarness(undefined, {}, new SqliteBoardStore(options));
   const get = await reloaded.invoke("board.get", { sessionKey });

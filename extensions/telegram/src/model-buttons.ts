@@ -5,7 +5,7 @@
  * - mdl_prov              - show providers list
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
- * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_sel/{model}       - read legacy providerless model selections
  * - mdl1~m:{sha256}       - select an opaque provider/model ref
  * - mdl1~p:{sha256}:{pg}  - show models for an opaque provider ref
  * - mdl_back              - back to providers list
@@ -54,7 +54,6 @@ const CALLBACK_PREFIX = {
   back: "mdl_back",
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
-  selectCompact: "mdl_sel/",
   opaqueModel: "mdl1~m:",
   opaqueProvider: "mdl1~p:",
 } as const;
@@ -96,7 +95,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (compact fallback)
+  // mdl_sel/{model} (legacy providerless input)
   const compactModel = trimmed.match(/^mdl_sel\/(.+)$/)?.[1];
   if (compactModel) {
     return { type: "select", model: compactModel };
@@ -114,14 +113,6 @@ export function buildModelSelectionCallbackData(params: {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (LEGACY_PROVIDER_PATTERN.test(params.provider) && fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
-  }
-  const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  if (
-    LEGACY_PROVIDER_PATTERN.test(params.provider) &&
-    fitsTelegramCallbackData(`${CALLBACK_PREFIX.list}${params.provider}_1`) &&
-    fitsTelegramCallbackData(compactCallbackData)
-  ) {
-    return compactCallbackData;
   }
   return `${CALLBACK_PREFIX.opaqueModel}${hashOpaqueCallback("model", params.provider, params.model)}`;
 }

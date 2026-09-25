@@ -24,9 +24,8 @@ import {
 } from "../skills/library/selection.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
@@ -41,8 +40,9 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    for (const stateDir of temps.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -128,7 +128,7 @@ async function fixture(
   capability?.bind(admitted);
   const snapshot = options.managed
     ? {
-        ...buildSkillSnapshot(workspace, { entries: loadSkillLibrarySelection(pins) }),
+        ...(await buildSkillSnapshot(workspace, { entries: loadSkillLibrarySelection(pins) })),
         librarySelections: pins,
       }
     : undefined;
@@ -194,7 +194,8 @@ async function fixture(
         const request = await decodeClaudeCliNodeRunParams(frame.paramsJSON);
         let seq = 0;
         endpoint = createNodeDuplexEndpoint({
-          sendFrame: (text) => {
+          sendFrame: (payload) => {
+            const text = JSON.stringify(payload);
             expect(Buffer.byteLength(text)).toBeLessThanOrEqual(16 * 1024);
             progress(text, seq++);
           },

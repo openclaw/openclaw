@@ -2,14 +2,14 @@
  * Browser screenshot normalization helpers that bound screenshots for media
  * transport and model input.
  */
-import { toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
   resizeToJpeg,
-} from "../media/media-services.js";
+} from "openclaw/plugin-sdk/media-runtime";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
@@ -41,7 +41,7 @@ export async function normalizeBrowserScreenshot(
   const sideStart = maxDim > 0 ? Math.min(maxSide, maxDim) : maxSide;
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
-  let smallest: { buffer: Buffer; size: number } | null = null;
+  let smallestSize: number | undefined;
   let processorUnavailableError: unknown;
 
   for (const side of sideGrid) {
@@ -62,8 +62,8 @@ export async function normalizeBrowserScreenshot(
         throw err;
       }
 
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      if (smallestSize === undefined || out.byteLength < smallestSize) {
+        smallestSize = out.byteLength;
       }
 
       if (out.byteLength <= maxBytes) {
@@ -79,8 +79,8 @@ export async function normalizeBrowserScreenshot(
     throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
-  const best = smallest?.buffer ?? buffer;
+  const bestSize = smallestSize ?? buffer.byteLength;
   throw new Error(
-    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(best.byteLength / (1024 * 1024)).toFixed(2)}MB)`,
+    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(bestSize / (1024 * 1024)).toFixed(2)}MB)`,
   );
 }

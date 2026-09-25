@@ -6,11 +6,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
-import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import {
+  loadWorkspaceSkills,
+  readWorkspaceSkillSources,
+} from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveWorkspaceSkillSourcePlan } from "../../skills/loading/workspace-skill-sources.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import {
+  readSkillResourceFiles,
+  resolveExplicitSkillResource,
+} from "../../skills/runtime/resources.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
 import {
   createNodeCarrier,
@@ -52,7 +61,7 @@ async function createCarrier(kind = "ssh") {
     : { ...tunnel, workspace: await fs.realpath(temps.make("skill-resource-ssh-")) };
 }
 
-async function createSource() {
+async function createSource(binarySize = 150000) {
   const workspace = await fs.realpath(temps.make("remote-skill-source-"));
   const baseDir = path.join(workspace, "skills", "source");
   await fs.mkdir(path.join(baseDir, "scripts"), { recursive: true });
@@ -61,7 +70,7 @@ async function createSource() {
     filePath,
     "---\ndescription: Resource transfer test\n---\n# Resource\nRead data.bin and run scripts/check.sh.\n",
   );
-  const binary = Buffer.alloc(150000, 129);
+  const binary = Buffer.alloc(binarySize, 129);
   await fs.writeFile(path.join(baseDir, "data.bin"), binary);
   await fs.writeFile(path.join(baseDir, "scripts/check.sh"), "#!/bin/sh\nprintf ready\n", {
     mode: 0o700,
@@ -70,7 +79,7 @@ async function createSource() {
     workspace,
     filePath,
     binary,
-    snapshot: buildSkillSnapshot(workspace, {
+    snapshot: await buildSkillSnapshot(workspace, {
       entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
     }),
   };
@@ -81,7 +90,8 @@ async function expectRejectedResourceRequest(
   mutate: (input: string) => string,
   message = "Skill resource transfer failed",
 ) {
-  const { snapshot } = await createSource();
+  // Keep malformed field tests below the independent transport-size boundary.
+  const { snapshot } = await createSource(16);
   const transport = await createCarrier(carrier);
   let initializedRoot: string | undefined;
   let injected = false;
@@ -118,6 +128,113 @@ async function expectRejectedResourceRequest(
 }
 
 describe("remote-exec skill resources", () => {
+  it.each(["ssh", "node"])(
+    "transfers host bytes rather than stale Gateway bytes over %s",
+    async (kind) => {
+      const source = await createSource(16);
+      const hostRoot = temps.make("skill-resource-host-");
+      await fs.cp(source.workspace, hostRoot, { recursive: true });
+      const script = "#!/bin/sh\nprintf host-script\n";
+      await fs.writeFile(path.join(hostRoot, "skills/source/scripts/check.sh"), script);
+      const release = registerAgentWorkspaceAccess(source.workspace, {
+        bridge: {
+          readFile: async () => {
+            throw new Error("Document bridge must not read skill resources");
+          },
+          writeFile: async () => {
+            throw new Error("Unexpected write");
+          },
+          stat: async () => {
+            throw new Error("Unexpected stat");
+          },
+        },
+        loadSkills: async (request) =>
+          readWorkspaceSkillSources({
+            ...request,
+            sourcePlan: resolveWorkspaceSkillSourcePlan(hostRoot, { workspaceOnly: true }),
+          }),
+        skillResources: {
+          readInstructions: (filePath, options) =>
+            fs.readFile(path.join(hostRoot, path.relative(source.workspace, filePath)), {
+              ...options,
+              encoding: "utf8",
+            }),
+          resolveExplicitSkill: resolveExplicitSkillResource,
+          readSkillFiles: (skill, options) =>
+            readSkillResourceFiles(
+              {
+                ...skill,
+                baseDir: path.join(hostRoot, path.relative(source.workspace, skill.baseDir)),
+              },
+              options,
+            ),
+        },
+      });
+      const carrier = await createCarrier(kind);
+      let resources: Awaited<ReturnType<typeof transferSkillResources>>;
+      try {
+        resources = await transferSkillResources({
+          snapshot: source.snapshot,
+          workspaceDir: source.workspace,
+          remoteWorkspaceDir: carrier.workspace,
+          assertCurrent: () => {},
+          tunnel: carrier,
+        });
+        expect(
+          await fs.readFile(
+            path.join(resources!.mounts[0]!.containerPath, "scripts/check.sh"),
+            "utf8",
+          ),
+        ).toBe(script);
+      } finally {
+        await resources?.cleanup();
+        release();
+      }
+    },
+  );
+
+  it.each(["ssh", "node"])(
+    "batches small resources within the input budget over %s",
+    async (kind) => {
+      const { snapshot, filePath, binary } = await createSource();
+      const base = path.dirname(filePath);
+      const files = new Map<string, string>([["empty.txt", ""]]);
+      for (let index = 0; index < 20; index += 1) {
+        files.set(`nested/${index}/résumé.txt`, `resource ${index}\n`);
+      }
+      for (const [name, content] of files) {
+        await fs.mkdir(path.dirname(path.join(base, name)), { recursive: true });
+        await fs.writeFile(path.join(base, name), content);
+      }
+      const carrier = await createCarrier(kind);
+      let writes = 0;
+      const resources = await transferSkillResources({
+        snapshot,
+        remoteWorkspaceDir: carrier.workspace,
+        assertCurrent: () => {},
+        tunnel: {
+          runWorkspaceCommand: (command) => {
+            expect(Buffer.byteLength(command.input!)).toBeLessThanOrEqual(
+              NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES,
+            );
+            writes += Number(JSON.parse(command.input!).op === "write");
+            return carrier.runWorkspaceCommand(command);
+          },
+        },
+      });
+      try {
+        const remote = resources!.mounts[0]!.containerPath;
+        expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+        for (const [name, content] of files) {
+          expect(await fs.readFile(path.join(remote, name), "utf8")).toBe(content);
+        }
+        expect(writes).toBeLessThanOrEqual(3);
+      } finally {
+        await resources?.cleanup();
+      }
+    },
+  );
+
   it("rejects a valid-shaped init reply advertising a different allocation", async () => {
     const { snapshot } = await createSource();
     const carrier = await createNodeCarrier(temps.make("skill-resource-node-"));
@@ -220,10 +337,13 @@ describe("remote-exec skill resources", () => {
           sequence: 1,
           retain: [{ ...carrier.binding, manifestRefs: null }],
         };
-        await restarted.applyRetainSnapshot(retention, () => []);
+        await restarted.applyRetainSnapshot(retention, async () => []);
         expect((await fs.stat(allocated!)).isDirectory()).toBe(true);
         if (failure === "retired") {
-          await restarted.applyRetainSnapshot({ ...retention, sequence: 2, retain: [] }, () => []);
+          await restarted.applyRetainSnapshot(
+            { ...retention, sequence: 2, retain: [] },
+            async () => [],
+          );
           await expect(fs.stat(allocated!)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
           const next = await transferSkillResources({
@@ -610,6 +730,8 @@ describe("remote-exec skill resources", () => {
   );
 
   it.each([
+    { name: "empty batch", patch: { files: [] } },
+    { name: "invalid batch member", patch: { files: [null] } },
     { name: "forged directory", patch: { directory: "../outside" } },
     {
       name: "unallocated directory",
@@ -617,25 +739,33 @@ describe("remote-exec skill resources", () => {
     },
     { name: "wrong inode", patch: { identity: "0:0" } },
     { name: "absolute root input", patch: { root: "/tmp" } },
-    { name: "digest mismatch", patch: { hash: "0".repeat(64) } },
-    { name: "Windows alternate data stream", patch: { name: "0/data.bin:stream" } },
-    { name: "Windows trailing-space parent", patch: { name: "0/.. /marker" } },
-    { name: "Windows reserved device", patch: { name: "0/NUL" } },
-    { name: "Windows console input", patch: { name: "0/CONIN$" } },
-    { name: "Windows console output", patch: { name: "0/CONOUT$" } },
-    { name: "Windows superscript COM device", patch: { name: "0/COM¹.txt" } },
-    { name: "Windows superscript LPT device", patch: { name: "0/LPT³" } },
-  ])("rejects $name and cleans only the allocated resources", async ({ patch }) => {
-    await expectRejectedResourceRequest("node", (input) =>
-      JSON.stringify({ ...JSON.parse(input), ...patch }),
-    );
+    { name: "digest mismatch", target: "file", patch: { hash: "0".repeat(64) } },
+    { name: "Windows alternate data stream", target: "file", patch: { name: "0/data.bin:stream" } },
+    { name: "Windows trailing-space parent", target: "file", patch: { name: "0/.. /marker" } },
+    { name: "Windows reserved device", target: "file", patch: { name: "0/NUL" } },
+    { name: "Windows console input", target: "file", patch: { name: "0/CONIN$" } },
+    { name: "Windows console output", target: "file", patch: { name: "0/CONOUT$" } },
+    { name: "Windows superscript COM device", target: "file", patch: { name: "0/COM¹.txt" } },
+    { name: "Windows superscript LPT device", target: "file", patch: { name: "0/LPT³" } },
+  ])("rejects $name and cleans only the allocated resources", async ({ patch, target }) => {
+    await expectRejectedResourceRequest("node", (input) => {
+      const request = JSON.parse(input);
+      if (target === "file") {
+        request.files[0] = { ...request.files[0], ...patch };
+      } else {
+        Object.assign(request, patch);
+      }
+      return JSON.stringify(request);
+    });
   });
 
   it("rejects resource-relative traversal without writing outside its owned directory", async () => {
     const outside = await fs.realpath(temps.make("skill-resource-escape-"));
-    await expectRejectedResourceRequest("node", (input) =>
-      JSON.stringify({ ...JSON.parse(input), name: `../${path.basename(outside)}/marker` }),
-    );
+    await expectRejectedResourceRequest("node", (input) => {
+      const request = JSON.parse(input);
+      request.files[0].name = `../${path.basename(outside)}/marker`;
+      return JSON.stringify(request);
+    });
     expect(await fs.readdir(outside)).toEqual([]);
   });
 
@@ -722,7 +852,7 @@ describe("remote-exec skill resources", () => {
         path.join(staleBaseDir, "SKILL.md"),
         "---\ndescription: Stale resource\n---\n# Stale\n",
       );
-      const snapshot = buildSkillSnapshot(workspace, {
+      const snapshot = await buildSkillSnapshot(workspace, {
         entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
       });
       const sourceSkill = snapshot.resolvedSkills?.[0];
@@ -791,12 +921,19 @@ describe("remote-exec skill resources", () => {
     },
   );
 
-  it.each(["ssh", "node"])(
-    "cleans the accepted remote directory when cancellation arrives with initialization (%s)",
-    async (carrier) => {
+  it.each(
+    ["ssh", "node"].flatMap((carrier) =>
+      ["init", "write"].flatMap((phase) =>
+        ["abort", "authority"].map((revocation) => ({ carrier, phase, revocation })),
+      ),
+    ),
+  )(
+    "cleans the accepted remote directory when $revocation arrives with $phase ($carrier)",
+    async ({ carrier, phase, revocation }) => {
       const { snapshot } = await createSource();
       const transport = await createCarrier(carrier);
       const controller = new AbortController();
+      let runCurrent = true;
       let initializedRoot: string | undefined;
       try {
         await expect(
@@ -805,6 +942,11 @@ describe("remote-exec skill resources", () => {
             remoteWorkspaceDir: transport.workspace,
             signal: controller.signal,
             assertCurrent: () => {},
+            assertRunCurrent: () => {
+              if (!runCurrent) {
+                throw new DOMException("run authority closed", "AbortError");
+              }
+            },
             tunnel: {
               runWorkspaceCommand: async (command) => {
                 const result = await transport.runWorkspaceCommand(command);
@@ -813,7 +955,13 @@ describe("remote-exec skill resources", () => {
                     transport.workspace,
                     JSON.parse(command.input!).directory,
                   );
-                  controller.abort();
+                }
+                if (JSON.parse(command.input!).op === phase) {
+                  if (revocation === "abort") {
+                    controller.abort();
+                  } else {
+                    runCurrent = false;
+                  }
                 }
                 return result;
               },

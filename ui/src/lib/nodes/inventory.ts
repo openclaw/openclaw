@@ -6,6 +6,10 @@ import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/n
 // renders one row per machine instead of one row per historical keypair.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
@@ -41,6 +45,7 @@ type NodeListEntry = {
   nodeId: string;
   displayName?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   coreVersion?: string;
   uiVersion?: string;
@@ -69,6 +74,7 @@ export type DeviceInventoryEntry = {
   clientId?: string;
   clientMode?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   modelIdentifier?: string;
   remoteIp?: string;
@@ -97,15 +103,6 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "pending-reapproval",
   "unapproved",
 ]);
-
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
 
 function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
   if (!isRecord(value)) {
@@ -153,6 +150,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     nodeId,
     displayName: normalizeOptionalString(raw.displayName),
     platform: normalizeOptionalString(raw.platform),
+    deviceFamily: normalizeOptionalString(raw.deviceFamily),
     version: normalizeOptionalString(raw.version),
     coreVersion: normalizeOptionalString(raw.coreVersion),
     uiVersion: normalizeOptionalString(raw.uiVersion),
@@ -160,8 +158,8 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     clientId: normalizeOptionalString(raw.clientId),
     clientMode: normalizeOptionalString(raw.clientMode),
     remoteIp: normalizeOptionalString(raw.remoteIp),
-    caps: stringList(raw.caps),
-    commands: stringList(raw.commands),
+    caps: normalizeTrimmedStringList(raw.caps),
+    commands: normalizeTrimmedStringList(raw.commands),
     approvalState:
       approvalState && NODE_APPROVAL_STATES.has(approvalState)
         ? (approvalState as NodeApprovalState)
@@ -176,17 +174,6 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     lastSeenAtMs: optionalNumber(raw.lastSeenAtMs),
     approvedAtMs: optionalNumber(raw.approvedAtMs),
   };
-}
-
-function deviceRoles(device: PairedDevice): string[] {
-  const roles = new Set<string>();
-  for (const role of [...(device.roles ?? []), device.role]) {
-    const normalized = normalizeOptionalString(role);
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles];
 }
 
 function maxDefined(...values: Array<number | undefined>): number | undefined {
@@ -205,7 +192,9 @@ function buildEntry(
   node?: NodeListEntry,
   presence?: PresenceEntry,
 ): DeviceInventoryEntry {
-  const roles = device ? deviceRoles(device) : [];
+  const roles = device
+    ? normalizeUniqueTrimmedStringList([...(device.roles ?? []), device.role])
+    : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
     roles.push("node");
@@ -225,11 +214,15 @@ function buildEntry(
       normalizeOptionalString(presence?.platform) ??
       normalizeOptionalString(device?.platform) ??
       node?.platform,
+    deviceFamily:
+      normalizeOptionalString(presence?.deviceFamily) ??
+      normalizeOptionalString(device?.deviceFamily) ??
+      node?.deviceFamily,
     version: normalizeOptionalString(presence?.version) ?? node?.version,
     modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
-    scopes: stringList(device?.scopes),
+    scopes: normalizeTrimmedStringList(device?.scopes),
     // Server-computed device/node connectivity accounts for multiple live
     // connections sharing one device id; one disconnect beacon cannot.
     connected: node?.connected === true || device?.connected === true,

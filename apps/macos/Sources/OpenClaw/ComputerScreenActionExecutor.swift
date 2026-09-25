@@ -37,6 +37,8 @@ final class ComputerScreenActionExecutor {
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
     private var leftButtonDown = false
+    private var heldButtonScopeId: UUID?
+    private let defaultInputScopeId = UUID()
     /// Bounded watchdog that releases a stuck left button if the matching
     /// left_mouse_up never arrives (arm expiry, disconnect, or a failed turn).
     private var buttonReleaseTask: Task<Void, Never>?
@@ -75,12 +77,19 @@ final class ComputerScreenActionExecutor {
     }
 
     #if DEBUG
-    init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
+    convenience init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
+        self.init(mouseButtonEventPoster: mouseButtonEventPoster, textGraphemePoster: { try Self.postTextGrapheme($0) })
+    }
+
+    init(
+        mouseButtonEventPoster: @escaping MouseButtonEventPoster,
+        textGraphemePoster: @escaping TextGraphemePoster)
+    {
         self.automation = UIAutomationService()
         self.mouseButtonEventPoster = mouseButtonEventPoster
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
+        self.textGraphemePoster = textGraphemePoster
     }
 
     init(
@@ -105,6 +114,7 @@ final class ComputerScreenActionExecutor {
 
     func perform(
         _ params: OpenClawComputerActParams,
+        inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
         -> OpenClawComputerActResult
     {
@@ -114,6 +124,7 @@ final class ComputerScreenActionExecutor {
         try await self.dispatch(
             params,
             display: display,
+            inputScopeId: inputScopeId,
             checkExecutionAllowed: checkExecutionAllowed)
         try checkExecutionAllowed()
         return OpenClawComputerActResult(ok: true)
@@ -124,10 +135,16 @@ final class ComputerScreenActionExecutor {
     private func dispatch(
         _ params: OpenClawComputerActParams,
         display: ResolvedDisplay,
+        inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
         try checkExecutionAllowed()
         let modifiers = try ComputerModifiers.parse(params.modifiers)
+        if self.leftButtonDown, self.heldButtonScopeId != inputScopeId,
+           params.action == .leftMouseUp || params.action == .mouseMove
+        {
+            throw ComputerActionError.buttonAlreadyHeld
+        }
         try Self.validateHeldButtonTransition(action: params.action, leftButtonDown: self.leftButtonDown)
         switch params.action {
         case .leftClick, .rightClick, .doubleClick:
@@ -182,8 +199,7 @@ final class ComputerScreenActionExecutor {
                 self.automation.currentMouseLocation() ?? CGPoint.zero
             }
             if params.action == .leftMouseDown {
-                try self.rawMouseButton(down: true, at: point, flags: modifiers.flags)
-                self.setLeftButtonDown(true, flags: modifiers.flags)
+                try self.pressLeftButton(at: point, flags: modifiers.flags, inputScopeId: inputScopeId)
             } else {
                 // Release with the modifiers held since left_mouse_down (unioned
                 // with any the release turn resends) so modifier-held drops keep
@@ -366,10 +382,17 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Button-hold watchdog
 
-    private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = []) {
+    func pressLeftButton(at point: CGPoint, flags: CGEventFlags, inputScopeId: UUID) throws {
+        guard !self.leftButtonDown else { throw ComputerActionError.buttonAlreadyHeld }
+        try self.rawMouseButton(down: true, at: point, flags: flags)
+        self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
+    }
+
+    private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = [], inputScopeId: UUID? = nil) {
         self.buttonReleaseTask?.cancel()
         self.buttonReleaseTask = nil
         self.leftButtonDown = down
+        self.heldButtonScopeId = down ? inputScopeId ?? self.defaultInputScopeId : nil
         self.heldButtonFlags = down ? flags : []
         guard down else { return }
         self.armButtonWatchdog()
@@ -398,7 +421,8 @@ final class ComputerScreenActionExecutor {
     /// execution queue owns epoch changes so a reordered duplicate release cannot
     /// cancel a fresh action that already adopted the same epoch.
     @discardableResult
-    func releaseCurrentHeldButton() -> Bool {
+    func releaseCurrentHeldButton(inputScopeId: UUID? = nil) -> Bool {
+        if let inputScopeId, self.heldButtonScopeId != inputScopeId { return true }
         guard self.leftButtonDown else {
             self.buttonReleaseTask?.cancel()
             self.buttonReleaseTask = nil
@@ -442,8 +466,8 @@ final class ComputerScreenActionExecutor {
         self.buttonReleaseTask != nil
     }
 
-    func holdLeftButtonForTesting(flags: CGEventFlags) {
-        self.setLeftButtonDown(true, flags: flags)
+    func holdLeftButtonForTesting(flags: CGEventFlags, inputScopeId: UUID? = nil) {
+        self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
     }
 
     func fireButtonWatchdogForTesting() {

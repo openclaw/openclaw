@@ -1,0 +1,179 @@
+name: Node Runtime Conformance
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: &validation_paths
+      - ".github/workflows/node-runtime-conformance.yml"
+      - "crates/**"
+      - "packages/gateway-protocol/src/index.ts"
+      - "packages/gateway-protocol/src/schema/nodes.ts"
+      - "packages/gateway-protocol/src/validator-registry.ts"
+      - "src/gateway/node-command-policy.ts"
+      - "src/gateway/node-invoke-request.ts"
+      - "src/gateway/node-registry.ts"
+      - "src/infra/node-invoke-lifecycle-contract.test.ts"
+      - "src/infra/node-pairing-surface.ts"
+      - "src/infra/node-runtime-integration-contract.test.ts"
+      - "src/node-host/invoke-payload.ts"
+      - "test/fixtures/node-invoke-lifecycle-contract.json"
+      - "test/fixtures/node-runtime-integration-contract.json"
+      - ".github/actions/detect-scheduled-changes/**"
+      - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-pnpm-store-cache/**"
+      - "scripts/test-projects*"
+      - "scripts/run-vitest*"
+      - "scripts/lib/**"
+      - "test/vitest/**"
+      - "vitest*.ts"
+      - "tsconfig*.json"
+      - "node-version.mjs"
+      - ".npmrc"
+      - "pnpm-workspace.yaml"
+      - "patches/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "src/gateway/node-command-policy-mobile.ts"
+      - "src/infra/node-commands.ts"
+      - "packages/normalization-core/**"
+  pull_request:
+    paths: *validation_paths
+
+concurrency:
+  group: node-runtime-conformance-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  scope:
+    if: github.event_name == 'schedule' && github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.scope.outputs.changed }}
+    steps:
+      - name: Checkout scheduled admission
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions/detect-scheduled-changes
+          persist-credentials: false
+      - name: Detect scheduled input changes
+        id: scope
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: |
+            TypeScript contracts
+            Rust workspace
+          # Reuse is stricter than event admission: include transitive source and tool inputs.
+          paths: |
+            .github/workflows/node-runtime-conformance.yml
+            .github/actions/detect-scheduled-changes/**
+            .github/actions/setup-node-env/**
+            .github/actions/setup-pnpm-store-cache/**
+            .npmrc
+            .pnpmfile.*
+            pnpmfile.cjs
+            node-version.mjs
+            package.json
+            **/package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            patches/**
+            scripts/**
+            test/**
+            vitest*.ts
+            tsconfig*.json
+            src/**
+            packages/**
+            crates/**
+
+  typescript:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    name: TypeScript contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          dependency-cache: "true"
+          install-bun: "false"
+
+      - name: Test shared node contracts
+        run: >-
+          pnpm test
+          src/infra/node-invoke-lifecycle-contract.test.ts
+          src/infra/node-runtime-integration-contract.test.ts
+
+  rust:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    name: Rust workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: node-runtime-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            node-runtime-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo +1.93.0 fmt --manifest-path crates/Cargo.toml --all -- --check
+
+      - name: Run tests
+        run: cargo +1.93.0 test --manifest-path crates/Cargo.toml --workspace --locked --all-targets
+
+      - name: Run Clippy
+        run: >-
+          cargo +1.93.0 clippy
+          --manifest-path crates/Cargo.toml
+          --workspace
+          --locked
+          --all-targets
+          --
+          -D warnings
+
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: >-
+          cargo +1.93.0 doc
+          --manifest-path crates/Cargo.toml
+          --workspace
+          --locked
+          --no-deps

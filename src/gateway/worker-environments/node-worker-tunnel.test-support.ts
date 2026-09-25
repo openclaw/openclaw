@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -7,6 +8,7 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -19,6 +21,8 @@ export const BUILD = {
 
 export function environment(): WorkerEnvironmentRecord {
   return {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId: "environment-1",
     providerId: "device",
     profileId: "device:node-1",
@@ -46,6 +50,9 @@ export function environment(): WorkerEnvironmentRecord {
 
 export function transport(): NodeWorkerSupervisorTransport {
   return {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
       {
@@ -61,10 +68,25 @@ export function transport(): NodeWorkerSupervisorTransport {
       },
     ],
     isCurrent: () => true,
-    invoke: async ({ command }) =>
+    invoke: withWorkspaceDrain(async ({ command }) =>
       command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND
         ? { ok: true, payloadJSON: "null" }
         : { ok: false, error: { code: "UNAVAILABLE" } },
+    ),
+  };
+}
+
+export function withWorkspaceDrain(
+  invoke: NodeWorkerSupervisorTransport["invoke"],
+): NodeWorkerSupervisorTransport["invoke"] {
+  return async (request) => {
+    const input = request.params as { argv?: string[] } | undefined;
+    return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
+      ? {
+          ok: true,
+          payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
+        }
+      : await invoke(request);
   };
 }
 
@@ -97,4 +119,53 @@ export function workspaceCommandPayload(workspaceDir: string, result: Partial<Sp
     termination: "exit",
     ...result,
   });
+}
+
+export function manifestCaptureOutput(manifestRef: string): string {
+  return JSON.stringify({
+    version: 1,
+    manifestRef,
+    memo: [],
+    metrics: {
+      contentHashCount: 0,
+      contentHashDurationMs: 0,
+      memoHitCount: 0,
+      memoTruncatedCount: 0,
+      totalDurationMs: 0,
+    },
+  });
+}
+
+export function seedNodeWorkspaceRepositories(
+  localPath: string,
+  remoteWorkspaceDir: string,
+): string {
+  const git = (args: string[]) =>
+    execFileSync("git", args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    }).trim();
+  git(["init", "--quiet", localPath]);
+  git(["-C", localPath, "add", "."]);
+  git([
+    "-C",
+    localPath,
+    "-c",
+    "user.name=Memo Test",
+    "-c",
+    "user.email=memo@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  ]);
+  const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
+  git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
+  return baseCommit;
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements components registry behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -10,6 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   discordComponentRegistryState,
   type DiscordRegistryStore,
+  type PersistedDiscordRegistryEntry,
 } from "./components-registry-state.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
@@ -19,18 +19,6 @@ const PERSISTENT_COMPONENT_NAMESPACE = "discord.components";
 const PERSISTENT_MODAL_NAMESPACE = "discord.modals";
 const PERSISTENT_COMPONENT_MAX_ENTRIES = 500;
 const PERSISTENT_MODAL_MAX_ENTRIES = 500;
-type PersistedDiscordRegistryEntry<T extends { id: string }> = {
-  version: 1;
-  entry: T;
-};
-
-function getComponentEntries(): Map<string, DiscordComponentEntry> {
-  return discordComponentRegistryState.componentEntries;
-}
-
-function getModalEntries(): Map<string, DiscordModalEntry> {
-  return discordComponentRegistryState.modalEntries;
-}
 
 function formatRegistryError(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
@@ -183,24 +171,16 @@ function pruneUndefinedRegistryValues<T>(value: T): T {
   return result as T;
 }
 
-function registerEntries<
+function normalizeRegistryEntries<
   T extends { id: string; messageId?: string; createdAt?: number; expiresAt?: number },
->(
-  entries: T[],
-  store: Map<string, T>,
-  params: { now: number; ttlMs: number; messageId?: string },
-): T[] {
-  const normalizedEntries: T[] = [];
-  for (const entry of entries) {
-    const normalized = normalizeEntryTimestamps(
+>(entries: T[], params: { now: number; ttlMs: number; messageId?: string }): T[] {
+  return entries.map((entry) =>
+    normalizeEntryTimestamps(
       { ...entry, messageId: params.messageId ?? entry.messageId },
       params.now,
       params.ttlMs,
-    );
-    store.set(entry.id, normalized);
-    normalizedEntries.push(normalized);
-  }
-  return normalizedEntries;
+    ),
+  );
 }
 
 function resolveEntry<T extends { expiresAt?: number }>(
@@ -231,11 +211,11 @@ function readPersistedRegistryEntry<T extends { id: string }>(
   return persisted.entry;
 }
 
-function registerPersistentRegistryEntries<T extends { id: string }>(params: {
+async function registerPersistentRegistryEntries<T extends { id: string }>(params: {
   entries: T[];
   ttlMs: number;
   openStore: () => DiscordRegistryStore<T> | undefined;
-}): void {
+}): Promise<void> {
   if (params.entries.length === 0) {
     return;
   }
@@ -243,40 +223,54 @@ function registerPersistentRegistryEntries<T extends { id: string }>(params: {
   if (!store) {
     return;
   }
-  for (const entry of params.entries) {
-    const persistedEntry = pruneUndefinedRegistryValues(entry);
-    void store
-      .register(entry.id, { version: 1, entry: persistedEntry }, { ttlMs: params.ttlMs })
-      .catch(disablePersistentComponentRegistry);
-  }
+  await Promise.all(
+    params.entries.map(async (entry) => {
+      try {
+        const persistedEntry = pruneUndefinedRegistryValues(entry);
+        await store.register(
+          entry.id,
+          { version: 1, entry: persistedEntry },
+          { ttlMs: params.ttlMs },
+        );
+      } catch (error) {
+        disablePersistentComponentRegistry(error);
+      }
+    }),
+  );
 }
 
-function registerPersistentEntries(params: {
+async function registerPersistentEntries(params: {
   entries: DiscordComponentEntry[];
   modals: DiscordModalEntry[];
   ttlMs: number;
-}): void {
-  registerPersistentRegistryEntries({
-    entries: params.entries,
-    ttlMs: params.ttlMs,
-    openStore: getPersistentComponentStore,
-  });
-  registerPersistentRegistryEntries({
-    entries: params.modals,
-    ttlMs: params.ttlMs,
-    openStore: getPersistentModalStore,
-  });
+}): Promise<void> {
+  await Promise.all([
+    registerPersistentRegistryEntries({
+      entries: params.entries,
+      ttlMs: params.ttlMs,
+      openStore: getPersistentComponentStore,
+    }),
+    registerPersistentRegistryEntries({
+      entries: params.modals,
+      ttlMs: params.ttlMs,
+      openStore: getPersistentModalStore,
+    }),
+  ]);
 }
 
-function deletePersistentEntry<T extends { id: string }>(params: {
+async function deletePersistentEntry<T extends { id: string }>(params: {
   id: string;
   openStore: () => DiscordRegistryStore<T> | undefined;
-}): void {
+}): Promise<void> {
   const store = params.openStore();
   if (!store) {
     return;
   }
-  void store.delete(params.id).catch(disablePersistentComponentRegistry);
+  try {
+    await store.delete(params.id);
+  } catch (error) {
+    disablePersistentComponentRegistry(error);
+  }
 }
 
 function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] {
@@ -288,20 +282,20 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
 }
 
 function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {
-  const store = getComponentEntries();
+  const store = discordComponentRegistryState.componentEntries;
   for (const id of resolveComponentConsumptionIds(entry)) {
     store.delete(id);
   }
 }
 
-function deletePersistentComponentConsumptionGroup(entry: DiscordComponentEntry): void {
-  const store = getPersistentComponentStore();
-  if (!store) {
-    return;
-  }
-  for (const id of resolveComponentConsumptionIds(entry)) {
-    void store.delete(id).catch(disablePersistentComponentRegistry);
-  }
+async function deletePersistentComponentConsumptionGroup(
+  entry: DiscordComponentEntry,
+): Promise<void> {
+  await Promise.all(
+    resolveComponentConsumptionIds(entry).map((id) =>
+      deletePersistentEntry({ id, openStore: getPersistentComponentStore }),
+    ),
+  );
 }
 
 async function resolvePersistentRegistryEntry<T extends { id: string }>(params: {
@@ -328,23 +322,31 @@ export function registerDiscordComponentEntries(params: {
   modals: DiscordModalEntry[];
   ttlMs?: number;
   messageId?: string;
-}): void {
+}): Promise<void> {
   const now = Date.now();
   const ttlMs = params.ttlMs ?? DEFAULT_COMPONENT_TTL_MS;
-  const normalizedEntries = registerEntries(params.entries, getComponentEntries(), {
+  const normalizedEntries = normalizeRegistryEntries(params.entries, {
     now,
     ttlMs,
     messageId: params.messageId,
   });
-  const normalizedModals = registerEntries(params.modals, getModalEntries(), {
+  const normalizedModals = normalizeRegistryEntries(params.modals, {
     now,
     ttlMs,
     messageId: params.messageId,
   });
-  registerPersistentEntries({
-    entries: normalizedEntries,
-    modals: normalizedModals,
-    ttlMs,
+  return discordComponentRegistryState.withRegistryLock(async () => {
+    for (const entry of normalizedEntries) {
+      discordComponentRegistryState.componentEntries.set(entry.id, entry);
+    }
+    for (const entry of normalizedModals) {
+      discordComponentRegistryState.modalEntries.set(entry.id, entry);
+    }
+    await registerPersistentEntries({
+      entries: normalizedEntries,
+      modals: normalizedModals,
+      ttlMs,
+    });
   });
 }
 
@@ -352,7 +354,7 @@ function resolveDiscordComponentEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordComponentEntry | null {
-  const entry = resolveEntry(getComponentEntries(), params);
+  const entry = resolveEntry(discordComponentRegistryState.componentEntries, params);
   if (entry && params.consume !== false) {
     deleteComponentConsumptionGroup(entry);
   }
@@ -363,43 +365,42 @@ export async function resolveDiscordComponentEntryWithPersistence(params: {
   id: string;
   consume?: boolean;
 }): Promise<DiscordComponentEntry | null> {
-  const inMemory = resolveDiscordComponentEntry(params);
-  if (inMemory) {
-    if (params.consume !== false) {
-      deletePersistentComponentConsumptionGroup(inMemory);
+  // Group membership may only be known after lookup. Keep fallback reads behind
+  // the winning consume until every sibling's persistent deletion has settled.
+  return discordComponentRegistryState.withRegistryLock(async () => {
+    const inMemory = resolveDiscordComponentEntry(params);
+    if (inMemory) {
+      if (params.consume !== false) {
+        await deletePersistentComponentConsumptionGroup(inMemory);
+      }
+      return inMemory;
     }
-    return inMemory;
-  }
-  const persisted = await resolvePersistentRegistryEntry({
-    ...params,
-    openStore: getPersistentComponentStore,
+    const persisted = await resolvePersistentRegistryEntry({
+      ...params,
+      openStore: getPersistentComponentStore,
+    });
+    if (persisted && params.consume !== false) {
+      await deletePersistentComponentConsumptionGroup(persisted);
+    }
+    return persisted;
   });
-  if (persisted && params.consume !== false) {
-    deletePersistentComponentConsumptionGroup(persisted);
-  }
-  return persisted;
-}
-
-function resolveDiscordModalEntry(params: {
-  id: string;
-  consume?: boolean;
-}): DiscordModalEntry | null {
-  return resolveEntry(getModalEntries(), params);
 }
 
 export async function resolveDiscordModalEntryWithPersistence(params: {
   id: string;
   consume?: boolean;
 }): Promise<DiscordModalEntry | null> {
-  const inMemory = resolveDiscordModalEntry(params);
-  if (inMemory) {
-    if (params.consume !== false) {
-      deletePersistentEntry({ ...params, openStore: getPersistentModalStore });
+  return discordComponentRegistryState.withRegistryLock(async () => {
+    const inMemory = resolveEntry(discordComponentRegistryState.modalEntries, params);
+    if (inMemory) {
+      if (params.consume !== false) {
+        await deletePersistentEntry({ ...params, openStore: getPersistentModalStore });
+      }
+      return inMemory;
     }
-    return inMemory;
-  }
-  return await resolvePersistentRegistryEntry({
-    ...params,
-    openStore: getPersistentModalStore,
+    return await resolvePersistentRegistryEntry({
+      ...params,
+      openStore: getPersistentModalStore,
+    });
   });
 }

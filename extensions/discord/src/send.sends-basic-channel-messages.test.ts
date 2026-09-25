@@ -527,6 +527,69 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
+  it("sends a pre-sized fenced media tail once", async () => {
+    let messageCount = 0;
+    const loopback = await createDiscordLoopbackRest({
+      respond: (request) =>
+        request.method === "GET"
+          ? { id: "789", type: ChannelType.GuildText }
+          : { id: `message-${++messageCount}`, channel_id: "789" },
+    });
+    try {
+      const body = "abc ".repeat(14);
+      const onDeliveryResult = vi.fn();
+      const result = await sendMessageDiscord("channel:789", `\`\`\`txt\n${body}\n\`\`\``, {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+        maxLinesPerMessage: 2,
+        onDeliveryResult,
+      });
+      const requests = loopback.requests.filter((request) => request.method === "POST");
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(JSON.parse(requests[1]?.body ?? "{}").content).toBe(`\`\`\`txt\n${body}\n\`\`\``);
+      expect(result.messageId).toBe("message-1");
+      expect(result.receipt.platformMessageIds).toEqual(["message-1", "message-2"]);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual([
+        "message-1",
+        "message-2",
+      ]);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each(["delivery callback", "later text send"])(
+    "does not retry accepted media when its %s raises an upload error",
+    async (failure) => {
+      const { rest, postMock } = makeDiscordRest();
+      const error = Object.assign(new Error("upload-shaped follow-up failure"), {
+        status: 413,
+        code: 40005,
+      });
+      postMock.mockResolvedValueOnce({ id: "media-1", channel_id: "789" });
+      const onDeliveryResult = vi.fn();
+      if (failure === "delivery callback") {
+        onDeliveryResult.mockRejectedValue(error);
+      } else {
+        postMock.mockRejectedValueOnce(error);
+      }
+      await expect(
+        sendMessageDiscord("channel:789", "a".repeat(2500), {
+          rest,
+          token: "t",
+          cfg: DISCORD_TEST_CFG,
+          mediaUrl: "file:///tmp/photo.jpg",
+          onDeliveryResult,
+        }),
+      ).rejects.toBe(error);
+      expect(postMock).toHaveBeenCalledTimes(failure === "delivery callback" ? 1 : 2);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual(["media-1"]);
+    },
+  );
+
   it("rechecks delivery authority before media caption follow-up chunks", async () => {
     const loopback = await createDiscordLoopbackRest();
     try {
@@ -1014,6 +1077,104 @@ describe("sendMessageDiscord", () => {
     }
   });
 
+  it("reports thread send permission hints without requiring SendMessages", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    postMock.mockRejectedValueOnce(
+      Object.assign(new Error("Missing Permissions"), {
+        code: 50013,
+        status: 403,
+      }),
+    );
+    getMock
+      .mockResolvedValueOnce({ type: ChannelType.GuildPublicThread })
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPublicThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          {
+            id: "guild1",
+            permissions: PermissionFlagsBits.ViewChannel.toString(),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    let error: unknown;
+    try {
+      await sendMessageDiscord("channel:thread1", "hello", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toMatchObject({
+      missingPermissions: ["SendMessagesInThreads"],
+    });
+    expect(String(error)).not.toContain("ViewChannel/SendMessages/");
+  });
+
+  it.each([ChannelType.GuildVoice, ChannelType.GuildStageVoice])(
+    "reports message permissions for voice channel type %s",
+    async (channelType) => {
+      const { rest, postMock, getMock } = makeDiscordRest();
+      postMock.mockRejectedValueOnce(
+        Object.assign(new Error("Missing Permissions"), {
+          code: 50013,
+          status: 403,
+        }),
+      );
+      getMock
+        .mockResolvedValueOnce({ type: channelType })
+        .mockResolvedValueOnce({
+          id: "voice1",
+          guild_id: "guild1",
+          type: channelType,
+          permission_overwrites: [],
+        })
+        .mockResolvedValueOnce({ id: "bot1" })
+        .mockResolvedValueOnce({
+          id: "guild1",
+          roles: [
+            {
+              id: "guild1",
+              permissions: PermissionFlagsBits.ViewChannel.toString(),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ roles: [] });
+
+      let error: unknown;
+      try {
+        await sendMessageDiscord("channel:voice1", "hello", {
+          rest,
+          token: "t",
+          cfg: DISCORD_TEST_CFG,
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toMatchObject({
+        missingPermissions: ["SendMessages"],
+      });
+    },
+  );
+
   it("uploads media attachments", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
@@ -1326,15 +1487,13 @@ describe("reactMessageDiscord", () => {
     },
   ])("$name", async ({ emoji, encoded }) => {
     const { rest, putMock } = makeDiscordRest();
-    await reactMessageDiscord("chan1", "msg1", emoji, {
+    await reactMessageDiscord("chan1", "1", emoji, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
-    expect(putMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", encoded),
-    );
+    expect(putMock).toHaveBeenCalledWith(Routes.channelMessageOwnReaction("chan1", "1", encoded));
   });
 });
 
@@ -1345,14 +1504,14 @@ describe("removeReactionDiscord", () => {
 
   it("removes a unicode emoji reaction", async () => {
     const { rest, deleteMock } = makeDiscordRest();
-    await removeReactionDiscord("chan1", "msg1", "✅", {
+    await removeReactionDiscord("chan1", "1", "✅", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+      Routes.channelMessageOwnReaction("chan1", "1", "%E2%9C%85"),
     );
   });
 
@@ -1363,7 +1522,7 @@ describe("removeReactionDiscord", () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      removeReactionDiscord("chan1", "msg1", "✅", {
+      removeReactionDiscord("chan1", "1", "✅", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -1390,7 +1549,7 @@ describe("removeOwnReactionsDiscord", () => {
         { me: false, emoji: { name: "other_blob", id: "456" } },
       ],
     });
-    const res = await removeOwnReactionsDiscord("chan1", "msg1", {
+    const res = await removeOwnReactionsDiscord("chan1", "1", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -1398,10 +1557,10 @@ describe("removeOwnReactionsDiscord", () => {
     });
     expect(res).toEqual({ ok: true, removed: ["✅", "party_blob:123"] });
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+      Routes.channelMessageOwnReaction("chan1", "1", "%E2%9C%85"),
     );
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
+      Routes.channelMessageOwnReaction("chan1", "1", "party_blob%3A123"),
     );
     expect(deleteMock).toHaveBeenCalledTimes(2);
   });
@@ -1416,7 +1575,7 @@ describe("removeOwnReactionsDiscord", () => {
     });
 
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+      removeOwnReactionsDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
     ).resolves.toEqual({ ok: true, removed: [] });
     expect(deleteMock).not.toHaveBeenCalled();
   });
@@ -1431,7 +1590,7 @@ describe("removeOwnReactionsDiscord", () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", {
+      removeOwnReactionsDiscord("chan1", "1", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -1454,7 +1613,7 @@ describe("removeOwnReactionsDiscord", () => {
     deleteMock.mockResolvedValueOnce(undefined);
     deleteMock.mockRejectedValueOnce(apiError);
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+      removeOwnReactionsDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
     ).rejects.toThrow("Discord API 500");
     // Both deletions are still attempted; the rejection just propagates.
     expect(deleteMock).toHaveBeenCalledTimes(2);
@@ -1477,7 +1636,7 @@ describe("fetchReactionsDiscord", () => {
       })
       .mockResolvedValueOnce([{ id: "u1", username: "alpha", discriminator: "0001" }])
       .mockResolvedValueOnce([{ id: "u2", username: "beta" }]);
-    const res = await fetchReactionsDiscord("chan1", "msg1", {
+    const res = await fetchReactionsDiscord("chan1", "1", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -1513,7 +1672,7 @@ describe("fetchReactionsDiscord", () => {
     getMock.mockResolvedValueOnce(users);
 
     await expect(
-      fetchReactionsDiscord("chan1", "msg1", {
+      fetchReactionsDiscord("chan1", "1", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -1562,6 +1721,80 @@ describe("fetchChannelPermissionsDiscord", () => {
     expect(res.permissions).toContain("ViewChannel");
     expect(res.permissions).toContain("SendMessages");
     expect(res.isDm).toBe(false);
+  });
+
+  it.each([
+    { name: "public", type: ChannelType.GuildPublicThread },
+    { name: "private", type: ChannelType.GuildPrivateThread },
+  ])("uses parent channel overwrites for $name thread diagnostics", async ({ type }) => {
+    const { rest, getMock } = makeDiscordRest();
+    const granted = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads;
+    const denied = PermissionFlagsBits.ViewChannel;
+    const responses = new Map<string, unknown>([
+      [
+        Routes.channel("thread1"),
+        {
+          id: "thread1",
+          guild_id: "guild1",
+          parent_id: "parent1",
+          type,
+        },
+      ],
+      [
+        Routes.channel("parent1"),
+        {
+          id: "parent1",
+          guild_id: "guild1",
+          type: ChannelType.GuildText,
+          permission_overwrites: [
+            {
+              id: "guild1",
+              deny: denied.toString(),
+              allow: "0",
+            },
+          ],
+        },
+      ],
+      [Routes.user("@me"), { id: "bot1" }],
+      [
+        Routes.guild("guild1"),
+        {
+          id: "guild1",
+          roles: [{ id: "guild1", permissions: granted.toString() }],
+        },
+      ],
+      [Routes.guildMember("guild1", "bot1"), { roles: [] }],
+    ]);
+    getMock.mockImplementation(async (route: string) => {
+      if (!responses.has(route)) {
+        throw new Error(`unexpected Discord REST route: ${route}`);
+      }
+      return responses.get(route);
+    });
+
+    const res = await fetchChannelPermissionsDiscord("thread1", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(res).toMatchObject({
+      channelId: "thread1",
+      guildId: "guild1",
+      channelType: type,
+      isDm: false,
+      raw: PermissionFlagsBits.SendMessagesInThreads.toString(),
+    });
+    expect(res.permissions).not.toContain("ViewChannel");
+    expect(res.permissions).not.toContain("SendMessages");
+    expect(res.permissions).toContain("SendMessagesInThreads");
+    expect(getMock.mock.calls.map(([route]) => route)).toEqual([
+      Routes.channel("thread1"),
+      Routes.channel("parent1"),
+      Routes.user("@me"),
+      Routes.guild("guild1"),
+      Routes.guildMember("guild1", "bot1"),
+    ]);
   });
 
   it("stops permission lookup when the caller deadline aborts", async () => {
@@ -1815,19 +2048,19 @@ describe("edit/delete message helpers", () => {
     patchMock.mockResolvedValue({ id: "m1" });
     await editMessageDiscord(
       "chan1",
-      "m1",
+      "1",
       { content: "hello" },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "m1"));
+    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "1"));
     expect(requireRestBody(patchMock).content).toBe("hello");
   });
 
   it("deletes message", async () => {
     const { rest, deleteMock } = makeDiscordRest();
     deleteMock.mockResolvedValue({});
-    await deleteMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "m1"));
+    await deleteMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "1"));
   });
 });
 
@@ -1840,10 +2073,10 @@ describe("pin helpers", () => {
     const { rest, putMock, deleteMock } = makeDiscordRest();
     putMock.mockResolvedValue({});
     deleteMock.mockResolvedValue({});
-    await pinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    await unpinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
+    await pinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    await unpinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
   });
 });
 

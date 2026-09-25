@@ -11,6 +11,7 @@ import type {
   ReplacedSessionContext,
   TreePreparation,
 } from "./extensions/index.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { BranchSummaryEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
 
@@ -86,7 +87,8 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
     };
 
     // Set up abort controller for summarization
-    this.branchSummaryAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.branchSummaryAbortController = abortController;
 
     try {
       let extensionSummary: { summary: string; details?: unknown } | undefined;
@@ -97,7 +99,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         const result = await this.currentExtensionRunner.emit({
           type: "session_before_tree",
           preparation,
-          signal: this.branchSummaryAbortController.signal,
+          signal: abortController.signal,
         });
 
         if (result?.cancel) {
@@ -133,7 +135,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
             model,
             apiKey,
             headers,
-            signal: this.branchSummaryAbortController.signal,
+            signal: abortController.signal,
             customInstructions,
             replaceInstructions,
             reserveTokens: branchSummarySettings.reserveTokens,
@@ -176,39 +178,43 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         newLeafId = targetId;
       }
 
-      // Switch leaf (with or without summary)
-      // Summary is attached at the navigation target position (newLeafId), not the old branch
-      let summaryEntry: BranchSummaryEntry | undefined;
-      if (summaryText) {
-        // Create summary at target position (can be null for root)
-        const summaryId = this.sessionManager.branchWithSummary(
-          newLeafId,
-          summaryText,
-          summaryDetails,
-          fromExtension,
-        );
-        summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-
-        // Attach label to the summary entry
-        if (label) {
-          this.sessionManager.appendLabelChange(summaryId, label);
+      const navigation = await withSessionManagerWrite(this.sessionManager, () => {
+        if (
+          abortController.signal.aborted ||
+          this.branchSummaryAbortController !== abortController
+        ) {
+          return { cancelled: true, aborted: true } as const;
         }
-      } else if (newLeafId === null) {
-        // No summary, navigating to root - reset leaf
-        this.sessionManager.resetLeaf();
-      } else {
-        // No summary, navigating to non-root
-        this.sessionManager.branch(newLeafId);
+        // Summary and labels belong to the navigation target, not the old branch.
+        // Keep leaf publication synchronous with its admitted persistence.
+        let summaryEntry: BranchSummaryEntry | undefined;
+        if (summaryText) {
+          const summaryId = this.sessionManager.branchWithSummary(
+            newLeafId,
+            summaryText,
+            summaryDetails,
+            fromExtension,
+          );
+          summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
+          if (label) {
+            this.sessionManager.appendLabelChange(summaryId, label);
+          }
+        } else if (newLeafId === null) {
+          this.sessionManager.resetLeaf();
+        } else {
+          this.sessionManager.branch(newLeafId);
+        }
+        if (label && !summaryText) {
+          this.sessionManager.appendLabelChange(targetId, label);
+        }
+        const sessionContext = this.sessionManager.buildSessionContext();
+        this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+        return { cancelled: false, summaryEntry } as const;
+      });
+      if (navigation.cancelled) {
+        return navigation;
       }
-
-      // Attach label to target entry when not summarizing (no summary entry to label)
-      if (label && !summaryText) {
-        this.sessionManager.appendLabelChange(targetId, label);
-      }
-
-      // Update agent state
-      const sessionContext = this.sessionManager.buildSessionContext();
-      this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+      const { summaryEntry } = navigation;
 
       // Emit session_tree event
       await this.currentExtensionRunner.emit({
@@ -223,7 +229,9 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
 
       return { editorText, cancelled: false, summaryEntry };
     } finally {
-      this.branchSummaryAbortController = undefined;
+      if (this.branchSummaryAbortController === abortController) {
+        this.branchSummaryAbortController = undefined;
+      }
     }
   }
 

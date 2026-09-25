@@ -1,6 +1,5 @@
 // Grouped auth-choice prompt tests cover configured-provider setup affordances.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -20,8 +19,6 @@ vi.mock("./auth-choice-options.js", () => ({
   compareAuthChoiceGroups,
   isFeaturedAuthChoiceGroup,
 }));
-
-const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 function createPromptHarness(
   onSelect: (params: WizardSelectParams<unknown>) => Promise<unknown>,
@@ -128,7 +125,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowKeepCurrentProvider: true,
       config: {
@@ -182,7 +178,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowKeepCurrentProvider: true,
       config: {
@@ -274,7 +269,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowedChoices: new Set([
         "openai",
@@ -341,7 +335,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       additionalGroups: [
         {
@@ -380,7 +373,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: false,
       additionalGroups: [
         {
@@ -411,7 +403,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       detectedProviderIds: new Set(["ollama"]),
     });
@@ -422,4 +413,47 @@ describe("promptAuthChoiceGrouped", () => {
       hint: undefined,
     });
   });
+
+  it.each([
+    {
+      featured: true,
+      answers: ["__more", "missing", "minimax", "__back", "__back", "skip"],
+      searchable: [undefined, true, true, undefined, true, undefined],
+      notes: 0,
+    },
+    {
+      featured: false,
+      answers: ["minimax", "__back", "missing", "skip"],
+      searchable: [true, undefined, true, true],
+      notes: 1,
+    },
+  ])(
+    "keeps method Back on its provider page and returns More to the root (featured=$featured)",
+    async ({ featured, answers, searchable, notes }) => {
+      buildAuthChoiceGroups.mockReturnValue({
+        groups: [
+          ...(featured ? [openAIGroup()] : []),
+          authChoiceGroup("minimax", "MiniMax", [
+            ["minimax-global-api", "Global API key"],
+            ["minimax-cn-api", "CN API key"],
+          ]),
+        ],
+        skipOption: { value: "skip", label: "Skip for now" },
+      });
+      const prompts: WizardSelectParams<unknown>[] = [];
+      const prompter = createPromptHarness(async (params) => {
+        prompts.push(params);
+        const answer = answers[prompts.length - 1];
+        if (!answer) {
+          throw new Error("Unexpected additional provider prompt");
+        }
+        return answer;
+      });
+
+      expect(await promptAuthChoiceGrouped({ prompter, includeSkip: true })).toBe("skip");
+      expect(prompts.map((prompt) => prompt.searchable)).toEqual(searchable);
+      expect(prompter.note).toHaveBeenCalledTimes(notes);
+      expect(prompts.at(-1)?.options.at(-1)?.value).toBe("skip");
+    },
+  );
 });

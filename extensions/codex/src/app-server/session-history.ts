@@ -1,13 +1,6 @@
-/** Reads model context separately from full-fidelity Codex mirror evidence. */
-import fs from "node:fs/promises";
+/** Reads bounded model context from the Codex transcript mirror. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
-import {
-  buildSessionContext,
-  migrateSessionEntries,
-  parseSessionEntries,
-  SessionManager,
-} from "openclaw/plugin-sdk/agent-sessions";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   getSessionEntry,
   parseSqliteSessionFileMarker,
@@ -18,10 +11,12 @@ import type {
   TranscriptTurnAdmission,
   SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
+import {
+  consumeCodexHistory,
+  readCodexNativeHistory,
+  type ResolvedCodexHistoryTarget,
+} from "./session-history-read.js";
 
-type CodexHistoryView = "native-evidence" | "model-context";
 export type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
@@ -30,133 +25,109 @@ export type CodexMirroredSessionHistoryTarget = {
   sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
 
-/** Returns sanitized session-context messages for consumers that need an owned array. */
-export async function readCodexMirroredSessionHistoryMessages(
+export function resolveCodexHistoryTarget(
   target: CodexMirroredSessionHistoryTarget,
   admission?: TranscriptTurnAdmission,
-  view: CodexHistoryView = "native-evidence",
-): Promise<AgentMessage[] | undefined> {
-  return readCodexMirroredSessionHistory(
-    target,
-    (messages) => Array.from(messages),
-    admission,
-    view,
-  );
-}
-
-/** The synchronous consumer can reject before further SQLite message payloads are acquired. */
-export async function readCodexMirroredSessionHistory<T>(
-  target: CodexMirroredSessionHistoryTarget,
-  read: (messages: Iterable<AgentMessage>) => T,
-  admission?: TranscriptTurnAdmission,
-  view: CodexHistoryView = "native-evidence",
-): Promise<T | undefined> {
-  const consume = (
-    messages: Iterable<AgentMessage>,
-    header: unknown,
-    imageLabel = "codex mirrored history",
-  ): T | undefined => {
-    // Foreign or absent headers are empty history; malformed session headers are read failures.
-    if (!isRecord(header) || header.type !== "session") {
-      return read([]);
+): ResolvedCodexHistoryTarget {
+  if (target.sessionTarget) {
+    const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
+    if (
+      !agentId ||
+      !sessionId ||
+      !sessionKey ||
+      !storePath ||
+      sessionId !== target.sessionId ||
+      (target.agentId !== undefined && agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && sessionKey !== target.sessionKey)
+    ) {
+      return { kind: "empty" };
     }
-    if (typeof header.id !== "string") {
-      return undefined;
+    return { kind: "sqlite", target: { agentId, sessionId, sessionKey, storePath } };
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
+  if (sqliteMarker) {
+    if (
+      sqliteMarker.sessionId !== target.sessionId ||
+      (target.agentId !== undefined && sqliteMarker.agentId !== target.agentId)
+    ) {
+      return { kind: "empty" };
     }
-    if (header.id !== target.sessionId) {
-      return read([]);
-    }
-    return read(
-      (function* () {
-        for (const message of messages) {
-          yield sanitizeCodexHistoryImagePayloads(message, imageLabel);
+    const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
+    return sessionKey
+      ? {
+          kind: "sqlite",
+          target: {
+            agentId: sqliteMarker.agentId,
+            sessionId: sqliteMarker.sessionId,
+            sessionKey,
+            storePath: sqliteMarker.storePath,
+          },
         }
-      })(),
-    );
-  };
-  const readTarget = (
-    transcriptTarget: Required<
-      Pick<SessionTranscriptTargetParams, "agentId" | "sessionId" | "sessionKey" | "storePath">
-    >,
-  ) => {
-    if (view === "native-evidence") {
-      return SessionManager.readSessionContext(transcriptTarget, consume, { admission });
+      : { kind: "empty" };
+  }
+  if (admission) {
+    if (
+      admission.sessionId !== target.sessionId ||
+      (target.agentId !== undefined && admission.agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && admission.sessionKey !== target.sessionKey)
+    ) {
+      return { kind: "empty" };
     }
-    const loaded = SessionManager.openModelContext(transcriptTarget, { admission });
-    return consume(
-      loaded.buildSessionContext().messages,
-      loaded.getHeader(),
-      "codex mirrored model context",
-    );
-  };
-  try {
-    if (target.sessionTarget) {
-      const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
-      if (
-        !agentId ||
-        !sessionId ||
-        !sessionKey ||
-        !storePath ||
-        sessionId !== target.sessionId ||
-        (target.agentId !== undefined && agentId !== target.agentId) ||
-        (target.sessionKey !== undefined && sessionKey !== target.sessionKey)
-      ) {
-        return read([]);
-      }
-      return readTarget({ agentId, sessionId, sessionKey, storePath });
-    }
-    const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
-    if (sqliteMarker) {
-      if (
-        sqliteMarker.sessionId !== target.sessionId ||
-        (target.agentId !== undefined && sqliteMarker.agentId !== target.agentId)
-      ) {
-        return read([]);
-      }
-      const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
-      if (!sessionKey) {
-        return read([]);
-      }
-      return readTarget({
-        agentId: sqliteMarker.agentId,
-        sessionId: sqliteMarker.sessionId,
-        sessionKey,
-        storePath: sqliteMarker.storePath,
-      });
-    }
-    if (admission) {
-      if (
-        admission.sessionId !== target.sessionId ||
-        (target.agentId !== undefined && admission.agentId !== target.agentId) ||
-        (target.sessionKey !== undefined && admission.sessionKey !== target.sessionKey)
-      ) {
-        return read([]);
-      }
-      return readTarget({
+    return {
+      kind: "sqlite",
+      target: {
         agentId: admission.agentId,
         sessionId: admission.sessionId,
         sessionKey: admission.sessionKey,
         storePath: admission.storePath,
+      },
+    };
+  }
+  return { kind: "file", sessionFile: target.sessionFile };
+}
+
+/** Returns sanitized session-context messages for consumers that need an owned array. */
+export async function readCodexMirroredSessionHistoryMessages(
+  target: CodexMirroredSessionHistoryTarget,
+  admission?: TranscriptTurnAdmission,
+  signal?: AbortSignal,
+  contextTokenBudget?: number,
+): Promise<AgentMessage[] | undefined> {
+  signal?.throwIfAborted();
+  try {
+    let result: AgentMessage[] | undefined;
+    const resolved = resolveCodexHistoryTarget(target, admission);
+    const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
+    if (resolved.kind === "sqlite") {
+      const loaded = await SessionManager.openModelContextAsync(resolved.target, {
+        admission,
+        signal,
+        limits: {
+          maxBytes: Math.min(
+            64 * 1024 * 1024,
+            Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
+          ),
+          maxEvents: 10_000,
+          toolResultOverflow: "omit",
+        },
       });
+      result = consumeCodexHistory(
+        loaded.buildSessionContext().messages,
+        loaded.getHeader(),
+        target.sessionId,
+        read,
+        "codex mirrored model context",
+      );
+    } else {
+      const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+      result = history.status === "ok" ? history.value : undefined;
     }
-    // File-only callers retain the legacy import codec; runtime identities never read this path.
-    const entries = parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8"));
-    return consume(
-      (function* () {
-        migrateSessionEntries(entries);
-        const sessionEntries = entries.filter(
-          (entry): entry is SessionEntry => isRecord(entry) && entry.type !== "session",
-        );
-        yield* buildSessionContext(sessionEntries).messages;
-      })(),
-      entries[0],
-    );
+    signal?.throwIfAborted();
+    return result;
   } catch (error) {
-    // A new session can be read before its transcript exists; other failures still warn.
-    if (isRecord(error) && error.code === "ENOENT") {
-      return read([]);
-    }
-    return undefined;
+    signal?.throwIfAborted();
+    // A rejected bounded read is not an empty transcript: preserve the existing session.
+    throw error;
   }
 }
 

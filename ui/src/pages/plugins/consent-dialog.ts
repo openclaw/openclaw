@@ -5,26 +5,31 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import {
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
   PluginInspectSource,
-  PluginInstallRequest,
   PluginOperatorGrants,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+
+registerPluginManagementEnglish();
 
 registerPluginConsentEnglish();
 
-export type PluginConsentIntent =
-  | { kind: "install"; request: PluginInstallRequest; installIdentity: string }
-  | { kind: "enable"; pluginId: string; rowKey: string };
+export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -59,47 +64,47 @@ export function renderArtTile(
   iconUrl?: string,
   onIconError?: () => void,
   className = "plugins-tile",
+  authorIconUrl?: string,
 ): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class=${className}>
-      <img src=${art} alt="" loading="lazy" decoding="async" />
+  const renderTile = (url: string | null, onError: () => void) => {
+    if (url) {
+      return html`<span class=${className} data-plugin-icon-id=${slug}>
+        <img
+          class="plugins-icon"
+          src=${url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          @error=${() => {
+            onError();
+            onIconError?.();
+          }}
+        />
+      </span>`;
+    }
+    const [from, to] = pluginFallbackGradient(slug);
+    const monogram = pluginMonogram(name);
+    return html`<span
+      class=${`${className} ${className}--fallback`}
+      data-plugin-icon-id=${slug}
+      style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
+      aria-hidden="true"
+    >
+      ${monogram ? html`<span>${monogram}</span>` : icons.plug}
     </span>`;
-  }
-  if (iconUrl) {
-    return html`<span class=${className}>
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class=${`${className} ${className}--fallback`}
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
+  };
+  return html`${imageWithFallback(iconUrl, (url, onError) =>
+    url ? renderTile(url, onError) : html`${imageWithFallback(authorIconUrl, renderTile)}`,
+  )}`;
 }
 
-export function renderPluginMetaRow(
-  label: string,
-  value: TemplateResult | string,
-  warning = false,
-) {
-  return html`
-    <div class="plugins-detail__meta-row ${warning ? "plugins-consent__row--warning" : ""}">
-      <span class="plugins-detail__meta-label">${label}</span>
-      <span class="plugins-detail__meta-value">${value}</span>
-    </div>
-  `;
+function renderPluginMetaRow(label: string, value: TemplateResult | string, warning = false) {
+  return renderSettingsRow({
+    title: label,
+    control: html`<span class=${warning ? "plugins-consent__row--warning" : ""}>${value}</span>`,
+    stackedOnNarrow: true,
+    carapace: true,
+  });
 }
 
 function renderCapabilityItems(items: readonly string[]) {
@@ -134,33 +139,18 @@ function renderCapabilityRows(surface: Partial<PluginDeclaredSurface>, widened =
   });
 }
 
-export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): TemplateResult {
+function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): TemplateResult {
   const rows = renderCapabilityRows(declared);
-  return html`
-    <section class="plugins-consent__section">
-      <h3>${t("pluginConsent.declaredTitle")}</h3>
-      <p class="plugins-consent__description">${t("pluginConsent.declaredDescription")}</p>
-      ${
-        rows.length > 0
-          ? html`<div class="plugins-consent__rows">${rows}</div>`
-          : html`<p class="plugins-consent__hint">${t("pluginConsent.declaredEmpty")}</p>`
-      }
-      ${
-        declared.hooks.length === 0
-          ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
-          : nothing
-      }
-      ${
-        declared.dangerousConfigFlags.length > 0
-          ? renderPluginMetaRow(
-              t("pluginConsent.dangerousFlags"),
-              renderCapabilityItems(declared.dangerousConfigFlags),
-              true,
-            )
-          : nothing
-      }
-    </section>
-  `;
+  return renderSettingsSection(
+    {
+      title: t("pluginConsent.declaredTitle"),
+      description: t("pluginConsent.declaredDescription"),
+      carapace: true,
+    },
+    html`${rows.length ? rows : renderSettingsRow({ title: t("pluginConsent.declaredEmpty"), carapace: true })}
+    ${declared.hooks.length === 0 ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks")) : nothing}
+    ${declared.dangerousConfigFlags.length > 0 ? renderPluginMetaRow(t("pluginConsent.dangerousFlags"), renderCapabilityItems(declared.dangerousConfigFlags), true) : nothing}`,
+  );
 }
 
 function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
@@ -172,7 +162,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
     return nothing;
   }
   return html`
-    <section class="plugins-consent__section">
+    <section class="plugins-consent__section oc-section">
       <h3>${t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
         ${t("pluginConsent.widenedDescription")}
@@ -222,55 +212,51 @@ function modelOverrideSummary(
   return values.filter(Boolean).join(" · ") || t("pluginConsent.noOverrides");
 }
 
-export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): TemplateResult {
+function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): TemplateResult {
   const conversation = grants.hooks.allowConversationAccess;
-  return html`
-    <section class="plugins-consent__section">
-      <h3>${t("pluginConsent.grantsTitle")}</h3>
-      <p class="plugins-consent__description">${t("pluginConsent.grantsDescription")}</p>
-      <div class="plugins-consent__rows">
-        ${renderPluginMetaRow(
-          t("pluginConsent.promptInjection"),
-          grantValue(
-            grants.hooks.allowPromptInjection,
-            "pluginConsent.allowed",
-            "pluginConsent.blocked",
-          ),
-        )}
-        ${renderPluginMetaRow(
-          t("pluginConsent.conversationAccess"),
-          html`
-            ${grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
-            ${
-              !conversation.effective &&
-              conversation.configured === undefined &&
-              origin !== "bundled"
-                ? html`<span class="plugins-consent__hint">
-                    ${t("pluginConsent.externalAccessHint")}
-                  </span>`
-                : nothing
-            }
-          `,
-        )}
-        ${
-          grants.llm
-            ? renderPluginMetaRow(
-                t("pluginConsent.modelOverrides"),
-                modelOverrideSummary(grants.llm),
-              )
-            : nothing
-        }
-        ${
-          grants.subagent
-            ? renderPluginMetaRow(
-                t("pluginConsent.subagentModelOverrides"),
-                modelOverrideSummary(grants.subagent),
-              )
-            : nothing
-        }
-      </div>
-    </section>
-  `;
+  return renderSettingsSection(
+    {
+      title: t("pluginConsent.grantsTitle"),
+      description: t("pluginConsent.grantsDescription"),
+      carapace: true,
+    },
+    html`
+      ${renderPluginMetaRow(
+        t("pluginConsent.promptInjection"),
+        grantValue(
+          grants.hooks.allowPromptInjection,
+          "pluginConsent.allowed",
+          "pluginConsent.blocked",
+        ),
+      )}
+      ${renderPluginMetaRow(
+        t("pluginConsent.conversationAccess"),
+        html`
+          ${grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
+          ${
+            !conversation.effective && conversation.configured === undefined && origin !== "bundled"
+              ? html`<span class="plugins-consent__hint">
+                  ${t("pluginConsent.externalAccessHint")}
+                </span>`
+              : nothing
+          }
+        `,
+      )}
+      ${
+        grants.llm
+          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
+          : nothing
+      }
+      ${
+        grants.subagent
+          ? renderPluginMetaRow(
+              t("pluginConsent.subagentModelOverrides"),
+              modelOverrideSummary(grants.subagent),
+            )
+          : nothing
+      }
+    `,
+  );
 }
 
 const SOURCE_KIND_LABELS = {
@@ -292,9 +278,9 @@ const PLUGIN_ORIGIN_LABELS: Readonly<Record<string, string>> = {
   official: "pluginsPage.official",
 };
 
-export function pluginOriginLabel(origin: string, official?: boolean): string;
-export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
-export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
+function pluginOriginLabel(origin: string, official?: boolean): string;
+function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
+function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
   if (official) {
     return t("pluginsPage.official");
   }
@@ -303,10 +289,6 @@ export function pluginOriginLabel(origin: string | undefined, official?: boolean
       ? PLUGIN_ORIGIN_LABELS[origin]
       : undefined;
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
-}
-
-export function pluginVerificationLabel(tier: string): string {
-  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
 }
 
 function renderProvenance(source: PluginInspectSource | undefined) {
@@ -359,7 +341,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
     trust.disposition === "clean" ? "ok" : trust.disposition === "blocked" ? "danger" : "warn";
   return html`
     <section class="plugins-consent__trust">
-      ${renderSettingsStatus({ kind, label })}
+      ${renderSettingsStatus({ kind, label, carapace: true })}
       ${
         trust.reasons?.length
           ? html`<ul>
@@ -383,30 +365,19 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
   const details = consent.details;
   const plugin = inspection?.plugin;
   const fallback = consent.fallback;
-  const packageName =
-    inspection?.source?.packageName ??
-    (consent.intent.kind === "install" && consent.intent.request.source === "clawhub"
-      ? consent.intent.request.packageName
-      : null);
+  const packageName = inspection?.source?.packageName;
   const slug = consent.pluginId ?? packageName ?? fallback?.name ?? "plugin";
   const name = plugin?.name ?? fallback?.name ?? slug;
   const version = plugin?.version ?? fallback?.version;
   const origin = pluginOriginLabel(plugin?.origin, fallback?.official);
   const meta = [origin, packageName].filter(Boolean).join(" · ");
-  const action =
-    consent.intent.kind === "install"
-      ? props.busy
-        ? t("pluginsPage.installing")
-        : t("pluginsPage.installNamed", { name })
-      : props.busy
-        ? t("pluginsPage.working")
-        : t("pluginConsent.enableNamed", { name });
+  const action = props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =
     !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
   const confirm = html`
     <button
       type="button"
-      class="btn primary"
+      class="btn primary oc-action oc-action-primary"
       ?disabled=${confirmUnavailable && !props.mutationBlockedReason}
       aria-disabled=${!props.canMutate ? "true" : nothing}
       @click=${() => {
@@ -425,7 +396,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
       style="--openclaw-modal-width: min(560px, calc(100vw - 32px));"
       @modal-cancel=${props.onCancel}
     >
-      <section class="plugins-consent" data-plugin-consent=${consent.intent.kind}>
+      <section class="plugins-consent oc-card" data-plugin-consent=${consent.intent.kind}>
         <header class="plugins-consent__header">
           ${renderArtTile(slug, name, props.iconUrl)}
           <div>
@@ -442,7 +413,11 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
             : props.error
               ? html`<div class="plugins-consent__error" role="alert">
                   <span>${props.error}</span>
-                  <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+                  <button
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    @click=${props.onRetry}
+                  >
                     ${t("pluginsPage.tryAgain")}
                   </button>
                 </div>`
@@ -456,7 +431,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
                 : html`<p class="plugins-consent__description">${t("pluginConsent.fallback")}</p>`
         }
         <footer class="plugins-consent__actions">
-          <button type="button" class="btn" @click=${props.onCancel}>
+          <button type="button" class="btn oc-action oc-action-secondary" @click=${props.onCancel}>
             ${t("pluginsPage.cancel")}
           </button>
           ${renderReasonedDisabledControl(props.mutationBlockedReason, confirm)}

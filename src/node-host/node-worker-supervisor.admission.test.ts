@@ -9,7 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
 import { createNodeWorkerLaunchAdapter } from "../gateway/worker-environments/node-launch-adapter.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   parseNodeWorkerLaunchInput,
   projectNodeWorkerSupervisorReceipt,
@@ -21,8 +24,13 @@ import {
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(closeOpenClawStateDatabaseForTest);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("node worker admission re-arm journal", () => {
   it("retains each child's reason and replays the same attempts after supervisor restart", async () => {
@@ -32,6 +40,9 @@ describe("node worker admission re-arm journal", () => {
     const transport: NodeWorkerSupervisorTransport = {
       isCurrent: () => true,
       hasCurrentRunner: () => true,
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
       listCurrentNodes: async () => [
         {
           nodeId: "node-1",
@@ -44,6 +55,7 @@ describe("node worker admission re-arm journal", () => {
           workerHost: {
             enabled: true,
             environmentSession: 1,
+            capturedExecPolicy: true,
             capacity: { total: 1, available: 1 },
           },
           commands: [],

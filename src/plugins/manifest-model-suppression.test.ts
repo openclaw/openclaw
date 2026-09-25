@@ -5,6 +5,8 @@ import {
   normalizeModelCatalogProviderRows,
 } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { projectModelProviderConfig } from "../config/model-provider-config.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -91,26 +93,60 @@ describe("manifest model suppression", () => {
   });
 
   describe("buildManifestBuiltInModelSuppressionResolver", () => {
-    it("reads planned manifest suppressions once per resolver creation", () => {
-      const config = { plugins: { entries: { openai: { enabled: true } } } };
+    it("traverses plugin policy once per compilation while preserving owner restrictions", () => {
+      const ids = Array.from({ length: 8 }, (_, index) => `fixture-${index}`);
+      let enumerations = 0;
+      const entries = new Proxy(
+        Object.fromEntries(ids.map((id) => [id, { enabled: id !== "fixture-1" }])),
+        {
+          ownKeys(target) {
+            enumerations += 1;
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
+      const config = {
+        plugins: {
+          entries,
+          allow: ids.filter((id) => id !== "fixture-7"),
+          deny: ["fixture-2"],
+        },
+      };
+      mocks.loadPluginMetadataSnapshot.mockReturnValue(
+        createMetadataSnapshot(
+          ids.map((id) => ({
+            id,
+            providers: [id],
+            modelCatalog: { suppressions: [{ provider: id, model: "retired" }] },
+          })),
+        ),
+      );
+      const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
 
-      const resolver = buildManifestBuiltInModelSuppressionResolver({
-        config,
-        env: process.env,
-      });
-
+      expect(ids.map((provider) => Boolean(resolver({ provider, id: "retired" })))).toEqual([
+        true,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+      ]);
       expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+      expect(enumerations).toBe(1);
+      expect(buildManifestBuiltInModelSuppressionResolver({ config })).toBe(resolver);
+      expect(enumerations).toBe(1);
 
-      resolver({
-        provider: "azure-openai-responses",
-        id: "gpt-5.3-codex-spark",
+      const changedConfig = {
+        plugins: { ...config.plugins, deny: ["fixture-2", "fixture-4"] },
+      };
+      const changedResolver = buildManifestBuiltInModelSuppressionResolver({
+        config: changedConfig,
       });
-      resolver({
-        provider: "azure-openai-responses",
-        id: "gpt-5.3-codex-spark",
-      });
-
-      expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+      expect(changedResolver({ provider: "fixture-4", id: "retired" })).toBeUndefined();
+      expect(resolver({ provider: "fixture-4", id: "retired" })?.suppress).toBe(true);
+      expect(enumerations).toBe(2);
     });
   });
 
@@ -140,6 +176,125 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
+  it("preserves ordered same-model rules and current route conditions", () => {
+    const config = {
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions" as const,
+            baseUrl: "https://first.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "z-fallback",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [{ provider: "fixture", model: "model", reason: "Fallback." }],
+          },
+        },
+        {
+          id: "a-conditional",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "First route.",
+                when: {
+                  baseUrlHosts: ["FIRST.EXAMPLE.", "shared.example"],
+                  providerConfigApiIn: ["OPENAI-COMPLETIONS"],
+                },
+              },
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "Second route.",
+                retirement: { replacedBy: "successor" },
+                when: { baseUrlHosts: ["second.example", "shared.example"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "fixture", id: "model" };
+
+    expect(resolver({ ...input, baseUrl: "https://shared.example/v1" })).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. First route.",
+    });
+    expect(resolver({ ...input, baseUrl: "https://second.example/v1" })).toMatchObject({
+      retirement: { replacedBy: "successor" },
+    });
+    for (const baseUrl of ["https://other.example/v1", "invalid endpoint"]) {
+      expect(resolver({ ...input, baseUrl })?.errorMessage).toBe(
+        "Unknown model: fixture/model. Fallback.",
+      );
+    }
+    expect(
+      resolver({ ...input, baseUrl: "https://shared.example/v1", unconditionalOnly: true })
+        ?.errorMessage,
+    ).toBe("Unknown model: fixture/model. Fallback.");
+    expect(resolver(input)?.errorMessage).toBe("Unknown model: fixture/model. First route.");
+    config.models.providers.fixture.baseUrl = "https://second.example/v1";
+    expect(resolver(input)).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. Fallback.",
+    });
+  });
+
+  it.each([undefined, "current-model"])(
+    "preserves explicit retirement and successor %s only on the selected endpoint",
+    (replacedBy) => {
+      const modelCatalog = normalizeModelCatalog(
+        {
+          suppressions: [
+            {
+              provider: "fixture",
+              model: "old-model",
+              reason: "This subscription model has retired.",
+              retirement: replacedBy ? { replacedBy } : {},
+              when: { baseUrlHosts: ["subscription.example"] },
+            },
+          ],
+        },
+        { ownedProviders: new Set(["fixture"]) },
+      );
+      mocks.loadPluginMetadataSnapshot.mockReturnValue(
+        createMetadataSnapshot([{ id: "fixture", providers: ["fixture"], modelCatalog }]),
+      );
+      const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
+      const retired = resolver({
+        provider: "fixture",
+        id: "old-model",
+        baseUrl: "https://subscription.example/v1",
+      });
+      expect(retired).toMatchObject({
+        suppress: true,
+        retirement: replacedBy ? { replacedBy } : {},
+      });
+      expect(retired?.errorMessage).toContain("openclaw doctor --fix");
+      expect(resolver({ provider: "fixture", id: "old-model" })).toBeUndefined();
+      expect(
+        resolver({ provider: "fixture", id: "old-model", baseUrl: "https://api.example/v1" }),
+      ).toBeUndefined();
+      expect(
+        resolver({
+          provider: "fixture",
+          id: "current-model",
+          baseUrl: "https://subscription.example/v1",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("reuses planned manifest suppressions inside a resolver instance", () => {
     const config = { plugins: { entries: { openai: { enabled: true } } } };
 
@@ -161,6 +316,172 @@ describe("manifest model suppression", () => {
       }),
     ).toBeUndefined();
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "native", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
+    { name: "custom", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+    { name: "private ID", baseUrl: "https://api.x.ai/v1", id: "private-model", retired: false },
+    { name: "ambiguous", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "owned logical provider", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "model override", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+  ])("applies captured physical retirement policy for $name", (scenario) => {
+    const native = { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [] };
+    const plugins: Record<string, unknown>[] = [
+      {
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        modelCatalog: {
+          providers: { xai: native },
+          suppressions: [
+            {
+              provider: "xai",
+              model: "auto",
+              retirement: { replacedBy: "current" },
+              when: { baseUrlHosts: ["api.x.ai"] },
+            },
+          ],
+        },
+      },
+    ];
+    if (scenario.name === "ambiguous") {
+      plugins.push({
+        id: "other",
+        providers: ["other"],
+        modelCatalog: { providers: { other: native } },
+      });
+    }
+    if (scenario.name === "owned logical provider") {
+      plugins.push({ id: "personal", providers: ["personal"] });
+    }
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot(plugins));
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-responses" as const,
+            baseUrl: scenario.name === "model override" ? native.baseUrl : scenario.baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: scenario.id,
+                name: scenario.id,
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl: scenario.baseUrl,
+              }),
+            ].map(({ provider: _provider, api: _api, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: scenario.id };
+    expect(resolver.hasRetirementCandidate(input)).toBe(scenario.retired);
+    const result = resolver({ ...input, baseUrl: scenario.baseUrl });
+    expect(Boolean(result?.retirement)).toBe(scenario.retired);
+    if (scenario.retired) {
+      expect(result?.errorMessage).toContain("personal/auto");
+    }
+    expect(
+      resolver({ ...input, baseUrl: scenario.baseUrl, unconditionalOnly: true }),
+    ).toBeUndefined();
+    expect(resolver({ provider: "xai", id: "auto", baseUrl: native.baseUrl })?.retirement).toEqual({
+      replacedBy: "current",
+    });
+  });
+
+  it("uses the model-level API for physical retirement candidate knowledge", () => {
+    const baseUrl = "https://api.x.ai/v1";
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "xai",
+          providers: ["xai"],
+          providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+          modelCatalog: {
+            providers: { xai: { api: "openai-responses", baseUrl, models: [] } },
+            suppressions: [
+              {
+                provider: "xai",
+                model: "auto",
+                retirement: { replacedBy: "current" },
+                when: { baseUrlHosts: ["api.x.ai"], providerConfigApiIn: ["openai-responses"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-completions" as const,
+            baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: "auto",
+                name: "Auto",
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl,
+              }),
+            ].map(({ provider: _provider, baseUrl: _baseUrl, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: "auto", baseUrl };
+    expect(resolver.hasRetirementCandidate(input)).toBe(true);
+    expect(resolver(input)).toBeUndefined();
+    const selected = projectModelProviderConfig(config, "personal", {
+      api: "openai-responses",
+      baseUrl,
+    });
+    expect(
+      buildManifestBuiltInModelSuppressionResolver({ config: selected })(input)?.retirement,
+    ).toEqual({ replacedBy: "current" });
+    Object.defineProperty(config.models.providers.personal, "models", {
+      get() {
+        throw new Error("Nonretired model knowledge must not read configured rows");
+      },
+    });
+    expect(resolver.hasRetirementCandidate({ provider: "personal", id: "private-model" })).toBe(
+      false,
+    );
+  });
+
+  it("keeps the OpenAI API route available while retiring the ChatGPT route", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        new URL("../../extensions/openai/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([manifest]));
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
+    const input = { provider: "openai", id: "gpt-5.4" };
+    expect(resolver({ ...input, baseUrl: "https://chatgpt.com/backend-api" })).toMatchObject({
+      retirement: { replacedBy: "gpt-5.6-terra" },
+    });
+    for (const baseUrl of [undefined, "https://api.openai.com/v1", "https://proxy.example/v1"]) {
+      expect(resolver({ ...input, baseUrl })).toBeUndefined();
+    }
+  });
+
+  it.each([
+    "subscription.example",
+    { baseUrlHosts: [] },
+    { baseUrlHosts: 42 },
+    { baseUrlHosts: ["subscription.example"], providerConfigApiIn: false },
+  ])("does not broaden malformed retirement scope %# into a global rule", (when) => {
+    const catalog = normalizeModelCatalog(
+      { suppressions: [{ provider: "fixture", model: "old", retirement: {}, when }] },
+      { ownedProviders: new Set(["fixture"]) },
+    );
+    expect(catalog?.suppressions).toBeUndefined();
   });
 
   it("matches conditional suppressions by base URL host", () => {

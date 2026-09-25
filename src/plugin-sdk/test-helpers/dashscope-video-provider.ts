@@ -10,8 +10,8 @@ type ResettableMock = {
   mockReset(): unknown;
 };
 
-type ResolvableMock = {
-  mockResolvedValue(value: unknown): unknown;
+type ImplementableMock = {
+  mockImplementation(implementation: () => Promise<unknown>): unknown;
 };
 
 type ChainableResolvedValueMock = ResettableMock & {
@@ -20,7 +20,7 @@ type ChainableResolvedValueMock = ResettableMock & {
 
 export type DashscopeVideoProviderMocks = {
   resolveApiKeyForProviderMock: ClearableMock;
-  postJsonRequestMock: ResettableMock & ResolvableMock;
+  postJsonRequestMock: ResettableMock & ImplementableMock;
   fetchWithTimeoutMock: ChainableResolvedValueMock;
   assertOkOrThrowHttpErrorMock: ClearableMock;
   resolveProviderHttpRequestConfigMock: ClearableMock;
@@ -49,31 +49,29 @@ export function mockSuccessfulDashscopeVideoTask(
     taskStatus = "SUCCEEDED",
     videoUrl = "https://example.com/out.mp4",
   } = params;
-  mocks.postJsonRequestMock.mockResolvedValue({
-    response: {
-      json: async () => ({
-        request_id: requestId,
-        output: {
-          task_id: taskId,
-        },
-      }),
-    },
+  mocks.postJsonRequestMock.mockImplementation(async () => ({
+    response: Response.json({
+      request_id: requestId,
+      output: {
+        task_id: taskId,
+      },
+    }),
     release: vi.fn(async () => {}),
-  });
+  }));
   mocks.fetchWithTimeoutMock
-    .mockResolvedValueOnce({
-      json: async () => ({
+    .mockResolvedValueOnce(
+      Response.json({
         output: {
           task_status: taskStatus,
           results: [{ video_url: videoUrl }],
         },
       }),
-      headers: new Headers(),
-    })
-    .mockResolvedValueOnce({
-      arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      headers: new Headers({ "content-type": "video/mp4" }),
-    });
+    )
+    .mockResolvedValueOnce(
+      new Response(Buffer.from("mp4-bytes"), {
+        headers: { "content-type": "video/mp4" },
+      }),
+    );
 }
 
 export function expectDashscopeVideoTaskPoll(

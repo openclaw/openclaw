@@ -5,7 +5,10 @@ import { afterEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -15,7 +18,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "./store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -36,11 +39,12 @@ export function createAuthOwnerTestFixtures() {
     return getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath)?.store;
   }
 
-  afterEach(() => {
+  afterEach(async () => {
     clearSecretsRuntimeSnapshotState();
     clearRuntimeAuthProfileStoreSnapshots();
     clearAuthProfileMigrationDiagnostics();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     tempDirs.cleanup();

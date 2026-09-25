@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -18,7 +18,6 @@ type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
   createLineBotMock,
-  createLineNodeWebhookHandlerMock,
   registerWebhookTargetWithPluginRouteMock,
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
@@ -28,16 +27,12 @@ const {
     handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
     stop: vi.fn(),
   })),
-  createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
-    vi.fn<LineNodeWebhookHandler>(async () => {}),
-  ),
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
   runDetachedWebhookWorkMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
-let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 type RegisteredRoute = {
   accountId?: string;
@@ -104,7 +99,6 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   );
   return {
     ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
     registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
   };
 });
@@ -117,14 +111,6 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
   return {
     ...actual,
     runDetachedWebhookWork: runDetachedWebhookWorkMock,
-  };
-});
-
-vi.mock("./webhook-node.js", async () => {
-  const actual = await vi.importActual<typeof import("./webhook-node.js")>("./webhook-node.js");
-  return {
-    ...actual,
-    createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
   };
 });
 
@@ -161,7 +147,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
-    vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
     vi.doUnmock("./send.js");
@@ -179,10 +164,6 @@ describe("monitorLineProvider lifecycle", () => {
     // Clear call history only; the implementation was wired to the actual
     // helper once in the module mock factory.
     runDetachedWebhookWorkMock.mockClear();
-    innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
-    createLineNodeWebhookHandlerMock
-      .mockReset()
-      .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")
@@ -259,26 +240,52 @@ describe("monitorLineProvider lifecycle", () => {
     );
   });
 
-  it("registers an account target without replacing existing route ownership", async () => {
-    const monitor = await monitorLineProvider({
-      channelAccessToken: "token",
-      channelSecret: "secret", // pragma: allowlist secret
-      accountId: "work",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
+  it.each([
+    { name: "default", webhookPath: undefined, expectedPath: "/line/webhook" },
+    { name: "empty", webhookPath: "", expectedPath: "/line/webhook" },
+    { name: "no leading slash", webhookPath: "hooks/line", expectedPath: "/hooks/line" },
+    { name: "trailing slash", webhookPath: "/hooks/line/", expectedPath: "/hooks/line" },
+    { name: "whitespace", webhookPath: "  /hooks/line  ", expectedPath: "/hooks/line" },
+  ])(
+    "registers the $name path without replacing route ownership",
+    async ({ webhookPath, expectedPath }) => {
+      const monitor = await monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        accountId: "work",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        webhookPath,
+      });
 
-    const registration = requireWebhookRegistration();
-    expect(registration.target.accountId).toBe("work");
-    expect(registration.target.path).toBe("/line/webhook");
-    expect(registration.route.accountId).toBe("work");
-    expect(registration.route.auth).toBe("plugin");
-    expect(registration.route.pluginId).toBe("line");
-    expect(registration.route.source).toBe("line-webhook");
-    expect(registration.route.throwOnFailure).toBe(true);
-    expect(registration.route).not.toHaveProperty("path");
-    expect(registration.route).not.toHaveProperty("replaceExisting");
-    await monitor.stop();
+      try {
+        const registration = requireWebhookRegistration();
+        expect(registration.target.accountId).toBe("work");
+        expect(registration.target.path).toBe(expectedPath);
+        expect(registration.route.accountId).toBe("work");
+        expect(registration.route.auth).toBe("plugin");
+        expect(registration.route.pluginId).toBe("line");
+        expect(registration.route.source).toBe("line-webhook");
+        expect(registration.route.throwOnFailure).toBe(true);
+        expect(registration.route).not.toHaveProperty("path");
+        expect(registration.route).not.toHaveProperty("replaceExisting");
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it("rejects a blank channel secret before creating a bot or registering a route", async () => {
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "  ",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+      }),
+    ).rejects.toThrow(/non-empty channel secret/);
+    expect(createLineBotMock).not.toHaveBeenCalled();
+    expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
   });
 
   it("stops immediately when signal is already aborted", async () => {
@@ -377,66 +384,125 @@ describe("monitorLineProvider lifecycle", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
-  it("resolves a reply's presentation into LINE controls before delivering it", async () => {
-    // The turn adapter owns this preparation: core renders presentations inside
-    // the outbound send pipeline, which replies delivered here never enter.
-    const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = { delivery: { preparePayload?: (payload: ReplyPayload) => ReplyPayload } };
-    let resolvedTurn: ResolvedTurn | undefined;
-    const runTurn = async (params: {
-      adapter: { resolveTurn: () => ResolvedTurn };
-    }): Promise<{ dispatched: false }> => {
-      resolvedTurn = params.adapter.resolveTurn();
-      return { dispatched: false };
-    };
-    setLineRuntime({
-      channel: { inbound: { run: runTurn } },
-    } as unknown as Parameters<typeof setLineRuntime>[0]);
-    const monitor = await monitorLineProvider({
-      channelAccessToken: "token",
-      channelSecret: "secret", // pragma: allowlist secret
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
-    if (!onMessage) {
-      throw new Error("expected the LINE bot to receive an inbound message handler");
-    }
-
-    try {
-      await onMessage(
-        {
-          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "approve?" },
-          replyToken: "reply-token",
-          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
-          isGroup: true,
-          accountId: "default",
-          turn: { record: {} },
-        } as unknown as Parameters<typeof onMessage>[0],
-        // Admission always hands the turn its live config; an empty one is unreachable.
-        { cfg: {} } as Parameters<typeof onMessage>[1],
-      );
-
-      const prepared = resolvedTurn?.delivery.preparePayload?.({
-        text: "Approve this run?",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
-            },
-          ],
-        },
+  it.each([
+    { from: "line:U0123456789abcdef0123456789abcdef", question: true, prompt: true, native: true },
+    {
+      from: "line:U0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: false,
+      native: false,
+    },
+    {
+      from: "line:group:C0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: true,
+      native: false,
+    },
+    {
+      from: "line:room:R0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: true,
+      native: false,
+    },
+    { from: "unknown", question: true, prompt: true, native: false },
+    {
+      from: "line:group:C0123456789abcdef0123456789abcdef",
+      question: false,
+      prompt: false,
+      native: true,
+    },
+  ])(
+    "prepares native=$native question=$question prompt=$prompt replies for $from",
+    async ({ from, question, prompt, native }) => {
+      const { setLineRuntime } = await import("./runtime.js");
+      type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
+      let resolvedTurn: ResolvedTurn | undefined;
+      const runTurn = async (params: {
+        adapter: { resolveTurn: () => ResolvedTurn };
+      }): Promise<{ dispatched: false }> => {
+        resolvedTurn = params.adapter.resolveTurn();
+        return { dispatched: false };
+      };
+      setLineRuntime({
+        channel: { inbound: { run: runTurn } },
+      } as unknown as Parameters<typeof setLineRuntime>[0]);
+      const monitor = await monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
       });
-      const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
+      const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+      if (!onMessage) {
+        throw new Error("expected the LINE bot to receive an inbound message handler");
+      }
 
-      expect(prepared?.presentation).toBeUndefined();
-      expect(line?.flexMessage).toBeDefined();
-    } finally {
-      // A leaked registration makes later shared-path signature tests ambiguous.
-      await monitor.stop();
-    }
-  });
+      try {
+        await onMessage(
+          {
+            ctxPayload: { From: from, MessageSid: "m1", RawBody: "approve?" },
+            replyToken: "reply-token",
+            route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+            isGroup: !from.startsWith("line:U"),
+            accountId: "default",
+            turn: { record: {} },
+          } as unknown as Parameters<typeof onMessage>[0],
+          // Admission always hands the turn its live config; an empty one is unreachable.
+          { cfg: {} } as Parameters<typeof onMessage>[1],
+        );
+
+        const questionId = "ask_3d8dbe55be452a9a39add7c909beb119";
+        const prepared = await resolvedTurn?.delivery.preparePayload?.(
+          {
+            text: "Approve this run? Approve / Deny",
+            presentationTextMode: "fallback",
+            ...(question
+              ? { channelData: { askUser: { questionId, optionValues: ["Approve", "Deny"] } } }
+              : {}),
+            presentation: {
+              blocks: [
+                ...(prompt ? [{ type: "text" as const, text: "Approve this run?" }] : []),
+                {
+                  type: "buttons",
+                  buttons: question
+                    ? ["Approve", "Deny"].map((label) => ({
+                        label,
+                        action: { type: "question" as const, questionId, optionValue: label },
+                      }))
+                    : [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+                },
+              ],
+            },
+          },
+          { kind: "final" },
+        );
+        const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
+
+        expect(prepared?.presentation).toBeUndefined();
+        if (native) {
+          expect(line?.flexMessage).toBeDefined();
+          if (question) {
+            expect(line?.flexMessage).toMatchObject({
+              contents: {
+                footer: {
+                  contents: [
+                    { action: { data: `line.question=${questionId}&line.option=0` } },
+                    { action: { data: `line.question=${questionId}&line.option=1` } },
+                  ],
+                },
+              },
+            });
+          }
+        } else {
+          expect(line).toBeUndefined();
+          expect(prepared?.text).toBe("Approve this run? Approve / Deny");
+        }
+      } finally {
+        // A leaked registration makes later shared-path signature tests ambiguous.
+        await monitor.stop();
+      }
+    },
+  );
 
   it("paces block replies with the humanDelay the turn's own config carries", async () => {
     // humanDelay lives on the agent, but only the dispatcher can act on it, so a
@@ -722,8 +788,8 @@ describe("monitorLineProvider lifecycle", () => {
           accountId: "default",
           runtime,
           queue,
-          deliver: async (event, _destination, control) => {
-            delivered.push(event);
+          deliver: async (events, _destination, control) => {
+            delivered.push(...events);
             await control.turnAdoptionLifecycle.onAdopted();
           },
         });

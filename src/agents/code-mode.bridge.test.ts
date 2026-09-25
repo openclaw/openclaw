@@ -23,9 +23,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("drains a nested combinator after its outer race wins", async () => {
@@ -155,7 +155,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
-  it("rejects an over-cap bridge frontier before dispatching its admitted prefix", async () => {
+  it("rejects an over-queue-cap bridge frontier before dispatching its admitted prefix", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
@@ -184,7 +184,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-frontier-overflow",
         {
           code: `return await Promise.all(
-            Array.from({ length: 3 }, (_, index) => fake_mutation({ index })),
+            Array.from({ length: 2 + 128 + 1 }, (_, index) => fake_mutation({ index })),
           );`,
         },
       ),
@@ -867,10 +867,17 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(oversizedSearch.execute).toHaveBeenCalledOnce();
     expect(details.value).toMatchObject({
       truncated: true,
-      omittedBytes: expect.any(Number),
-      guidance: expect.stringContaining("rerun with narrower args"),
-      prefix: expect.stringContaining("first useful match"),
+      guidance: expect.stringContaining("results.load"),
+      reference: { id: expect.any(String), preview: expect.stringContaining("first useful match") },
     });
+    const reference = (details.value as { reference: { id: string } }).reference;
+    const loaded = resultDetails(
+      await codeModeTools[0]!.execute("load-search", {
+        code: `return (await results.load(${JSON.stringify(reference.id)})).matches[1].text.length;`,
+      }),
+    );
+    expect(loaded).toMatchObject({ status: "completed", value: 4096 });
+    expect(oversizedSearch.execute).toHaveBeenCalledOnce();
     const outputBytes = Buffer.byteLength(JSON.stringify(details.output), "utf8");
     const valueBytes = Buffer.byteLength(JSON.stringify(details.value), "utf8");
     expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);

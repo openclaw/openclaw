@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -19,9 +19,13 @@ import {
   markBackgrounded,
   markExited,
   type ProcessSession,
+  resolveProcessCleanupMs,
+  waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -93,7 +97,8 @@ vi.mock("../infra/shell-env.js", async () => {
   };
 });
 
-vi.mock("../process/supervisor/index.js", () => {
+vi.mock("../process/supervisor/index.js", async () => {
+  const { takeHeldSupervisorExit } = await import("./bash-tools.exec-runtime.test-support.js");
   type SpawnInput = {
     argv?: string[];
     env?: NodeJS.ProcessEnv;
@@ -188,6 +193,7 @@ vi.mock("../process/supervisor/index.js", () => {
   return {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
+        const exitGate = takeHeldSupervisorExit();
         const command = extractCommand(input);
         const output = commandOutput(command, input.env);
         const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
@@ -200,17 +206,26 @@ vi.mock("../process/supervisor/index.js", () => {
         if (stagedOutput) {
           input.onStdout?.(stagedOutput);
         }
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "mock-bash-run",
           startedAtMs: Date.now(),
           pid: 123,
           stdin: undefined,
           wait: async () => {
-            await immediate();
-            await immediate();
+            if (exitGate) {
+              exitGate.markStarted();
+              await exitGate.wait;
+            } else {
+              await immediate();
+              await immediate();
+            }
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
+              activity.lastOutputAtMs = Date.now();
             }
+            activity.resultSettled = true;
             return {
               reason: "exit" as const,
               exitCode,
@@ -227,7 +242,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     }),
   };
 });
@@ -269,6 +283,7 @@ const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
+  bypassHostApprovalFloors: true,
 };
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
@@ -635,6 +650,7 @@ const seedFinishedLogSession = (lines: string[]) => {
   const session: ProcessSession = {
     id: `seeded-log-${nextCallId()}`,
     command: "seeded log",
+    cleanupMs: resolveProcessCleanupMs(),
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
@@ -698,26 +714,23 @@ describe("exec tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
-
-      // Timing can race here: command may already be complete before the first response.
-      if (result.details.status === PROCESS_STATUS_COMPLETED) {
-        expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
-        return;
-      }
-
-      const sessionId = requireRunningSessionId(result);
-
-      let output = "";
-      await expect
-        .poll(async () => {
-          const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output += pollResult.output ?? "";
-          return pollResult.status;
-        }, BACKGROUND_POLL_OPTIONS)
-        .toBe(PROCESS_STATUS_COMPLETED);
-
-      expect(output).toContain(OUTPUT_DONE);
+      const scopeKey = "test:background-yield";
+      const tool = createTestExecTool({ scopeKey });
+      const sessionId = await supervisorExit.withHeldSupervisorExit(
+        async (heldExit) => {
+          const execution = executeExecCommand(tool, shellEcho(OUTPUT_DONE), { yieldMs: 10 });
+          await Promise.race([heldExit.waitStarted, execution]);
+          await vi.advanceTimersByTimeAsync(10);
+          return requireRunningSessionId(await execution);
+        },
+        () => waitForExecScope(scopeKey),
+      );
+      const pollResult = await pollProcessSession({
+        tool: processTool,
+        sessionId,
+      });
+      expect(pollResult.status).toBe(PROCESS_STATUS_COMPLETED);
+      expect(pollResult.output).toContain(OUTPUT_DONE);
     },
     isWin ? 15_000 : 5_000,
   );
@@ -780,16 +793,20 @@ describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   async function drainPendingHeartbeatWakes(): Promise<void> {
-    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
-    const dispose = setHeartbeatWakeHandler(handler);
+    const dispose = setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
     try {
-      requestHeartbeat({
-        source: "other",
-        intent: "immediate",
-        reason: "test-cleanup",
-        coalesceMs: 0,
-      });
-      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+      // An older session wake can call the handler before this cleanup barrier settles.
+      await expect(
+        requestHeartbeatAndWait(
+          {
+            source: "other",
+            intent: "immediate",
+            reason: "test-cleanup",
+            coalesceMs: 0,
+          },
+          { abortSignal: AbortSignal.timeout(NOTIFY_EVENT_TIMEOUT_MS) },
+        ),
+      ).resolves.toEqual({ status: "ran", durationMs: 0 });
     } finally {
       dispose();
     }
@@ -818,15 +835,18 @@ describe("exec notifyOnExit", () => {
     expect(formatted).toBeUndefined();
   });
 
-  it("consumes only the polled completion event", async () => {
+  it("consumes only the acknowledged poll's completion event", async () => {
     const tool = createNotifyOnExitExecTool();
     const unpolledSessionId = await startBackgroundCommand(tool, shellEcho("unpolled"));
     await waitForNotifyEvent(unpolledSessionId);
     const sessionId = await startBackgroundCommand(tool, shellEcho("polled"));
     await waitForNotifyEvent(sessionId);
-    const poll = await pollProcessSession({ tool: processTool, sessionId });
+    const queued = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY);
+    const poll = await executeProcessTool(processTool, { action: "poll", sessionId });
 
-    expect(poll.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(readProcessStatus(poll.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect(peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY)).toEqual(queued);
+    acknowledgeInternalToolResult(poll);
     expect(hasNotifyEventForSession(sessionId)).toBe(false);
     expect(hasNotifyEventForSession(unpolledSessionId)).toBe(true);
   });

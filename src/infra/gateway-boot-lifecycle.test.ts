@@ -1,11 +1,8 @@
 // Gateway boot lifecycle tests cover restart-loop breaker accounting.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  formatLegacyAgentMediaMigrationRequiredMessage,
-  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-} from "../state/openclaw-agent-db-migration-required.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -14,13 +11,14 @@ import {
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-  GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   completeGatewayBootLifecycle,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
+  readGatewayLastInstallationReplacement,
+  readGatewayLastShutdown,
   recordGatewayBootStart,
   recordGatewayCrashLoopRecovery,
-  repairGatewayAgentMediaMigrationStartupFailures,
+  repairGatewayMaintenanceStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
@@ -37,6 +35,9 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
   vi.unstubAllEnvs();
+  setLoggerOverride(null);
+  loggingState.rawConsole = null;
+  resetLogger();
 });
 
 function createLifecycleDb() {
@@ -75,6 +76,106 @@ function insertBootRows(
 }
 
 describe("gateway crash-loop breaker", () => {
+  it("projects replacement history only while it is the latest shutdown", () => {
+    const lifecycle = createLifecycleDb();
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toBeUndefined();
+    const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+    const replacedBoot = recordGatewayBootStart(lifecycle.env, 1_000);
+    completeGatewayBootLifecycle(
+      replacedBoot,
+      { outcome: "planned_restart", reason },
+      lifecycle.env,
+      2_000,
+    );
+    const successor = recordGatewayBootStart(lifecycle.env, 3_000);
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toEqual({
+      reason,
+      completedAtMs: 2_000,
+    });
+    completeGatewayBootLifecycle(
+      successor,
+      { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+      lifecycle.env,
+      4_000,
+    );
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toBeUndefined();
+  });
+
+  it.each(["SIGTERM", "SIGINT"])(
+    "warns about repeated %s stops across process lifetimes",
+    (signal) => {
+      const lifecycle = createLifecycleDb();
+      const warn = vi.fn();
+      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+      loggingState.rawConsole = { log: warn, info: warn, warn, error: warn };
+      const reason = `stop (${signal})`;
+      const nowMs = 1_000_000;
+      insertBootRows(lifecycle, [
+        {
+          bootId: "expired",
+          startedAtMs: 1,
+          completedAtMs: nowMs - 300_001,
+          outcome: "clean_stop",
+          reason,
+        },
+        {
+          bootId: "previous",
+          startedAtMs: 2,
+          completedAtMs: nowMs - 100_000,
+          outcome: "clean_stop",
+          reason,
+        },
+      ]);
+      const secondBoot = recordGatewayBootStart(lifecycle.env, nowMs - 1_000);
+      completeGatewayBootLifecycle(
+        secondBoot,
+        { outcome: "clean_stop", reason },
+        lifecycle.env,
+        nowMs,
+      );
+      expect(warn).not.toHaveBeenCalled();
+      const thirdBoot = recordGatewayBootStart(lifecycle.env, nowMs + 1_000);
+      completeGatewayBootLifecycle(
+        thirdBoot,
+        { outcome: "clean_stop", reason },
+        lifecycle.env,
+        nowMs + 2_000,
+      );
+      expect(warn.mock.calls.flat().join("\n")).toContain(
+        `stopped after ${signal} 3 times in 5 min: another supervisor may be managing this Gateway`,
+      );
+      expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 2_000).tripped).toBe(false);
+    },
+  );
+
+  it("reads the last shutdown without mistaking recovery segments or live boots for stops", () => {
+    const lifecycle = createLifecycleDb();
+    expect(readGatewayLastShutdown(lifecycle.env)).toBeUndefined();
+    const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
+    completeGatewayBootLifecycle(
+      bootId,
+      { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+      lifecycle.env,
+      3_000,
+    );
+    insertBootRows(lifecycle, [
+      {
+        bootId: "older-stop",
+        startedAtMs: 1_500,
+        completedAtMs: 2_000,
+        outcome: "planned_restart",
+        reason: "restart (SIGUSR2)",
+      },
+      { bootId: "recovery", startedAtMs: 3_001, completedAtMs: 4_000, outcome: "safe_mode_stable" },
+      { bootId: "running", startedAtMs: 4_001 },
+    ]);
+
+    expect(readGatewayLastShutdown(lifecycle.env)).toEqual({
+      reason: "stop (SIGTERM)",
+      completedAtMs: 3_000,
+    });
+  });
+
   it("trips from the persisted unclean boot count", () => {
     const db = createLifecycleDb();
     const nowMs = 1_000_000;
@@ -131,6 +232,28 @@ describe("gateway crash-loop breaker", () => {
 
     expect(decision.tripped).toBe(false);
     expect(decision.uncleanBoots).toBe(1);
+  });
+
+  it("does not count maintenance refusals toward channel suppression", () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    for (let index = 0; index < 3; index++) {
+      const bootId = recordGatewayBootStart(lifecycle.env, nowMs + index);
+      completeGatewayBootLifecycle(
+        bootId,
+        {
+          outcome: "startup_failed",
+          startupReason: "gateway.maintenance_required",
+          reason: "Legacy workspace setup state requires migration",
+        },
+        lifecycle.env,
+        nowMs + index + 1,
+      );
+    }
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 4)).toMatchObject({
+      tripped: false,
+      uncleanBoots: 0,
+    });
   });
 
   it("writes the breaker bundle only on a persisted transition into tripped state", () => {
@@ -257,46 +380,19 @@ describe("gateway crash-loop breaker", () => {
     expect(decision.uncleanBoots).toBe(0);
   });
 
-  it("repairs only typed and shipped media-migration startup failures", () => {
+  it("repairs maintenance history without clearing real startup crashes", () => {
     const lifecycle = createLifecycleDb();
-    const databasePath = "/tmp/openclaw-agent.sqlite";
-    const longDatabasePath = `/tmp/${"agent-".repeat(100)}openclaw-agent.sqlite`;
     const nowMs = 1_000_000;
-
     insertBootRows(lifecycle, [
-      {
-        bootId: "typed-a",
-        startedAtMs: nowMs - 4,
-        completedAtMs: nowMs - 3,
-        outcome: "startup_failed",
-        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-        reason: "typed migration failure",
-      },
-      {
-        bootId: "typed-b",
-        startedAtMs: nowMs - 3,
-        completedAtMs: nowMs - 2,
-        outcome: "startup_failed",
-        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-        reason: "typed migration failure",
-      },
-      {
-        bootId: "beta-raw",
-        startedAtMs: nowMs - 2,
-        completedAtMs: nowMs - 1,
-        outcome: "startup_failed",
-        reason: formatLegacyAgentMediaMigrationRequiredMessage(databasePath, 14),
-      },
-      {
-        bootId: "beta-raw-truncated",
-        startedAtMs: nowMs - 2,
-        completedAtMs: nowMs - 1,
-        outcome: "startup_failed",
-        reason: truncateUtf16Safe(
-          formatLegacyAgentMediaMigrationRequiredMessage(longDatabasePath, 14),
-          GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
-        ),
-      },
+      ...["gateway.maintenance_required", "gateway.agent_media_migration_required"].map(
+        (startupReason, index) => ({
+          bootId: `maintenance-${index}`,
+          startedAtMs: nowMs - 2,
+          completedAtMs: nowMs - 1,
+          outcome: "startup_failed" as const,
+          startupReason,
+        }),
+      ),
       {
         bootId: "unrelated",
         startedAtMs: nowMs - 1,
@@ -305,25 +401,12 @@ describe("gateway crash-loop breaker", () => {
         reason: "EADDRINUSE",
       },
     ]);
-
-    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs).tripped).toBe(true);
-    expect(
-      repairGatewayAgentMediaMigrationStartupFailures({
-        databasePaths: [databasePath, longDatabasePath],
-        env: lifecycle.env,
-      }),
-    ).toBe(4);
+    expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(2);
+    expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(0);
     expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 1)).toMatchObject({
       tripped: false,
       uncleanBoots: 1,
     });
-    expect(
-      repairGatewayAgentMediaMigrationStartupFailures({
-        databasePaths: [databasePath],
-        env: lifecycle.env,
-      }),
-    ).toBe(0);
-
     const rows = executeSqliteQuerySync(
       lifecycle.db,
       lifecycle.kysely
@@ -332,10 +415,8 @@ describe("gateway crash-loop breaker", () => {
         .orderBy("boot_id"),
     ).rows;
     expect(rows).toEqual([
-      { boot_id: "beta-raw", outcome: "startup_failure_repaired" },
-      { boot_id: "beta-raw-truncated", outcome: "startup_failure_repaired" },
-      { boot_id: "typed-a", outcome: "startup_failure_repaired" },
-      { boot_id: "typed-b", outcome: "startup_failure_repaired" },
+      { boot_id: "maintenance-0", outcome: "startup_failure_repaired" },
+      { boot_id: "maintenance-1", outcome: "startup_failure_repaired" },
       { boot_id: "unrelated", outcome: "startup_failed" },
     ]);
   });

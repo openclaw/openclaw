@@ -613,7 +613,9 @@ export function createBeamMirrorService(params: { runtime: PluginRuntime }): {
         void runner?.tick();
       }, mirror.pollSeconds * 1_000);
       interval.unref?.();
-      ctx.logger.info(`beam mirror active: ${mirror.catalogs.join(", ")} -> ${mirror.endpoint}`);
+      ctx.logger.info(
+        `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
+      );
       void runner.tick();
     },
     stop() {

@@ -6,18 +6,25 @@ import Testing
 
 private let gatewayTLSTestCertificateDER =
     Data(
-        base64Encoded: "MIIDMTCCAhmgAwIBAgIUY2qs5gTY9AYGcm5Ba8TG3ooCnyowDQYJKoZIhvcNAQELBQAwGjEYMBYGA1UEAwwPZ2F0ZXdheS5leGFtcGxlMB4XDTI2MDcyNTIxNDkxM1oXDTM2MDcyMjIxNDkxM1owGjEYMBYGA1UEAwwPZ2F0ZXdheS5leGFtcGxlMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtT4Nw7/K1v8hp5+rrtbfhgB3pnLGnjCi53n95Yisv1WH4osvd5oxjoS3OocLzdX5L8Czz66Caq3zX+Bd6FTtWiaAPek7Gc5hJ6lDf+UR2TBhJGgLcIZbrJz2GQGItqJl0XlkShqnhhAXw/8wScG0QdEeEq3OGm2z2IQYagtbYWB2ugb65GuTxjgIHryDISrY1pKAw3UhwhsftqpUQ5e+gVj1qTMUkj8o6+qEBqzKRWAah1mBbjBuv1/dn6dLXSJDM/XFxqQGOStpywQGHIi0EPZBNiPAE2QL9gRQg4YtgbX2gFcIdrrGUVmbDMEY+FVC4q6zsRyVmnxndDlTx791UwIDAQABo28wbTAdBgNVHQ4EFgQUjd+huKP5/FHbm0h2Tgmnjb8c2dowHwYDVR0jBBgwFoAUjd+huKP5/FHbm0h2Tgmnjb8c2dowDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgg9nYXRld2F5LmV4YW1wbGUwDQYJKoZIhvcNAQELBQADggEBAASZeHqh26eec0U30QJmI2I8+60HAGDd1Cd9XpA/13eFXqCGfev8Rk1gfZ+m0NvBDlBlary4jKGYnVA4QNzP23jL4mBEEAqlmO0QMFg4ucKiKtOLmzdnk2utCY7oMw3/Nt1tD0+qBhayL+d2e5t33fYUwEm5s832xONGJUkpJ1MIldXqMovKomlMUgzSNnkGiTv8yY/J1b2W2/LWjL/ZDLd7E/pyLwvfKY5QXlfEKFp2K+brfkkk1tFLRPir6VNm9wXz3HTZTnj2CAHchitY87MXgDVliYpsQD4AIiycrsHOcRkBF/CBX9XH1LL3iolkk8WaLHeDk2jd6+vd3FRrlsU=")!
+        base64Encoded: "MIIDWDCCAkCgAwIBAgIUauCyPszeo0mp5lDu/ldJ80BblyEwDQYJKoZIhvcNAQELBQAwHTEbMBkGA1UEAwwST3BlbkNsYXcgVGVzdCBSb290MB4XDTI2MDkxNjIzNTI0OFoXDTI3MDkxNjIzNTI0OFowGjEYMBYGA1UEAwwPZ2F0ZXdheS5leGFtcGxlMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwDr4MWE7mhxcr7bDk0vAKmoh+7tdNx+xzwewikHjijfVeLR7ziIQ15OpCTU977vaCe/D9eb3sOzihHxqwEpCd1qSbJT47Me3lC2r1j22GVZQ/lxh/3Pb/KHLJs6rA0Ts6Qvcn+AN9ZMqlUMXP33ZrR69y7dhZmywAFH0LCJzEdKlLw53C5lTVsXwXntE9ARiZbnUPQANvRZP0ydRKaGzWKaF50xdaUwnTQSLWkF5H6QxlXohlN5l3INrOLNtHu5VxSqvdwJ5I/OeOPtyx3WoCcxd3TBpAOha0rPMCO4G0d6sp6nu6gP9aTTUyfcYC0KOnX+BAMqvEQCwMJZCQ5s9wwIDAQABo4GSMIGPMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBoGA1UdEQQTMBGCD2dhdGV3YXkuZXhhbXBsZTAdBgNVHQ4EFgQU4nDtoZ7Mi1ucqIfG++KYKDa+weQwHwYDVR0jBBgwFoAUdnh7Zg6UOXq6ezrHR8XvyymGbIMwDQYJKoZIhvcNAQELBQADggEBAJ60ChP9kjlmUyPLkQO1g8k95TpICNXw19KZF5NhQn4+60ZkvcBQ1PlAQP4j1ry2I7tGLoV2RGl0GA347DKYvOE9OAJPT7fRHPq9CGqRzJOD1qXLXjaP6qszGxTu88J3WhNsXIC5sNI7Cc8ba7ybrEg4Q+Tyo4sB+c53/AtHnDdFbprOwZfyR55wnY1pTdPcZ4QBXwRPuV+sHVvXetkgApKuyXAbIGOpj4xGB2Lvvk8QKjsOvdvv3dsUwAKnyzCWmjKS8I168227W5ga9H1twNm8RoQnQLOfUiLFcaWtFDiFRtcXc+7pK1ER1kHus0rprzTF5e6UM0cVTIVOyIMp3Ow=")!
+
+private let gatewayTLSTestRootCertificateDER =
+    Data(
+        base64Encoded: "MIIDLjCCAhagAwIBAgIUZm9nSb93f+rEJJweoxU/auE9A3UwDQYJKoZIhvcNAQELBQAwHTEbMBkGA1UEAwwST3BlbkNsYXcgVGVzdCBSb290MB4XDTI2MDkxNjIzNTI0OFoXDTM2MDkxMzIzNTI0OFowHTEbMBkGA1UEAwwST3BlbkNsYXcgVGVzdCBSb290MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApWsa86zBy3I9AZ5m533iV1JLhFUtRYEHtF3Mq/00UrvZZlmfceY4bJUp38tX+UnT9sx+ilD45+VOl8VjSXmLtMo74TNjBQEn79SYbwaHMkLItYomwO+lgF9tcAjJM4MS3bQ1tK40VqxfuKtTKL1ZsqUZW1zHZ8Tf2dom+jLB8yKYelY35IxpNVBelzbiGUXw5OW8oGDqKjE9eezDpDpd4Bfgt/l8PPWlhXK2PLwNXZtCMUFPFt0ZOeo1o9Bal0cp/R46DyV1OvGkpL9RIyHbXfQJQZvugV2whWVsxHAM7cINV7rmOdf9ObbQPogTPLx08ZFDFv/MVjH5RAqYWz3LuwIDAQABo2YwZDAdBgNVHQ4EFgQUdnh7Zg6UOXq6ezrHR8XvyymGbIMwHwYDVR0jBBgwFoAUdnh7Zg6UOXq6ezrHR8XvyymGbIMwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAKPVh4LuWJf4rowdUkEEWu1fa/QBqK2/gLMdOryxkR9es2FU2LdL744KoBND89+fuisFa7gDxDCZBrJhBkDthjOnerl9Se/qpOfuODgfvSMF4Qkv97L52rhR7djV5+8LJYrGXBSbeRIMnsdOOyn1rH5GugLSCakLfmfkTIGmTwK/l7zDw7DcRNcYdLruE8wSccIDnPLKIEpyYeC2uLvLKigAV7gOjmVzObaSwKSzUaYAjFdi+zMxpHT8l8gXEfpqN+g5SgG/yRFWLy12lWNO4YXwt0jgTRqljouj1/SdozeMQCLKfoLrjDk8wlcplfSpKsJPtGVp81hAnEY9akYrw7s=")!
 
 private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
     let certificate = try #require(SecCertificateCreateWithData(nil, gatewayTLSTestCertificateDER as CFData))
+    let rootCertificate = try #require(
+        SecCertificateCreateWithData(nil, gatewayTLSTestRootCertificateDER as CFData))
     let policy = systemTrusted
         ? SecPolicyCreateBasicX509()
         : SecPolicyCreateSSL(true, "gateway.example" as CFString)
     var trust: SecTrust?
-    try #require(SecTrustCreateWithCertificates(certificate, policy, &trust) == errSecSuccess)
+    let certificateChain = [certificate, rootCertificate]
+    try #require(SecTrustCreateWithCertificates(certificateChain as CFArray, policy, &trust) == errSecSuccess)
     let trustValue = try #require(trust)
     // Both trust outcomes use explicit fixture anchors, without default roots or issuer downloads.
-    let anchors = systemTrusted ? [certificate] : []
+    let anchors = systemTrusted ? [rootCertificate] : []
     try #require(SecTrustSetAnchorCertificates(trustValue, anchors as CFArray) == errSecSuccess)
     try #require(SecTrustSetAnchorCertificatesOnly(trustValue, true) == errSecSuccess)
     try #require(SecTrustSetNetworkFetchAllowed(trustValue, false) == errSecSuccess)
@@ -26,6 +33,39 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 
 @Suite(.gatewayTLSStoreIsolated)
 struct GatewayTLSPinningTests {
+    @Test(
+        arguments: [true, false],
+        ["https://other.example/", "http://gateway.example/", "https://gateway.example/login"])
+    func `credential routes can refuse every transport redirect`(
+        _ allowsRedirects: Bool,
+        destination: String) async throws
+    {
+        let originalURL = try #require(URL(string: "https://gateway.example/artifact"))
+        let targetURL = try #require(URL(string: destination))
+        let policy = GatewayTLSPinningSession(
+            params: .init(required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+            allowsRedirects: allowsRedirects)
+        let transport = URLSession(configuration: .ephemeral)
+        let task = transport.dataTask(with: originalURL)
+        defer {
+            task.cancel()
+            transport.invalidateAndCancel()
+        }
+        let response = try #require(HTTPURLResponse(
+            url: originalURL, statusCode: 302, httpVersion: nil, headerFields: ["Location": destination]))
+        var request = URLRequest(url: targetURL)
+        request.setValue("synthetic-session", forHTTPHeaderField: "CF-Access-Token")
+        let redirected = await withCheckedContinuation { continuation in
+            policy.urlSession(
+                transport,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: request,
+                completionHandler: { continuation.resume(returning: $0) })
+        }
+        #expect(redirected?.url == (allowsRedirects ? targetURL : nil))
+    }
+
     @Test func `keychain namespace configures once and fails closed after use`() {
         var state = GatewayTLSKeychainNamespaceState()
         let configuredWork = state.configure(suffix: ".profile.work")
@@ -145,6 +185,22 @@ struct GatewayTLSPinningTests {
             port: 443,
             params: params) == .accept)
         #expect(GatewayTLSStore.loadFingerprint(stableID: "profile:first-use") == fingerprint)
+    }
+
+    @Test func `server trust evaluator binds system trust to the requested hostname`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: true)
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: nil,
+            allowTOFU: true,
+            storeKey: "profile:wrong-host")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "other.example",
+            port: 443,
+            params: params) == .reject)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: "profile:wrong-host") == nil)
     }
 
     @Test func `server trust evaluator reuses persisted first use pin`() throws {

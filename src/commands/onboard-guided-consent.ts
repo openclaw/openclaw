@@ -5,6 +5,20 @@ import { getSecurityNoteTitle } from "../wizard/setup.security-note.js";
 import { requestTelemetryConsent, requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
+export type GuidedAccessMode = "full" | "guarded";
+
+export async function persistGuidedAccessMode(mode: GuidedAccessMode): Promise<void> {
+  const { mutateConfigFileWithRetry } = await import("../config/config.js");
+  await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      if (draft.wizard?.accessMode === mode) {
+        return;
+      }
+      draft.wizard = { ...draft.wizard, accessMode: mode };
+    },
+  });
+}
+
 async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<string | undefined> {
   const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt;
   if (!securityAcknowledgedAt) {

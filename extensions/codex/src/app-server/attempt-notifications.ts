@@ -69,26 +69,6 @@ export function isRawFunctionToolOutputCompletionNotification(
   return item ? readString(item, "type") === "function_call_output" : false;
 }
 
-/** Distinguishes progress-only assistant items from conversation answers. */
-export function isAssistantCommentaryCompletionNotification(
-  notification: CodexServerNotification,
-): boolean {
-  if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
-    return false;
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return Boolean(
-    item &&
-    readString(item, "type") === "agentMessage" &&
-    (readString(item, "phase") === "commentary" || readString(item, "delivery") === "async"),
-  );
-}
-
-/** A retryable native error is not a terminal outcome for bounded operations. */
-export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
-  return isJsonObject(value) && value.willRetry === true;
-}
-
 /** Returns true for terminal app-server thread status strings. */
 export function isTerminalTurnStatus(status: string | undefined): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";
@@ -192,27 +172,6 @@ export function readRawResponseToolCallId(
     default:
       return undefined;
   }
-}
-
-/** Maps Codex item types to the tool name shown in execution progress. */
-export function codexExecutionToolName(item: CodexThreadItem): string | undefined {
-  if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
-    return item.tool;
-  }
-  if (item.type === "mcpToolCall" && typeof item.tool === "string") {
-    const server = typeof item.server === "string" && item.server ? item.server : undefined;
-    return server ? `${server}.${item.tool}` : item.tool;
-  }
-  if (item.type === "commandExecution") {
-    return "bash";
-  }
-  if (item.type === "fileChange") {
-    return "apply_patch";
-  }
-  if (item.type === "webSearch") {
-    return "web_search";
-  }
-  return undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

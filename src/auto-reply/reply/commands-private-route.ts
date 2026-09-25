@@ -10,6 +10,7 @@ import {
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -26,12 +27,34 @@ export type PrivateCommandRouteTarget = {
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
 
-/** Resolves expiry timestamp for temporary private approval routes. */
-export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()): number {
-  return (
-    resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, { nowMs }) ??
-    EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS
-  );
+export function buildPrivateCommandApprovalRequest(params: {
+  commandParams: HandleCommandsParams;
+  id: string;
+  command: string;
+  commandArgv?: string[];
+  agentId: string | undefined;
+  createdAtMs: number;
+}): ExecApprovalRequest {
+  const { commandParams } = params;
+  return {
+    approvalKind: "exec",
+    id: params.id,
+    request: {
+      command: params.command,
+      ...(params.commandArgv === undefined ? {} : { commandArgv: params.commandArgv }),
+      agentId: params.agentId,
+      ...(commandParams.sessionKey ? { sessionKey: commandParams.sessionKey } : {}),
+      turnSourceChannel: commandParams.command.channel,
+      turnSourceTo: readCommandDeliveryTarget(commandParams) ?? null,
+      turnSourceAccountId: commandParams.ctx.AccountId ?? null,
+      turnSourceThreadId: readCommandMessageThreadId(commandParams) ?? null,
+    },
+    createdAtMs: params.createdAtMs,
+    expiresAtMs:
+      resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, {
+        nowMs: params.createdAtMs,
+      }) ?? EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS,
+  };
 }
 
 /** Finds private owner DM routes that can receive sensitive command replies. */
@@ -77,45 +100,57 @@ export async function resolvePrivateCommandRouteTargets(params: {
   return sortPrivateCommandRouteTargets({
     cfg: params.commandParams.cfg,
     originChannel,
-    targets: filterPrivateCommandRouteOwnerTargets({
-      cfg: params.commandParams.cfg,
-      targets: dedupePrivateCommandRouteTargets(targets),
-    }),
+    targets: dedupeByKey(targets, (target) =>
+      [
+        target.channel,
+        target.to,
+        target.accountId ?? "",
+        target.threadId == null ? "" : String(target.threadId),
+      ].join("\0"),
+    ),
   });
 }
 
-/** Delivers a sensitive command reply to the resolved private targets. */
+/** Tries private targets in priority order until delivery stops or owns further recovery. */
 export async function deliverPrivateCommandReply(params: {
   commandParams: HandleCommandsParams;
   targets: PrivateCommandRouteTarget[];
   reply: ReplyPayload;
-}): Promise<boolean> {
-  const results = await Promise.allSettled(
-    params.targets.map((target) =>
-      routeReply({
-        payload: params.reply,
-        channel: target.channel as OriginatingChannelType,
-        to: target.to,
-        accountId: target.accountId ?? undefined,
-        threadId: target.threadId ?? undefined,
-        cfg: params.commandParams.cfg,
-        agentId: params.commandParams.agentId,
-        sessionKey: params.commandParams.sessionKey,
-        policyConversationType: "direct",
-        mirror: false,
-        isGroup: false,
-        replyKind: "final",
-      }),
-    ),
-  );
-  return results.some(
-    (result) =>
-      result.status === "fulfilled" && (result.value.delivered || result.value.suppressed === true),
-  );
+}): Promise<"delivered" | "pending" | "suppressed" | "failed"> {
+  for (const target of params.targets) {
+    const result = await routeReply({
+      payload: params.reply,
+      channel: target.channel as OriginatingChannelType,
+      to: target.to,
+      accountId: target.accountId ?? undefined,
+      threadId: target.threadId ?? undefined,
+      cfg: params.commandParams.cfg,
+      agentId: params.commandParams.agentId,
+      sessionKey: params.commandParams.sessionKey,
+      policyConversationType: "direct",
+      mirror: false,
+      isGroup: false,
+      replyKind: "final",
+    }).catch(() => undefined);
+    // Transport failures resolve with custody; rejection is a pre-send preparation failure.
+    if (!result) {
+      continue;
+    }
+    if (result.queueCustody === "held" || result.ambiguous) {
+      return "pending";
+    }
+    if (result.delivered) {
+      return "delivered";
+    }
+    if (result.suppressed) {
+      return "suppressed";
+    }
+  }
+  return "failed";
 }
 
 /** Reads the command message thread id from command context. */
-export function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
+function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
   return typeof params.ctx.MessageThreadId === "string" ||
     typeof params.ctx.MessageThreadId === "number"
     ? String(params.ctx.MessageThreadId)
@@ -123,7 +158,7 @@ export function readCommandMessageThreadId(params: HandleCommandsParams): string
 }
 
 /** Reads the best delivery target for command route resolution. */
-export function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
+function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
   return (
     normalizeOptionalString(params.ctx.OriginatingTo) ??
     normalizeOptionalString(params.command.to) ??
@@ -226,6 +261,7 @@ function sortPrivateCommandRouteTargets(params: {
       ownerPreference: resolveOwnerPreferenceIndex({ cfg: params.cfg, target }),
       originPreference: target.channel === params.originChannel ? 0 : 1,
     }))
+    .filter((entry) => entry.ownerPreference !== Number.MAX_SAFE_INTEGER)
     .toSorted((a, b) => {
       if (a.originPreference !== b.originPreference) {
         return a.originPreference - b.originPreference;
@@ -236,38 +272,4 @@ function sortPrivateCommandRouteTargets(params: {
       return a.index - b.index;
     })
     .map((entry) => entry.target);
-}
-
-function filterPrivateCommandRouteOwnerTargets(params: {
-  cfg: HandleCommandsParams["cfg"];
-  targets: PrivateCommandRouteTarget[];
-}): PrivateCommandRouteTarget[] {
-  return params.targets.filter(
-    (target) =>
-      resolveOwnerPreferenceIndex({
-        cfg: params.cfg,
-        target,
-      }) !== Number.MAX_SAFE_INTEGER,
-  );
-}
-
-function dedupePrivateCommandRouteTargets(
-  targets: PrivateCommandRouteTarget[],
-): PrivateCommandRouteTarget[] {
-  const seen = new Set<string>();
-  const deduped: PrivateCommandRouteTarget[] = [];
-  for (const target of targets) {
-    const key = [
-      target.channel,
-      target.to,
-      target.accountId ?? "",
-      target.threadId == null ? "" : String(target.threadId),
-    ].join("\0");
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(target);
-  }
-  return deduped;
 }

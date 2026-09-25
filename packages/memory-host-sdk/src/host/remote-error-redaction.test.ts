@@ -105,8 +105,8 @@ describe("memory remote error redaction", { concurrent: false }, () => {
       }).catch((cause: unknown) => cause);
 
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("embedding fetch failed: 401");
-      expect((error as Error).message).toContain("Authorization: bearer ");
+      expect((error as Error).message).toContain("embedding fetch failed (401)");
+      expect((error as Error).message).toContain("Authorization: ***");
       expect((error as Error).message).not.toContain(API_KEY);
       expect((error as Error).message).not.toContain(UNIQUE_NEEDLE);
 
@@ -166,7 +166,6 @@ describe("memory remote error redaction", { concurrent: false }, () => {
         ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
         body: {},
         errorPrefix: "post failed",
-        attachStatus: true,
         parse: (payload) => payload,
       });
 
@@ -180,7 +179,7 @@ describe("memory remote error redaction", { concurrent: false }, () => {
       const benignError = await request("/v1/post/benign").catch((cause: unknown) => cause);
       expect(benignError).toBeInstanceOf(Error);
       expect((benignError as { status?: unknown }).status).toBe(400);
-      expect((benignError as Error).message).toBe("post failed: 400 harmless diagnostic");
+      expect((benignError as Error).message).toBe("post failed (400): harmless diagnostic");
     } finally {
       await closeServer(server);
     }

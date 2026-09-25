@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions } from "./code-regions.js";
 
@@ -96,10 +97,48 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   };
 }
 
-export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
+/** Trim surrounding padding without removing Markdown block indentation. */
+export function trimTextPreservingCode(
+  text: string,
+  mode: "start" | "both" = "both",
+  codeRegions?: ReturnType<typeof findCodeRegions>,
+): string {
+  let trimmed = text.trimStart();
+  if (trimmed && trimmed.length !== text.length) {
+    const contentStart = text.length - trimmed.length;
+    const leadingCode = (codeRegions ?? findCodeRegions(text)).find(
+      (region) =>
+        (region.block || (codeRegions && region.start === 0)) &&
+        region.start <= contentStart &&
+        contentStart < region.end,
+    );
+    if (leadingCode) {
+      trimmed = text.slice(leadingCode.start);
+    }
+  }
+  if (mode === "both") {
+    const contentEnd = text.trimEnd().length;
+    if (codeRegions?.some((region) => region.start <= contentEnd && region.end === text.length)) {
+      return trimmed;
+    }
+    return trimmed.trimEnd();
+  }
+  return trimmed;
+}
+
+export function trimTextFilter(
+  mode: "none" | "start" | "both",
+  options?: { preserveCodeIndentation?: boolean },
+): TextFilter {
   return {
     transform: (text) =>
-      mode === "both" ? text.trim() : mode === "start" ? text.trimStart() : text,
+      mode === "none"
+        ? text
+        : options?.preserveCodeIndentation
+          ? trimTextPreservingCode(text, mode)
+          : mode === "both"
+            ? text.trim()
+            : text.trimStart(),
     create: () => {
       let text = "";
       let leading = true;
@@ -111,7 +150,14 @@ export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
         }
         const appended = input.delta ?? input.text;
         let delta = leading ? appended.trimStart() : appended;
-        removedLeading ||= delta.length !== appended.length;
+        if (leading && options?.preserveCodeIndentation && delta) {
+          // The first visible content classifies any preceding whitespace-only deltas.
+          // Replacements create a fresh projector; later appends retain this decision.
+          delta = trimTextPreservingCode(input.text, "start");
+          removedLeading = delta.length !== input.text.length;
+        } else {
+          removedLeading ||= delta.length !== appended.length;
+        }
         leading &&= !delta;
         if (mode === "both") {
           const content = delta.trimEnd();
@@ -175,27 +221,24 @@ function collapseDuplicateParagraphs(text: string): string {
     marker += "\0";
   }
   const inlineTokens = new Map<string, string>();
-  const protectedRegions = regions.map((region, index) => {
+  let masked = "";
+  let cursor = 0;
+  const protectedText = regions.map((region, index) => {
     const source = text.slice(region.start, region.end);
     let token = `${marker}${index}${marker}`;
     if (!region.block) {
       token = inlineTokens.get(source) ?? token;
       inlineTokens.set(source, token);
     }
-    return { region, token };
-  });
-  let masked = "";
-  let cursor = 0;
-  for (const { region, token } of protectedRegions) {
     masked += text.slice(cursor, region.start) + token;
     cursor = region.end;
-  }
-  let projected = collapsePlainDuplicateParagraphs(masked + text.slice(cursor));
-  for (const { region, token } of protectedRegions) {
-    // Replacement-string dollar sequences must remain literal inside code.
-    projected = projected.replace(token, () => text.slice(region.start, region.end));
-  }
-  return projected;
+    return source;
+  });
+  // Only our indexed tokens contain the marker; a callback preserves literal dollar sequences.
+  return collapsePlainDuplicateParagraphs(masked + text.slice(cursor)).replace(
+    new RegExp(`${marker}(\\d+)${marker}`, "g"),
+    (_token, index: string) => expectDefined(protectedText[Number(index)], "protected code text"),
+  );
 }
 
 function createDuplicateParagraphProjector(protectCode = true): TextProjector {

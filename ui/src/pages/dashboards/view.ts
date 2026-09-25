@@ -1,15 +1,22 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  isSessionKeyAddressable,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import "./dashboard-preview.ts";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -17,6 +24,7 @@ export type DashboardsRouteData = {
   basePath: string;
   fallbackAgentId: string;
   mainKey: string;
+  globalScope: boolean;
 };
 
 export type DashboardGalleryFilters = {
@@ -29,6 +37,7 @@ export type DashboardGalleryHandlers = {
   onQueryChange: (value: string) => void;
   onOwnerChange: (value: string) => void;
   onSortChange: (value: DashboardGalleryFilters["sort"]) => void;
+  onNavigate?: ApplicationContext["navigate"];
 };
 
 type DashboardRow = SessionsListResult["sessions"][number];
@@ -46,27 +55,18 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   return { id, label: actor?.label?.trim() || id };
 }
 
-function dashboardPreviewVariant(key: string): number {
-  let hash = 0;
-  for (const character of key) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  }
-  return hash % 3;
-}
-
-function renderDashboardPreview(row: DashboardRow) {
-  return html`<div
-    class="dashboard-preview dashboard-preview--${dashboardPreviewVariant(row.key)}"
-    aria-hidden="true"
-  >
-    <div class="dashboard-preview__topbar"><span></span><span></span><span></span><i></i></div>
-    <div class="dashboard-preview__canvas">
-      <div class="dashboard-preview__metric"><span></span><strong></strong><i></i></div>
-      <div class="dashboard-preview__chart">
-        <span></span><span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <div class="dashboard-preview__feed"><span></span><span></span><span></span></div>
-    </div>
+function renderDashboardPreview(
+  row: DashboardRow,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  error: string | null,
+) {
+  return html`<div class="dashboard-preview" aria-hidden="true" inert>
+    <openclaw-dashboard-preview
+      .gatewaySnapshot=${gatewaySnapshot}
+      .sessionKey=${row.key}
+      .agentId=${row.agentId}
+      .error=${error}
+    ></openclaw-dashboard-preview>
   </div>`;
 }
 
@@ -94,22 +94,41 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
     );
 }
 
-function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
-  const target = sessionNavigationTarget({
-    face: "chat",
-    sessionKey: row.key,
-    fallbackAgentId: data.fallbackAgentId,
-    basePath: data.basePath,
-    row,
-    mainKey: data.mainKey,
-    dashboardExpanded: true,
-  });
+function renderDashboardCard(
+  data: DashboardsRouteData,
+  row: DashboardRow,
+  handlers: DashboardGalleryHandlers,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  previewError: string | null,
+) {
+  const target = isSessionKeyAddressable(row.key, data.globalScope)
+    ? sessionNavigationTarget({
+        face: "dashboard",
+        sessionKey: row.key,
+        fallbackAgentId:
+          row.key === "global" ? row.agentId?.trim() || data.fallbackAgentId : data.fallbackAgentId,
+        basePath: data.basePath,
+        row,
+        mainKey: data.mainKey,
+      })
+    : null;
+  const tag = target ? literal`a` : literal`div`;
   const author = dashboardAuthor(row, data.fallbackAgentId);
   const title = resolveSessionDisplayName(row.key, row);
   const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
-  return html`<article class="dashboard-card" data-dashboard-session=${row.key}>
-    <a class="dashboard-card__main" href=${target.href} aria-label=${title}>
-      ${renderDashboardPreview(row)}
+  return staticHtml`<article class="dashboard-card" data-dashboard-session=${row.key}>
+    <${tag}
+      class="dashboard-card__main"
+      href=${target?.href ?? nothing}
+      aria-label=${target ? title : nothing}
+      @click=${(event: MouseEvent) => {
+        if (target && handlers.onNavigate && shouldHandleNavigationClick(event)) {
+          event.preventDefault();
+          handlers.onNavigate("dashboard", target.options);
+        }
+      }}
+    >
+      ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
           <h2>${title}</h2>
@@ -132,9 +151,9 @@ function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
               : t("dashboardsPage.updatedUnknown")
           }
         </span>
-        <span class="dashboard-card__open" aria-hidden="true">${icons.arrowUpRight}</span>
+        ${target ? html`<span class="dashboard-card__open" aria-hidden="true">${icons.arrowUpRight}</span>` : nothing}
       </footer>
-    </a>
+    </${tag}>
   </article>`;
 }
 
@@ -142,6 +161,8 @@ function renderDashboardList(
   data: DashboardsRouteData,
   filters: DashboardGalleryFilters,
   handlers: DashboardGalleryHandlers,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  previewError: string | null,
 ) {
   const rows = data.result?.sessions ?? [];
   if (data.error && !data.result) {
@@ -224,39 +245,81 @@ function renderDashboardList(
             ${repeat(
               visibleRows,
               (row) => row.key,
-              (row) => renderDashboardCard(data, row),
+              (row) => renderDashboardCard(data, row, handlers, gatewaySnapshot, previewError),
             )}
           </div>`
     }
   </section>`;
 }
 
+function renderDashboardGallerySkeleton() {
+  return html`<section class="dashboards-gallery" aria-busy="true">
+    <span class="sr-only" role="status">${t("common.loading")}</span>
+    <div class="dashboards-loading" aria-hidden="true" inert>
+      <div class="dashboards-toolbar">
+        <div class="dashboards-search skeleton dashboards-loading__control"></div>
+        ${[0, 1].map(
+          () => html`<div class="dashboards-select dashboards-loading__select">
+            <div class="skeleton skeleton-line dashboards-loading__label"></div>
+            <div class="skeleton dashboards-loading__control"></div>
+          </div>`,
+        )}
+      </div>
+      <div class="dashboards-results">
+        <div class="skeleton skeleton-line dashboards-loading__label"></div>
+      </div>
+      <div class="dashboards-grid">
+        ${Array.from(
+          { length: 6 },
+          () => html`<div class="dashboard-card">
+            <div class="dashboard-preview skeleton"></div>
+            <div class="dashboard-card__body">
+              <div
+                class="skeleton skeleton-line skeleton-line--long dashboards-loading__title"
+              ></div>
+              <div class="dashboard-card__author">
+                <div class="dashboard-card__avatar skeleton"></div>
+                <div class="skeleton skeleton-line skeleton-line--medium"></div>
+              </div>
+            </div>
+            <div class="dashboard-card__footer">
+              <div class="skeleton skeleton-line skeleton-line--medium"></div>
+            </div>
+          </div>`,
+        )}
+      </div>
+    </div>
+  </section>`;
+}
+
 export function renderDashboards(
   data: DashboardsRouteData | undefined,
-  onRetry: () => void,
   filters: DashboardGalleryFilters = DEFAULT_FILTERS,
   handlers: DashboardGalleryHandlers = NOOP_HANDLERS,
+  gatewaySnapshot?: ApplicationGatewaySnapshot,
+  previewError: string | null = null,
 ) {
-  const body = data
-    ? html`
-        ${renderPanelRefreshStatus({
-          status: {
-            error: data.error,
-            hasLoaded: data.result !== null,
-            stale: data.result !== null && data.error !== null,
-          },
-          errorMessage: data.error
-            ? t("dashboardsPage.loadError", { error: data.error })
-            : undefined,
-          onRetry,
-        })}
-        ${renderDashboardList(data, filters, handlers)}
-      `
-    : html`<section class="card" aria-busy="true">${t("common.loading")}</section>`;
+  const body =
+    data && (data.result || data.error)
+      ? html`
+          ${renderPanelRefreshStatus({
+            status: {
+              error: data.error,
+              hasLoaded: data.result !== null,
+              stale: data.result !== null && data.error !== null,
+              awaitingGateway: false,
+            },
+            errorMessage: data.error
+              ? t("dashboardsPage.loadError", { error: data.error })
+              : undefined,
+          })}
+          ${renderDashboardList(data, filters, handlers, gatewaySnapshot, previewError)}
+        `
+      : renderDashboardGallerySkeleton();
   return html`
     <section class="content-header dashboards-header">
       <div>
-        <div class="page-title">${titleForRoute("dashboards")}</div>
+        <h1 class="page-title">${titleForRoute("dashboards")}</h1>
         <div class="page-subtitle">${t("subtitles.dashboards")}</div>
       </div>
       ${

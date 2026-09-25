@@ -2,10 +2,11 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { nothing } from "lit";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
 import { page as usageRoute } from "./route.ts";
+import type { UsageSessionEntry } from "./types.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 import "./usage-page.ts";
 
@@ -19,23 +20,23 @@ export type TestUsagePage = HTMLElement & {
   providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
   loadUsage: () => Promise<void>;
+  requestUpdate: () => void;
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
 
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: Error) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, resolve, reject };
-}
+type UsagePublicationFixture = {
+  agentId?: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: boolean;
+};
 
-export function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
+export function contextWithClient(client: GatewayBrowserClient): ApplicationContext & {
+  setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  publishUsage: (publication: UsagePublicationFixture) => void;
+} {
   const subscribe = () => () => undefined;
-  const snapshot = {
+  let snapshot = {
     client,
     phase: "connected",
     hello: null,
@@ -44,11 +45,48 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     lastError: null,
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const selectionState: ApplicationContext["agentSelection"]["state"] = {
+    selectedId: null,
+    scopeId: null,
+  };
+  const selectionListeners = new Set<
+    Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
+  >();
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
   return {
+    setGatewaySnapshot,
+    publishUsage: ({
+      agentId = "main",
+      usageUpdatedAt,
+      usageRefreshFailed,
+    }: UsagePublicationFixture) =>
+      setGatewaySnapshot({
+        usagePublications: {
+          ...snapshot.usagePublications,
+          [agentId]: {
+            usageUpdatedAt,
+            committedAt: usageRefreshFailed
+              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              : usageUpdatedAt,
+            usageRefreshFailed: usageRefreshFailed || undefined,
+          },
+        },
+      }),
     basePath: "",
     gateway: {
-      snapshot,
-      subscribe,
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
     },
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
@@ -56,20 +94,28 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
       subscribe,
     },
     agentSelection: {
-      state: { selectedId: null, scopeId: null },
+      state: selectionState,
       set: vi.fn(),
-      setScope: vi.fn(),
-      subscribe,
+      setScope: vi.fn((scopeId: string | null) => {
+        selectionState.scopeId = scopeId;
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      }),
+      subscribe: (listener: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
+  } as unknown as ReturnType<typeof contextWithClient>;
 }
 
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  context = contextWithClient(client),
+  context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
   const page = document.createElement("openclaw-usage-page") as TestUsagePage;
   page.context = context;
@@ -86,16 +132,46 @@ export function focusDocument(): void {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 }
 
+export function createPendingUsageRouteData(
+  gateway: ApplicationContext["gateway"],
+  date: string,
+): UsageRouteData {
+  return {
+    gateway,
+    gatewaySnapshot: gateway.snapshot,
+    query: {
+      startDate: date,
+      endDate: date,
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result: null,
+    costSummary: null,
+    providerUsage: { state: "pending" },
+    loadedAtMs: null,
+    error: null,
+  };
+}
+
 export function cleanupUsagePageTest(): void {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
 }
 
-export function cacheSnapshot(
-  source: "sessions" | "cost",
-  status: "fresh" | "partial" | "stale" | "refreshing",
-) {
+export function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeight"]> {
+  return {
+    source: "run",
+    generatedAt: 1,
+    systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
+    skills: { promptChars: 10, entries: [{ name, blockChars: 10 }] },
+    tools: { listChars: 0, schemaChars: 0, entries: [] },
+    injectedWorkspaceFiles: [],
+  };
+}
+
+export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshing") {
   const cacheStatus = {
     status,
     cachedFiles: 1,
@@ -130,16 +206,10 @@ export function cacheSnapshot(
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [],
       },
-      cacheStatus: source === "sessions" ? cacheStatus : undefined,
+      cacheStatus,
     } satisfies SessionsUsageResult,
-    costSummary: {
-      updatedAt: Date.now(),
-      days: 1,
-      daily: [],
-      totals,
-      cacheStatus: source === "cost" ? cacheStatus : undefined,
-    } satisfies CostUsageSummary,
   };
 }
 

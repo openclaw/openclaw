@@ -154,14 +154,11 @@ describe("matrix driver client", () => {
         body: parseJsonRequestBody(init),
         url: resolveRequestUrl(input),
       });
-      return new Response(
-        JSON.stringify({
-          access_token: "secondary-token",
-          device_id: "SECONDARYDEVICE",
-          user_id: "@qa-driver:matrix-qa.test",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return Response.json({
+        access_token: "secondary-token",
+        device_id: "SECONDARYDEVICE",
+        user_id: "@qa-driver:matrix-qa.test",
+      });
     };
 
     const client = createMatrixQaClient({
@@ -202,10 +199,7 @@ describe("matrix driver client", () => {
         body: parseJsonRequestBody(init),
         url: resolveRequestUrl(input),
       });
-      return new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({});
     };
 
     const client = createMatrixQaClient({
@@ -258,10 +252,7 @@ describe("matrix driver client", () => {
           key: "👍",
         },
       });
-      return new Response(JSON.stringify({ event_id: "$reaction-1" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ event_id: "$reaction-1" });
     };
 
     const client = createMatrixQaClient({
@@ -287,10 +278,7 @@ describe("matrix driver client", () => {
         url: resolveRequestUrl(input),
       });
       const eventId = requests.length === 1 ? "$replacement-1" : "$redaction-1";
-      return new Response(JSON.stringify({ event_id: eventId }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ event_id: eventId });
     };
 
     const client = createMatrixQaClient({
@@ -344,18 +332,9 @@ describe("matrix driver client", () => {
         url: resolveRequestUrl(input),
       });
       if (requests.length === 1) {
-        return new Response(
-          JSON.stringify({ content_uri: "mxc://matrix-qa.test/red-top-blue-bottom" }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
+        return Response.json({ content_uri: "mxc://matrix-qa.test/red-top-blue-bottom" });
       }
-      return new Response(JSON.stringify({ event_id: "$media-1" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ event_id: "$media-1" });
     };
 
     const client = createMatrixQaClient({
@@ -481,10 +460,7 @@ describe("matrix driver client", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       createRoomBodies.push(parseJsonRequestBody(init));
       expect(resolveRequestUrl(input)).toBe("http://127.0.0.1:28008/_matrix/client/v3/createRoom");
-      return new Response(JSON.stringify({ room_id: "!encrypted:matrix-qa.test" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ room_id: "!encrypted:matrix-qa.test" });
     };
 
     const client = createMatrixQaClient({
@@ -541,45 +517,36 @@ describe("matrix driver client", () => {
         const username = typeof body.username === "string" ? body.username : "";
         const auth = typeof body.auth === "object" && body.auth ? body.auth : undefined;
         if (!auth) {
-          return new Response(
-            JSON.stringify({
+          return Response.json(
+            {
               session: `session-${username}`,
               flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
-            }),
-            { status: 401, headers: { "content-type": "application/json" } },
+            },
+            { status: 401 },
           );
         }
         if ((auth as { type?: string }).type === "m.login.registration_token") {
-          return new Response(
-            JSON.stringify({
+          return Response.json(
+            {
               session: `session-${username}`,
               completed: ["m.login.registration_token"],
               flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
-            }),
-            { status: 401, headers: { "content-type": "application/json" } },
+            },
+            { status: 401 },
           );
         }
-        return new Response(
-          JSON.stringify({
-            access_token: `token-${username}`,
-            device_id: `device-${username}`,
-            user_id: `@${username}:matrix-qa.test`,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return Response.json({
+          access_token: `token-${username}`,
+          device_id: `device-${username}`,
+          user_id: `@${username}:matrix-qa.test`,
+        });
       }
       if (url.endsWith("/_matrix/client/v3/createRoom")) {
         createRoomBodies.push(body);
-        return new Response(JSON.stringify({ room_id: "!room:matrix-qa.test" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ room_id: "!room:matrix-qa.test" });
       }
       if (url.includes("/_matrix/client/v3/join/")) {
-        return new Response(JSON.stringify({ room_id: "!room:matrix-qa.test" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ room_id: "!room:matrix-qa.test" });
       }
       throw new Error(`unexpected fetch ${url}`);
     };
@@ -665,13 +632,10 @@ describe("matrix driver client", () => {
       if (url.endsWith("/_matrix/client/v3/register")) {
         registerCount += 1;
         const role = ["driver", "sut", "observer"][registerCount - 1];
-        return new Response(
-          JSON.stringify({
-            access_token: `token-${role}`,
-            user_id: `@qa-${role}:matrix-qa.test`,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return Response.json({
+          access_token: `token-${role}`,
+          user_id: `@qa-${role}:matrix-qa.test`,
+        });
       }
       if (url.endsWith("/_matrix/client/v3/createRoom")) {
         createRoomBodies.push(body);
@@ -681,10 +645,7 @@ describe("matrix driver client", () => {
         });
       }
       if (url.includes("/_matrix/client/v3/join/")) {
-        return new Response(JSON.stringify({ room_id: "!joined:matrix-qa.test" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ room_id: "!joined:matrix-qa.test" });
       }
       throw new Error(`unexpected fetch ${url}`);
     };

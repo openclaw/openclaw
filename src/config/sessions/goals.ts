@@ -52,8 +52,8 @@ function recordGoalChange(
   options: SessionGoalStoreOptions,
   entry: SessionEntry,
   summary: string,
-): void {
-  recordSessionGoalChanged({
+): Promise<void> {
+  return recordSessionGoalChanged({
     sessionKey: options.sessionKey,
     entry,
     actor: options.actor,
@@ -81,16 +81,16 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
   const budget =
     goal.tokenBudget === undefined
       ? ""
-      : `\nToken budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-  const note = goal.lastStatusNote ? `\nNote: ${goal.lastStatusNote}` : "";
+      : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+  const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
     `Status: ${goal.status}`,
     `Objective: ${goal.objective}`,
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
-    ...(budget ? [budget.slice(1)] : []),
-    ...(note ? [note.slice(1)] : []),
+    ...(budget ? [budget] : []),
+    ...(note ? [note] : []),
     "",
     `Commands: ${commands}`,
   ].join("\n");
@@ -166,7 +166,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   if (!result || !created) {
     throw new Error("session not found");
   }
-  recordGoalChange(options, result, "goal created");
+  await recordGoalChange(options, result, "goal created");
   return cloneGoal(created);
 }
 
@@ -187,7 +187,7 @@ export async function updateSessionGoalStatus(
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
-  recordGoalChange(options, result, `goal status changed to ${updated.status}`);
+  await recordGoalChange(options, result, `goal status changed to ${updated.status}`);
   return cloneGoal(updated);
 }
 
@@ -212,7 +212,7 @@ export async function updateSessionGoalObjective(
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
-  recordGoalChange(options, result, "goal objective changed");
+  await recordGoalChange(options, result, "goal objective changed");
   return cloneGoal(updated);
 }
 
@@ -229,7 +229,7 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
     },
   );
   if (result && removed) {
-    recordGoalChange(options, result, "goal cleared");
+    await recordGoalChange(options, result, "goal cleared");
   }
   return Boolean(result && removed);
 }

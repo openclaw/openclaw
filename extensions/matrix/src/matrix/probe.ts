@@ -6,13 +6,8 @@ import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { isBunRuntime } from "./client/runtime.js";
 
-const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() =>
-  import("./probe.runtime.js").then((runtimeModule) => ({
-    createMatrixClient: runtimeModule.createMatrixClient,
-  })),
-);
+const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -39,9 +34,6 @@ export async function probeMatrix(params: {
         status: null,
         error: null,
       };
-      if (isBunRuntime()) {
-        return { ...result, error: "Matrix probe requires Node (bun runtime not supported)" };
-      }
       if (!params.homeserver?.trim()) {
         return { ...result, error: "missing homeserver" };
       }

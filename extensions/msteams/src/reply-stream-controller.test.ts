@@ -1,5 +1,6 @@
 // Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type StreamCloseResult = { id: string } | undefined;
@@ -353,12 +354,9 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("abcdef");
   });
 
-  it("does not touch native stream on reply start before text or progress work", async () => {
+  it("keeps replies without partial text or progress work on block delivery", async () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
-
-    await ctrl.onReplyStart();
-    await ctrl.onReplyStart();
 
     expect(stream.update).not.toHaveBeenCalled();
     expect(stream.emit).not.toHaveBeenCalled();
@@ -386,13 +384,18 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
-  it("allows fallback delivery for second text segment after tool calls", () => {
+  it.each([false, true])("keeps later partial segments whole with settled=%s", async (settled) => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
 
     ctrl.onPartialReply({ text: "First segment" });
     expect(ctrl.preparePayload({ text: "First segment" })).toBeUndefined();
+    expect(ctrl.claimNativeDelivery()).toBe(true);
+    if (settled) {
+      await ctrl.finalize();
+    }
 
+    ctrl.onPartialReply({ text: "Second segment after tools" });
     const result = ctrl.preparePayload({ text: "Second segment after tools" });
     expect(result).toEqual({ text: "Second segment after tools" });
   });
@@ -484,6 +487,32 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.close).toHaveBeenCalled();
   });
 
+  it("preserves disabled quoted tables when finalizing formatted replies", async () => {
+    const { source: text, expected } = teamsQuotedTableReply;
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      tableMode: "off",
+    });
+
+    ctrl.onPartialReply({ text });
+    expect(ctrl.preparePayload({ text })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: expected,
+      logicalContent: text,
+    });
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "message", text: expected }),
+    );
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
   it("returns suppressed final payload when stream close produces no final activity", async () => {
     const stream = makeStream();
     stream.close.mockResolvedValueOnce(undefined);
@@ -554,6 +583,7 @@ describe("createTeamsReplyStreamController", () => {
           streaming: {
             mode: "progress",
             progress: {
+              toolProgress: true,
               label: "Working",
               maxLines: 3,
             },
@@ -561,8 +591,8 @@ describe("createTeamsReplyStreamController", () => {
         } as never,
       });
 
-      await ctrl.pushProgressLine("tool: search");
-      await ctrl.pushProgressLine("tool: exec");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
+      await ctrl.pushItemEvent({ itemId: "exec", title: "tool: exec", phase: "start" });
       expect(stream.update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(5_000);
@@ -581,7 +611,7 @@ describe("createTeamsReplyStreamController", () => {
       context: makeContext(stream),
       feedbackLoopEnabled: false,
       msteamsConfig: {
-        streaming: { mode: "progress", progress: { label: false } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
       } as never,
     });
 
@@ -610,12 +640,12 @@ describe("createTeamsReplyStreamController", () => {
         feedbackLoopEnabled: false,
         log: { debug: vi.fn() } as never,
         msteamsConfig: {
-          streaming: { mode: "progress", progress: { label: "Working" } },
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
         } as never,
       });
 
       // One work event schedules the delayed start; the turn finishes first.
-      await ctrl.pushProgressLine("tool: search");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
       ctrl.preparePayload({ text: "done" });
       await ctrl.finalize();
       expect(stream.update).not.toHaveBeenCalled();
@@ -636,25 +666,35 @@ describe("createTeamsReplyStreamController", () => {
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
     });
 
     expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
     expect(stream.emit).toHaveBeenCalledWith("complete final answer");
   });
 
-  it("ignores plan updates after final answer streaming starts", async () => {
+  it("ignores progress after final answer streaming starts and settles", async () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
       allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
     });
 
     expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
     await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
+    const lateFailure = {
+      itemId: "late-failure",
+      title: "Late failure",
+      phase: "end",
+      status: "failed",
+    };
+    await ctrl.pushItemEvent(lateFailure);
+    await ctrl.finalize();
+    await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
+    await ctrl.pushItemEvent(lateFailure);
 
     expect(stream.update).not.toHaveBeenCalled();
   });
@@ -670,7 +710,7 @@ describe("createTeamsReplyStreamController", () => {
       context: makeContext(stream),
       feedbackLoopEnabled: false,
       log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
     });
 
     expect(ctrl.preparePayload({ text: "complete final answer" })).toEqual({
@@ -717,9 +757,18 @@ describe("createTeamsReplyStreamController", () => {
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
-        msteamsConfig: { streaming: { mode: "progress" } } as never,
+        msteamsConfig: {
+          streaming: { mode: "progress", progress: { toolProgress: true } },
+        } as never,
       });
-      await expect(ctrl.noteProgressWork({ toolName: "exec" })).resolves.toBeUndefined();
+      await ctrl.pushItemEvent({
+        itemId: "tool:exec",
+        name: "exec",
+        title: "Exec",
+        phase: "end",
+        status: "failed",
+      });
+      expect(stream.update).toHaveBeenCalled();
     });
 
     it("swallows StreamCancelledError thrown from stream.emit during finalize", async () => {
@@ -890,6 +939,7 @@ describe("createTeamsReplyStreamController", () => {
         fallbackPayload: { text: " world" },
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
+      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({ text: "hello again" });
     });
 
     it("does not redeliver an acknowledged final when stream close produces no activity", async () => {

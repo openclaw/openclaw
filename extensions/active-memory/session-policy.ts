@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   normalizePluginsConfig,
   resolvePluginConfigObject,
@@ -127,10 +126,6 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
   return plugins.entries["active-memory"]?.enabled !== false;
 }
 
-function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
-  return resolveRememberAcrossConversations(cfg, agentId);
-}
-
 function updateActiveMemoryGlobalEnabledInConfig(
   cfg: OpenClawConfig,
   enabled: boolean,
@@ -222,8 +217,14 @@ function isEligibleInteractiveSession(ctx: {
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
+  inputProvenance?: { kind?: string };
 }): boolean {
   if (ctx.trigger !== "user") {
+    return false;
+  }
+  // Inter-session deliveries retain the user trigger. Their typed origin keeps
+  // them out of human-message recall.
+  if (ctx.inputProvenance?.kind === "inter_session") {
     return false;
   }
   // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
@@ -436,6 +437,5 @@ export {
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
-  shouldRememberAcrossConversations,
   updateActiveMemoryGlobalEnabledInConfig,
 };

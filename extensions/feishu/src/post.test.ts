@@ -1,5 +1,6 @@
 // Feishu tests cover post plugin behavior.
 import { describe, expect, it } from "vitest";
+import { parseFeishuMarkdown } from "./markdown.js";
 import { parsePostContent } from "./post.js";
 
 describe("parsePostContent", () => {
@@ -8,15 +9,15 @@ describe("parsePostContent", () => {
       title: "Daily *Plan*",
       content: [
         [
-          { tag: "text", text: "Bold", style: { bold: true } },
+          { tag: "text", text: "Bold", style: ["bold"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Italic", style: { italic: true } },
+          { tag: "text", text: "Italic", style: ["italic"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Underline", style: { underline: true } },
+          { tag: "text", text: "Underline", style: ["underline"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Strike", style: { strikethrough: true } },
+          { tag: "text", text: "Strike", style: ["lineThrough"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Code", style: { code: true, bold: true } },
+          { tag: "code", text: "Code" },
         ],
       ],
     });
@@ -28,6 +29,69 @@ describe("parsePostContent", () => {
     );
     expect(result.attachments).toStrictEqual([]);
     expect(result.mentionedOpenIds).toStrictEqual([]);
+  });
+
+  it.each([
+    { style: ["bold"], expected: "**x \\* y** **[Docs](https://example.com)** **@Alice**" },
+    { style: ["italic"], expected: "*x \\* y* *[Docs](https://example.com)* *@Alice*" },
+    {
+      style: ["underline"],
+      expected: "<u>x \\* y</u> <u>[Docs](https://example.com)</u> <u>@Alice</u>",
+    },
+    { style: ["lineThrough"], expected: "~~x \\* y~~ ~~[Docs](https://example.com)~~ ~~@Alice~~" },
+    {
+      style: ["lineThrough", "bold", "italic"],
+      expected: "~~***x \\* y***~~ ~~***[Docs](https://example.com)***~~ ~~***@Alice***~~",
+    },
+    { style: [], expected: "x \\* y [Docs](https://example.com) @Alice" },
+  ])("preserves native inline styles $style", ({ style, expected }) => {
+    const result = parsePostContent(
+      JSON.stringify({
+        content: [
+          [
+            { tag: "text", text: "x * y", style },
+            { tag: "text", text: " " },
+            { tag: "a", text: "Docs", href: "https://example.com", style },
+            { tag: "text", text: " " },
+            { tag: "at", user_name: "Alice", user_id: "ou_alice", style },
+          ],
+        ],
+      }),
+    );
+
+    expect(result.textContent).toBe(expected);
+    expect(result.mentionedOpenIds).toEqual(["ou_alice"]);
+    expect(result.attachments).toEqual([]);
+  });
+
+  it.each([
+    { style: "bold", nodeType: "strong" },
+    { style: "italic", nodeType: "emphasis" },
+  ])("keeps boundary whitespace outside $style delimiters", ({ style, nodeType }) => {
+    const result = parsePostContent(
+      JSON.stringify({
+        content: [
+          [
+            { tag: "text", text: "Before" },
+            { tag: "text", text: " styled ", style: [style] },
+            { tag: "text", text: "after" },
+          ],
+        ],
+      }),
+    );
+
+    expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "Before " },
+            { type: nodeType, children: [{ type: "text", value: "styled" }] },
+            { type: "text", value: " after" },
+          ],
+        },
+      ],
+    });
   });
 
   it("renders links and mentions", () => {

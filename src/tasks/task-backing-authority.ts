@@ -1,5 +1,22 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { getTaskFlowById } from "./task-flow-runtime-internal.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createAcpTaskBackingDetail,
+  createManagedTaskBackingDetail,
+  readManagedTaskBacking,
+  readTaskBackingInstance,
+  hasAuthoritativeTaskBackingFromRecords,
+  selectCurrentCanonicalTaskBacking,
+  type TaskBackingInstance,
+} from "./task-backing-records.js";
+import {
+  getTaskFlowById,
+  getTaskMirroredFlowIds,
+  prepareTaskFlowRegistryRead,
+  readResidentTaskFlow,
+  type TaskFlowRegistryRead,
+} from "./task-flow-runtime-internal.js";
+import { prepareTaskRegistryRead, type TaskRegistryRead } from "./task-registry-read.js";
 import {
   ensureTaskRegistryReady,
   taskIdsByRelatedSessionKey,
@@ -7,102 +24,127 @@ import {
 } from "./task-registry-state.js";
 import type { JsonValue, TaskRecord, TaskRuntime, TaskScopeKind } from "./task-registry.types.js";
 
-const TASK_BACKING_DETAIL_KIND = "task_backing_instance";
-/** Owner-minted identity persisted in canonical tasks and copied into managed projections. */
-export type TaskBackingInstance =
-  | { runtime: "acp"; instanceId: string; generation: number }
-  | { runtime: "subagent"; generation: number };
+export {
+  readTaskBackingInstance,
+  createSubagentTaskBackingDetail,
+  type TaskBackingInstance,
+} from "./task-backing-records.js";
 
-type TaskBackingDetail = TaskBackingInstance & { kind: typeof TASK_BACKING_DETAIL_KIND };
-type ManagedTaskBacking = { taskId: string; instance: TaskBackingInstance };
+export type TaskBackingRead = Pick<
+  TaskRegistryRead,
+  "assertCurrent" | "getTaskById" | "getTasksByRunId"
+> & {
+  getTaskFlowById: TaskFlowRegistryRead["getTaskFlowById"];
+  hasAuthoritativeTaskBacking(task: TaskRecord): boolean;
+};
 
-function readTaskBackingInstance(value: unknown): TaskBackingInstance | undefined {
-  const detail = asOptionalRecord(value);
-  if (detail?.kind !== TASK_BACKING_DETAIL_KIND) {
-    return undefined;
+/** Side effects use both admitted projections; their synchronous guards never reopen storage. */
+export async function prepareTaskBackingRead(): Promise<TaskBackingRead | undefined> {
+  const [taskRead, flowRead] = await Promise.allSettled([
+    prepareTaskRegistryRead(),
+    prepareTaskFlowRegistryRead(),
+  ]);
+  const errors = [taskRead, flowRead].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (errors.length === 1) {
+    throw errors[0];
   }
-  if (detail.runtime === "acp") {
-    const instanceId = typeof detail.instanceId === "string" ? detail.instanceId.trim() : "";
-    return instanceId &&
-      typeof detail.generation === "number" &&
-      Number.isSafeInteger(detail.generation) &&
-      detail.generation > 0
-      ? { runtime: "acp", instanceId, generation: detail.generation }
-      : undefined;
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(
+      errors,
+      "Task backing read preparation failed",
+      errors[0],
+    );
   }
   if (
-    detail.runtime === "subagent" &&
-    typeof detail.generation === "number" &&
-    Number.isSafeInteger(detail.generation) &&
-    detail.generation > 0
+    taskRead.status !== "fulfilled" ||
+    flowRead.status !== "fulfilled" ||
+    !taskRead.value ||
+    !flowRead.value
   ) {
-    return { runtime: "subagent", generation: detail.generation };
+    return undefined;
   }
-  return undefined;
+  const task = taskRead.value;
+  const flow = flowRead.value;
+  const assertCurrent = () => {
+    task.assertCurrent();
+    flow.assertCurrent();
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    getTasksByRunId: task.getTasksByRunId,
+    getTaskById(taskId) {
+      assertCurrent();
+      if (!task.isTaskCurrent(taskId)) {
+        return undefined;
+      }
+      const record = task.getTaskById(taskId);
+      return record?.parentFlowId && !flow.isTaskFlowCurrent(record.parentFlowId)
+        ? undefined
+        : record;
+    },
+    getTaskFlowById: flow.getTaskFlowById,
+    hasAuthoritativeTaskBacking(record) {
+      assertCurrent();
+      if (
+        !task.isTaskCurrent(record.taskId) ||
+        (record.parentFlowId && !flow.isTaskFlowCurrent(record.parentFlowId))
+      ) {
+        return false;
+      }
+      return hasAuthoritativeTaskBackingFromRecords(record, {
+        isManagedFlow: (flowId) => flow.getTaskFlowById(flowId)?.syncMode === "managed",
+        resolveCurrentCanonicalBacking: (scope) => {
+          if (!task.isChildSessionCurrent(scope.childSessionKey)) {
+            return undefined;
+          }
+          const candidates = task.listTaskRecordsForChildSessionKey(scope.childSessionKey);
+          if (
+            candidates.some(
+              (candidate) =>
+                candidate.parentFlowId && !flow.isTaskFlowCurrent(candidate.parentFlowId),
+            )
+          ) {
+            return undefined;
+          }
+          return selectCurrentCanonicalTaskBacking({
+            ...scope,
+            candidates,
+            isTaskMirroredFlow: (flowId) =>
+              flow.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
+          });
+        },
+      });
+    },
+  };
 }
 
-function readManagedTaskBacking(value: unknown): ManagedTaskBacking | undefined {
-  const detail = asOptionalRecord(value);
-  const taskId = typeof detail?.taskId === "string" ? detail.taskId.trim() : "";
-  const instance = readTaskBackingInstance(detail);
-  return taskId && instance ? { taskId, instance } : undefined;
-}
-
-function sameTaskBackingInstance(left: TaskBackingInstance, right: TaskBackingInstance): boolean {
-  return left.runtime === "acp" && right.runtime === "acp"
-    ? left.instanceId === right.instanceId && left.generation === right.generation
-    : left.runtime === "subagent" && right.runtime === "subagent"
-      ? left.generation === right.generation
-      : false;
-}
-
-function isCanonicalBackingTask(task: TaskRecord): boolean {
-  const flowId = task.parentFlowId?.trim();
-  return Boolean(flowId && getTaskFlowById(flowId)?.syncMode === "task_mirrored");
-}
-
-function resolveCurrentCanonicalBacking(params: {
-  runtime: TaskRuntime;
-  scopeKind: TaskScopeKind;
-  ownerKey: string;
-  childSessionKey: string;
-  runId: string;
-}): { task: TaskRecord; instance: TaskBackingInstance } | undefined {
+function resolveCurrentCanonicalBacking(
+  params: Omit<
+    Parameters<typeof selectCurrentCanonicalTaskBacking>[0],
+    "candidates" | "isTaskMirroredFlow"
+  >,
+) {
   ensureTaskRegistryReady();
-  const candidates = [...(taskIdsByRelatedSessionKey.get(params.childSessionKey) ?? [])]
-    .flatMap((taskId) => {
+  const candidates = [...(taskIdsByRelatedSessionKey.get(params.childSessionKey) ?? [])].flatMap(
+    (taskId) => {
       const task = tasks.get(taskId);
       return task ? [task] : [];
-    })
-    .flatMap((task) => {
-      const instance = readTaskBackingInstance(task.detail);
-      return instance &&
-        instance.runtime === params.runtime &&
-        task.runtime === params.runtime &&
-        task.scopeKind === params.scopeKind &&
-        task.childSessionKey?.trim() === params.childSessionKey &&
-        isCanonicalBackingTask(task)
-        ? [{ task, instance }]
-        : [];
-    })
-    .toSorted((left, right) => {
-      const generationDelta = right.instance.generation - left.instance.generation;
-      if (generationDelta !== 0) {
-        return generationDelta;
-      }
-      return (
-        right.task.createdAt - left.task.createdAt ||
-        right.task.taskId.localeCompare(left.task.taskId)
+    },
+  );
+  let mirroredFlowIds: ReadonlySet<string> | undefined;
+  return selectCurrentCanonicalTaskBacking({
+    ...params,
+    candidates,
+    isTaskMirroredFlow: (flowId) => {
+      mirroredFlowIds ??= getTaskMirroredFlowIds(
+        candidates.flatMap((task) => (task.parentFlowId ? [task.parentFlowId.trim()] : [])),
       );
-    });
-  const current = candidates[0];
-  return current?.task.ownerKey === params.ownerKey && current.task.runId?.trim() === params.runId
-    ? current
-    : undefined;
-}
-
-function createAcpTaskBackingDetail(instanceId: string, generation = 1): TaskBackingDetail {
-  return { kind: TASK_BACKING_DETAIL_KIND, runtime: "acp", instanceId, generation };
+      return mirroredFlowIds.has(flowId);
+    },
+  });
 }
 
 export function createNextAcpTaskBackingDetail(params: {
@@ -110,21 +152,49 @@ export function createNextAcpTaskBackingDetail(params: {
   instanceId: string;
 }): JsonValue {
   ensureTaskRegistryReady();
+  const candidateIds = taskIdsByRelatedSessionKey.get(params.childSessionKey) ?? [];
+  let mirroredFlowIds: ReadonlySet<string> | undefined;
+  const isCanonicalBackingTask = (task: TaskRecord): boolean => {
+    const firstFlowId = task.parentFlowId?.trim();
+    if (!firstFlowId) {
+      return false;
+    }
+    mirroredFlowIds ??= getTaskMirroredFlowIds(
+      (function* () {
+        // Restore observers can remove the selected task or append to this live index.
+        yield firstFlowId;
+        for (const taskId of candidateIds) {
+          const flowId = tasks.get(taskId)?.parentFlowId?.trim();
+          if (flowId) {
+            yield flowId;
+          }
+        }
+      })(),
+    );
+    return mirroredFlowIds.has(firstFlowId);
+  };
   // ACP serializes turns per child session. Persisting the next generation here
   // keeps same-run-id replacements distinguishable after restart.
   let generation = 0;
-  for (const taskId of taskIdsByRelatedSessionKey.get(params.childSessionKey) ?? []) {
+  let existingGeneration: number | undefined;
+  for (const taskId of candidateIds) {
     const task = tasks.get(taskId);
     const instance = task ? readTaskBackingInstance(task.detail) : undefined;
-    if (task && instance?.runtime === "acp" && isCanonicalBackingTask(task)) {
+    // Requester candidates serve list queries; generation history keeps its owner/child scope.
+    if (
+      task &&
+      (normalizeOptionalString(task.ownerKey) === params.childSessionKey ||
+        normalizeOptionalString(task.childSessionKey) === params.childSessionKey) &&
+      instance?.runtime === "acp" &&
+      isCanonicalBackingTask(task)
+    ) {
       generation = Math.max(generation, instance.generation);
+      if (instance.instanceId === params.instanceId) {
+        existingGeneration = Math.max(existingGeneration ?? 0, instance.generation);
+      }
     }
   }
-  return createAcpTaskBackingDetail(params.instanceId, generation + 1);
-}
-
-export function createSubagentTaskBackingDetail(generation: number): TaskBackingDetail {
-  return { kind: TASK_BACKING_DETAIL_KIND, runtime: "subagent", generation };
+  return createAcpTaskBackingDetail(params.instanceId, existingGeneration ?? generation + 1);
 }
 
 export function resolveManagedTaskBackingDetail(params: {
@@ -135,17 +205,7 @@ export function resolveManagedTaskBackingDetail(params: {
   runId: string;
 }): JsonValue | undefined {
   const current = resolveCurrentCanonicalBacking(params);
-  return current
-    ? current.instance.runtime === "acp"
-      ? {
-          ...createAcpTaskBackingDetail(current.instance.instanceId, current.instance.generation),
-          taskId: current.task.taskId,
-        }
-      : {
-          ...createSubagentTaskBackingDetail(current.instance.generation),
-          taskId: current.task.taskId,
-        }
-    : undefined;
+  return createManagedTaskBackingDetail(current);
 }
 
 export function getManagedTaskBackingInstance(task: TaskRecord): TaskBackingInstance | undefined {
@@ -157,32 +217,26 @@ export function getManagedTaskBackingInstance(task: TaskRecord): TaskBackingInst
 
 /** A managed projection may control a child only while its exact canonical instance is current. */
 export function hasAuthoritativeTaskBacking(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" && task.runtime !== "subagent") {
-    return true;
-  }
-  const flowId = task.parentFlowId?.trim();
-  if (!flowId || getTaskFlowById(flowId)?.syncMode !== "managed") {
-    return true;
-  }
-  const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return true;
-  }
-  const runId = task.runId?.trim();
-  const managed = readManagedTaskBacking(task.detail);
-  if (!runId || !managed) {
-    return false;
-  }
-  const current = resolveCurrentCanonicalBacking({
-    runtime: task.runtime,
-    scopeKind: task.scopeKind,
-    ownerKey: task.ownerKey,
-    childSessionKey,
-    runId,
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => getTaskFlowById(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking,
   });
-  return Boolean(
-    current &&
-    current.task.taskId === managed.taskId &&
-    sameTaskBackingInstance(current.instance, managed.instance),
-  );
+}
+
+/** Presentation ingestion consumes recorded facts; durable mutations recheck the canonical rows. */
+export function hasResidentTaskBacking(task: TaskRecord): boolean {
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking: (scope) =>
+      selectCurrentCanonicalTaskBacking({
+        ...scope,
+        candidates: [...(taskIdsByRelatedSessionKey.get(scope.childSessionKey) ?? [])].flatMap(
+          (taskId) => {
+            const candidate = tasks.get(taskId);
+            return candidate ? [candidate] : [];
+          },
+        ),
+        isTaskMirroredFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "task_mirrored",
+      }),
+  });
 }

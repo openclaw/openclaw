@@ -713,7 +713,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 240_000);
 
@@ -775,7 +775,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 120_000);
 

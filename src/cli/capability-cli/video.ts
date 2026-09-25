@@ -10,7 +10,6 @@ import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
 } from "../../agents/provider-http-errors.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
@@ -31,13 +30,14 @@ import type { VideoGenerationResolution } from "../../video-generation/types.js"
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalFiniteNumber,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
+  registerLocalProvidersCommand,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -126,6 +126,7 @@ async function runVideoGenerate(params: {
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
@@ -185,17 +186,8 @@ async function runVideoGenerate(params: {
             });
             return { path: filePath, mimeType: video.mimeType, size };
           }
-          // Provider-supplied video URLs are untrusted external sources, and the
-          // in-memory fallback (no --output) must not buffer an unbounded body:
-          // generated videos routinely exceed tens of MiB and a hostile/buggy
-          // provider could exhaust process memory. Cap the read (fail-closed:
-          // overflow cancels the stream and throws rather than silently
-          // truncating) using the same shared bounded reader the rest of the
-          // media stack relies on. The --output branch above already streams
-          // straight to disk, so only this buffered path needs the guard. The
-          // overflow error reports only the provider label and byte cap (never
-          // the raw URL, which may be signed/tokenized) to match the sibling
-          // generated-media downloaders.
+          // Bound the in-memory download; --output streams to disk. Keep signed
+          // provider URLs out of overflow errors.
           const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
           videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
             onOverflow: ({ maxBytes }) =>
@@ -211,17 +203,15 @@ async function runVideoGenerate(params: {
         }
       }
 
-      return {
-        ...(await writeOutputAsset({
-          buffer: videoBuffer!,
-          mimeType: video.mimeType,
-          originalFilename: video.fileName,
-          outputPath: params.output,
-          outputIndex: index,
-          outputCount: result.videos.length,
-          subdir: "generated",
-        })),
-      };
+      return await writeOutputAsset({
+        buffer: videoBuffer!,
+        mimeType: video.mimeType,
+        originalFilename: video.fileName,
+        outputPath: params.output,
+        outputIndex: index,
+        outputCount: result.videos.length,
+        subdir: "generated",
+      });
     }),
   );
   return {
@@ -240,14 +230,14 @@ async function runVideoDescribe(params: { file: string; model?: string; agent?: 
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe"),
-  );
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentId,
     agentDir,
     activeModel,
   });
@@ -326,48 +316,38 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       });
     });
 
-  video
-    .command("providers")
-    .description("List video generation and description providers")
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-        );
-        const result = {
-          generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
+  registerLocalProvidersCommand(
+    video,
+    "List video generation and description providers",
+    (cfg, agentId) => {
+      const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
+        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
+      );
+      return {
+        generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
+          available: true,
+          configured:
+            selectedGenerationProvider === provider.id ||
+            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+          selected: selectedGenerationProvider === provider.id,
+          id: provider.id,
+          label: provider.label,
+          defaultModel: provider.defaultModel,
+          models: provider.models ?? [],
+          capabilities: provider.capabilities,
+        })),
+        description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+          .filter((provider) => provider.capabilities?.includes("video"))
+          .map((provider) => ({
             available: true,
-            configured:
-              selectedGenerationProvider === provider.id ||
-              providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-            selected: selectedGenerationProvider === provider.id,
+            configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+            selected: false,
             id: provider.id,
-            label: provider.label,
-            defaultModel: provider.defaultModel,
-            models: provider.models ?? [],
             capabilities: provider.capabilities,
+            defaultModels: provider.defaultModels,
           })),
-          description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-            .filter((provider) => provider.capabilities?.includes("video"))
-            .map((provider) => ({
-              available: true,
-              configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-              selected: false,
-              id: provider.id,
-              capabilities: provider.capabilities,
-              defaultModels: provider.defaultModels,
-            })),
-        };
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+      };
+    },
+    (value) => JSON.stringify(value, null, 2),
+  );
 }

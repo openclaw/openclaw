@@ -1,6 +1,11 @@
 import { ContextProvider } from "@lit/context";
-import type { RouteId } from "../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGateway,
+  type ApplicationGatewaySnapshot,
+} from "../app/context.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 
 export const hiddenScopeUpgradeCapability = {
@@ -29,9 +34,9 @@ const emptySidebarAttentionStore = {
   dispose: () => undefined,
 } satisfies ApplicationContext["sidebarAttention"];
 
-export function createApplicationContextProvider(context: ApplicationContext<RouteId>) {
+export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
-  const normalize = (value: ApplicationContext<RouteId>) => {
+  const normalize = (value: ApplicationContext) => {
     if (!value.sidebarAttention) {
       Object.assign(value, { sidebarAttention: emptySidebarAttentionStore });
     }
@@ -42,8 +47,44 @@ export function createApplicationContextProvider(context: ApplicationContext<Rou
     initialValue: normalize(context),
   });
   return Object.assign(host, {
-    setContext: (value: ApplicationContext<RouteId>) => provider.setValue(normalize(value)),
+    setContext: (value: ApplicationContext) => provider.setValue(normalize(value)),
   });
 }
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
+
+export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
+  let snapshot = initial;
+  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
+  const gateway = {
+    connectionRevision: 0,
+    connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
+    get snapshot() {
+      return snapshot;
+    },
+    connect: () => undefined,
+    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEvents(listener: GatewayEventListener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+  } as unknown as ApplicationGateway;
+  return {
+    gateway,
+    publishEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
+    publish(next: ApplicationGatewaySnapshot) {
+      snapshot = next;
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}

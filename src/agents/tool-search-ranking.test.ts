@@ -34,11 +34,11 @@ const CATALOG = [
   }),
 ];
 
-function runtime(): ToolSearchRuntime {
+function runtime(catalog = CATALOG): ToolSearchRuntime {
   const ctx = {
     catalogRef: {
       current: {
-        entries: CATALOG,
+        entries: catalog,
         counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
@@ -258,6 +258,33 @@ describe("untrusted schemas", () => {
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
+    const search = runtime(
+      ["listURL", "listUrl"].map((toolName) =>
+        entry({
+          id: `mcp:accounting:${toolName}`,
+          name: toolName,
+          source: "mcp",
+          description: "Find overdue invoices",
+        }),
+      ),
+    );
+    expect(
+      (await search.search(`mcp:accounting:${name}`, { limit: 1 })).map((hit) => hit.id),
+    ).toEqual([`mcp:accounting:${name}`]);
+  });
+
+  it("preserves ranked exact-match order when the limit excludes other exact matches", async () => {
+    const search = runtime([
+      entry({ id: "z", name: "harvest", description: "Collect records" }),
+      entry({ id: "a", name: "harvest", description: "Collect records" }),
+      entry({ id: "m", name: "HARVEST", description: "Collect records" }),
+      entry({ name: "records", description: "harvest" }),
+    ]);
+
+    expect((await search.search("harvest", { limit: 2 })).map((hit) => hit.id)).toEqual(["a", "m"]);
+  });
+
   it.each([
     {
       query: "scheduling",
@@ -330,7 +357,9 @@ describe("ToolSearchRuntime.search", () => {
 
   it("returns a tool named exactly like a stopword", async () => {
     const catalog = [
-      entry({ name: "do", description: "Run a stored action" }),
+      entry({ id: "z-local", name: "do", description: "Run a stored action" }),
+      entry({ id: "a-remote", source: "mcp", name: "DO", description: "Run a remote action" }),
+      entry({ id: "m-local", name: "do", description: "Run another stored action" }),
       entry({ id: "other", name: "other", description: "Unrelated" }),
     ];
     const ctx = {
@@ -352,9 +381,29 @@ describe("ToolSearchRuntime.search", () => {
       maxSearchLimit: 50,
     });
 
-    // "do" tokenizes to nothing, so it never reaches the ranking; naming it
-    // exactly is still an unambiguous request for it.
-    expect((await search.search("do")).map((hit) => hit.name)).toEqual(["do"]);
+    // "do" tokenizes to nothing; exact matches still retain catalog order,
+    // with visibility applied before the result limit.
+    expect((await search.search(" DO ")).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+      "m-local",
+    ]);
+    expect((await search.search("do", { limit: 2 })).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+    ]);
+    expect(
+      (await search.search("do", { includeMcp: false, limit: 1 })).map((hit) => hit.id),
+    ).toEqual(["z-local"]);
+    expect(
+      (
+        await search.search("do", {
+          allowedIds: new Set(["a-remote", "m-local"]),
+          includeMcp: false,
+          limit: 1,
+        })
+      ).map((hit) => hit.id),
+    ).toEqual(["m-local"]);
   });
 
   it("does not match a term that only appears inside another word", async () => {

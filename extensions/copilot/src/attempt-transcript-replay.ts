@@ -6,6 +6,20 @@ export type AttemptTranscriptMessage =
   | NonNullable<TranscriptRecorder["message"]>
   | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 
+export function userText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1) {
+    // SAFETY: Fields stay unknown until checked below; retain primitive access and repeated getter reads.
+    const part = content[0] as { text?: unknown; type?: unknown };
+    if (part?.type === "text" && typeof part.text === "string") {
+      return part.text;
+    }
+  }
+  return JSON.stringify(content) ?? "";
+}
+
 function readAssistantToolCallIds(message: AttemptTranscriptMessage): string[] {
   return message.role === "assistant"
     ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))

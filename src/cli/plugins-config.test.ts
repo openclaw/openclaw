@@ -1,7 +1,6 @@
-// Plugin config tests cover plugin config command parsing and output formatting.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { setPluginEnabledInConfig } from "./plugins-config.js";
+import { setPluginEnabledInConfig } from "../plugins/toggle-config.js";
 
 describe("setPluginEnabledInConfig", () => {
   it("sets enabled flag for an existing plugin entry", () => {
@@ -29,6 +28,58 @@ describe("setPluginEnabledInConfig", () => {
     expect(next.plugins?.entries?.beta).toEqual({
       enabled: false,
     });
+  });
+
+  it.each([
+    { name: "absent", policy: {}, expected: {} },
+    {
+      name: "own undefined",
+      policy: { allow: undefined, deny: undefined },
+      expected: { allow: undefined, deny: undefined },
+    },
+    { name: "empty", policy: { allow: [], deny: [] }, expected: { allow: [], deny: [] } },
+    {
+      name: "ordered duplicates",
+      policy: {
+        allow: [" GOOGLE-GEMINI-CLI ", "alpha", "google", " "],
+        deny: [" omega ", "OMEGA", ""],
+      },
+      expected: { allow: ["google", "alpha", "google"], deny: ["omega", "omega"] },
+    },
+  ])("preserves raw siblings and $name policy properties", ({ policy, expected }) => {
+    const alpha = { enabled: false, custom: "kept", llm: { allowedModels: [" model "] } };
+    const omega = { config: { optional: undefined, nested: { kept: true } } };
+    const targetModels = ["target-model"];
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          alpha,
+          "GOOGLE-GEMINI-CLI": { config: { models: targetModels } },
+          omega,
+        },
+        ...policy,
+      },
+    };
+    const before = structuredClone(config);
+
+    const next = setPluginEnabledInConfig(config, "google", false);
+
+    expect(config).toStrictEqual(before);
+    expect(Object.keys(next.plugins ?? {})).toEqual(Object.keys(config.plugins ?? {}));
+    expect(Object.keys(next.plugins?.entries ?? {})).toEqual(["alpha", "omega", "google"]);
+    expect(next.plugins?.entries?.alpha).toBe(alpha);
+    expect(next.plugins?.entries?.omega).toBe(omega);
+    expect(next.plugins?.entries?.google).toEqual({
+      config: { models: targetModels },
+      enabled: false,
+    });
+    for (const key of ["allow", "deny"] as const) {
+      expect(Object.hasOwn(next.plugins ?? {}, key)).toBe(Object.hasOwn(policy, key));
+      expect(next.plugins?.[key]).toEqual(expected[key]);
+      if (Array.isArray(policy[key])) {
+        expect(Object.is(next.plugins?.[key], policy[key])).toBe(false);
+      }
+    }
   });
 
   it.each([
@@ -163,5 +214,12 @@ describe("setPluginEnabledInConfig", () => {
     expect(reenabled.plugins?.entries?.telegram).toEqual({
       enabled: true,
     });
+
+    const pluginOnly = setPluginEnabledInConfig(config, "telegram", false, {
+      updateChannelConfig: false,
+    });
+    expect(pluginOnly.channels).toBe(config.channels);
+    expect(pluginOnly.plugins?.entries?.telegram?.enabled).toBe(false);
+    expect(config.channels?.telegram?.enabled).toBe(true);
   });
 });

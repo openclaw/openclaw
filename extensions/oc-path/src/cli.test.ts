@@ -114,7 +114,7 @@ function optionArgs(options: PathCommandOptions): string[] {
 
 async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
   const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     runtime.writeStdout(String(chunk));
     return true;
@@ -141,7 +141,9 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   } finally {
     stdoutWrite.mockRestore();
     stderrWrite.mockRestore();
-    process.exitCode = previousExitCode;
+    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
+    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
+    process.exitCode = previousExitCode ?? 0;
   }
 }
 
@@ -581,6 +583,49 @@ describe("openclaw path CLI", () => {
         "allowlist",
       );
     });
+
+    it("writes literal dollar replacement text through the registered Markdown command", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(filePath, "## Tools\n\n- command: old\n- keep: stable\n", "utf-8");
+      const value = "literal $$ $& $1 $` $' $HOME";
+      const rt = createTestRuntime();
+
+      await pathSetCommand(
+        "oc://AGENTS.md/tools/command/command",
+        value,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      expect(readFileSync(filePath, "utf-8")).toBe(
+        `## Tools\n\n- command: ${value}\n- keep: stable\n`,
+      );
+    });
+
+    it.each([false, true])(
+      "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
+      async (dryRun) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "AGENTS.md");
+        const before = "---\nname: x\n---\n";
+        writeFileSync(filePath, before, "utf-8");
+        const rt = createTestRuntime();
+
+        await pathSetCommand(
+          "oc://AGENTS.md/[frontmatter]/+note",
+          "before__OPENCLAW_REDACTED__after",
+          { cwd: workspaceDir, json: true, dryRun },
+          rt,
+        );
+
+        expect(rt.exitCode).toBe(1);
+        expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+        expect(stderrText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+      },
+    );
 
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");

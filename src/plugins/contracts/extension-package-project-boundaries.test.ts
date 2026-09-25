@@ -81,8 +81,10 @@ const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-workspace.ts",
 ] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.

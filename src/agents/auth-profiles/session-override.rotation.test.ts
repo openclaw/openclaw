@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   configureProviderRoutes,
@@ -27,16 +28,8 @@ function configureMixedOpenAiAuthStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [API_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [API_BACKUP_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-backup",
-      },
+      [API_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [API_BACKUP_PROFILE_ID]: createApiKeyCredential("openai", "sk-backup"),
       [OAUTH_PROFILE_ID]: {
         type: "oauth",
         provider: "openai",
@@ -56,11 +49,7 @@ function configureAnthropicFallbackStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [ANTHROPIC_API_PROFILE_ID]: {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-anthropic",
-      },
+      [ANTHROPIC_API_PROFILE_ID]: createApiKeyCredential("anthropic", "sk-anthropic"),
       [CLAUDE_CLI_PROFILE_ID]: {
         type: "oauth",
         provider: "claude-cli",
@@ -100,7 +89,7 @@ function createTriggeredSessionEntry(params: {
 }
 
 describe("session auth-profile rotation", () => {
-  it("retries preferred OAuth after its cooldown in the same session", async () => {
+  it("retries preferred OAuth after cooldown when compaction also advanced", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -138,16 +127,18 @@ describe("session auth-profile rotation", () => {
         cooldownReason: "rate_limit",
         failureCounts: { rate_limit: 1 },
       };
+      sessionEntry.compactionCount = 1;
 
       expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
         OAUTH_PROFILE_ID,
       );
       expect(sessionEntry.authProfileOverride).toBe(OAUTH_PROFILE_ID);
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(1);
     });
   });
 
-  it("keeps an automatic API-key selection when auth order is implicit", async () => {
+  it("keeps a healthy automatic profile across compaction when auth order is implicit", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -156,6 +147,8 @@ describe("session auth-profile rotation", () => {
       const sessionEntry = createAutomaticSessionEntry({
         model: OPENAI_MODEL_ID,
         authProfileOverride: API_PRIMARY_PROFILE_ID,
+        compactionCount: 1,
+        authProfileOverrideCompactionCount: 0,
       });
       const sessionStore = { "agent:main:main": sessionEntry };
 
@@ -163,10 +156,12 @@ describe("session auth-profile rotation", () => {
         API_PRIMARY_PROFILE_ID,
       );
       expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
+      expect(sessionEntry.updatedAt).toBe(1);
     });
   });
 
-  it("does not reverse an automatic compaction rotation on the next resolution", async () => {
+  it("keeps a healthy automatic fallback across compaction without a retryable preference", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -179,7 +174,7 @@ describe("session auth-profile rotation", () => {
         model: OPENAI_MODEL_ID,
         authProfileOverride: API_PRIMARY_PROFILE_ID,
         compactionCount: 1,
-        authProfileOverrideCompactionCount: 1,
+        authProfileOverrideCompactionCount: 0,
       });
       const sessionStore = { "agent:main:main": sessionEntry };
 
@@ -187,12 +182,17 @@ describe("session auth-profile rotation", () => {
         API_PRIMARY_PROFILE_ID,
       );
       expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
+      expect(sessionEntry.updatedAt).toBe(1);
     });
   });
 
-  it.each(["compaction", "cooldown"] as const)(
-    "keeps a multi-route OpenAI session on its physical route after %s",
-    async (trigger) => {
+  it.each([
+    { trigger: "compaction", expected: API_PRIMARY_PROFILE_ID },
+    { trigger: "cooldown", expected: API_BACKUP_PROFILE_ID },
+  ] as const)(
+    "keeps a multi-route OpenAI session on the expected profile after $trigger",
+    async ({ trigger, expected }) => {
       await withAuthState(async (state) => {
         const agentDir = state.agentDir();
         await fs.mkdir(agentDir, { recursive: true });
@@ -214,16 +214,20 @@ describe("session auth-profile rotation", () => {
 
         const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
 
-        expect(resolved).toBe(API_BACKUP_PROFILE_ID);
-        expect(sessionEntry.authProfileOverride).toBe(API_BACKUP_PROFILE_ID);
+        expect(resolved).toBe(expected);
+        expect(sessionEntry.authProfileOverride).toBe(expected);
         expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
       });
     },
   );
 
-  it.each(["compaction", "cooldown"] as const)(
-    "retains Anthropic API-key to Claude CLI OAuth fallback after %s",
-    async (trigger) => {
+  it.each([
+    { trigger: "compaction", expected: ANTHROPIC_API_PROFILE_ID },
+    { trigger: "cooldown", expected: CLAUDE_CLI_PROFILE_ID },
+  ] as const)(
+    "retains Anthropic fallback behavior after $trigger",
+    async ({ trigger, expected }) => {
       await withAuthState(async (state) => {
         const agentDir = state.agentDir();
         await fs.mkdir(agentDir, { recursive: true });
@@ -242,13 +246,14 @@ describe("session auth-profile rotation", () => {
           sessionStore,
         });
 
-        expect(resolved).toBe(CLAUDE_CLI_PROFILE_ID);
-        expect(sessionEntry.authProfileOverride).toBe(CLAUDE_CLI_PROFILE_ID);
+        expect(resolved).toBe(expected);
+        expect(sessionEntry.authProfileOverride).toBe(expected);
+        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
       });
     },
   );
 
-  it("retains mixed-mode rotation when the provider exposes only one route", async () => {
+  it("keeps a healthy profile across compaction when the provider exposes one route", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -267,16 +272,18 @@ describe("session auth-profile rotation", () => {
 
       const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
 
-      expect(resolved).toBe(OAUTH_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(OAUTH_PROFILE_ID);
+      expect(resolved).toBe(API_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
     });
   });
 
-  it("rotates an automatic override to an auth profile that is not in cooldown", async () => {
+  it("rotates an implicit automatic override to an auth profile that is not in cooldown", async () => {
     await withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state, {
         profileIds: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
       });
+      authStoreMocks.state.store.order = undefined;
       authStoreMocks.isProfileInCooldown.mockImplementation(
         (_store: AuthProfileStore, profileId: string) => profileId === TEST_PRIMARY_PROFILE_ID,
       );

@@ -1,5 +1,6 @@
 {
   "id": "qwen",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -48,6 +49,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "qwen": "alibaba-coding-plan",
+      "qwen-token-plan": "alibaba-token-plan"
+    },
     "suppressions": [
       {
         "provider": "qwen",
@@ -404,6 +409,12 @@
     "discovery": {
       "qwen": "runtime",
       "qwen-token-plan": "refreshable"
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "qwen": { "modelsDev": { "provider": "alibaba" } },
+      "qwen-token-plan": { "modelsDev": { "provider": "alibaba" } }
     }
   },
   "contracts": {

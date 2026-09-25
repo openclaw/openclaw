@@ -28,13 +28,7 @@ import {
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import {
-  collectSessionEntryLookupKeys,
-  readSessionEntryRow,
-  readSessionIdentitySnapshot,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -58,6 +52,7 @@ type OperationErrorCode =
   | "session-rebound"
   | "goal-rebound"
   | "capacity"
+  | "receipt-invalid"
   | "invalid";
 
 export class SessionGoalOperationError extends Error {
@@ -187,7 +182,7 @@ export function readSessionGoalOperationReceipt(
     (result.goal !== undefined && result.goal.id !== result.goalId)
   ) {
     throw new SessionGoalOperationError(
-      "invalid",
+      "receipt-invalid",
       "Stored Goal operation receipt is invalid; inspect the session before retrying.",
     );
   }
@@ -309,44 +304,53 @@ export async function mutateSessionGoal(
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
   const resolved = resolveSqliteScope(options);
   const databaseOptions = toDatabaseOptions(resolved);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
-    const committed = runOpenClawAgentWriteTransaction((database) => {
-      options.assertCurrent?.();
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
-      const replay = readSessionGoalOperationReceipt(
-        database.db,
-        resolved.sessionKey,
-        options.expectedSessionId,
-        options.operation,
-      );
-      if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
-        return { result: replay, replayed: true };
-      }
-      if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
-        throw new SessionGoalOperationError(
-          "session-rebound",
-          "Session changed; refresh before changing its Goal.",
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
+      const committed = runOpenClawAgentWriteTransaction((database) => {
+        options.assertCurrent?.();
+        const fresh = readSessionEntryRow(database, resolved.sessionKey);
+        const replay = readSessionGoalOperationReceipt(
+          database.db,
+          resolved.sessionKey,
+          options.expectedSessionId,
+          options.operation,
         );
-      }
-      const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
-      const next = mergeSessionEntry(fresh.entry, { goal });
-      const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      writeSessionEntry(database, resolved.sessionKey, next);
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const result = writeSessionGoalOperationReceipt(
-        database.db,
-        resolved.sessionKey,
-        options.expectedSessionId,
-        options.operation,
-        goal,
-      );
-      return { result, replayed: false, previousIdentity, currentIdentity, next };
-    }, databaseOptions);
-    if (committed.next) {
-      emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
-    }
-    return { result: committed.result, replayed: committed.replayed, sessionEntry: committed.next };
-  });
+        if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
+          return { result: replay, replayed: true };
+        }
+        if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
+          throw new SessionGoalOperationError(
+            "session-rebound",
+            "Session changed; refresh before changing its Goal.",
+          );
+        }
+        const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
+        const next = mergeSessionEntry(fresh.entry, { goal });
+        // Goal management preserves the session key and generation, so no identity publication is due.
+        writeSessionEntry(database, resolved.sessionKey, next, {
+          canonicalPreviousEntry: fresh.entry,
+        });
+        const result = writeSessionGoalOperationReceipt(
+          database.db,
+          resolved.sessionKey,
+          options.expectedSessionId,
+          options.operation,
+          goal,
+        );
+        return {
+          result,
+          replayed: false,
+          next,
+        };
+      }, databaseOptions);
+      return {
+        result: committed.result,
+        replayed: committed.replayed,
+        sessionEntry: committed.next,
+      };
+    },
+    "session.goal.mutate",
+  );
 }

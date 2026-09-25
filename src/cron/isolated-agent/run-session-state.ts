@@ -3,9 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -55,9 +57,9 @@ export type CronLiveSelection = LiveSessionModelSelection;
  * returns the full entry to commit. `fallbackEntry` seeds creation when the
  * row does not exist yet.
  */
-type PersistSessionEntry = (params: {
+export type CronSessionRowWriter = (params: {
   fallbackEntry: SessionEntry;
-  resetBoundaryReason?: "cron-stale";
+  resetBoundary?: SessionResetBoundaryWrite;
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -104,13 +106,11 @@ function cronTranscriptExists(params: {
     return false;
   }
   try {
-    return (
-      readTranscriptStatsSync({
-        sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }).eventCount > 0
-    );
+    return hasSessionTranscriptEventsSync({
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   } catch {
     return false;
   }
@@ -147,7 +147,8 @@ export function createPersistCronSessionEntry(params: {
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
   sandbox?: "required";
-  persistSessionEntry: PersistSessionEntry;
+  workspaceDir: string;
+  persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
   return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
@@ -172,7 +173,15 @@ export function createPersistCronSessionEntry(params: {
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
       assertCommitAllowed,
-      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
+      ...(resetBoundaryPending
+        ? {
+            resetBoundary: {
+              context: "preserve-tail",
+              reason: "cron-stale",
+              cwd: params.workspaceDir,
+            } satisfies SessionResetBoundaryWrite,
+          }
+        : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
@@ -272,7 +281,7 @@ export function createCronRunContinuationSession(params: {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     requireExplicitMessageTarget?: boolean;
   };
-  persistSessionEntry: PersistSessionEntry;
+  persistSessionEntry: CronSessionRowWriter;
 }): CronRunContinuationSession {
   const scheduledToolPolicy =
     params.toolsAllow === undefined
@@ -507,11 +516,12 @@ export function syncCronSessionLiveSelection(params: {
   if (previousRuntime !== nextRuntime) {
     clearCronContextOwnerState(params.entry);
   }
-  if (params.liveSelection.agentRuntimeOverride) {
-    params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
-  } else {
-    delete params.entry.agentRuntimeOverride;
-  }
+  applyModelRuntimeDirective(
+    params.entry,
+    params.liveSelection.agentRuntimeOverride
+      ? { kind: "set", runtime: params.liveSelection.agentRuntimeOverride }
+      : { kind: "clear" },
+  );
   if (params.liveSelection.authProfileId) {
     const source =
       params.liveSelection.authProfileIdSource ??

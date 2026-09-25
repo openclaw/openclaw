@@ -51,13 +51,7 @@ function leastCommonMultiple(left: bigint, right: bigint): bigint {
 }
 
 function integerCompatibleStep(multipleOf: number): number {
-  const [coefficient = "", exponentText] = String(multipleOf).toLowerCase().split("e");
-  const [whole = "0", fraction = ""] = coefficient.split(".");
-  const exponent = Number(exponentText ?? 0);
-  const digits = BigInt(`${whole}${fraction}`);
-  const denominatorExponent = fraction.length - exponent;
-  const numerator = denominatorExponent < 0 ? digits * 10n ** BigInt(-denominatorExponent) : digits;
-  const denominator = denominatorExponent > 0 ? 10n ** BigInt(denominatorExponent) : 1n;
+  const { numerator, denominator } = decimalRational(multipleOf)!;
   const divisor = greatestCommonDivisor(numerator, denominator);
   const step = Number(numerator / divisor);
   if (!Number.isFinite(step) || step <= 0) {
@@ -421,13 +415,11 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
         : undefined;
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
-  const rawMinimum = lowerBound.exclusive ? undefined : lowerBound.value;
-  const rawMaximum = upperBound.exclusive ? undefined : upperBound.value;
   const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
   const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
 
-  let min = rawMinimum ?? exclusiveMinimum;
-  let max = rawMaximum ?? exclusiveMaximum;
+  let min = lowerBound.value;
+  let max = upperBound.value;
   if (numericStep) {
     if (min !== undefined) {
       min = alignToStep(min, numericStep, "ceil");
@@ -506,16 +498,10 @@ export function normalizeNumericValue(value: number, schema: JsonSchema): number
     normalized = Math.min(constraints.max, normalized);
   }
   if (constraints.exclusiveMin !== undefined && normalized <= constraints.exclusiveMin) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMin, 1)
-        : nextRepresentable(constraints.exclusiveMin, 1);
+    normalized = nextRepresentable(constraints.exclusiveMin, 1);
   }
   if (constraints.exclusiveMax !== undefined && normalized >= constraints.exclusiveMax) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMax, -1)
-        : nextRepresentable(constraints.exclusiveMax, -1);
+    normalized = nextRepresentable(constraints.exclusiveMax, -1);
   }
   return normalizePrecision(
     normalized,
@@ -632,32 +618,19 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
       if (itemCount === 0) {
         return validatedDefaultCandidate(schema, []);
       }
-      if (Array.isArray(schema.items)) {
-        const value: unknown[] = [];
-        for (let index = 0; index < itemCount; index += 1) {
-          const itemSchema =
-            schema.items[index] ??
-            (schema.additionalItems && typeof schema.additionalItems === "object"
-              ? schema.additionalItems
-              : undefined);
-          if (!itemSchema) {
-            return NO_SAFE_DEFAULT;
-          }
-          const itemDefault = defaultValue(itemSchema, depth + 1);
-          if (itemDefault === NO_SAFE_DEFAULT) {
-            return NO_SAFE_DEFAULT;
-          }
-          value.push(itemDefault);
-        }
-        return validatedDefaultCandidate(schema, value);
-      }
       const itemsSchema = schema.items;
-      if (!itemsSchema) {
-        return NO_SAFE_DEFAULT;
-      }
       const value: unknown[] = [];
       for (let index = 0; index < itemCount; index += 1) {
-        const itemDefault = defaultValue(itemsSchema, depth + 1);
+        const itemSchema = Array.isArray(itemsSchema)
+          ? (itemsSchema[index] ??
+            (schema.additionalItems && typeof schema.additionalItems === "object"
+              ? schema.additionalItems
+              : undefined))
+          : itemsSchema;
+        if (!itemSchema) {
+          return NO_SAFE_DEFAULT;
+        }
+        const itemDefault = defaultValue(itemSchema, depth + 1);
         if (itemDefault === NO_SAFE_DEFAULT) {
           return NO_SAFE_DEFAULT;
         }

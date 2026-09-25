@@ -57,6 +57,13 @@ alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports
 (`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
 the focused test subpaths above.
 
+Bundled channel integration tests can use `agent-runtime-test-contracts` for
+real session and subscriber fixtures, `reply-payload-testing` for payload
+construction and delivery settlement, and `plugin-test-runtime` for hook
+runners and registries. These helpers reuse their core owners; register the
+session fixture lifecycle explicitly. Use published runtime subpaths when
+they already expose the needed operation.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |
@@ -86,7 +93,6 @@ the focused test subpaths above.
 | `createTestWizardPrompter`                                                | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                          |
 | `createRuntimeTaskFlow`                                                   | Create isolated runtime task-flow state. Import from `plugin-sdk/plugin-test-runtime`                                                       |
 | `runProviderCatalog`                                                      | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                        |
-| `resolveProviderWizardOptions`                                            | Resolve provider setup wizard choices in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `resolveProviderModelPickerEntries`                                       | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `buildProviderPluginMethodChoice`                                         | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                               |
 | `setProviderWizardProvidersResolverForTest`                               | Inject provider wizard providers for isolated tests. Import from `plugin-sdk/plugin-test-runtime`                                           |
@@ -105,6 +111,7 @@ the focused test subpaths above.
 | `removeAckReactionAfterReply`                                             | Remove ack reaction after reply delivery. Import from `plugin-sdk/channel-feedback`                                                         |
 | `createTestRegistry`                                                      | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                  |
 | `createEmptyPluginRegistry`                                               | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                   |
+| `createPluginMetadataSnapshotFixture`                                     | Build a complete metadata snapshot with aligned manifest and installed-plugin views. Import from `plugin-sdk/plugin-test-runtime`           |
 | `setActivePluginRegistry`                                                 | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`      |
 | `createRequestCaptureJsonFetch`                                           | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-media-understanding`                                        |
 | `isLiveTestEnabled`                                                       | Gate opt-in live provider tests. Import from `plugin-sdk/test-live`                                                                         |
@@ -119,6 +126,7 @@ the focused test subpaths above.
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
 | `createCliRuntimeCapture`                                                 | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                                 |
+| `findSourceImportBackedges`                                               | Asynchronously inspect repository-source static import closures for forbidden dependencies. Import from `plugin-sdk/test-fixtures`          |
 | `runDirectImportSmoke`                                                    | Run a plugin public-surface import in an isolated Node process. Import from `plugin-sdk/test-fixtures`                                      |
 | `importFreshModule`                                                       | Import an ESM module with a fresh query token to bypass module cache. Import from `plugin-sdk/test-fixtures`                                |
 | `bundledPluginRoot` / `bundledPluginFile`                                 | Resolve bundled plugin source or dist fixture paths. Import from `plugin-sdk/test-fixtures`                                                 |
@@ -135,6 +143,18 @@ Bundled-plugin contract suites also use these SDK testing subpaths for
 test-only registry, manifest, public-artifact, and runtime fixture helpers.
 Core-only suites that depend on bundled OpenClaw inventory stay under
 `src/plugins/contracts` instead.
+
+For channel account-policy tests, `createAccountPolicyInheritanceCases()` from
+`openclaw/plugin-sdk/channel-test-helpers` returns four literal inheritance rows
+with fresh objects and arrays on each call, preserving omitted policy fields.
+Use it alongside `validateTestChannelConfig(channelId, channelConfig)`, which
+validates schema-parsed channel data through the host config boundary. Each
+plugin test still owns its schema parsing, account resolver, and assertions,
+including checks that omitted account policies remain absent.
+
+For complete zero-usage inputs, `createZeroUsageFixture()` from
+`openclaw/plugin-sdk/test-fixtures` returns fresh usage and nested cost objects
+without optional telemetry fields. Keep expected usage values explicit.
 
 ### Types
 
@@ -232,6 +252,18 @@ describe("my-channel plugin", () => {
 ```
 
 ### Unit testing a provider plugin
+
+For bundled catalog tests that resolve provider endpoint capabilities, call
+`useProviderCatalogMetadata(new URL(".", import.meta.url))` from
+`openclaw/plugin-sdk/plugin-test-runtime` at file or suite scope. It prepares
+the plugin's manifest metadata once, installs and clears that snapshot around
+each test, and rejects Jiti loading during assertions. This keeps cold runtime
+discovery out of catalog test deadlines without changing provider behavior.
+
+Pass additional manifest roots when a case exercises another provider's endpoints,
+for example `useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url))`.
+Assert the endpoint class in route-specific cases so missing metadata cannot turn
+a provider route into an unintended custom-endpoint case.
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -352,7 +384,7 @@ patterns is recommended.
 
 ## Test configuration
 
-OpenClaw uses Vitest 4 with informational V8 coverage reporting. For plugin tests:
+OpenClaw uses Vitest 5 with informational V8 coverage reporting. For plugin tests:
 
 ```bash
 # Run all tests

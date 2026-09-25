@@ -5,10 +5,8 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -38,7 +36,6 @@ import {
   measureLaunchTurn,
   placements,
   seedActivePlacement,
-  sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
@@ -66,7 +63,7 @@ describe("cloud worker run ownership", () => {
         ...unusedEnvironments(),
         get: () => attachedEnvironment(),
         acquireTurnCredential: async () => credential(),
-        acknowledgeCredentialDelivery: () => true,
+        acknowledgeCredentialDelivery: async () => true,
         startTunnel: async () => ({
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,
@@ -143,14 +140,7 @@ describe("cloud worker run ownership", () => {
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
       };
-      const receiver = createWorkerLiveEventReceiver({
-        getConfig: () => ({ session: { store: sessionTarget.storePath } }),
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
-      receiver.start();
+      const receiver = createWorkerLiveEventReceiver();
       vi.useFakeTimers({
         toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
         now: turnStartedAtMs + firstToolDelayMs,
@@ -171,7 +161,9 @@ describe("cloud worker run ownership", () => {
       );
       try {
         expect(
-          receiver.apply({
+          await receiver.apply({
+            readAckedSeq: () => 0,
+            source: turnCapability,
             identity,
             request: {
               runEpoch: OWNER_EPOCH,
@@ -210,7 +202,9 @@ describe("cloud worker run ownership", () => {
           await expect(turnCapability.run(async () => "late effect")).rejects.toThrow();
         } else {
           expect(
-            receiver.apply({
+            await receiver.apply({
+              readAckedSeq: () => 0,
+              source: turnCapability,
               identity,
               request: {
                 runEpoch: OWNER_EPOCH,
@@ -260,7 +254,7 @@ describe("cloud worker run ownership", () => {
   it.each(["replacement", "claim-loss", "shutdown"] as const)(
     "fences retained event recorders after %s, including a reused run ID",
     async (closure) => {
-      const { captureWorkerTurnDiagnosticRecorder, createWorkerTurnRunOwner } =
+      const { captureWorkerTurnLiveEventOwner, createWorkerTurnRunOwner } =
         await import("./worker-turn-run-owner.js");
       seedActivePlacement();
       const runId = "reused-worker-run";
@@ -290,8 +284,8 @@ describe("cloud worker run ownership", () => {
         protocolFeatures: [],
         credentialExpiresAtMs: Date.now() + 60_000,
       };
-      const record = captureWorkerTurnDiagnosticRecorder(identity);
-      expect(record).toBeTypeOf("function");
+      const eventOwner = captureWorkerTurnLiveEventOwner(identity);
+      expect(eventOwner?.record).toBeTypeOf("function");
       const event = {
         kind: "tool" as const,
         payload: {
@@ -317,18 +311,19 @@ describe("cloud worker run ownership", () => {
               turn: turn(runId),
               sessionKey: SESSION_KEY,
             });
-            expect(captureWorkerTurnDiagnosticRecorder(identity)).toBeUndefined();
-            const current = captureWorkerTurnDiagnosticRecorder({
+            expect(captureWorkerTurnLiveEventOwner(identity)).toBeUndefined();
+            const current = captureWorkerTurnLiveEventOwner({
               ...identity,
               turnClaim: nextClaim,
             });
-            current?.({
+            current?.record({
               ...event,
               payload: { ...event.payload, toolCallId: "current-tool", name: "exec" },
             });
           }
         }
-        record?.(event);
+        eventOwner?.record(event);
+        expect(eventOwner?.isCancelled()).toBe(false);
         const activity = getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID });
         expect(activity.activeToolCallId).toBe(
           closure === "replacement" ? "current-tool" : undefined,

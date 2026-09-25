@@ -37,6 +37,26 @@ function requireFinding(
 }
 
 describe("security audit gateway exposure findings", () => {
+  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
+    "audits public-origin inheritance with allowedOrigins=%j",
+    ({ allowedOrigins }) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          publicOrigin: "https://gateway.example.com",
+          auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+          controlUi: { allowedOrigins },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(
+        findings.some(
+          (finding) => finding.checkId === "gateway.control_ui.allowed_origins_required",
+        ),
+      ).toBe(allowedOrigins !== undefined);
+    },
+  );
+
   it("warns when the MCP Apps bridge is enabled", () => {
     const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
     expect(collectGatewayConfigFindings(cfg, cfg, {})).toEqual(
@@ -535,7 +555,7 @@ describe("security audit gateway exposure findings", () => {
       severity: "critical",
       title: "Trusted-proxy device auto-approval allows full admin",
       detail:
-        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new operator device with full admin; requests without scopes receive full admin automatically.",
       remediation:
         "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
     });

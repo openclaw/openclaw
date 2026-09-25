@@ -1,186 +1,19 @@
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import { startCronClone } from "../../lib/cron/index.ts";
+import {
+  createContext,
+  createGateway,
+  createPage,
+  createRequest,
+  cronListResponse,
+  operatorHello,
+  waitForCronPage,
+} from "./cron-page.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.ts";
-
-type CronTestPage = HTMLElement & {
-  context: ApplicationContext;
-  routeSearch: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-  render: () => typeof nothing;
-  cron: CronState;
-  cronModelSuggestions: string[];
-};
-
-function waitForCronPage(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
-type TestGateway = ApplicationContext["gateway"] & {
-  emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  emitRetiredEvent: (event: Parameters<GatewayEventListener>[0]) => void;
-};
-
-function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<GatewayEventListener>();
-  const allEventListeners: GatewayEventListener[] = [];
-  return {
-    snapshot,
-    connection: { gatewayUrl: "", token: "", password: "" },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      allEventListeners.push(listener);
-      return () => eventListeners.delete(listener);
-    },
-    emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
-      Object.assign(snapshot, patch);
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-    emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
-      for (const listener of allEventListeners) {
-        listener(event);
-      }
-    },
-  } as unknown as TestGateway;
-}
-
-function operatorHello(scopes: string[]): NonNullable<ApplicationGatewaySnapshot["hello"]> {
-  return {
-    type: "hello-ok",
-    protocol: 4,
-    auth: { role: "operator", scopes },
-  };
-}
-
-function createContext(
-  gateway: TestGateway,
-  scopeId: string | null = "main",
-  selectedId: string | null = scopeId,
-): ApplicationContext {
-  const subscribe = () => () => undefined;
-  let selectionState = { selectedId, scopeId };
-  const selectionListeners = new Set<(state: typeof selectionState) => void>();
-  return {
-    basePath: "",
-    gateway,
-    agents: {
-      state: {
-        agentsList: { defaultId: "main", agents: [{ id: "main" }] },
-        agentsLoading: false,
-        agentsError: null,
-      },
-      ensureList: vi.fn(async () => undefined),
-      subscribe,
-    },
-    channels: {
-      state: {
-        channelsSnapshot: null,
-      },
-      refresh: vi.fn(async () => undefined),
-      subscribe,
-    },
-    runtimeConfig: {
-      state: { configSnapshot: null },
-      subscribe,
-    },
-    agentSelection: {
-      get state() {
-        return selectionState;
-      },
-      set(agentId: string | null) {
-        selectionState = { selectedId: agentId, scopeId: agentId };
-        for (const listener of selectionListeners) {
-          listener(selectionState);
-        }
-      },
-      setScope(agentId: string | null) {
-        selectionState = { ...selectionState, scopeId: agentId };
-        for (const listener of selectionListeners) {
-          listener(selectionState);
-        }
-      },
-      subscribe(listener: (state: typeof selectionState) => void) {
-        selectionListeners.add(listener);
-        return () => selectionListeners.delete(listener);
-      },
-    },
-    navigate: vi.fn(),
-    preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
-}
-
-function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {
-  const page = document.createElement("openclaw-cron-page") as CronTestPage;
-  page.context = context;
-  if (!options.render) {
-    page.render = () => nothing;
-  }
-  document.body.append(page);
-  return page;
-}
-
-function cronListResponse(jobs: CronJob[]): CronJobsListResult {
-  return {
-    jobs: jobs.map((job) => ({
-      configRevision: job.configRevision ?? `config-revision-${job.id}`,
-      ...job,
-    })),
-    snapshotRevision: "cron-page-fixture",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
-
-function createRequest(
-  cronStatus: { enabled: boolean; jobs: number; triggersEnabled: boolean } = {
-    enabled: true,
-    jobs: 0,
-    triggersEnabled: true,
-  },
-) {
-  return vi.fn(async (method: string) => {
-    if (method === "cron.status") {
-      return { ...cronStatus };
-    }
-    if (method === "cron.list") {
-      return cronListResponse([]);
-    }
-    if (method === "cron.runs") {
-      return { entries: [], total: 0, offset: 0, hasMore: false };
-    }
-    if (method === "models.list") {
-      return { models: [] };
-    }
-    return {};
-  });
-}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -214,6 +47,135 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("does not treat an accepted edit as completion of a newer clone", async () => {
+    const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
+    const saved = createDeferred<CronJob>();
+    const fallback = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([job]);
+      }
+      if (method === "cron.update") {
+        return saved.promise;
+      }
+      return fallback(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    try {
+      await waitForCronPage(() =>
+        expect(page.querySelector('[data-test-id="cron-row-earlier-edit"]')).not.toBeNull(),
+      );
+      (page.querySelector('[data-test-id="cron-row-earlier-edit"]') as HTMLElement).click();
+      await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
+      (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
+      await waitForCronPage(() =>
+        expect(request).toHaveBeenCalledWith("cron.update", expect.anything()),
+      );
+      // Exercise controller intent replacement; the ordinary clone button is busy-disabled.
+      startCronClone(page.cron, job);
+      page.cron.cronCreateOpen = true;
+      page.requestUpdate();
+      await page.updateComplete;
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+      const draft = page.cron.cronForm;
+      saved.resolve({ ...job, name: "Earlier edit saved" });
+      await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
+      await page.updateComplete;
+      expect(page.cron.cronCreateOpen).toBe(true);
+      expect(page.cron.cronEditingJob).toBeNull();
+      expect(page.cron.cronForm).toBe(draft);
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+    } finally {
+      saved.resolve(job);
+      page.remove();
+    }
+  });
+
+  it.each([
+    { selector: "#cron-name", text: "QA smoke" },
+    { selector: "#cron-payload-text", text: "Write a summary" },
+    { selector: "#cron-every-amount", text: "30" },
+  ])("keeps $selector focused as validation changes while typing", async ({ selector, text }) => {
+    const gateway = createGateway(
+      { request: createRequest() } as unknown as GatewayBrowserClient,
+      true,
+    );
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
+    await page.updateComplete;
+
+    const input = page.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement;
+    input.focus();
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    expect(page.querySelector(selector)?.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement?.matches(selector)).toBe(true);
+
+    for (const character of text) {
+      input.value += character;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await page.updateComplete;
+      expect(document.activeElement?.matches(selector)).toBe(true);
+    }
+    expect((page.querySelector(selector) as HTMLInputElement).value).toBe(text);
+    expect(page.querySelector(selector)?.getAttribute("aria-invalid")).toBe("false");
+  });
+
+  it.each([0, 1, 2])(
+    "opens one attached automation and keeps %i matching jobs scoped",
+    async (count) => {
+      const jobs = Array.from({ length: count }, (_, index) =>
+        createCronViewJob(`linked-${index}`, { name: `Linked ${index}` }),
+      );
+      const fallback = createRequest();
+      const request = vi.fn(async (method: string, _params?: unknown) =>
+        method === "cron.list" ? cronListResponse(jobs) : fallback(method),
+      );
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+      const context = createContext(gateway);
+      const page = createPage(context, { render: true });
+      if (count === 2) {
+        await waitForCronPage(() =>
+          expect(page.querySelector("[data-test-id=cron-list-tab-activity]")).not.toBeNull(),
+        );
+        page
+          .querySelector<HTMLElement>("[data-test-id=cron-list-tab-activity]")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, detail: 1 }));
+        await page.updateComplete;
+      }
+      page.routeSearch = "?session=agent%3Aops%3Anight-watch&agent=ops";
+      await waitForCronPage(() => expect(page.cron.cronJobsTotal).toBe(count));
+      await waitForCronPage(() => expect(page.cron.cronJobsSnapshotRevision).not.toBeNull());
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledWith(
+        "cron.list",
+        expect.objectContaining({ sessionKey: "agent:ops:night-watch", sessionAgentId: "ops" }),
+      );
+      expect(page.cron.cronEditingJob?.id ?? null).toBe(count === 1 ? "linked-0" : null);
+      if (count === 2) {
+        await waitForCronPage(() =>
+          expect(
+            page.querySelector("[data-test-id=cron-tab-all]")?.getAttribute("aria-selected"),
+          ).toBe("true"),
+        );
+      }
+      expect(page.querySelector(".page-subtitle")?.textContent).toContain(
+        "attached to this session",
+      );
+      page.routeSearch = "";
+      await waitForCronPage(() => expect(page.cron.cronSessionFilter).toBeUndefined());
+      expect(page.cron.cronEditingJob).toBeNull();
+    },
+  );
   it.each(["visible", "later page", "another agent"])(
     "opens a linked job's history when the job is on %s",
     async (placement) => {
@@ -294,7 +256,7 @@ describe("CronPage editor state sync", () => {
       jobs.resolve(inventory);
 
       await waitForCronPage(() => {
-        expect(page.cron.cronEditingJobId).toBe(job.id);
+        expect(page.cron.cronEditingJob?.id).toBe(job.id);
         expect(
           page
             .querySelector('[data-test-id="cron-detail-tab-history"]')
@@ -349,7 +311,7 @@ describe("CronPage editor state sync", () => {
     }
     const expectedJobId =
       action === "selecting another job" || action === "opening another link" ? selected.id : null;
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(expectedJobId));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id ?? null).toBe(expectedJobId));
     pending.resolve(linked);
     // Drain the held response and its page update before checking the user's selection.
     await pending.promise;
@@ -357,7 +319,7 @@ describe("CronPage editor state sync", () => {
       setTimeout(resolve, 0);
     });
     await page.updateComplete;
-    expect(page.cron.cronEditingJobId).toBe(expectedJobId);
+    expect(page.cron.cronEditingJob?.id ?? null).toBe(expectedJobId);
     expect(page.cron.cronError).toBeNull();
   });
 
@@ -374,7 +336,7 @@ describe("CronPage editor state sync", () => {
     page.routeSearch = "?job=removed-job";
 
     await waitForCronPage(() => expect(page.textContent).toContain("Automation no longer exists"));
-    expect(page.cron.cronEditingJobId).toBeNull();
+    expect(page.cron.cronEditingJob).toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(1);
   });
 
@@ -413,7 +375,7 @@ describe("CronPage editor state sync", () => {
       }
       await waitForCronPage(() =>
         expect(
-          destination === "a new task" ? page.cron.cronCreateOpen : page.cron.cronEditingJobId,
+          destination === "a new task" ? page.cron.cronCreateOpen : page.cron.cronEditingJob?.id,
         ).toBe(destination === "a new task" ? true : job.id),
       );
       expect(page.cron.cronError).toBeNull();
@@ -550,7 +512,7 @@ describe("CronPage editor state sync", () => {
       expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).not.toBeNull(),
     );
     (page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(staleJob.id));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
     page.cron.cronJobsQuery = "missing from filtered results";
     page.requestUpdate();
@@ -561,7 +523,7 @@ describe("CronPage editor state sync", () => {
     (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
 
     await waitForCronPage(() =>
-      expect(page.cron.cronEditingConfigRevision).toBe("revision-current"),
+      expect(page.cron.cronEditingJob?.configRevision).toBe("revision-current"),
     );
     expect(page.cron.cronEditingJob).toEqual(authoritativeJob);
     expect(request).toHaveBeenCalledWith(
@@ -581,8 +543,7 @@ describe("CronPage editor state sync", () => {
     expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
 
     (page.querySelector('[data-test-id="cron-back"]') as HTMLButtonElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
-    expect(page.cron.cronEditingJob).toBeNull();
+    await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
     expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).toBeNull();
   });
 
@@ -695,7 +656,6 @@ describe("CronPage editor state sync", () => {
       expect(request).toHaveBeenCalledWith("models.list", {
         agentId: scenario.expectedAgentId,
         view: "configured",
-        preparedOnly: true,
       });
     });
 
@@ -752,10 +712,13 @@ describe("CronPage editor state sync", () => {
     });
   });
 
-  it("create & run now issues cron.run for the job returned by cron.add", async () => {
+  it.each([false, true])("completes create & run now after navigation=%s", async (navigated) => {
+    const addRequested = createDeferred();
+    const added = createDeferred<{ id: string }>();
     const request = vi.fn(async (method: string) => {
       if (method === "cron.add") {
-        return { id: "job-fresh" };
+        addRequested.resolve();
+        return added.promise;
       }
       if (method === "cron.list") {
         return cronListResponse([]);
@@ -783,6 +746,15 @@ describe("CronPage editor state sync", () => {
       expect(page.querySelector('[data-test-id="cron-submit-run"]')).not.toBeNull(),
     );
     (page.querySelector('[data-test-id="cron-submit-run"]') as HTMLButtonElement).click();
+    await addRequested.promise;
+    const submittedState = page.cron;
+    let currentPage = page;
+    if (navigated) {
+      page.remove();
+      currentPage = createPage(createContext(gateway, "writer"));
+      await currentPage.updateComplete;
+    }
+    added.resolve({ id: "job-fresh" });
 
     await waitForCronPage(() => {
       const methods = request.mock.calls.map((call) => call[0]);
@@ -793,10 +765,129 @@ describe("CronPage editor state sync", () => {
       expect.objectContaining({ agentId: "writer" }),
     );
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-    await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
-    await waitForCronPage(() =>
-      expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
-    );
+    await waitForCronPage(() => expect(submittedState.cronCreateOpen).toBe(false));
+    if (navigated) {
+      expect(currentPage.cron).not.toBe(submittedState);
+      expect(currentPage.cron.cronError).toBeNull();
+    } else {
+      await waitForCronPage(() =>
+        expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
+      );
+    }
+  });
+
+  it.each([
+    { outcome: "queued", result: { ok: true, enqueued: true, runId: "run-alpha" } },
+    { outcome: "invalid specification", result: { ok: true, ran: false, reason: "invalid-spec" } },
+  ])("keeps the selected history when an earlier run returns $outcome", async ({ result }) => {
+    const alpha = createCronViewJob("alpha", { name: "Alpha task", state: {} });
+    const beta = createCronViewJob("beta", { name: "Beta task", state: {} });
+    const overview = {
+      entries: [
+        {
+          ts: 1,
+          jobId: alpha.id,
+          action: "finished",
+          status: "ok",
+          summary: "Overview history only",
+        },
+      ],
+      total: 1,
+      offset: 0,
+      hasMore: false,
+      nextOffset: null,
+    };
+    const selected = {
+      entries: [
+        {
+          ts: 2,
+          jobId: beta.id,
+          action: "finished",
+          status: "ok",
+          summary: "Beta history is current",
+        },
+      ],
+      total: 1,
+      offset: 0,
+      hasMore: false,
+      nextOffset: null,
+    };
+    const run = createDeferred<unknown>();
+    const firstBeta = createDeferred<typeof selected>();
+    const fallback = createRequest({ enabled: true, jobs: 2, triggersEnabled: true });
+    let betaReads = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return cronListResponse([alpha, beta]);
+      }
+      if (method === "cron.run") {
+        return run.promise;
+      }
+      if (method === "cron.runs") {
+        if ((params as { id?: string }).id === beta.id) {
+          return ++betaReads === 1 ? firstBeta.promise : selected;
+        }
+        return overview;
+      }
+      return fallback(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
+    const page = createPage(createContext(gateway), { render: true });
+    try {
+      await waitForCronPage(() =>
+        expect(page.querySelector('[data-test-id="cron-row-run-alpha"]')).not.toBeNull(),
+      );
+      (page.querySelector('[data-test-id="cron-row-run-alpha"]') as HTMLButtonElement).click();
+      await waitForCronPage(() =>
+        expect(request).toHaveBeenCalledWith("cron.run", { id: alpha.id, mode: "force" }),
+      );
+      // Run actions stop propagation; the overview still permits selecting another row.
+      (
+        page.querySelector('[data-test-id="cron-row-beta"] .cron-table__name') as HTMLButtonElement
+      ).click();
+      await waitForCronPage(() => {
+        expect(betaReads).toBe(1);
+        expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
+      });
+      (page.querySelector('[data-test-id="cron-detail-tab-history"]') as HTMLElement).dispatchEvent(
+        new MouseEvent("click", { detail: 1, bubbles: true }),
+      );
+      await page.updateComplete;
+      // A notification queued before the acknowledgement must not rescue the stale target.
+      expect(page.querySelector(".cron-history")).not.toBeNull();
+      gateway.emitRetiredEvent({
+        type: "event",
+        event: "cron",
+        payload: { jobId: alpha.id, action: "finished" },
+      });
+      run.resolve(result);
+      await waitForCronPage(() =>
+        expect(
+          (page.querySelector('[data-test-id="cron-run-now"]') as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      firstBeta.resolve(selected);
+      await waitForCronPage(() => {
+        expect(page.querySelector(".cron-detail-title")?.textContent).toContain(beta.name);
+        expect(
+          page
+            .querySelector('[data-test-id="cron-detail-tab-history"]')
+            ?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(page.querySelector(".cron-run-entry")?.textContent ?? "").toContain(
+          "Beta history is current",
+        );
+        expect(page.querySelector(".cron-run-entry")?.textContent ?? "").not.toContain(
+          "Overview history only",
+        );
+      });
+    } finally {
+      page.remove();
+      run.resolve(result);
+      firstBeta.resolve(selected);
+      await Promise.allSettled([run.promise, firstBeta.promise]);
+    }
   });
 
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
@@ -850,7 +941,7 @@ describe("CronPage editor state sync", () => {
 
     await waitForCronPage(() => expect(page.querySelector(".cron-table__row")).not.toBeNull());
     (page.querySelector(".cron-table__row") as HTMLElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe("job-1"));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe("job-1"));
     expect(page.cron.cronRunsScope).toBe("job");
     expect(page.cron.cronForm.enabled).toBe(true);
 
@@ -883,7 +974,7 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(findConfirmButton()).toBeDefined());
     findConfirmButton()?.click();
     await removeRequested.promise;
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
+    await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));
   });
 
@@ -939,138 +1030,5 @@ describe("CronPage editor state sync", () => {
     );
     expect(page.querySelector('[data-test-id="cron-submit"]')).toBeNull();
     expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
-  });
-});
-
-describe("CronPage lifecycle", () => {
-  it("registers idempotently when the module is evaluated again", async () => {
-    const registered = customElements.get("openclaw-cron-page");
-    expect(registered).toBeDefined();
-
-    const freshModulePath = "./cron-page.ts?custom-element-idempotence";
-    await expect(import(/* @vite-ignore */ freshModulePath)).resolves.toBeDefined();
-
-    expect(customElements.get("openclaw-cron-page")).toBe(registered);
-  });
-
-  it("replaces all mutable page state on each connection epoch", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway));
-    await page.updateComplete;
-    const connectedState = page.cron;
-    page.cron = {
-      ...connectedState,
-      cronStatus: { enabled: true, triggersEnabled: true, jobs: 1 },
-      cronJobs: [{ id: "old" } as never],
-      cronCreateOpen: true,
-    };
-    page.cronModelSuggestions = ["old/model"];
-
-    gateway.emitSnapshot({ phase: "stopped" });
-    const disconnectedState = page.cron;
-
-    expect(disconnectedState).not.toBe(connectedState);
-    expect(disconnectedState.cronStatus).toBeNull();
-    expect(disconnectedState.cronJobs).toEqual([]);
-    expect(page.cronModelSuggestions).toEqual([]);
-    expect(disconnectedState.cronCreateOpen).toBe(false);
-
-    gateway.emitSnapshot({ phase: "connected" });
-    expect(page.cron).not.toBe(disconnectedState);
-  });
-
-  it("refreshes trigger authoring from scheduler status after reconnect", async () => {
-    const schedulerStatus = { enabled: true, jobs: 0, triggersEnabled: true };
-    const request = createRequest(schedulerStatus);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const context = createContext(gateway);
-    Object.assign(context.runtimeConfig.state, {
-      configForm: { cron: { triggers: { enabled: true } } },
-      configNeedsApply: true,
-    });
-    const page = createPage(context, { render: true });
-
-    await waitForCronPage(() =>
-      expect(page.cron.cronStatus).toMatchObject({ triggersEnabled: true }),
-    );
-    schedulerStatus.triggersEnabled = false;
-    gateway.emitSnapshot({ phase: "stopped" });
-    expect(page.cron.cronStatus).toBeNull();
-    gateway.emitSnapshot({ phase: "connected" });
-
-    await waitForCronPage(() =>
-      expect(page.cron.cronStatus).toMatchObject({ triggersEnabled: false }),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(2);
-    (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
-    await waitForCronPage(() => expect(page.querySelector("fieldset.cron-editor")).not.toBeNull());
-
-    const triggerToggle = Array.from(page.querySelectorAll("wa-switch.settings-toggle")).find(
-      (toggle) => toggle.textContent?.includes("Condition trigger"),
-    );
-    expect(triggerToggle).toBeUndefined();
-    expect(page.textContent).toContain("disabled by cron.triggers.enabled");
-  });
-
-  it("rejects model suggestions from an earlier connection epoch", async () => {
-    const staleModels = createDeferred<{ models: Array<{ id: string }> }>();
-    let modelRequestCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        modelRequestCount += 1;
-        return modelRequestCount === 1 ? staleModels.promise : { models: [{ id: "fresh/model" }] };
-      }
-      if (method === "cron.list") {
-        return cronListResponse([]);
-      }
-      if (method === "cron.runs") {
-        return { entries: [], total: 0, offset: 0, hasMore: false };
-      }
-      return {};
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, false);
-    const page = createPage(createContext(gateway));
-    await page.updateComplete;
-
-    gateway.emitSnapshot({ phase: "connected" });
-    await waitForCronPage(() => expect(modelRequestCount).toBe(1));
-    gateway.emitSnapshot({ phase: "stopped" });
-    gateway.emitSnapshot({ phase: "connected" });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
-
-    staleModels.resolve({ models: [{ id: "stale/model" }] });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
-  });
-
-  it("ignores a cron event callback retained by a replaced gateway source", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstGateway = createGateway(client, true);
-    const secondGateway = createGateway(client, true);
-    const firstContext = createContext(firstGateway);
-    const secondContext = createContext(secondGateway);
-    const page = createPage(firstContext);
-    await waitForCronPage(() => expect(request).toHaveBeenCalled());
-
-    page.context = secondContext;
-    page.requestUpdate();
-    await page.updateComplete;
-    await waitForCronPage(() => expect(page.cron.client).toBe(client));
-    request.mockClear();
-    vi.mocked(secondContext.channels.refresh).mockClear();
-
-    firstGateway.emitRetiredEvent({ event: "cron" } as never);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(secondContext.channels.refresh).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components.system controls behavior.
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
@@ -21,6 +20,7 @@ import {
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
 } from "./agent-components-helpers.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
 import { enqueueRoutedSystemEvent } from "./agent-components.deps.runtime.js";
 
 type AgentSystemControlParams = {
@@ -45,8 +45,12 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   }
 
   const { componentId } = parsed;
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return;
+  }
   const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.interactionComponentLabel,
@@ -68,7 +72,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   } = interactionCtx;
 
   const allowed = await ensureAgentComponentInteractionAllowed({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     channelId,
     rawGuildId,
@@ -83,7 +87,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   }
 
   const route = resolveAgentComponentRoute({
-    ctx: params.ctx,
+    ctx,
     rawGuildId,
     memberRoleIds,
     isDirectMessage,

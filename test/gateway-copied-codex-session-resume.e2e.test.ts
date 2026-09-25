@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../src/plugins/installed-plugin-index-records.js";
+import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -123,7 +123,7 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
       },
     };\n`,
   );
-  await writePersistedInstalledPluginIndexInstallRecords(
+  await seedInstalledPluginIndex(
     {
       [PLUGIN_ID]: {
         source: "path",

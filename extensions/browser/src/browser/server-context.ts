@@ -125,7 +125,6 @@ function createProfileContext(
     profile,
     runtime: profileState,
     getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
-    ensureBrowserAvailable: rawAvailability.ensureBrowserAvailable,
     listTabs: rawTabOps.listTabs,
     openTab: rawTabOps.openTab,
   });
@@ -158,12 +157,18 @@ function createProfileContext(
     profile,
     ensureBrowserAvailable,
     ensureTabAvailable: async (targetId, options) => {
-      await ensureBrowserAvailable({ signal: options?.signal });
-      return await withLease(
-        options?.signal,
-        async (signal) =>
-          await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
-      );
+      if (targetId === undefined) {
+        await ensureBrowserAvailable({ signal: options?.signal });
+      }
+      return await withLease(options?.signal, async (signal) => {
+        // Explicit targets can come from history; lookup must not launch or restart a browser.
+        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
+          );
+        }
+        return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+      });
     },
     isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
@@ -303,6 +308,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                           activeProfile.cdpUrl,
                           probeTimeoutMs,
                           resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                          signal,
                         );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
@@ -363,14 +369,6 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
   // Create default profile context for backward compatibility
   const getDefaultContext = () => forProfile();
 
-  const mapTabError = (err: unknown) => {
-    const browserMapped = toBrowserErrorResponse(err);
-    if (browserMapped) {
-      return browserMapped;
-    }
-    return null;
-  };
-
   return {
     state,
     forProfile,
@@ -379,16 +377,17 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     ensureBrowserAvailable: (options) => getDefaultContext().ensureBrowserAvailable(options),
     ensureTabAvailable: (targetId, options) =>
       getDefaultContext().ensureTabAvailable(targetId, options),
-    isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
-    isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
+    isHttpReachable: (timeoutMs, signal) => getDefaultContext().isHttpReachable(timeoutMs, signal),
+    isTransportAvailable: (timeoutMs, signal, pageProbe) =>
+      getDefaultContext().isTransportAvailable(timeoutMs, signal, pageProbe),
     isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
-    listTabs: () => getDefaultContext().listTabs(),
+    listTabs: (options) => getDefaultContext().listTabs(options),
     openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
     labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
     focusTab: (targetId, options) => getDefaultContext().focusTab(targetId, options),
     closeTab: (targetId, options) => getDefaultContext().closeTab(targetId, options),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
     resetProfile: () => getDefaultContext().resetProfile(),
-    mapTabError,
+    mapTabError: toBrowserErrorResponse,
   };
 }

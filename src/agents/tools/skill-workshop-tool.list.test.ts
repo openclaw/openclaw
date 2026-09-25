@@ -1,38 +1,60 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
+import type { SkillWorkshopStoreOptions } from "../../skills/workshop/store-sqlite-schema.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const commitLockState = vi.hoisted(() => ({ active: false, calls: 0 }));
-
-vi.mock("../../skills/workshop/target-lock.js", () => ({
-  withSkillCollectionLock: async (_workspaceDir: string, fn: () => Promise<unknown>) => await fn(),
-  withSkillProposalTargetLock: async (_record: unknown, fn: () => Promise<unknown>) => await fn(),
-  withSkillProposalCommitLock: async (
-    _workspaceDir: string,
-    _record: unknown,
-    fn: () => Promise<unknown>,
-  ) => {
-    if (commitLockState.active) {
-      throw new Error("skill proposal reconciliations overlapped");
-    }
-    commitLockState.active = true;
-    commitLockState.calls += 1;
-    await Promise.resolve();
-    try {
-      return await fn();
-    } finally {
-      commitLockState.active = false;
-    }
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
   },
-}));
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+
+vi.mock("../../skills/workshop/target-lock.js", async () => {
+  const { captureSkillWorkshopStoreOptions } =
+    await import("../../skills/workshop/store-client.js");
+  type CapturedStore = ReturnType<typeof captureSkillWorkshopStoreOptions>;
+  return {
+    withSkillCollectionLock: async (
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => await fn(captureSkillWorkshopStoreOptions(options)),
+    withSkillProposalTargetLock: async (
+      _record: unknown,
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => await fn(captureSkillWorkshopStoreOptions(options)),
+    withSkillProposalCommitLock: async (
+      _record: unknown,
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => {
+      const store = captureSkillWorkshopStoreOptions(options);
+      if (commitLockState.active) {
+        throw new Error("skill proposal reconciliations overlapped");
+      }
+      commitLockState.active = true;
+      commitLockState.calls += 1;
+      await Promise.resolve();
+      try {
+        return await fn(store);
+      } finally {
+        commitLockState.active = false;
+      }
+    },
+  };
+});
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -67,7 +89,12 @@ describe("skill_workshop list", () => {
       proposal_content: "# Missing Draft\n",
     });
     const proposalId = (created.details as { id: string }).id;
-    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    const record = await readSkillProposalRecord(
+      proposalId,
+      { config: {}, env: testState.env },
+      {},
+      { config: {} },
+    );
     if (!record) {
       throw new Error(`expected stored proposal ${proposalId}`);
     }
@@ -86,10 +113,14 @@ describe("skill_workshop list", () => {
     });
     await expect(
       tool.execute("call-inspect", { action: "inspect", proposal_id: proposalId }),
-    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    ).rejects.toThrow(
+      `Skill proposal draft is missing: ${proposalId}. Run openclaw doctor --fix for recovery.`,
+    );
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: proposalId }),
-    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    ).rejects.toThrow(
+      `Skill proposal draft is missing: ${proposalId}. Run openclaw doctor --fix for recovery.`,
+    );
     await expect(
       tool.execute("call-reject", { action: "reject", proposal_id: proposalId }),
     ).resolves.toMatchObject({ details: { id: proposalId, status: "rejected" } });
@@ -130,13 +161,14 @@ describe("skill_workshop list", () => {
         proposal_content: `# Limit Proposal ${index}\n`,
       });
     }
-    await writeWorkspaceSkills(
-      workspaceDir,
-      Array.from({ length: 51 }, (_, index) => ({
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+    for (let index = 0; index < 51; index += 1) {
+      await writeSkill({
+        dir: path.join(workshopDir, `limit-proposal-${index}`),
         name: `limit-proposal-${index}`,
         description: `Materialized proposal ${index}`,
-      })),
-    );
+      });
+    }
 
     for (const [limit, expectedCount] of [
       [49, 49],

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  bindAgentToolAvailability,
   finalizeAgentToolAvailability,
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
@@ -9,6 +10,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
 import {
   applyToolSearchCatalog,
@@ -48,7 +50,113 @@ beforeEach(() => {
   });
 });
 
+describe("execution allowlist availability", () => {
+  const sparseAllow: string[] = [];
+  sparseAllow.length = 1;
+  it.each([
+    {
+      label: "aliases",
+      allow: [" BASH ", "apply-PATCH", " CRON "],
+      expected: ["exec", "apply_patch", "automations"],
+    },
+    { label: "blank names", allow: [" \t "], expected: ["", "   "] },
+    {
+      label: "literal names",
+      allow: ["write", "web_*", "*", "group:fs"],
+      expected: ["WRITE", "web_*", "*", "group:fs"],
+    },
+    { label: "empty list", allow: [], expected: [] },
+    { label: "sparse list", allow: sparseAllow, expected: [] },
+  ])("prepares callable tools from frozen $label", ({ allow, expected }) => {
+    const tools = [
+      "exec",
+      "apply_patch",
+      "automations",
+      "WRITE",
+      "read",
+      "web_fetch",
+      "web_*",
+      "*",
+      "group:fs",
+      "",
+      "   ",
+    ].map((name) => ({ name, description: name, parameters: { type: "object", properties: {} } }));
+    let callableNames: string[] = [];
+    bindAgentToolAvailability(tools[0]!, {
+      prepare: (_tool, callableTools) => {
+        callableNames = [...callableTools.keys()];
+      },
+    });
+
+    finalizeAgentToolAvailability(tools, { toolExecutionAllow: Object.freeze(allow) });
+
+    expect(callableNames).toEqual(expected);
+  });
+
+  it("reads current execution caps when restricting and rebuilding a catalog", async () => {
+    const catalogConfig = {
+      ...config,
+      tools: { toolSearch: { enabled: true, mode: "tools" as const } },
+    };
+    const catalogRef = createToolSearchCatalogRef();
+    const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
+    const tool = spawnTool();
+    const params = {
+      tools: [...controls, tool, reader()],
+      config: catalogConfig,
+      catalogRef,
+      toolExecutionAllow: ["sessions_spawn", "agents_wait"],
+    };
+    const expectUnavailable = async () => {
+      await expect(tool.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
+        "Collector results are unavailable",
+      );
+      expect(tool.parameters).not.toHaveProperty("properties.collect");
+      expect(spawn).not.toHaveBeenCalled();
+    };
+    try {
+      applyToolSearchCatalog(params);
+      expect(tool.parameters).toHaveProperty("properties.collect");
+
+      params.toolExecutionAllow[1] = "read";
+      restrictToolSearchCatalog({
+        catalogRef,
+        allowedToolNames: new Set(["sessions_spawn", "agents_wait"]),
+      });
+      await expectUnavailable();
+
+      params.toolExecutionAllow[1] = "agents_wait";
+      applyToolSearchCatalog(params);
+      expect(tool.parameters).toHaveProperty("properties.collect");
+
+      params.toolExecutionAllow = ["sessions_spawn", "read"];
+      applyToolSearchCatalog(params);
+      await expectUnavailable();
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+    }
+  });
+});
+
 describe("collector tool availability", () => {
+  it("preserves normalized collector fields across availability changes", () => {
+    const source = spawnTool();
+    const wait = reader();
+    finalizeAgentToolAvailability([source, wait]);
+    const normalized = normalizeToolParameters(source, { modelProvider: "google" });
+
+    finalizeAgentToolAvailability([normalized, wait]);
+    expect(normalized.parameters).toHaveProperty("properties.outputSchema.type", "object");
+    expect(normalized.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+
+    finalizeAgentToolAvailability([normalized]);
+    expect(normalized.parameters).not.toHaveProperty("properties.outputSchema");
+    const wrapped = wrapToolWithBeforeToolCallHook(normalized);
+    finalizeAgentToolAvailability([wrapped, wait]);
+    expect(wrapped.parameters).toHaveProperty("properties.outputSchema.type", "object");
+    expect(wrapped.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+  });
+
   it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
     "hides and refuses collection with a %s reader, without disabling ordinary spawning or fastMode",
     async (kind) => {

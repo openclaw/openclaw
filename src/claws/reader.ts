@@ -2,9 +2,8 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { isScalar, parseDocument, visit } from "yaml";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
@@ -21,6 +20,7 @@ import type {
   ClawSourceIdentity,
   ClawWorkspaceSourceSnapshot,
 } from "./types.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 type PackageJson = {
   name: string;
@@ -315,43 +315,6 @@ function parsePackageJson(value: unknown): PackageJson | undefined {
   return { name: record.name, version: record.version, openclaw: { claw } };
 }
 
-async function readJson(
-  path: string,
-  code: string,
-  maxBytes: number,
-): Promise<
-  { ok: true; raw: Buffer; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
-> {
-  let raw: Buffer;
-  try {
-    raw = await readBoundedFile(path, maxBytes);
-  } catch (error) {
-    const tooLarge =
-      error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          tooLarge ? `${code}_too_large` : code,
-          tooLarge
-            ? `${path} exceeds ${maxBytes} bytes.`
-            : `Could not read ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, raw, value: JSON.parse(raw.toString("utf8")) };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("invalid_json", `Could not parse ${path}: ${(error as Error).message}`),
-      ],
-    };
-  }
-}
-
 export function parseClawMarkdown(
   raw: Buffer,
   path: string,
@@ -387,57 +350,8 @@ export function parseClawMarkdown(
       ],
     };
   }
-  const document = parseDocument(frontmatter, { prettyErrors: false, uniqueKeys: true });
-  if (document.errors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: document.errors.map((error) =>
-        fileDiagnostic("invalid_claw_frontmatter", `Could not parse ${path}: ${error.message}`),
-      ),
-    };
-  }
-  let unsupportedFeature: string | undefined;
-  visit(document, {
-    Alias() {
-      unsupportedFeature ??= "aliases";
-    },
-    Node(_key, node) {
-      if (node.anchor) {
-        unsupportedFeature ??= "anchors";
-      } else if (node.tag) {
-        unsupportedFeature ??= "explicit tags";
-      }
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<") {
-        unsupportedFeature ??= "merge keys";
-      }
-    },
-  });
-  if (unsupportedFeature) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "unsupported_claw_yaml_feature",
-          `${path} uses ${unsupportedFeature}; CLAW.md frontmatter must map directly to JSON data.`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, value: document.toJSON(), body };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "invalid_claw_frontmatter",
-          `Could not parse ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
+  const parsed = parseClawYaml(frontmatter, path, "frontmatter");
+  return parsed.ok ? { ...parsed, body } : parsed;
 }
 
 function parseClawManifestDocument(
@@ -462,6 +376,7 @@ function parseClawManifestDocument(
 async function readClawDocument(
   path: string,
   code: string,
+  maxBytes: number,
   manifestFormatPath = path,
 ): Promise<
   | { ok: true; raw: Buffer; value: unknown; body?: Buffer }
@@ -469,7 +384,7 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, MAX_CLAW_MANIFEST_BYTES);
+    raw = await readBoundedFile(path, maxBytes);
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
@@ -479,7 +394,7 @@ async function readClawDocument(
         fileDiagnostic(
           tooLarge ? `${code}_too_large` : code,
           tooLarge
-            ? `${path} exceeds ${MAX_CLAW_MANIFEST_BYTES} bytes.`
+            ? `${path} exceeds ${maxBytes} bytes.`
             : `Could not read ${path}: ${(error as Error).message}`,
         ),
       ],
@@ -502,7 +417,7 @@ async function resolvePackageSource(
     };
   }
   const packageJsonPath = resolve(packageRootReal, "package.json");
-  const packageJsonResult = await readJson(
+  const packageJsonResult = await readClawDocument(
     packageJsonPath,
     "package_read_failed",
     MAX_CLAW_PACKAGE_JSON_BYTES,
@@ -571,6 +486,13 @@ async function resolveSource(
     };
   }
   if (inputStat.isDirectory()) {
+    const sourceRoot = await fsSafeRoot(inputPath);
+    if (
+      !(await sourceRoot.exists("package.json")) &&
+      (await sourceRoot.exists(CLAW_MARKDOWN_FILENAME))
+    ) {
+      return resolveSource(resolve(inputPath, CLAW_MARKDOWN_FILENAME));
+    }
     return resolvePackageSource(inputPath);
   }
   if (!inputStat.isFile()) {
@@ -617,6 +539,7 @@ export async function readClawManifestFile(
   const manifestResult = await readClawDocument(
     sourceResult.source.manifestPath,
     "read_failed",
+    MAX_CLAW_MANIFEST_BYTES,
     sourceResult.source.manifestFormatPath,
   );
   if (!manifestResult.ok) {

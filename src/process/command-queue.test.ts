@@ -5,12 +5,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
+import { processProbeEntrypoints } from "./process-probes-runtime.test-support.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -265,9 +267,10 @@ describe("command queue", () => {
   });
 
   it("avoids quadratic array work as a paused queue doubles", () => {
+    const queueUrl = resolveRuntimeWorkerUrl(processProbeEntrypoints.commandQueue);
     const script = String.raw`
       const { enqueueCommandInLane, setCommandLaneConcurrency } = await import(
-        "./src/process/command-queue.ts"
+        ${JSON.stringify(queueUrl.href)}
       );
       const originalFindIndex = Array.prototype.findIndex;
       const originalShift = Array.prototype.shift;
@@ -306,7 +309,7 @@ describe("command queue", () => {
     `;
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [...resolveRuntimeWorkerArgv(queueUrl).slice(0, -1), "--input-type=module", "--eval", script],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -530,7 +533,7 @@ describe("command queue", () => {
     expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     expect(task2Ran).toBe(false);
 
-    // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
+    // Simulate SIGUSR2: reset all lanes. Queued work (task2) should be
     // drained immediately — no fresh enqueue needed.
     resetAllLanes();
 
@@ -1009,64 +1012,6 @@ describe("command queue", () => {
     setCommandLaneConcurrency(outerLane, 1);
 
     await expect(task).rejects.toBeInstanceOf(GatewayDrainingError);
-  });
-
-  it("migrates legacy queued entries missing priority and wait diagnostics", async () => {
-    const key = Symbol.for("openclaw.commandQueueState");
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    const original = globalStore[key];
-    let queuedAhead: number | null = null;
-    const legacyTask = new Promise<string>((resolve, reject) => {
-      globalStore[key] = {
-        gatewayDraining: false,
-        lanes: new Map([
-          [
-            CommandLane.Main,
-            {
-              lane: CommandLane.Main,
-              queue: [
-                {
-                  task: async () => "done",
-                  resolve,
-                  reject,
-                  enqueuedAt: Date.now() - 10,
-                  warnAfterMs: 0,
-                  onWait: (_ms: number, ahead: number) => {
-                    queuedAhead = ahead;
-                  },
-                },
-              ],
-              activeTaskIds: new Set(),
-              maxConcurrent: 1,
-              draining: false,
-              generation: 0,
-            },
-          ],
-        ]),
-        activeTaskWaiters: new Set(),
-        nextTaskId: 1,
-        nextQueueSequence: 1,
-      };
-    });
-
-    try {
-      resetAllLanes();
-
-      await expect(legacyTask).resolves.toBe("done");
-      expect(queuedAhead).toBe(0);
-      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
-        ([message]) =>
-          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
-      );
-      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=0");
-    } finally {
-      if (original !== undefined) {
-        globalStore[key] = original;
-      } else {
-        delete globalStore[key];
-      }
-      resetCommandQueueStateForTest();
-    }
   });
 
   it("shares lane state across distinct module instances", async () => {

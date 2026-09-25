@@ -27,7 +27,8 @@ const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
-const SCREEN_DANGEROUS_COMMANDS = ["screen.record", NODE_DESKTOP_STREAM_COMMAND];
+const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const DESKTOP_SCREEN_COMMANDS = [...SCREEN_COMMANDS, NODE_DESKTOP_STREAM_COMMAND];
 
 // Desktop computer use is advertised only while the node-local control is
 // enabled. Pairing approval of that advertised surface is the durable grant.
@@ -153,16 +154,16 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS, ...SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
+  linux: [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
@@ -272,14 +273,17 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands = [
-    ...registry.nodeHostCommands
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
-  ];
+  const commands: string[] = [];
+  registry.nodeHostCommands.forEach(({ command }) => {
+    if (command.dangerous === true) {
+      commands.push(command.command);
+    }
+  });
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous === true) {
+      policy.commands.forEach((command) => commands.push(command));
+    }
+  });
   return normalizeUniqueStringEntries(commands);
 }
 
@@ -293,23 +297,18 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
-      return [];
+  const commands: string[] = [];
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
+      policy.commands.forEach((command) => commands.push(command));
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  const nodeHostCommands = registry.nodeHostCommands
-    .filter((entry) => {
-      if (entry.command.dangerous === true) {
-        return false;
-      }
-      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
-      return defaults.includes(platformId);
-    })
-    .map((entry) => entry.command.command);
-  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
+  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
+    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+      commands.push(command);
+    }
+  });
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
@@ -516,7 +515,7 @@ const CAPABILITY_COMMAND_FAMILIES: ReadonlyMap<string, ReadonlySet<string>> = ne
   ["camera", new Set([...CAMERA_COMMANDS, ...MAC_CAMERA_COMMANDS, ...CAMERA_DANGEROUS_COMMANDS])],
   ["computer", new Set(COMPUTER_COMMANDS)],
   ["location", new Set(MOBILE_NODE_COMMANDS.location)],
-  ["screen", new Set([...SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
+  ["screen", new Set([...DESKTOP_SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
 ]);
 
 /** Drops capabilities whose commands policy withheld without admitting a sibling. */

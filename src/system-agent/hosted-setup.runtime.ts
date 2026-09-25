@@ -1,5 +1,7 @@
 import { stat } from "node:fs/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
@@ -52,32 +54,37 @@ export async function runHostedSetup(params: {
   run: (context: { baseConfig: OpenClawConfig; runtime: RuntimeEnv }) => Promise<
     | {
         nextConfig: OpenClawConfig;
-        afterWrite?: (committedConfig: OpenClawConfig) => Promise<void>;
+        afterWrite?: (configPath: string) => Promise<void>;
       }
     | { keptCurrent: true }
   >;
 }): Promise<HostedSetupCompletion> {
-  const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
-  const snapshot = await readSetupConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-    throw new Error(
-      `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
-    );
-  }
-  const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-  const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
-  const result = await params.run({ baseConfig, runtime });
-  if ("keptCurrent" in result) {
-    return "kept-current";
-  }
-  await params.beforePersistentApply(runtime);
-  const committedConfig = await writeWizardConfigFile(result.nextConfig, {
-    allowConfigSizeDrop: false,
-    baseHash: snapshot.hash,
-    ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
-  });
-  await result.afterWrite?.(committedConfig);
-  return "applied";
+  await using cache = createPluginCache();
+  return await runOutsidePluginRuntimeGenerationScope(() =>
+    withPluginCache(cache, async (): Promise<HostedSetupCompletion> => {
+      const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
+      const snapshot = await readSetupConfigFileSnapshot();
+      if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+        throw new Error(
+          `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
+        );
+      }
+      const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+      const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
+      const result = await params.run({ baseConfig, runtime });
+      if ("keptCurrent" in result) {
+        return "kept-current";
+      }
+      await params.beforePersistentApply(runtime);
+      const committed = await writeWizardConfigFile(result.nextConfig, {
+        allowConfigSizeDrop: false,
+        baseHash: snapshot.hash,
+        ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+      });
+      await result.afterWrite?.(committed.path);
+      return "applied";
+    }),
+  );
 }
 
 export async function runHostedChannelSetup(
@@ -85,16 +92,17 @@ export async function runHostedChannelSetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  assertPersistentEffectCurrent?: () => void,
 ): Promise<HostedSetupCompletion> {
-  const { createChannelSetupTransaction, setupChannels } =
+  const { createChannelSetupHooks, setupChannels } =
     await import("../commands/onboard-channels.js");
-  let channelSetup: ReturnType<typeof createChannelSetupTransaction>;
+  let channelSetup: ReturnType<typeof createChannelSetupHooks>;
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
-      channelSetup = createChannelSetupTransaction({
+      channelSetup = createChannelSetupHooks({
         runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
       });
@@ -109,10 +117,11 @@ export async function runHostedChannelSetup(
           skipDmPolicyPrompt: true,
           skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+          ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
           onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
         }),
-        afterWrite: async (committedConfig) => {
-          await channelSetup.runPostWriteHooks(committedConfig);
+        afterWrite: async (configPath) => {
+          await channelSetup.runPostWriteHooks(configPath);
         },
       };
     },

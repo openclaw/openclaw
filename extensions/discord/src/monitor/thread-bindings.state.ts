@@ -1,11 +1,13 @@
-// Discord plugin module implements thread bindings.state behavior.
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveThreadBindingExpiry } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import type {
   PersistedThreadBindingRecord,
@@ -13,6 +15,14 @@ import type {
   ThreadBindingRecord,
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
+
+export type ThreadBindingPersistence = {
+  targetKey: string;
+  deletingTarget: boolean;
+  nextRecord: ThreadBindingRecord | null;
+  writingKey?: string;
+  committedKeys: Set<string>;
+};
 
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
@@ -22,9 +32,14 @@ type ThreadBindingsGlobalState = {
   reusableWebhooksByAccountChannel: Map<string, { webhookId: string; webhookToken: string }>;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
+  loadingBindings?: Promise<void>;
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
+  revision: number;
+  mutationTail: Promise<void>;
+  accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
+  activePersistence?: ThreadBindingPersistence;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -48,6 +63,9 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     loadedPersistentBindings: false,
     persistenceAvailable: true,
     lastPersistedAtMs: 0,
+    revision: 0,
+    mutationTail: Promise.resolve(),
+    accountOperationTails: new WeakMap(),
   };
 }
 
@@ -57,12 +75,14 @@ function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     threadBindingsState =
       (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
       createThreadBindingsGlobalState();
+    // Source-plugin reloads retain the previous generation's shared registry.
+    threadBindingsState.accountOperationTails ??= new WeakMap();
     globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
   }
   return threadBindingsState;
 }
 
-const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
+export const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -96,7 +116,7 @@ export function shouldDefaultPersist(): boolean {
   return !(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function openThreadBindingsStore() {
+export function openThreadBindingsStore() {
   return getDiscordRuntime().state.openSyncKeyedStore<PersistedThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
@@ -241,6 +261,37 @@ export function resolveThreadBindingMaxAgeMs(params: {
   return Math.max(0, Math.floor(params.defaultMaxAgeMs));
 }
 
+function resolveTimestampExpiry(timestamp: number, durationMs: number): number | undefined {
+  if (durationMs <= 0) {
+    return undefined;
+  }
+  const at = Math.floor(timestamp);
+  return Number.isFinite(at) && at > 0 ? at + durationMs : undefined;
+}
+
+export function resolvePreparedThreadBindingLifecycle(params: {
+  record: ThreadBindingRecord;
+  idleTimeoutMs: number;
+  maxAgeMs: number;
+}) {
+  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
+    record: params.record,
+    defaultIdleTimeoutMs: params.idleTimeoutMs,
+  });
+  const maxAgeMs = resolveThreadBindingMaxAgeMs({
+    record: params.record,
+    defaultMaxAgeMs: params.maxAgeMs,
+  });
+  return {
+    idleTimeoutMs,
+    maxAgeMs,
+    ...resolveThreadBindingExpiry({
+      inactivityExpiresAt: resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs),
+      maxAgeExpiresAt: resolveTimestampExpiry(params.record.boundAt, maxAgeMs),
+    }),
+  };
+}
+
 export function resolveThreadBindingInactivityExpiresAt(params: {
   record: Pick<ThreadBindingRecord, "lastActivityAt" | "idleTimeoutMs">;
   defaultIdleTimeoutMs: number;
@@ -249,14 +300,7 @@ export function resolveThreadBindingInactivityExpiresAt(params: {
     record: params.record,
     defaultIdleTimeoutMs: params.defaultIdleTimeoutMs,
   });
-  if (idleTimeoutMs <= 0) {
-    return undefined;
-  }
-  const lastActivityAt = Math.floor(params.record.lastActivityAt);
-  if (!Number.isFinite(lastActivityAt) || lastActivityAt <= 0) {
-    return undefined;
-  }
-  return lastActivityAt + idleTimeoutMs;
+  return resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs);
 }
 
 export function resolveThreadBindingMaxAgeExpiresAt(params: {
@@ -267,14 +311,7 @@ export function resolveThreadBindingMaxAgeExpiresAt(params: {
     record: params.record,
     defaultMaxAgeMs: params.defaultMaxAgeMs,
   });
-  if (maxAgeMs <= 0) {
-    return undefined;
-  }
-  const boundAt = Math.floor(params.record.boundAt);
-  if (!Number.isFinite(boundAt) || boundAt <= 0) {
-    return undefined;
-  }
-  return boundAt + maxAgeMs;
+  return resolveTimestampExpiry(params.record.boundAt, maxAgeMs);
 }
 
 function linkSessionBinding(targetSessionKey: string, bindingKey: string) {
@@ -344,6 +381,7 @@ export function setBindingRecord(record: ThreadBindingRecord) {
     unlinkSessionBinding(existing.targetSessionKey, bindingKey);
   }
   BINDINGS_BY_THREAD_ID.set(bindingKey, record);
+  THREAD_BINDINGS_STATE.revision += 1;
   linkSessionBinding(record.targetSessionKey, bindingKey);
   rememberReusableWebhook(record);
 }
@@ -358,97 +396,21 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
     return null;
   }
   BINDINGS_BY_THREAD_ID.delete(key);
+  THREAD_BINDINGS_STATE.revision += 1;
   unlinkSessionBinding(existing.targetSessionKey, key);
   return existing;
 }
 
-function shouldPersistAnyBindingState(): boolean {
-  for (const value of PERSIST_BY_ACCOUNT_ID.values()) {
-    if (value) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function shouldPersistBindingMutations(): boolean {
-  if (!THREAD_BINDINGS_STATE.persistenceAvailable) {
-    return false;
-  }
-  if (shouldPersistAnyBindingState()) {
-    return true;
-  }
-  return THREAD_BINDINGS_STATE.loadedPersistentBindings;
-}
-
-function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadBindingRecord {
-  const serialized = JSON.stringify(record);
-  if (!serialized) {
-    return { ...record };
-  }
-  return normalizePersistedBinding(record.threadId, JSON.parse(serialized)) ?? { ...record };
-}
-
-export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
-  if (!params.force && !shouldPersistAnyBindingState()) {
-    return;
-  }
-  if (!THREAD_BINDINGS_STATE.persistenceAvailable) {
-    return;
-  }
-  const minIntervalMs =
-    typeof params.minIntervalMs === "number" && Number.isFinite(params.minIntervalMs)
-      ? Math.max(0, Math.floor(params.minIntervalMs))
-      : 0;
-  const now = Date.now();
-  if (
-    !params.force &&
-    minIntervalMs > 0 &&
-    THREAD_BINDINGS_STATE.lastPersistedAtMs > 0 &&
-    now - THREAD_BINDINGS_STATE.lastPersistedAtMs < minIntervalMs
-  ) {
-    return;
-  }
-  try {
-    const store = openThreadBindingsStore();
-    const persistedKeys = new Set<string>();
-    for (const [bindingKey, record] of BINDINGS_BY_THREAD_ID.entries()) {
-      store.register(bindingKey, toPersistedBindingRecord(record));
-      persistedKeys.add(bindingKey);
-    }
-    for (const entry of store.entries()) {
-      if (!persistedKeys.has(entry.key)) {
-        store.delete(entry.key);
-      }
-    }
-    THREAD_BINDINGS_STATE.loadedPersistentBindings = persistedKeys.size > 0;
-    THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
-  } catch {
-    THREAD_BINDINGS_STATE.persistenceAvailable = false;
-  }
-}
-
-export function ensureBindingsLoaded() {
-  if (THREAD_BINDINGS_STATE.loadedBindings) {
-    return;
-  }
+function beginBindingsLoad() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
+  THREAD_BINDINGS_STATE.revision += 1;
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
+}
 
-  const entries = (() => {
-    try {
-      return openThreadBindingsStore().entries();
-    } catch {
-      THREAD_BINDINGS_STATE.persistenceAvailable = false;
-      return null;
-    }
-  })();
-  if (!entries) {
-    return;
-  }
+function restoreBindings(entries: PluginStateEntry<PersistedThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.persistenceAvailable = true;
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
@@ -457,6 +419,60 @@ export function ensureBindingsLoaded() {
       continue;
     }
     setBindingRecord(normalized);
+  }
+}
+
+export function ensureBindingsLoaded() {
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  beginBindingsLoad();
+  let entries: PluginStateEntry<PersistedThreadBindingRecord>[];
+  try {
+    entries = openThreadBindingsStore().entries();
+  } catch {
+    THREAD_BINDINGS_STATE.persistenceAvailable = false;
+    return;
+  }
+  restoreBindings(entries);
+}
+
+async function loadBindingsAsync() {
+  let entries: PluginStateEntry<PersistedThreadBindingRecord>[];
+  try {
+    entries = await getDiscordRuntime()
+      .state.openKeyedStore<PersistedThreadBindingRecord>({
+        namespace: THREAD_BINDINGS_NAMESPACE,
+        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+      })
+      .entries();
+  } catch {
+    if (!THREAD_BINDINGS_STATE.loadedBindings) {
+      beginBindingsLoad();
+      THREAD_BINDINGS_STATE.persistenceAvailable = false;
+      logVerbose("discord thread binding persistence unavailable; keeping bindings in memory");
+    }
+    return;
+  }
+  // A synchronous compatibility caller can initialize and mutate the registry while we wait.
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  beginBindingsLoad();
+  restoreBindings(entries);
+}
+
+export async function ensureBindingsLoadedAsync(): Promise<void> {
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  const loading = (THREAD_BINDINGS_STATE.loadingBindings ??= loadBindingsAsync());
+  try {
+    await loading;
+  } finally {
+    if (THREAD_BINDINGS_STATE.loadingBindings === loading) {
+      delete THREAD_BINDINGS_STATE.loadingBindings;
+    }
   }
 }
 

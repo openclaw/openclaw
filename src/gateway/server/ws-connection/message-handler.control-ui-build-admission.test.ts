@@ -14,8 +14,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pairing.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayClientRegistry } from "../client-registry.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -90,19 +93,34 @@ vi.mock("../../../version.js", async (importOriginal) => {
   return { ...actual, resolveRuntimeServiceBuildId: resolveRuntimeServiceBuildIdMock };
 });
 
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
 // only reachable once the device passes connect auth and silent local pairing.
 const temporaryIdentityPaths: string[] = [];
 
-async function buildSignedControlUiDevice(nonce: string) {
+async function prepareSignedControlUiDevice(nonce: string) {
   const { buildDeviceAuthPayload } = await import("../../device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
   const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
   temporaryIdentityPaths.push(identityPath);
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+  // Prepare pairing workers before timing admission; connect must still approve this device.
+  await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey,
+    platform: "web",
+    clientId: "openclaw-control-ui",
+    clientMode: "webchat",
+    role: "operator",
+    scopes: [],
+    remoteIp: "127.0.0.1",
+    silent: true,
+  });
+  expect(await getPairedDevice(identity.deviceId)).toBeNull();
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -116,7 +134,7 @@ async function buildSignedControlUiDevice(nonce: string) {
   });
   return {
     id: identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    publicKey,
     signature: signDevicePayload(identity.privateKeyPem, payload),
     signedAt: signedAtMs,
     nonce,
@@ -169,6 +187,7 @@ describe("Control UI build admission over WebSocket", () => {
     },
   ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
     const { clientBuildId } = testCase;
+    const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(
       new Promise<void>((resolve) => {
@@ -184,10 +203,8 @@ describe("Control UI build admission over WebSocket", () => {
     let connectedClient: unknown = null;
     // Hold the injected close until the post-rejection frame reaches the handler;
     // otherwise socket timing can make the no-RPC assertion vacuous.
-    let releasePostRejectionFrame = () => {};
-    const postRejectionFrameObserved = new Promise<void>((resolve) => {
-      releasePostRejectionFrame = resolve;
-    });
+    const { promise: postRejectionFrameObserved, resolve: releasePostRejectionFrame } =
+      createDeferred();
     let closeRequested = false;
 
     wss.on("connection", (socket, request) => {
@@ -196,7 +213,10 @@ describe("Control UI build admission over WebSocket", () => {
         return { kind: "sent" } as const;
       };
       attachGatewayWsMessageHandler({
+        clients: new GatewayClientRegistry(),
         socket,
+        prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
+        connectionWork,
         upgradeReq: request as IncomingMessage,
         ingressAttribution: {
           kind: "direct-local",
@@ -261,7 +281,7 @@ describe("Control UI build admission over WebSocket", () => {
       });
     });
 
-    const device = await buildSignedControlUiDevice("legacy-build-nonce");
+    const device = await prepareSignedControlUiDevice("legacy-build-nonce");
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
       headers: {
         origin,
@@ -282,12 +302,9 @@ describe("Control UI build admission over WebSocket", () => {
         }),
         "connect rejection",
       );
-      const closed = withDeadline(
-        new Promise<number>((resolve) => {
-          ws.once("close", (code) => resolve(code));
-        }),
-        "socket close",
-      );
+      const closed = new Promise<number>((resolve) => {
+        ws.once("close", (code) => resolve(code));
+      });
       ws.send(
         JSON.stringify({
           type: "req",
@@ -338,7 +355,7 @@ describe("Control UI build admission over WebSocket", () => {
           params: {},
         }),
       );
-      expect(await closed).toBe(1008);
+      expect(await withDeadline(closed, "socket close")).toBe(1008);
       expect(connectedClient).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
       expect(setLastFrameMetaMock).toHaveBeenCalledWith({
@@ -348,13 +365,22 @@ describe("Control UI build admission over WebSocket", () => {
       });
       expect(handleGatewayRequestMock).not.toHaveBeenCalled();
     } finally {
+      releasePostRejectionFrame();
       ws.terminate();
-      await withDeadline(
-        new Promise<void>((resolve) => {
-          wss.close(() => resolve());
-        }),
-        "cleanup",
-      );
+      for (const socket of wss.clients) {
+        socket.terminate();
+      }
+      connectionWork.beginClose();
+      try {
+        await withDeadline(
+          new Promise<void>((resolve) => {
+            wss.close(() => resolve());
+          }),
+          "cleanup",
+        );
+      } finally {
+        await connectionWork.drain();
+      }
     }
   });
 });

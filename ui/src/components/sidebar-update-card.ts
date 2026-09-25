@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   hasNativeUpdateBridge,
@@ -7,17 +8,24 @@ import {
 } from "../app/native-link-routing.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
+import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
+import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
+import { renderSidebarNotificationCard } from "./sidebar-notification-card.ts";
 import "./tooltip.ts";
+import { renderUpdateGitRevisions } from "./update-git-revisions.ts";
+
+registerSidebarAttentionEnglish();
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) compact = false;
@@ -25,6 +33,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
   @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateBusy = false;
+  @property({ attribute: false }) updateRun: UpdateRunRecord | null = null;
+  @property({ attribute: false }) updateRunAcknowledged = false;
+  @property({ attribute: false }) connected = true;
+  @property({ attribute: false }) onCheckStatus: (() => Promise<boolean>) | undefined = undefined;
+  @property({ attribute: false }) onAcknowledge: (() => void) | undefined = undefined;
   @property({ attribute: false }) statusBanner: ApplicationStatusBanner | null = null;
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
@@ -92,7 +105,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   }
 
   private renderStatus() {
-    const statusBanner = this.statusBanner;
+    const statusBanner = this.updateRun ? null : this.statusBanner;
     // The Gateway recorded this outcome; unlike the client's own update
     // metadata it stays true even when this client is stale.
     return statusBanner
@@ -105,6 +118,23 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       : nothing;
   }
 
+  private readonly openRun = () => {
+    if (!this.updateRun) {
+      return;
+    }
+    void confirmAndStartUpdate({
+      existingRun: this.updateRun,
+      updateAvailable: this.updateAvailable,
+      updateSchedule: this.updateSchedule,
+      viaNativeApp: hasNativeUpdateBridge(),
+      startGatewayUpdate: () => this.onUpdate(),
+      watchUpdateProgress: this.watchUpdateProgress,
+      onCheckStatus: this.onCheckStatus,
+      onReviewUpdate: this.onReviewUpdate,
+      onAcknowledge: this.onAcknowledge,
+    });
+  };
+
   private readonly startUpdate = () => {
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
@@ -113,6 +143,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
     void confirmAndStartUpdate({
       startGatewayUpdate: () => this.onUpdate(),
+      onCheckStatus: this.onCheckStatus,
+      onReviewUpdate: this.onReviewUpdate,
+      onAcknowledge: this.onAcknowledge,
       ...(this.watchUpdateProgress ? { watchUpdateProgress: this.watchUpdateProgress } : {}),
       updateAvailable: this.updateAvailable,
       updateSchedule: this.updateSchedule,
@@ -150,16 +183,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
   };
 
-  private hasAvailableUpdate() {
-    const update = this.updateAvailable;
-    const gitTarget = this.updateSchedule?.target;
-    return (
-      (update !== null && update.latestVersion !== update.currentVersion) ||
-      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
-      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
-    );
-  }
-
   private compactSummary() {
     if (this.refreshRequired) {
       return {
@@ -169,10 +192,29 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         title: t("chat.sidebar.serverUpdatedTitle"),
       };
     }
+    if (isUpdateRunAttentionVisible(this.updateRun, this.updateRunAcknowledged) && this.updateRun) {
+      const view = projectUpdateRun(this.updateRun, this.connected);
+      return {
+        title: view.headline,
+        detail: view.compactLabel,
+        timestampMs:
+          this.updateRun.status === "running"
+            ? this.updateRun.createdAtMs
+            : this.updateRun.finishedAtMs,
+        icon:
+          this.updateRun.status === "running"
+            ? icons.refresh
+            : this.updateRun.status === "succeeded"
+              ? icons.check
+              : icons.alertTriangle,
+        severity: this.updateRun.status === "failed" ? ("error" as const) : ("warning" as const),
+        critical: false,
+      };
+    }
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
-    const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    const statusBanner = this.updateRun ? null : this.statusBanner;
+    if (!statusBanner && !isUpdateActionable(this.updateAvailable, this.updateSchedule, busy)) {
       return null;
     }
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
@@ -180,6 +222,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const blocked = statusBanner && statusBanner.tone !== "info";
     const blockedReason = statusBanner?.text.trim() || t("updates.sidebar.blockedSummary");
     return {
+      timestampMs: campaign?.announcedAtMs,
       detail: blocked
         ? campaign?.state === "waiting-for-idle" && targetLabel
           ? t("updates.sidebar.blockedWaiting", { target: targetLabel })
@@ -208,62 +251,19 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     if (!summary) {
       return nothing;
     }
-    return html`<details
-      class="sidebar-issues-panel__details sidebar-issues-panel__details--${summary.severity}"
-    >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-        <span
-          class="sidebar-issues-panel__icon ${
-            summary.critical ? "sidebar-issues-panel__icon--critical" : ""
-          }"
-          aria-hidden="true"
-          >${summary.icon}</span
-        >
-        <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
-          <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
-        </span>
-        ${
-          this.onDismiss
-            ? html`<button
-                type="button"
-                class="sidebar-issues-panel__dismiss"
-                aria-label=${t("attention.dismissItem", { item: summary.title })}
-                title=${t("attention.dismissItem", { item: summary.title })}
-                @click=${(event: Event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  this.onDismiss?.();
-                }}
-              >
-                ${icons.x}
-              </button>`
-            : nothing
-        }
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </summary>
-      <div class="sidebar-issues-panel__body sidebar-update-issue__body">
-        ${this.renderCompactDetails()}
-      </div>
-    </details>`;
+    return renderSidebarNotificationCard({
+      ...summary,
+      onDismiss: this.onDismiss,
+      body: this.renderCompactDetails(),
+      bodyClass: "sidebar-update-issue__body",
+    });
   }
 
   private renderCompactDetails() {
-    const statusBanner = this.statusBanner;
+    const statusBanner = this.updateRun ? null : this.statusBanner;
     if (!statusBanner) {
       return this.renderCard();
     }
-    const campaign = this.updateSchedule?.campaign;
-    const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
-    const showHold = Boolean(
-      campaign &&
-      campaign.state !== "applying" &&
-      this.canUpdate &&
-      this.canHoldUpdate &&
-      !this.updateBusy &&
-      !holdActive &&
-      this.heldUpdateCampaignId !== campaign.id,
-    );
     return html`<div class="sidebar-update-card sidebar-update-card--compact-details">
       <p class="sidebar-update-card__compact-reason" title=${statusBanner.text}>
         ${statusBanner.text}
@@ -276,20 +276,32 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         >
           ${t("updates.reviewUpdate")}
         </button>
-        ${
-          showHold && campaign
-            ? html`<button
-                class="sidebar-update-card__hold"
-                type="button"
-                ?disabled=${this.holdingCampaignId === campaign.id}
-                @click=${() => this.holdUpdate(campaign.id)}
-              >
-                ${t("updates.holdOneHour")}
-              </button>`
-            : nothing
-        }
+        ${this.renderHoldUpdate()}
       </div>
     </div>`;
+  }
+
+  private renderHoldUpdate() {
+    const campaign = this.updateSchedule?.campaign;
+    if (
+      !campaign ||
+      campaign.state === "applying" ||
+      !this.canUpdate ||
+      !this.canHoldUpdate ||
+      this.updateBusy ||
+      (campaign.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now()) ||
+      this.heldUpdateCampaignId === campaign.id
+    ) {
+      return nothing;
+    }
+    return html`<button
+      class="sidebar-update-card__hold"
+      type="button"
+      ?disabled=${this.holdingCampaignId === campaign.id}
+      @click=${() => this.holdUpdate(campaign.id)}
+    >
+      ${t("updates.holdOneHour")}
+    </button>`;
   }
 
   private renderCard() {
@@ -337,14 +349,29 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         </div>
       `;
     }
+    if (isUpdateRunAttentionVisible(this.updateRun, this.updateRunAcknowledged) && this.updateRun) {
+      const view = projectUpdateRun(this.updateRun, this.connected);
+      return html`<div class="sidebar-update-card" role="status" aria-live="polite">
+        <button class="sidebar-update-card__action" type="button" @click=${this.openRun}>
+          <span class="sidebar-update-card__icon" aria-hidden="true"
+            >${this.updateRun.status === "running" ? icons.refresh : this.updateRun.status === "succeeded" ? icons.check : icons.alertTriangle}</span
+          >
+          <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
+            <span class="sidebar-update-card__title">${view.headline}</span>
+            <span class="sidebar-update-card__subtitle">${view.compactLabel}</span>
+          </span>
+        </button>
+      </div>`;
+    }
     const update = this.updateAvailable;
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
     // A running update outranks availability: the gateway drops its update
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
-    const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    const statusBanner = this.updateRun ? null : this.statusBanner;
+    const actionable = isUpdateActionable(update, this.updateSchedule, busy);
+    if (!statusBanner && !actionable) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable
@@ -364,19 +391,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           : title;
     const countdownActive =
       campaign?.state === "countdown" || campaign?.state === "waiting-for-idle";
-    const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
-    const showHold = Boolean(
-      campaign &&
-      campaign.state !== "applying" &&
-      this.canUpdate &&
-      this.canHoldUpdate &&
-      !busy &&
-      !holdActive &&
-      this.heldUpdateCampaignId !== campaign.id,
-    );
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
-    const actionable = isUpdateActionable(update, this.updateSchedule, this.updateBusy);
     const updateAction = html`<button
       class="sidebar-update-card__action ${busy ? "sidebar-update-card__action--busy" : ""}"
       type="button"
@@ -411,20 +427,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                         ${updateAction}
                       </openclaw-tooltip>`
                 }
-                ${
-                  showHold && campaign
-                    ? html`
-                        <button
-                          class="sidebar-update-card__hold"
-                          type="button"
-                          ?disabled=${this.holdingCampaignId === campaign.id}
-                          @click=${() => this.holdUpdate(campaign.id)}
-                        >
-                          ${t("updates.holdOneHour")}
-                        </button>
-                      `
-                    : nothing
-                }
+                ${this.renderHoldUpdate()}
               </div>`
             : nothing
         }
@@ -439,6 +442,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               </button>`
             : nothing
         }
+        ${actionable && !busy ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
       </div>
     `;
   }

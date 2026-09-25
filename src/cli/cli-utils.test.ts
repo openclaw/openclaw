@@ -140,7 +140,12 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "--update-canary"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--update-canary", "--port=14720"] },
     { argv: ["node", "openclaw", "gateway", "status"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run"] },
+    { argv: ["node", "openclaw", "gateway", "--", "status"] },
+    { argv: ["node", "openclaw", "gateway", "--token", "test-token", "status"] },
     {
       argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
     },
@@ -174,6 +179,9 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
+    { argv: ["node", "openclaw", "gateway", "--update-canary"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--update-canary", "--port=14720"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run"] },
   ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
@@ -183,6 +191,8 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
     { argv: ["node", "openclaw", "status"] },
+    { argv: ["node", "openclaw", "gateway", "--", "status"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run", "--force"] },
   ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });

@@ -1,14 +1,14 @@
-// Control UI view renders config screen content.
-import "../../styles/lobster-pet.css";
 import { html, nothing } from "lit";
+import "../../styles/lobster-pet.css";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
@@ -52,6 +52,7 @@ function renderAppearance(props: ConfigProps) {
       <input
         class="settings-input"
         data-settings-chat-message-width
+        aria-label=${t("configView.chatPrefs.messageWidth")}
         type="text"
         spellcheck="false"
         placeholder="48rem"
@@ -86,6 +87,7 @@ function renderAppearance(props: ConfigProps) {
 }
 
 export function renderConfig(props: ConfigProps) {
+  const renderSection = props.renderSection ?? ((editor) => editor);
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
@@ -146,7 +148,6 @@ export function renderConfig(props: ConfigProps) {
     });
   };
 
-  // Reset scroll position when switching between form and raw mode
   if (viewState.lastFormModeForScroll !== null && viewState.lastFormModeForScroll !== formMode) {
     resetContentScroll(null);
   }
@@ -159,7 +160,6 @@ export function renderConfig(props: ConfigProps) {
   }
   const envSensitiveVisible = viewState.envRevealed;
 
-  // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
   const isVisibleVirtualSection = (key: string) =>
@@ -184,7 +184,6 @@ export function renderConfig(props: ConfigProps) {
       .map((key) => ({ key, label: resolveNavSectionLabel(key) })),
   })).filter((category) => category.sections.length > 0);
 
-  // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
     .filter((key) => !CATEGORISED_KEYS.has(key))
     .map((key) => ({ key, label: key.charAt(0).toUpperCase() + key.slice(1) }));
@@ -227,30 +226,30 @@ export function renderConfig(props: ConfigProps) {
         ),
       }
     : formSchema;
+  const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
   const topTabs = [
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
       : []),
-    ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((category) =>
+    ...allCategories.flatMap((category) =>
       category.sections.map((section) => ({ key: section.key, label: section.label })),
     ),
   ];
   const settingsLayout = props.settingsLayout ?? "tabs";
-  const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
 
   // Raw mode keeps an explicit diff + save flow; form edits auto-save.
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
-  if ((!hasRawChanges || formMode !== "raw") && viewState.rawDiffOpen) {
+  if (!hasRawChanges) {
     viewState.rawDiffOpen = false;
   }
-  if (!hasRawChanges || formMode !== "raw" || !viewState.rawDiffOpen) {
+  if (!hasRawChanges || !viewState.rawDiffOpen) {
     viewState.rawDiffCache = undefined;
   }
   const rawDiff =
-    formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
+    hasRawChanges && viewState.rawDiffOpen
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
-  if (formMode === "raw" && hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
+  if (hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
     // First diff open can race the lazy JSON5 parser; re-render when it lands
     // so the pending-changes list fills in instead of staying empty.
     void warmJson5()
@@ -268,67 +267,66 @@ export function renderConfig(props: ConfigProps) {
     props.activeSection === null &&
     Boolean(include?.has("__appearance__"));
 
-  const rawDiffPanel =
-    hasRawChanges && formMode === "raw"
-      ? html`<details
-          class="config-diff"
-          ?open=${viewState.rawDiffOpen}
-          @toggle=${(event: Event) => {
-            const details = event.target as HTMLDetailsElement;
-            if (viewState.rawDiffOpen === details.open) {
-              return;
-            }
-            viewState.rawDiffOpen = details.open;
-            if (!details.open) {
-              viewState.rawDiffCache = undefined;
-            }
-            requestUpdate();
-          }}
-        >
-          <summary class="config-diff__summary">
-            <span>${t("configView.viewPendingChangesRaw")}</span>
-            <svg
-              class="config-diff__chevron"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </summary>
-          <div class="config-diff__content">
-            ${
-              rawDiff.length > 0
-                ? rawDiff.map(
-                    (change) => html`<div class="config-diff__item">
-                      <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
-                      <div class="config-diff__values">
-                        <span class="config-diff__from"
-                          >${renderRawDiffValue(
-                            change.path,
-                            change.from,
-                            props.uiHints,
-                            viewState.rawRevealed,
-                          )}</span
-                        >
-                        <span class="config-diff__arrow">→</span>
-                        <span class="config-diff__to"
-                          >${renderRawDiffValue(
-                            change.path,
-                            change.to,
-                            props.uiHints,
-                            viewState.rawRevealed,
-                          )}</span
-                        >
-                      </div>
-                    </div>`,
-                  )
-                : html`<div class="config-diff__item">${t("configView.rawDiffUnavailable")}</div>`
-            }
-          </div>
-        </details>`
-      : nothing;
+  const rawDiffPanel = hasRawChanges
+    ? html`<details
+        class="config-diff"
+        ?open=${viewState.rawDiffOpen}
+        @toggle=${(event: Event) => {
+          const details = event.target as HTMLDetailsElement;
+          if (viewState.rawDiffOpen === details.open) {
+            return;
+          }
+          viewState.rawDiffOpen = details.open;
+          if (!details.open) {
+            viewState.rawDiffCache = undefined;
+          }
+          requestUpdate();
+        }}
+      >
+        <summary class="config-diff__summary">
+          <span>${t("configView.viewPendingChangesRaw")}</span>
+          <svg
+            class="config-diff__chevron"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="9 6 15 12 9 18"></polyline>
+          </svg>
+        </summary>
+        <div class="config-diff__content">
+          ${
+            rawDiff.length > 0
+              ? rawDiff.map(
+                  (change) => html`<div class="config-diff__item">
+                    <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
+                    <div class="config-diff__values">
+                      <span class="config-diff__from"
+                        >${renderRawDiffValue(
+                          change.path,
+                          change.from,
+                          props.uiHints,
+                          viewState.rawRevealed,
+                        )}</span
+                      >
+                      <span class="config-diff__arrow">→</span>
+                      <span class="config-diff__to"
+                        >${renderRawDiffValue(
+                          change.path,
+                          change.to,
+                          props.uiHints,
+                          viewState.rawRevealed,
+                        )}</span
+                      >
+                    </div>
+                  </div>`,
+                )
+              : html`<div class="config-diff__item">${t("configView.rawDiffUnavailable")}</div>`
+          }
+        </div>
+      </details>`
+    : nothing;
 
   const showSectionTabs = settingsLayout !== "accordion" && topTabs.length > 1;
   const sectionTabs = showSectionTabs
@@ -353,34 +351,33 @@ export function renderConfig(props: ConfigProps) {
         ? html`<div class="config-toolbar">
             ${
               showModeToggle
-                ? html`<div class="config-mode-toggle">
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                      ?disabled=${props.schemaLoading || !props.schema || rawDraftPending}
-                      title=${
-                        rawDraftPending
+                ? renderSettingsSegmented({
+                    mode: "buttons",
+                    variant: "primary",
+                    value: formMode,
+                    onChange: props.onFormModeChange,
+                    onReselect: props.onFormModeChange,
+                    options: [
+                      {
+                        value: "form",
+                        label: t("configView.form"),
+                        disabled: props.schemaLoading || !props.schema || rawDraftPending,
+                        title: rawDraftPending
                           ? t("configView.rawDraftPendingFormTitle")
                           : formUnsafe
                             ? t("configView.formUnsafeTitle")
-                            : ""
-                      }
-                      @click=${() => props.onFormModeChange("form")}
-                    >
-                      ${t("configView.form")}
-                    </button>
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                      ?disabled=${!rawAvailable}
-                      title=${
-                        rawAvailable
-                          ? t("configView.rawTitle")
-                          : t("configView.rawUnavailableTitle")
-                      }
-                      @click=${() => props.onFormModeChange("raw")}
-                    >
-                      ${t("configView.raw")}
-                    </button>
-                  </div>`
+                            : "",
+                      },
+                      {
+                        value: "raw",
+                        label: t("configView.raw"),
+                        disabled: !rawAvailable,
+                        title: t(
+                          rawAvailable ? "configView.rawTitle" : "configView.rawUnavailableTitle",
+                        ),
+                      },
+                    ],
+                  })
                 : nothing
             }
             ${sectionTabs}
@@ -497,54 +494,56 @@ export function renderConfig(props: ConfigProps) {
                           <div class="config-loading__spinner"></div>
                           <span>${t("configView.loadingSchema")}</span>
                         </div>`
-                      : renderConfigForm({
-                          schema: editorSchema,
-                          uiHints: props.uiHints,
-                          value: props.formValue,
-                          embedded: props.embeddedEditor === true || Boolean(showSetup),
-                          rawAvailable,
-                          disabled: configBusy || !props.formValue || !mutationAllowed,
-                          unsupportedPaths: analysis.unsupportedPaths,
-                          onPatch: props.onFormPatch,
-                          onRemove: props.onFormRemove,
-                          activeSection: props.activeSection,
-                          activeSubsection: null,
-                          showAdvanced: effectiveShowAdvanced,
-                          forceAdvancedSection: props.forceAdvancedSection,
-                          onShowAdvanced: () => props.setShowAdvancedSettings(true),
-                          onHideAdvanced: props.forceShowAdvanced
-                            ? undefined
-                            : () => props.setShowAdvancedSettings(false),
-                          sectionActions:
-                            props.activeSection === "env"
-                              ? html`<button
-                                  class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
-                                  aria-pressed=${envSensitiveVisible ? "true" : "false"}
-                                  title=${
-                                    envSensitiveVisible
-                                      ? t("configView.hideEnvValues")
-                                      : t("configView.revealEnvValues")
-                                  }
-                                  @click=${() => {
-                                    viewState.envRevealed = !viewState.envRevealed;
-                                    requestUpdate();
-                                  }}
-                                >
-                                  ${envSensitiveVisible ? icons.eyeOff : icons.eye}
-                                  ${t("configView.peek")}
-                                </button>`
-                              : undefined,
-                          showSectionDocs: props.showSectionDocs,
-                          sectionPrelude: props.sectionPrelude,
-                          revealSensitive:
-                            props.activeSection === "env" ? envSensitiveVisible : false,
-                          isSensitivePathRevealed: (path) =>
-                            isSensitivePathRevealed(viewState, path),
-                          onToggleSensitivePath: (path) => {
-                            toggleSensitivePathReveal(viewState, path);
-                            requestUpdate();
-                          },
-                        })
+                      : renderSection(
+                          renderConfigForm({
+                            schema: editorSchema,
+                            uiHints: props.uiHints,
+                            value: props.formValue,
+                            embedded: props.embeddedEditor === true || Boolean(showSetup),
+                            rawAvailable,
+                            disabled: configBusy || !props.formValue || !mutationAllowed,
+                            unsupportedPaths: analysis.unsupportedPaths,
+                            onPatch: props.onFormPatch,
+                            onRemove: props.onFormRemove,
+                            activeSection: props.activeSection,
+                            activeSubsection: null,
+                            showAdvanced: effectiveShowAdvanced,
+                            forceAdvancedSection: props.forceAdvancedSection,
+                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onHideAdvanced: props.forceShowAdvanced
+                              ? undefined
+                              : () => props.setShowAdvancedSettings(false),
+                            sectionActions:
+                              props.activeSection === "env"
+                                ? html`<button
+                                    class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
+                                    aria-pressed=${envSensitiveVisible ? "true" : "false"}
+                                    title=${
+                                      envSensitiveVisible
+                                        ? t("configView.hideEnvValues")
+                                        : t("configView.revealEnvValues")
+                                    }
+                                    @click=${() => {
+                                      viewState.envRevealed = !viewState.envRevealed;
+                                      requestUpdate();
+                                    }}
+                                  >
+                                    ${envSensitiveVisible ? icons.eyeOff : icons.eye}
+                                    ${t("configView.peek")}
+                                  </button>`
+                                : undefined,
+                            showSectionDocs: props.showSectionDocs,
+                            sectionPrelude: props.sectionPrelude,
+                            revealSensitive:
+                              props.activeSection === "env" ? envSensitiveVisible : false,
+                            isSensitivePathRevealed: (path) =>
+                              isSensitivePathRevealed(viewState, path),
+                            onToggleSensitivePath: (path) => {
+                              toggleSensitivePathReveal(viewState, path);
+                              requestUpdate();
+                            },
+                          }),
+                        )
                   }
                   ${
                     showSetup && !props.schemaLoading
@@ -649,6 +648,7 @@ export function renderConfig(props: ConfigProps) {
                                   )}
                                 </div>`
                               : html`<textarea
+                                  aria-label=${t("configView.rawConfig")}
                                   placeholder=${t("configView.rawConfig")}
                                   .value=${props.raw}
                                   ?disabled=${configBusy || !mutationAllowed}

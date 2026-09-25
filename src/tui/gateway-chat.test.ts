@@ -1,14 +1,171 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewayClientOptions } from "../gateway/client.js";
+import {
+  createTuiCommandHandlersHarness,
+  firstMockArg,
+  flushAsyncSelect,
+} from "./tui-command-handlers-test-support.js";
 // Covers gateway-backed chat behavior used by the TUI backend.
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
-const { GatewayClientRequestError } = await import("../gateway/client.js");
+const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 
 describe("GatewayChatClient", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each([true, false])(
+    "preserves model availability semantics for published-catalog capability %s",
+    async (published) => {
+      const models = [
+        {
+          provider: "fixture",
+          id: "waiting",
+          name: "Waiting",
+          available: false,
+          unavailableReason: "cooldown",
+        },
+        { provider: "fixture", id: "unknown", name: "Unknown" },
+      ];
+      const request = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({ models });
+      try {
+        const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        client.hello = {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "catalog-test" },
+          features: {
+            methods: ["models.list"],
+            events: [],
+            capabilities: published ? [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG] : [],
+          },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 0, health: 0 },
+            uptimeMs: 0,
+          },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        };
+
+        const result = await client.listModels({ agentId: "work" });
+
+        expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+          agentId: "work",
+          ...(published ? { includeDetails: true } : {}),
+        });
+        expect(result).toEqual(
+          published
+            ? models
+            : [
+                { provider: "fixture", id: "waiting", name: "Waiting" },
+                { provider: "fixture", id: "unknown", name: "Unknown" },
+              ],
+        );
+      } finally {
+        request.mockRestore();
+      }
+    },
+  );
+
+  it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
+    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const held = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .spyOn(GatewayClient.prototype, "request")
+      .mockResolvedValueOnce({ models })
+      .mockReturnValueOnce(held.promise);
+    const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    try {
+      await client.listModels({ agentId: "work" });
+      const refresh = client.listModels({ agentId: "work" });
+      const sharedRefresh = client.listModels({ agentId: "work" });
+      expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
+      expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
+      await client.stop();
+      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      await Promise.all([refresh, sharedRefresh]);
+      expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
+    } finally {
+      held.resolve({ models });
+      request.mockRestore();
+    }
+  });
+
+  it.each([
+    { remaining: ["first", "current", "highlighted"], expected: "highlighted" },
+    { remaining: ["first", "current"], expected: "current" },
+    { remaining: ["first"], expected: "first" },
+  ])(
+    "keeps rows through sign-in and restores $expected after policy retirement",
+    async ({ remaining, expected }) => {
+      const models = ["first", "current", "highlighted"].map((id) => ({
+        provider: "fixture",
+        id,
+        name: id,
+      }));
+      const held = createDeferred<{ models: typeof models }>();
+      const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
+      let onEvent: GatewayClientOptions["onEvent"];
+      vi.resetModules();
+      vi.doMock("../gateway/client.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("../gateway/client.js")>();
+        return {
+          ...actual,
+          GatewayClient: class {
+            request = request;
+            constructor(opts: GatewayClientOptions) {
+              onEvent = opts.onEvent!;
+            }
+          },
+        };
+      });
+      try {
+        // Reload the client so its transport constructor uses this test's event source.
+        const { GatewayChatClient: CatalogClient } = await import("./gateway-chat.js");
+        const client = new CatalogClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        await client.listModels({ agentId: "main" });
+        const harness = createTuiCommandHandlersHarness({
+          getKnownModels: (opts) => client.getKnownModels(opts),
+          listModels: vi.fn((opts) => client.listModels(opts)),
+          sessionInfo: { modelProvider: "fixture", model: "current" },
+        });
+        client.onModelsChanged = harness.client.onModelsChanged;
+        await harness.handleCommand("/models");
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+        selector.handleInput("\u001b[B");
+        selector.handleInput("\u001b[B");
+        onEvent!({ type: "event", event: "config.changed", payload: {} });
+        expect(selector.render(100).join("\n")).not.toContain("Checking models...");
+        expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
+        onEvent!({
+          type: "event",
+          event: "chat.metadata.changed",
+          payload: { modelSelectionChanged: true },
+        });
+        expect(selector.render(100).join("\n")).toContain("Checking models...");
+        held.resolve({ models: models.filter((model) => remaining.includes(model.id)) });
+        await client.listModels({ agentId: "main" });
+        selector.handleInput("\r");
+        await flushAsyncSelect();
+        expect(harness.patchSession).toHaveBeenCalledWith({
+          key: "agent:main:main",
+          model: `fixture/${expected}`,
+        });
+      } finally {
+        held.resolve({ models });
+        vi.doUnmock("../gateway/client.js");
+        vi.resetModules();
+      }
+    },
+  );
 
   it("waits for gateway transport teardown on stop", async () => {
     const client = new GatewayChatClient({
@@ -157,13 +314,16 @@ describe("GatewayChatClient", () => {
 
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
     vi.useFakeTimers();
+    // The preceding mock test resets modules; keep client and proxy ownership together.
+    const { GatewayChatClient: CurrentGatewayChatClient } = await import("./gateway-chat.js");
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const proxyHandle = await startProxy({
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });
-    const onDisconnected = vi.fn();
-    const client = new GatewayChatClient({
+    const disconnected = createDeferred<string>();
+    const onDisconnected = vi.fn(disconnected.resolve);
+    const client = new CurrentGatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
@@ -173,10 +333,13 @@ describe("GatewayChatClient", () => {
       client.start();
       await vi.advanceTimersByTimeAsync(2);
 
-      expect(onDisconnected).toHaveBeenCalledWith(
-        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
-      );
+      const message =
+        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode; " +
+        "run openclaw config set proxy.loopbackMode gateway-only to allow local runtime traffic.";
+      await expect(disconnected.promise).resolves.toBe(message);
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith(message);
     } finally {
+      await client.stop();
       await stopProxy(proxyHandle);
     }
   });
@@ -480,17 +643,17 @@ describe("GatewayChatClient", () => {
     });
   });
 
-  it("lists profiles and serializes task suggestion acceptance modes", async () => {
+  it("requests a new non-worktree session even without mode capabilities", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
     const suggestion = {
       id: "task_1",
-      title: "Remove stale adapter",
-      prompt: "Delete the stale adapter.",
-      tldr: "The adapter is unreachable.",
-      cwd: "/repo",
+      title: "Investigate a restarting service",
+      prompt: "Inspect the service status and logs.",
+      tldr: "The service is unexpectedly restarting.",
+      cwd: "/workspace",
       sessionKey: "agent:main:main",
       agentId: "main",
       createdAt: 1_000,
@@ -498,60 +661,33 @@ describe("GatewayChatClient", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ suggestions: [suggestion] })
-      .mockResolvedValueOnce({ profiles: [{ id: "build", providerId: "crabbox" }] })
       .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:task" })
-      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:task" })
-      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:local" })
-      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:session" })
-      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:cloud" })
       .mockResolvedValueOnce({ taskId: "task_2", dismissed: true });
     client.hello = {
       features: {
-        methods: [
-          "environments.list",
-          "taskSuggestions.list",
-          "taskSuggestions.accept",
-          "taskSuggestions.dismiss",
-        ],
-        capabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
+        methods: ["taskSuggestions.list", "taskSuggestions.accept", "taskSuggestions.dismiss"],
       },
       auth: { role: "operator", scopes: ["operator.admin"] },
     } as never;
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     await expect(client.listTaskSuggestions()).resolves.toEqual([suggestion]);
-    await expect(client.listCloudWorkerProfiles()).resolves.toEqual(["build"]);
     await expect(client.acceptTaskSuggestion("task_1")).resolves.toEqual({
       taskId: "task_1",
       key: "agent:main:task",
     });
-    await client.acceptTaskSuggestion("task_1", "worktree");
-    await client.acceptTaskSuggestion("task_1", "local");
-    await client.acceptTaskSuggestion("task_1", "session");
-    await client.acceptTaskSuggestion("task_1", "cloud", "build");
     await expect(client.dismissTaskSuggestion("task_2")).resolves.toEqual({
       taskId: "task_2",
       dismissed: true,
     });
 
     expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "environments.list", {});
-    expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.accept", { taskId: "task_1" });
-    expect(request).toHaveBeenNthCalledWith(4, "taskSuggestions.accept", { taskId: "task_1" });
-    expect(request).toHaveBeenNthCalledWith(5, "taskSuggestions.accept", {
+    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", {
       taskId: "task_1",
       mode: "local",
     });
-    expect(request).toHaveBeenNthCalledWith(6, "taskSuggestions.accept", {
-      taskId: "task_1",
-      mode: "session",
-    });
-    expect(request).toHaveBeenNthCalledWith(7, "taskSuggestions.accept", {
-      taskId: "task_1",
-      mode: "cloud",
-      cloudProfileId: "build",
-    });
-    expect(request).toHaveBeenNthCalledWith(8, "taskSuggestions.dismiss", { taskId: "task_2" });
+    expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
@@ -568,20 +704,17 @@ describe("GatewayChatClient", () => {
 
     expect(client.getTaskSuggestionActionCapabilities()).toEqual({
       canAccept: false,
-      canAcceptModes: false,
       canDismiss: true,
     });
 
     client.hello = {
       features: {
         methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
-        capabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
       },
       auth: { role: "operator", scopes: ["operator.admin"] },
     } as never;
     expect(client.getTaskSuggestionActionCapabilities()).toEqual({
       canAccept: true,
-      canAcceptModes: true,
       canDismiss: true,
     });
   });
@@ -596,19 +729,6 @@ describe("GatewayChatClient", () => {
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     await expect(client.listTaskSuggestions()).resolves.toEqual([]);
-    await expect(client.listCloudWorkerProfiles()).resolves.toEqual([]);
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("keeps cloud profile discovery failures quiet", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
-    const request = vi.fn().mockRejectedValue(new Error("not available"));
-    client.hello = { features: { methods: ["environments.list"] } } as never;
-    (client as unknown as { client: { request: typeof request } }).client.request = request;
-
-    await expect(client.listCloudWorkerProfiles()).resolves.toEqual([]);
   });
 });

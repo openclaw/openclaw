@@ -1,8 +1,6 @@
-import type {
-  SessionsCompanionAskResult,
-  SessionsCompanionStateResult,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
@@ -14,13 +12,7 @@ import { onGatewaySessionReset } from "./session-reset-notifications.js";
 type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
-  ask: (params: {
-    agentId: string;
-    sessionKey: string;
-    question: string;
-    connId: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionsCompanionAskResult>;
+  ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
   reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;
@@ -80,6 +72,18 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     }
     reset({ sessionKey, agentId }, "backing-session-revoked");
   });
+  const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind !== "delete" || !mutation.previous.sessionId) {
+      return;
+    }
+    for (const sessionKey of mutation.previous.sessionKeys) {
+      const key = sessionObserverScopeKey(sessionKey, mutation.agentId);
+      // Replayed deletions must not retire a newer generation under the same scoped key.
+      if (threads.get(key)?.context.sessionId === mutation.previous.sessionId) {
+        reset({ sessionKey, agentId: mutation.agentId }, "backing-session-revoked");
+      }
+    }
+  });
 
   return {
     ask: askRuntime.ask,
@@ -104,6 +108,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       disposed = true;
       clearIntervalFn(sweepTimer);
       unsubscribeReset();
+      unsubscribeIdentity();
       askRuntime.dispose();
       threads.clear();
     },

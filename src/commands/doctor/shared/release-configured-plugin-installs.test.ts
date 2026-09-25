@@ -1,5 +1,6 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +112,30 @@ describe("configured plugin install release step", () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
+    });
+  });
+
+  it.each(["2026.5.1", "2026.9.1"])(
+    "does not install native catalog plugins from first-write opt-outs (touched %s)",
+    async (touchedVersion) => {
+      const cfg = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
+      await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg,
+        env: {},
+        currentVersion: "2026.9.1",
+        touchedVersion,
+      });
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains install intent when an opted-out catalog plugin is explicitly enabled", async () => {
+    const cfg = initializeNativeSessionCatalogPreferences({
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: {} })).toEqual({
+      pluginIds: ["codex"],
+      channelIds: [],
     });
   });
 
@@ -542,22 +567,33 @@ describe("configured plugin install release step", () => {
     ).toStrictEqual([]);
   });
 
-  it("marks the release step complete when there is nothing to install", async () => {
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {},
-      currentVersion: "2026.5.2",
-      touchedVersion: "2026.5.1",
-      env: {},
-    });
+  it.each(["standalone", "pre-plugin", "post-plugin"])(
+    "completes without touching config when there is nothing to install (%s)",
+    async (phase) => {
+      const result = await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg: {},
+        currentVersion: "2026.5.2",
+        touchedVersion: "2026.5.1",
+        env:
+          phase === "standalone"
+            ? {}
+            : {
+                OPENCLAW_UPDATE_IN_PROGRESS: "1",
+                OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+                OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+                ...(phase === "post-plugin" ? { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" } : {}),
+              },
+      });
 
-    expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      changes: [],
-      warnings: [],
-      completed: true,
-      touchedConfig: true,
-    });
-  });
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        completed: true,
+        touchedConfig: false,
+      });
+    },
+  );
 
   it("repairs used plugin installs and touches config only on success", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({

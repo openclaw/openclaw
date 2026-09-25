@@ -1,7 +1,7 @@
 // Chutes tests cover models plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
+import { buildChutesProvider, CHUTES_DEFAULT_MODEL_ID } from "./api.js";
 import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 import {
   applyChutesConfig,
@@ -19,14 +19,6 @@ const EXPECTED_STATIC_MODEL_IDS = [
   "Qwen/Qwen3.6-27B-TEE",
   "Qwen/Qwen3.5-397B-A17B-TEE",
 ];
-
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
 
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
@@ -195,7 +187,7 @@ describe("chutes-models", () => {
 
   it("preserves native per-million prices and exact zero rates during discovery", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
           {
             id: "fixture-provider/zero-input",
@@ -263,7 +255,7 @@ describe("chutes-models", () => {
     },
   ])("keeps an unknown runtime price, not partial paid rates, for $label", async ({ pricing }) => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [{ id: "fixture-provider/unpriced-model", pricing }],
       }),
     );
@@ -282,7 +274,7 @@ describe("chutes-models", () => {
 
   it("selects Chutes context limits in provider precedence order", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
           {
             id: "provider/context-primary",
@@ -317,7 +309,7 @@ describe("chutes-models", () => {
 
   it("falls back from malformed live token metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
           {
             id: "provider/bad-window",
@@ -349,14 +341,18 @@ describe("chutes-models", () => {
     });
   });
 
-  it("does not cache fallback static catalog for non-OK responses", async () => {
+  it("propagates uncached discovery failures", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
 
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const first = await discoverChutesModels("chutes-fallback-token");
-      const second = await discoverChutesModels("chutes-fallback-token");
-      expect(first.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
-      expect(second.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
+      await expect(
+        discoverChutesModels("chutes-fallback-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({
+        status: 503,
+      });
+      await expect(buildChutesProvider("chutes-fallback-token")).resolves.toMatchObject({
+        models: CHUTES_MODEL_CATALOG,
+      });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
@@ -366,20 +362,20 @@ describe("chutes-models", () => {
       const auth = readAuthorizationHeader(init);
       if (auth === "Bearer chutes-token-a") {
         return Promise.resolve(
-          jsonResponse({
+          Response.json({
             data: [{ id: "private/model-a" }],
           }),
         );
       }
       if (auth === "Bearer chutes-token-b") {
         return Promise.resolve(
-          jsonResponse({
+          Response.json({
             data: [{ id: "private/model-b" }],
           }),
         );
       }
       return Promise.resolve(
-        jsonResponse({
+        Response.json({
           data: [{ id: "public/model" }],
         }),
       );
@@ -395,27 +391,28 @@ describe("chutes-models", () => {
     });
   });
 
-  it("does not cache 401 fallback under the failed token key", async () => {
+  it("does not replace rejected account discovery with an anonymous catalog", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer failed-token") {
         return Promise.resolve(new Response("", { status: 401 }));
       }
       return Promise.resolve(
-        jsonResponse({
+        Response.json({
           data: [{ id: "public/model" }],
         }),
       );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const first = await discoverChutesModels("failed-token");
-      const second = await discoverChutesModels("failed-token");
-
-      expect(requireChutesModel(first, 0).id).toBe("public/model");
-      expect(requireChutesModel(second, 0).id).toBe("public/model");
+      await expect(
+        discoverChutesModels("failed-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({ status: 401 });
+      await expect(buildChutesProvider("failed-token")).resolves.toMatchObject({
+        models: [{ id: "public/model" }],
+      });
       expect(mockFetch.mock.calls.map(([, init]) => readAuthorizationHeader(init))).toEqual([
         "Bearer failed-token",
-        "",
         "Bearer failed-token",
+        "",
       ]);
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });

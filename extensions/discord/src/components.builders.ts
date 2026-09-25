@@ -1,4 +1,3 @@
-// Discord plugin module implements components.builders behavior.
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -106,6 +105,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override emoji = params.spec.emoji;
       override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };

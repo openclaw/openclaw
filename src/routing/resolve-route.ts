@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { DmScope, GroupScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
@@ -25,7 +26,6 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
-  sanitizeAgentId,
 } from "./session-key.js";
 
 /** @deprecated Use ChatType from channels/chat-type.js */
@@ -121,7 +121,7 @@ export function buildAgentSessionKey(params: {
 
 type AgentLookupCache = {
   agentsRef: OpenClawConfig["agents"] | undefined;
-  byNormalizedId: Map<string, string>;
+  agentIds: Set<string>;
   fallbackSoleAgentId?: string;
 };
 
@@ -134,17 +134,17 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
     return existing;
   }
 
-  const byNormalizedId = new Map<string, string>();
+  const agentIds = new Set<string>();
   for (const agent of listAgentEntries(cfg)) {
     const rawId = agent.id?.trim();
     if (!rawId) {
       continue;
     }
-    byNormalizedId.set(normalizeAgentId(rawId), sanitizeAgentId(rawId));
+    agentIds.add(normalizeAgentId(rawId));
   }
   const next: AgentLookupCache = {
     agentsRef,
-    byNormalizedId,
+    agentIds,
     fallbackSoleAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
@@ -155,7 +155,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return sanitizeAgentId(
+    return normalizeAgentId(
       lookup.fallbackSoleAgentId ??
         resolveDefaultAgentId(cfg, {
           surface: "agent lookup",
@@ -164,17 +164,16 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     );
   }
   const normalized = normalizeAgentId(trimmed);
-  const resolved = lookup.byNormalizedId.get(normalized);
-  if (resolved) {
-    return resolved;
+  if (lookup.agentIds.has(normalized)) {
+    return normalized;
   }
   if (normalized === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
-  if (lookup.byNormalizedId.size === 0) {
-    return sanitizeAgentId(trimmed);
+  if (lookup.agentIds.size === 0) {
+    return normalizeAgentId(trimmed);
   }
-  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+  throw new AgentSelectionRequiredError([...lookup.agentIds], {
     surface: "route binding",
     hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
   });
@@ -210,8 +209,7 @@ type BindingScope = {
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
   byChannel: Map<string, EvaluatedBindingsByChannel>;
-  byChannelAccount: Map<string, EvaluatedBinding[]>;
-  byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
+  byChannelAccount: Map<string, EvaluatedBindingsEntry>;
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
@@ -235,6 +233,12 @@ type EvaluatedBindingsIndex = {
   byTeam: Map<string, EvaluatedBinding[]>;
   byAccount: EvaluatedBinding[];
   byChannel: EvaluatedBinding[];
+};
+
+// Source-order candidates and their lookup index share one cache generation.
+type EvaluatedBindingsEntry = {
+  bindings: EvaluatedBinding[];
+  index: EvaluatedBindingsIndex;
 };
 
 type EvaluatedBindingsByChannel = {
@@ -278,13 +282,7 @@ function buildEvaluatedBindingsByChannel(
       bucket.byAnyAccount.push(evaluated);
       continue;
     }
-    const accountKey = normalizeAccountId(match.accountPattern);
-    const existing = bucket.byAccount.get(accountKey);
-    if (existing) {
-      existing.push(evaluated);
-      continue;
-    }
-    bucket.byAccount.set(accountKey, [evaluated]);
+    pushToIndexMap(bucket.byAccount, normalizeAccountId(match.accountPattern), evaluated);
   }
   return byChannel;
 }
@@ -303,40 +301,25 @@ function mergeEvaluatedBindingsInSourceOrder(
   let accountIdx = 0;
   let anyIdx = 0;
   while (accountIdx < accountScoped.length && anyIdx < anyAccount.length) {
-    const accountBinding = accountScoped[accountIdx];
-    const anyBinding = anyAccount[anyIdx];
-    if (
-      (accountBinding?.order ?? Number.MAX_SAFE_INTEGER) <=
-      (anyBinding?.order ?? Number.MAX_SAFE_INTEGER)
-    ) {
-      if (accountBinding) {
-        merged.push(accountBinding);
-      }
+    const accountBinding = accountScoped[accountIdx]!;
+    const anyBinding = anyAccount[anyIdx]!;
+    if (accountBinding.order <= anyBinding.order) {
+      merged.push(accountBinding);
       accountIdx += 1;
       continue;
     }
-    if (anyBinding) {
-      merged.push(anyBinding);
-    }
+    merged.push(anyBinding);
     anyIdx += 1;
   }
-  if (accountIdx < accountScoped.length) {
-    merged.push(...accountScoped.slice(accountIdx));
-  }
-  if (anyIdx < anyAccount.length) {
-    merged.push(...anyAccount.slice(anyIdx));
-  }
+  merged.push(...accountScoped.slice(accountIdx), ...anyAccount.slice(anyIdx));
   return merged;
 }
 
 function pushToIndexMap(
   map: Map<string, EvaluatedBinding[]>,
-  key: string | null,
+  key: string,
   binding: EvaluatedBinding,
 ): void {
-  if (!key) {
-    return;
-  }
   const existing = map.get(key);
   if (existing) {
     existing.push(binding);
@@ -348,13 +331,6 @@ function pushToIndexMap(
 function peerLookupKey(kind: ChatType, id: string): string {
   // Group/channel matching is interchangeable; share one source-ordered bucket.
   return `${kind === "channel" ? "group" : kind}:${id}`;
-}
-
-function getPeerIndexedBindings(
-  index: EvaluatedBindingsIndex,
-  peer: RoutePeer | null,
-): EvaluatedBinding[] {
-  return peer ? (index.byPeer.get(peerLookupKey(peer.kind, peer.id)) ?? []) : [];
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
@@ -413,7 +389,7 @@ function getEvaluatedBindingsForChannelAccount(
   cfg: OpenClawConfig,
   channel: string,
   accountId: string,
-): EvaluatedBinding[] {
+): EvaluatedBindingsEntry {
   const bindingsRef = cfg.bindings;
   const existing = evaluatedBindingsCacheByCfg.get(cfg);
   const cache =
@@ -422,8 +398,7 @@ function getEvaluatedBindingsForChannelAccount(
       : {
           bindingsRef,
           byChannel: buildEvaluatedBindingsByChannel(cfg),
-          byChannelAccount: new Map<string, EvaluatedBinding[]>(),
-          byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+          byChannelAccount: new Map<string, EvaluatedBindingsEntry>(),
         };
   if (cache !== existing) {
     evaluatedBindingsCacheByCfg.set(cfg, cache);
@@ -438,46 +413,16 @@ function getEvaluatedBindingsForChannelAccount(
   const channelBindings = cache.byChannel.get(channel);
   const accountScoped = channelBindings?.byAccount.get(accountId) ?? [];
   const anyAccount = channelBindings?.byAnyAccount ?? [];
-  const evaluated = mergeEvaluatedBindingsInSourceOrder(accountScoped, anyAccount);
+  const bindings = mergeEvaluatedBindingsInSourceOrder(accountScoped, anyAccount);
+  const evaluated = { bindings, index: buildEvaluatedBindingsIndex(bindings) };
 
   cache.byChannelAccount.set(cacheKey, evaluated);
-  cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
   if (cache.byChannelAccount.size > MAX_EVALUATED_BINDINGS_CACHE_KEYS) {
     cache.byChannelAccount.clear();
-    cache.byChannelAccountIndex.clear();
     cache.byChannelAccount.set(cacheKey, evaluated);
-    cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
   }
 
   return evaluated;
-}
-
-function getEvaluatedBindingIndexForChannelAccount(
-  cfg: OpenClawConfig,
-  channel: string,
-  accountId: string,
-): EvaluatedBindingsIndex {
-  const bindings = getEvaluatedBindingsForChannelAccount(cfg, channel, accountId);
-  const existing = evaluatedBindingsCacheByCfg.get(cfg);
-  const cacheKey = `${channel}\t${accountId}`;
-  const indexed = existing?.byChannelAccountIndex.get(cacheKey);
-  if (indexed) {
-    return indexed;
-  }
-  const built = buildEvaluatedBindingsIndex(bindings);
-  existing?.byChannelAccountIndex.set(cacheKey, built);
-  return built;
-}
-
-/** @internal Lists matchable candidates from the canonical channel/account binding index. */
-export function listChannelAccountRouteBindings(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
-) {
-  return getEvaluatedBindingsForChannelAccount(
-    input.cfg,
-    normalizeLowercaseStringOrEmpty(input.channel),
-    normalizeAccountId(input.accountId),
-  ).map(({ binding }) => binding);
 }
 
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
@@ -486,11 +431,11 @@ export function listExactDirectMessageBindingPeerIds(
 ): string[] {
   const prefix = "direct:";
   return [
-    ...getEvaluatedBindingIndexForChannelAccount(
+    ...getEvaluatedBindingsForChannelAccount(
       input.cfg,
       normalizeLowercaseStringOrEmpty(input.channel),
       normalizeAccountId(input.accountId),
-    ).byPeer.keys(),
+    ).index.byPeer.keys(),
   ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
 }
 
@@ -512,23 +457,14 @@ function normalizePeerConstraint(
 }
 
 function normalizeBindingMatch(
-  match:
-    | {
-        accountId?: string | undefined;
-        peer?: { kind?: string; id?: string } | undefined;
-        guildId?: string | undefined;
-        teamId?: string | undefined;
-        roles?: string[] | undefined;
-      }
-    | undefined,
+  match: AgentRouteBinding["match"] | undefined,
 ): NormalizedBindingMatch {
-  const rawRoles = match?.roles;
   return {
     accountPattern: (match?.accountId ?? "").trim(),
     peer: normalizePeerConstraint(match?.peer),
     guildId: normalizeRouteBindingId(match?.guildId) || null,
     teamId: normalizeRouteBindingId(match?.teamId) || null,
-    roles: normalizeRouteBindingRoles(rawRoles),
+    roles: normalizeRouteBindingRoles(match?.roles),
   };
 }
 
@@ -604,30 +540,25 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
   return routeBindingScopeMatches(match, scope);
 }
 
+function normalizeRoutePeer(peer: RoutePeer | null | undefined): RoutePeer | null {
+  return peer
+    ? { kind: normalizeChatType(peer.kind) ?? peer.kind, id: normalizeRouteBindingId(peer.id) }
+    : null;
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeLowercaseStringOrEmpty(input.channel);
   const defaultAgentId = normalizeLowercaseStringOrEmpty(input.defaultAgentId);
   const accountId = normalizeAccountId(input.accountId);
-  const peer = input.peer
-    ? {
-        kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
-        id: normalizeRouteBindingId(input.peer.id),
-      }
-    : null;
+  const peer = normalizeRoutePeer(input.peer);
   const guildId = normalizeRouteBindingId(input.guildId);
   const teamId = normalizeRouteBindingId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
-  const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
   const groupScope = input.groupScope ?? input.cfg.session?.groupScope ?? "per-group";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
-  const parentPeer = input.parentPeer
-    ? {
-        kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
-        id: normalizeRouteBindingId(input.parentPeer.id),
-      }
-    : null;
+  const parentPeer = normalizeRoutePeer(input.parentPeer);
 
   const routeCache =
     !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
@@ -652,8 +583,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
-  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
+  const memberRoleIdSet = new Set(memberRoleIds);
+  const { bindings, index: bindingsIndex } = getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    channel,
+    accountId,
+  );
 
   const choose = (
     agentId: string,
@@ -727,87 +662,48 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       );
     }
   }
-  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const baseScope = {
+  const scope: BindingScope = {
+    peer,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
   };
-
-  const tiers: Array<{
-    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
-    enabled: boolean;
-    scopePeer: RoutePeer | null;
-    candidates: EvaluatedBinding[];
-  }> = [
-    {
-      matchedBy: "binding.peer",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: getPeerIndexedBindings(bindingsIndex, peer),
-    },
-    {
-      matchedBy: "binding.peer.parent",
-      enabled: Boolean(parentPeer && parentPeer.id),
-      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: getPeerIndexedBindings(bindingsIndex, parentPeer),
-    },
-    {
-      matchedBy: "binding.peer.wildcard",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: bindingsIndex.byPeerWildcard,
-    },
-    {
-      matchedBy: "binding.guild+roles",
-      enabled: Boolean(guildId && memberRoleIds.length > 0),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuildWithRoles.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.guild",
-      enabled: Boolean(guildId),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuild.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.team",
-      enabled: Boolean(teamId),
-      scopePeer: peer,
-      candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.account",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byAccount,
-    },
-    {
-      matchedBy: "binding.channel",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byChannel,
-    },
-  ];
-
-  for (const tier of tiers) {
-    if (!tier.enabled) {
-      continue;
-    }
-    // Index buckets already enforce tier membership; only route scope still
-    // needs validation against this inbound peer, guild, team, and roles.
-    const matched = tier.candidates.find((candidate) =>
-      matchesBindingScope(candidate.match, {
-        ...baseScope,
-        peer: tier.scopePeer,
-      }),
+  const chooseFrom = (
+    candidates: EvaluatedBinding[] | undefined,
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">,
+    bindingScope = scope,
+  ) => {
+    // Index buckets enforce tier membership; compound scope constraints still apply.
+    const matched = candidates?.find((candidate) =>
+      matchesBindingScope(candidate.match, bindingScope),
     );
-    if (matched) {
-      if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
-      }
-      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.session);
+    if (!matched) {
+      return undefined;
     }
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=${matchedBy} agentId=${matched.binding.agentId}`);
+    }
+    return choose(matched.binding.agentId, matchedBy, matched.binding.session);
+  };
+  const route =
+    (peer &&
+      chooseFrom(bindingsIndex.byPeer.get(peerLookupKey(peer.kind, peer.id)), "binding.peer")) ||
+    (parentPeer?.id &&
+      chooseFrom(
+        bindingsIndex.byPeer.get(peerLookupKey(parentPeer.kind, parentPeer.id)),
+        "binding.peer.parent",
+        { ...scope, peer: parentPeer },
+      )) ||
+    (peer && chooseFrom(bindingsIndex.byPeerWildcard, "binding.peer.wildcard")) ||
+    (guildId &&
+      memberRoleIds.length > 0 &&
+      chooseFrom(bindingsIndex.byGuildWithRoles.get(guildId), "binding.guild+roles")) ||
+    (guildId && chooseFrom(bindingsIndex.byGuild.get(guildId), "binding.guild")) ||
+    (teamId && chooseFrom(bindingsIndex.byTeam.get(teamId), "binding.team")) ||
+    chooseFrom(bindingsIndex.byAccount, "binding.account") ||
+    chooseFrom(bindingsIndex.byChannel, "binding.channel");
+  if (route) {
+    return route;
   }
 
   const unboundAgentId = defaultAgentId || tryResolveLegacyCompatibilityAgentId(input.cfg);
@@ -815,7 +711,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     unboundAgentId ??
       resolveDefaultAgentId(input.cfg, {
         surface: `${channel} account ${accountId} routing`,
-        hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
+        hint: `Add a channel-wide binding for ${channel}:${accountId}: ${JSON.stringify({ agentId: "<agentId>", match: { channel, accountId } })}. Replace <agentId> with a configured agent, then restart the Gateway.`,
       }),
     "default",
   );

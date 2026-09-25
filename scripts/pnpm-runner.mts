@@ -6,7 +6,7 @@ import {
   buildCmdExeCommandLine,
   resolvePathEnvKey,
   resolveWindowsCmdExePath,
-} from "./lib/windows-cmd-helpers-runtime.mts";
+} from "./windows-cmd-helpers.mjs";
 
 export type PnpmRunnerParams = {
   comSpec?: string;
@@ -101,7 +101,7 @@ function findExecutableOnPath(
       : [""];
   const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
   for (const directory of envPath.split(pathDelimiter)) {
-    if (!directory) {
+    if (!directory && platform === "win32") {
       continue;
     }
     const resolvedDirectory = path.isAbsolute(directory) ? directory : path.resolve(cwd, directory);

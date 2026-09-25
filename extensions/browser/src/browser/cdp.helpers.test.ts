@@ -1,8 +1,8 @@
 // Browser tests cover cdp.helpers plugin behavior.
 import type { LookupAddress, LookupAllOptions, LookupOneOptions, LookupOptions } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
@@ -51,6 +51,7 @@ import {
   resolveCdpTabOwnership,
   scopeCdpPolicyToConfiguredEndpoint,
 } from "./cdp.helpers.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 describe("cdp helpers", () => {
   afterEach(() => {
@@ -181,8 +182,9 @@ describe("cdp helpers", () => {
   it("does not turn a strict remote CDP hostname into a private-network grant", async () => {
     const policy = { dangerouslyAllowPrivateNetwork: false };
     const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
-    const { resolvePinnedHostnameWithPolicy } =
-      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+    const { resolvePinnedHostnameWithPolicy } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/security-runtime")
+    >("openclaw/plugin-sdk/security-runtime");
 
     expect(scoped).toBe(policy);
     await expect(
@@ -199,8 +201,9 @@ describe("cdp helpers", () => {
       allowedHostnames: ["browser.example"],
     };
     const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
-    const { resolvePinnedHostnameWithPolicy } =
-      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+    const { resolvePinnedHostnameWithPolicy } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/security-runtime")
+    >("openclaw/plugin-sdk/security-runtime");
 
     expect(scoped).toEqual({
       dangerouslyAllowPrivateNetwork: false,
@@ -343,6 +346,106 @@ describe("cdp helpers", () => {
     controller.abort(new Error("caller stopped ownership lookup"));
     expect(request.signal.aborted).toBe(true);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("accepts remote CDP ownership when discovery advertises loopback websocket URLs", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-SIDECAR",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+    const policy = {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["1.1.1.1"],
+    };
+
+    await expect(
+      resolveCdpTabOwnership({
+        profileName: "remote",
+        cdpUrl: "https://1.1.1.1",
+        nativeTargetId: "TARGET-1",
+        ssrfPolicy: policy,
+      }),
+    ).resolves.toMatchObject({
+      status: "durable",
+      nativeTargetId: "TARGET-1",
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps browser-instance fingerprints on the advertised websocket identity", async () => {
+    const advertised = "ws://127.0.0.1:9222/devtools/browser/BROWSER-SIDECAR";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ webSocketDebuggerUrl: advertised }), {
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const policy = {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["1.1.1.1"],
+    };
+    const ownership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl: "https://1.1.1.1",
+      nativeTargetId: "TARGET-1",
+      ssrfPolicy: policy,
+    });
+    expect(ownership).toMatchObject({
+      status: "durable",
+      browserInstanceFingerprint:
+        "sha256:6eb6cb69267d17a1f2fbf755b1b5c681ddd023c458f6e0f14b3f30848c566ee3",
+    });
+  });
+
+  it("classifies malformed discovered websocket URLs as non-durable", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ webSocketDebuggerUrl: "not-a-url" }), {
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveCdpTabOwnership({
+        profileName: "remote",
+        cdpUrl: "https://1.1.1.1",
+        nativeTargetId: "TARGET-1",
+      }),
+    ).resolves.toEqual({
+      status: "non-durable",
+      reason: "browser-identity-unavailable",
+    });
+  });
+
+  it("still blocks ownership when discovery advertises a different remote authority", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          webSocketDebuggerUrl: "ws://evil.example:9223/devtools/browser/BROWSER-SIDECAR",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release: vi.fn(async () => {}),
+    });
+    const policy = {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["1.1.1.1"],
+    };
+
+    await expect(
+      resolveCdpTabOwnership({
+        profileName: "remote",
+        cdpUrl: "https://1.1.1.1",
+        nativeTargetId: "TARGET-1",
+        ssrfPolicy: policy,
+      }),
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
   it("classifies browser identity network failures without hiding caller aborts", async () => {

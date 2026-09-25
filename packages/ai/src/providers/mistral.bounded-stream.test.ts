@@ -1,8 +1,8 @@
 // Mistral provider tests cover bounded-stream-read helper (`createBoundedMistralFetcher`).
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
-import type { Context, Model } from "../types.js";
+import { assert, describe, expect, it } from "vitest";
+import type { AssistantMessageEvent, Context, Model } from "../types.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 
 const MAX = 16 * 1024 * 1024;
@@ -210,7 +210,8 @@ type MistralTerminalFixture = {
   done: boolean;
   abort?: boolean;
   toolArguments?: string[];
-  text?: string;
+  text?: string | Array<{ type: "text"; text: string }>;
+  followupTexts?: Array<string | Array<{ type: "text"; text: string }>>;
 };
 
 async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
@@ -242,8 +243,22 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
         usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
       })}\n\n`,
     );
+    for (const content of fixture.followupTexts ?? []) {
+      response.write(
+        `data: ${JSON.stringify({
+          id: "mistral-terminal-owner-proof",
+          model: "mistral-large-latest",
+          choices: [
+            {
+              index: 0,
+              delta: { content },
+              finish_reason: fixture.finishReason,
+            },
+          ],
+        })}\n\n`,
+      );
+    }
     if (fixture.abort) {
-      request.once("close", () => response.end());
       return;
     }
     response.end(fixture.done ? "data: [DONE]\n\n" : "");
@@ -275,14 +290,24 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
       ...(fixture.abort ? { signal: abort.signal } : {}),
     });
     const events: string[] = [];
+    const textIndexes: number[] = [];
+    const textBlocks: unknown[] = [];
+    const messageEvents: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event.type);
+      messageEvents.push(event);
+      if (event.type === "text_delta") {
+        assert.isDefined(event.partial);
+        textIndexes.push(event.contentIndex);
+        textBlocks.push(event.partial.content[event.contentIndex]);
+      }
       if (fixture.abort && event.type === "toolcall_delta") {
         abort.abort(new Error("Operator canceled the incomplete tool"));
       }
     }
-    return { result: await stream.result(), events };
+    return { result: await stream.result(), events, textIndexes, textBlocks, messageEvents };
   } finally {
+    server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -290,6 +315,76 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
 }
 
 describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE", () => {
+  it.each(["string", "text chunks"] as const)(
+    "coalesces %s wire deltas without changing event identity",
+    async (representation) => {
+      const inputs = ["", "a", "😀", "\ud800x", "\ud83d", "\ude00", "z"];
+      const contents = inputs.map((text) =>
+        representation === "string" ? text : [{ type: "text" as const, text }],
+      );
+      const { result, events, textIndexes, textBlocks, messageEvents } =
+        await streamMistralTerminalFixture({
+          text: contents[0],
+          followupTexts: contents.slice(1),
+          finishReason: "stop",
+          done: true,
+        });
+      const deltas = messageEvents.filter((event) => event.type === "text_delta");
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toEqual([{ type: "text", text: "a😀xz" }]);
+      expect(deltas.map((event) => event.delta)).toEqual(["", "a", "😀", "x", "", "", "z"]);
+      expect(textIndexes).toEqual(inputs.map(() => 0));
+      expect(textBlocks.every((block) => block === result.content[0])).toBe(true);
+      expect(
+        deltas.every(
+          (event) => event.partial === result && event.partial.content[0] === result.content[0],
+        ),
+      ).toBe(true);
+      expect(events).toEqual([
+        "start",
+        "text_start",
+        ...inputs.map(() => "text_delta"),
+        "text_end",
+        "done",
+      ]);
+    },
+  );
+
+  it.each([
+    { text: "before", followupTexts: [[{ type: "text", text: "after" }]] },
+    { text: [{ type: "text", text: "before" }], followupTexts: ["after"] },
+  ] satisfies Array<Pick<MistralTerminalFixture, "text" | "followupTexts">>)(
+    "preserves text and tool transitions across wire content forms: %j",
+    async (fixture) => {
+      const { result, events, textIndexes } = await streamMistralTerminalFixture({
+        ...fixture,
+        finishReason: "tool_calls",
+        done: true,
+        toolArguments: ["{}"],
+      });
+      expect(result.stopReason).toBe("toolUse");
+      expect(result.content).toEqual([
+        { type: "text", text: "before" },
+        expect.objectContaining({ type: "toolCall", name: "tool_0", arguments: {} }),
+        { type: "text", text: "after" },
+      ]);
+      expect(textIndexes).toEqual([0, 2]);
+      expect(events).toEqual([
+        "start",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "toolcall_start",
+        "toolcall_delta",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "toolcall_end",
+        "done",
+      ]);
+    },
+  );
+
   it("discards unfinished tool arguments when the operator cancels generation", async () => {
     const { result, events } = await streamMistralTerminalFixture({
       finishReason: null,

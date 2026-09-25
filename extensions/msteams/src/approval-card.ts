@@ -6,9 +6,13 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatApprovalDecisionLabel,
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createMSTeamsApprovalToken } from "./approval-card-actions.js";
+import { msTeamsApprovalControls } from "./approval-card-actions.js";
 
 export type MSTeamsApprovalActionToken = {
   token: string;
@@ -25,6 +29,11 @@ export type MSTeamsPendingApprovalCard = {
 };
 
 type MSTeamsApprovalBodyItem = Record<string, unknown>;
+
+// View-model cards use different system-agent wording from canonical terminal cards.
+function formatMSTeamsApprovalKind(kind: ChannelApprovalKind): string {
+  return kind === "plugin" ? "Plugin" : kind === "system-agent" ? "OpenClaw Change" : "Exec";
+}
 
 function buildCardHeading(title: string, subtitle: string): MSTeamsApprovalBodyItem[] {
   return [
@@ -85,28 +94,15 @@ function buildAdaptiveCard(
   };
 }
 
-function formatApprovalDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
-}
-
 export function buildMSTeamsPendingApprovalCard(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): MSTeamsPendingApprovalCard {
   const { view, nowMs } = params;
-  const kindLabel =
-    view.approvalKind === "plugin"
-      ? "Plugin"
-      : view.approvalKind === "system-agent"
-        ? "OpenClaw Change"
-        : "Exec";
+  const kindLabel = formatMSTeamsApprovalKind(view.approvalKind);
   const actionTokens: MSTeamsApprovalActionToken[] = [];
   const actions = view.actions.map(({ decision, label }) => {
-    const token = createMSTeamsApprovalToken();
+    const token = msTeamsApprovalControls.createToken();
     actionTokens.push({ token, decision });
     return {
       type: "Action.Submit",
@@ -133,21 +129,9 @@ export function buildMSTeamsPendingApprovalCard(params: {
 export function buildMSTeamsResolvedApprovalCard(
   view: ResolvedApprovalView,
 ): Record<string, unknown> {
-  const kindLabel =
-    view.approvalKind === "plugin"
-      ? "Plugin"
-      : view.approvalKind === "system-agent"
-        ? "OpenClaw Change"
-        : "Exec";
+  const kindLabel = formatMSTeamsApprovalKind(view.approvalKind);
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : formatApprovalDecision(view.decision);
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   return buildAdaptiveCard([
     ...buildCardHeading(
       `${kindLabel} Approval: ${decisionLabel}`,
@@ -161,12 +145,7 @@ export function buildMSTeamsResolvedApprovalCard(
 export function buildMSTeamsExpiredApprovalCard(
   view: ExpiredApprovalView,
 ): Record<string, unknown> {
-  const kindLabel =
-    view.approvalKind === "plugin"
-      ? "Plugin"
-      : view.approvalKind === "system-agent"
-        ? "OpenClaw Change"
-        : "Exec";
+  const kindLabel = formatMSTeamsApprovalKind(view.approvalKind);
   return buildAdaptiveCard([
     ...buildCardHeading(
       `${kindLabel} Approval Expired`,
@@ -190,7 +169,7 @@ export function buildMSTeamsCanonicalApprovalTerminalCard(
         : "System Agent";
   const outcome =
     approval.status === "allowed"
-      ? formatApprovalDecision(approval.decision)
+      ? formatApprovalDecisionLabel(approval.decision)
       : approval.status === "denied"
         ? "Denied"
         : approval.status === "expired"

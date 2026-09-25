@@ -11,9 +11,11 @@ import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
-import { MatrixClientBase, type MatrixMessageWireDispatch } from "./client-base.js";
+import { MatrixClientBase } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
+import type { MatrixMessageWireDispatch } from "./message-wire-dispatch.js";
+import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./send-currentness.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
 import type { MatrixRawEvent, MatrixRelationsPage, MessageEventContent } from "./types.js";
 
@@ -60,12 +62,14 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async getTransactionScopeId(): Promise<string> {
+    captureMatrixSendCurrentness(this)?.();
     if (this.transactionScopeId) {
       return this.transactionScopeId;
     }
+    // The memoized identity belongs to this client generation, not its first waiter.
     const active =
       this.transactionScopePromise ??
-      (async () => {
+      withoutMatrixSendCurrentness(async () => {
         const configuredUserId = this.client.getUserId()?.trim() || this.selfUserId;
         const configuredDeviceId =
           this.transactionScopeDeviceId || this.client.getDeviceId()?.trim() || null;
@@ -97,7 +101,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
           .update("\0")
           .update(this.transactionScopeAccessTokenHash)
           .digest("hex");
-      })();
+      });
     this.transactionScopePromise = active;
     try {
       const resolved = await active;
@@ -147,9 +151,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async resolveRoom(aliasOrRoomId: string): Promise<string | null> {
-    if (aliasOrRoomId.startsWith("!")) {
-      return aliasOrRoomId;
-    }
     if (!aliasOrRoomId.startsWith("#")) {
       return aliasOrRoomId;
     }
@@ -191,14 +192,19 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     transactionId?: string,
     beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
   ): Promise<string> {
-    return await this.runSerializedRoomSend(roomId, async () => {
-      return await this.withMessageWireDispatchGuard({
-        transactionId,
+    // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
+    const assertCurrent = captureMatrixSendCurrentness(this);
+    const wireTransactionId =
+      transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
+    return await this.sendQueue.enqueue(roomId, async () => {
+      return await this.messageWireDispatchGuards.run({
+        transactionId: wireTransactionId,
         guard: beforeWireDispatch,
+        assertCurrent,
         run: async () => {
-          if (transactionId) {
+          if (wireTransactionId) {
             const room = this.client.getRoom(roomId);
-            const existing = room?.getEventForTxnId?.(transactionId);
+            const existing = room?.getEventForTxnId?.(wireTransactionId);
             if (existing) {
               const existingId = existing.getId();
               if (
@@ -214,12 +220,12 @@ export abstract class MatrixClientCore extends MatrixClientBase {
                 return resent.event_id;
               }
               throw new Error(
-                `Matrix transaction ${transactionId} is already active with status ${existing.status ?? "unknown"}`,
+                `Matrix transaction ${wireTransactionId} is already active with status ${existing.status ?? "unknown"}`,
               );
             }
           }
           await this.prepareRoomForMessageSend(roomId, content);
-          const sent = await this.client.sendMessage(roomId, content as never, transactionId);
+          const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
           return sent.event_id;
         },
       });
@@ -294,7 +300,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    return await this.runSerializedRoomSend(roomId, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       // SDK encryption trusts these wire event types without inspecting their
       // payload; only SDK encryption and the dedicated redaction owner may emit them.
       if (
@@ -313,12 +319,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
       return sent.event_id;
     });
-  }
-
-  // Keep outbound room events ordered when multiple plugin paths emit
-  // messages/reactions/polls into the same Matrix room concurrently.
-  private async runSerializedRoomSend<T>(roomId: string, task: () => Promise<T>): Promise<T> {
-    return await this.sendQueue.enqueue(roomId, task);
   }
 
   async sendStateEvent(
@@ -377,10 +377,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
 
   async joinRoom(roomId: string): Promise<void> {
     await this.client.joinRoom(roomId);
-  }
-
-  mxcToHttp(mxcUrl: string): string | null {
-    return this.client.mxcUrlToHttp(mxcUrl, undefined, undefined, undefined, true, false, true);
   }
 
   async downloadContent(
@@ -462,6 +458,10 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     } = {},
   ): Promise<MatrixRelationsPage> {
     const result = await this.client.relations(roomId, eventId, relationType, eventType, opts);
+    // Untyped relation queries include ciphertext even without cached room state;
+    // the SDK only awaits decryption itself for an explicitly encrypted query.
+    const events = result.originalEvent ? [result.originalEvent, ...result.events] : result.events;
+    await Promise.all(events.map((event) => this.client.decryptEventIfNeeded(event)));
     return {
       originalEvent: result.originalEvent ? matrixEventToRaw(result.originalEvent) : null,
       events: result.events.map((event) => matrixEventToRaw(event)),

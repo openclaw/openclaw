@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { normalizeFileReferencePrefix } from "../../sandbox-paths.js";
 import { getReadPathVariants, resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,6 +14,31 @@ describe("resolveToCwd", () => {
 
   it("resolves ordinary relative paths against cwd", () => {
     expect(resolveToCwd("notes/today.md", cwd)).toBe(path.resolve(cwd, "notes/today.md"));
+  });
+
+  it.each([
+    ["@notes.md", "notes.md"],
+    ["@@notes.md", "@notes.md"],
+    ["@@@notes.md", "@@notes.md"],
+    ["./@notes.md", "@notes.md"],
+  ])("consumes one reference prefix across resolver handoffs: %s", (input, filename) => {
+    const normalized = normalizeFileReferencePrefix(input);
+    expect(resolveToCwd(normalized, cwd)).toBe(path.resolve(cwd, filename));
+    expect(resolveToCwd(normalizeFileReferencePrefix(normalized), cwd)).toBe(
+      path.resolve(cwd, filename),
+    );
+  });
+
+  it("preserves home and file URL references without decoding escaped mentions", () => {
+    const target = path.resolve(cwd, "notes.txt");
+    const url = pathToFileURL(target).href;
+    expect(resolveToCwd(normalizeFileReferencePrefix(`@${url}`), cwd)).toBe(target);
+    expect(resolveToCwd(normalizeFileReferencePrefix(`@@${url}`), cwd)).toBe(
+      path.resolve(cwd, `@${url}`),
+    );
+    expect(resolveToCwd(normalizeFileReferencePrefix("@~/notes.txt"), cwd)).toBe(
+      resolveToCwd("~/notes.txt", cwd),
+    );
   });
 
   it("keeps Unicode spaces in the destination path", () => {

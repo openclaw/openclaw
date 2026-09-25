@@ -7,7 +7,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { CronJob } from "../../cron/types.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -30,7 +32,8 @@ vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
   return { ...actual, runOpenClawAgentWriteTransaction };
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -103,7 +106,10 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           respond,
           context: {
             getRuntimeConfig: () => ({}),
-            loadGatewayModelCatalog: vi.fn(async () => []),
+            loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+              entries: [],
+              routeVariants: [],
+            })),
             broadcastToConnIds: vi.fn(),
             getSessionEventSubscriberConnIds: () => new Set(),
             chatAbortControllers: new Map(),
@@ -202,6 +208,21 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     sqliteTransactionLabels.length = 0;
     const originalExec = database.db.exec.bind(database.db);
     const transactionCounts = { begin: 0, commit: 0 };
+    const workerGrants: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    const admissionSpy = vi
+      .spyOn(admission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((callback) =>
+        createAdmission((request, grant) => {
+          callback(request, () => {
+            const granted = grant();
+            if (granted && (request.stage === "transaction" || request.stage === "commit")) {
+              workerGrants.push(request.stage);
+            }
+            return granted;
+          });
+        }),
+      );
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
       const normalized = sql.trim().toUpperCase();
       if (normalized === "BEGIN IMMEDIATE") {
@@ -261,7 +282,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       );
       const context = {
         getRuntimeConfig: () => ({}),
-        loadGatewayModelCatalog: vi.fn(async () => []),
+        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
         broadcastToConnIds: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set(),
         chatAbortControllers: new Map(),
@@ -290,11 +311,12 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       // Guard batch cost with operation counts, independent of shared-runner contention.
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
-      // Archive attribution stays in the session-store batch; transcripts are untouched.
-      expect(transactionCounts).toEqual({ begin: 1, commit: 1 });
+      // One admitted worker transaction owns the batch; the caller never waits in SQLite.
+      expect(transactionCounts).toEqual({ begin: 0, commit: 0 });
+      expect(workerGrants).toEqual(["transaction", "commit"]);
       expect(
         sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
       expect(cronList).toHaveBeenCalledOnce();
       expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
@@ -315,6 +337,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         { enabled: false, id: "already-disabled" },
       ]);
     } finally {
+      admissionSpy.mockRestore();
       execSpy.mockRestore();
       statements.restore();
     }

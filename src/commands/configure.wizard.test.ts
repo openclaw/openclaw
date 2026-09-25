@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
+import { committedConfigFiles } from "./committed-config.test-support.js";
 import {
   createEnabledWebSearchConfig,
   createWizardTestRuntime as createRuntime,
@@ -55,6 +56,26 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     setupWizardTestDefaults();
+  });
+
+  it("directs invalid config to the doctor repair command before making changes", async () => {
+    setupBaseWizardState();
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      ...EMPTY_CONFIG_SNAPSHOT,
+      exists: true,
+      valid: false,
+      issues: [{ path: "browser.actionTimeoutTypoMs", message: "Unknown key" }],
+    });
+    const runtime = createRuntime();
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    expect(mocks.clackOutro).toHaveBeenCalledWith(
+      "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run configure.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.clackSelect).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it.each(["gateway", "daemon", "health", "web"] as const)(
@@ -410,6 +431,7 @@ describe("runConfigureWizard", () => {
         // Second call: succeeds with refreshed hash
         expect(params.baseHash).toBe(newHashAfterMutation);
         await mocks.writeConfigFile(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     );
 
@@ -499,6 +521,7 @@ describe("runConfigureWizard", () => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await mocks.writeConfigFile(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     );
 

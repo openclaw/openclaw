@@ -18,6 +18,7 @@ const daemonMocks = vi.hoisted(() => ({
   },
   loadNodeHostConfig: vi.fn<LoadNodeHostConfig>(async () => null),
   runNodeHost: vi.fn(),
+  runNodeHostWorker: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   runNodeDaemonRestart: vi.fn(),
   runNodeDaemonStart: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock("../../node-host/config.js", () => ({
 
 vi.mock("../../node-host/runner.js", () => ({
   runNodeHost: daemonMocks.runNodeHost,
+}));
+
+vi.mock("../../node-host/worker.js", () => ({
+  runNodeHostWorker: daemonMocks.runNodeHostWorker,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -58,12 +63,61 @@ describe("registerNodeCli", () => {
     daemonMocks.loadNodeHostConfig.mockClear();
     daemonMocks.loadNodeHostConfig.mockResolvedValue(null);
     daemonMocks.runNodeHost.mockClear();
+    daemonMocks.runNodeHostWorker.mockClear();
     daemonMocks.runNodeDaemonInstall.mockClear();
     daemonMocks.runNodeDaemonRestart.mockClear();
     daemonMocks.runNodeDaemonStart.mockClear();
     daemonMocks.runNodeDaemonStatus.mockClear();
     daemonMocks.runNodeDaemonStop.mockClear();
     daemonMocks.runNodeDaemonUninstall.mockClear();
+  });
+
+  it.each([
+    { args: [], enabled: undefined },
+    { args: ["--desktop-sharing"], enabled: true },
+    { args: ["--no-desktop-sharing"], enabled: false },
+  ])(
+    "forwards only the private worker's explicit desktop preference: $args",
+    async ({ args, enabled }) => {
+      await createProgram().parseAsync(["node", "worker", ...args], { from: "user" });
+      expect(daemonMocks.runNodeHostWorker).toHaveBeenCalledWith({
+        desktopSharingEnabled: enabled,
+      });
+    },
+  );
+
+  it.each([
+    { args: [], enabled: undefined },
+    { args: ["--desktop-sharing"], enabled: true },
+    { args: ["--no-desktop-sharing"], enabled: false },
+  ])("forwards the desktop companion preference to node run: $args", async ({ args, enabled }) => {
+    const program = createProgram();
+    await program.parseAsync(["node", "run", ...args], { from: "user" });
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopSharingEnabled: enabled }),
+    );
+    expect(
+      program.commands
+        .find((command) => command.name() === "node")
+        ?.commands.find((command) => command.name() === "run")
+        ?.helpInformation(),
+    ).not.toContain("--desktop-sharing");
+  });
+
+  it("forwards a companion's scoped authentication and parent lifetime without public help flags", async () => {
+    const program = createProgram();
+    await program.parseAsync(["node", "run", "--auth-from-env", "--parent-stdin"], {
+      from: "user",
+    });
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayAuthFromEnv: true, parentStdin: true }),
+    );
+    const help = program.commands
+      .find((command) => command.name() === "node")
+      ?.commands.find((command) => command.name() === "run")
+      ?.helpInformation();
+    expect(help).not.toContain("--auth-from-env");
+    expect(help).not.toContain("--parent-stdin");
   });
 
   it.each([
@@ -79,6 +133,18 @@ describe("registerNodeCli", () => {
 
     expect(action.mock.calls[0]?.[0]?.json).toBe(true);
   });
+
+  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
+    "forwards an exact node runtime pin: %s",
+    async (pin) => {
+      await createProgram().parseAsync(["node", "install", "--runtime-path", pin, "--force"], {
+        from: "user",
+      });
+      expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimePath: pin, force: true }),
+      );
+    },
+  );
 
   it("forwards node install options to the daemon adapter", async () => {
     const program = createProgram();
@@ -109,6 +175,64 @@ describe("registerNodeCli", () => {
       }),
     );
   });
+
+  it.each(["run", "install"] as const)(
+    "accepts exact command allowlists before or after node %s",
+    async (leaf) => {
+      const action = leaf === "run" ? daemonMocks.runNodeHost : daemonMocks.runNodeDaemonInstall;
+      for (const args of [
+        ["node", "--commands", "fixture.read,fixture.list", leaf],
+        ["node", leaf, "--commands", "fixture.read", "--commands", "fixture.list,fixture.read"],
+      ]) {
+        await createProgram().parseAsync(args, { from: "user" });
+        expect(action).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            commands: ["fixture.list", "fixture.read"],
+          }),
+        );
+      }
+    },
+  );
+
+  it("rejects empty command ids instead of silently widening the surface", async () => {
+    await expect(
+      createProgram().parseAsync(["node", "run", "--commands", "fixture.list,"], { from: "user" }),
+    ).rejects.toThrow("non-empty command ids");
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it.each(["run", "install"] as const)(
+    "accepts --all-commands before or after node %s",
+    async (leaf) => {
+      const action = leaf === "run" ? daemonMocks.runNodeHost : daemonMocks.runNodeDaemonInstall;
+      for (const args of [
+        ["node", "--all-commands", leaf],
+        ["node", leaf, "--all-commands"],
+      ]) {
+        await createProgram().parseAsync(args, { from: "user" });
+        expect(action).toHaveBeenLastCalledWith(expect.objectContaining({ allCommands: true }));
+      }
+    },
+  );
+
+  it.each(["run", "install"] as const)(
+    "rejects conflicting command selections for node %s",
+    async (leaf) => {
+      for (const args of [
+        ["node", leaf, "--all-commands", "--commands", "fixture.read"],
+        ["node", "--all-commands", leaf, "--commands", "fixture.read"],
+        ["node", "--commands", "fixture.read", leaf, "--all-commands"],
+        ["node", "--commands", "fixture.read", "--all-commands", leaf],
+      ]) {
+        await expect(createProgram().parseAsync(args, { from: "user" })).rejects.toThrow(
+          /--all-commands.*--commands/,
+        );
+      }
+      expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+      expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects an explicit invalid node run port", async () => {
     const program = createProgram();
@@ -149,6 +273,20 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
   });
 
+  it("hosts worker sessions for this foreground process with --session-host", async () => {
+    await createProgram().parseAsync(["node", "run", "--session-host"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true }),
+    );
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("ephemeral");
+    expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+
+    daemonMocks.runNodeHost.mockClear();
+    await createProgram().parseAsync(["node", "run"], { from: "user" });
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+  });
+
   it("falls back to configured node run port when --port is omitted", async () => {
     daemonMocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,
@@ -164,14 +302,17 @@ describe("registerNodeCli", () => {
     );
   });
 
-  it("derives the node endpoint, TLS pin, and bootstrap credential from --pair", async () => {
+  it.each([
+    ["--pair", true],
+    ["--pair-if-needed", false],
+  ])("derives endpoint and authentication preference from %s", async (flag, preferBootstrap) => {
     const setupCode = encodePairingSetupCode({
       url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "bootstrap-123",
       tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT.toUpperCase()}`,
     });
 
-    await createProgram().parseAsync(["node", "run", "--pair", `oc-pair://${setupCode}`], {
+    await createProgram().parseAsync(["node", "run", flag, `oc-pair://${setupCode}`], {
       from: "user",
     });
 
@@ -192,9 +333,19 @@ describe("registerNodeCli", () => {
           },
         ],
         gatewayBootstrapToken: "bootstrap-123",
-        preferGatewayBootstrapToken: true,
+        preferGatewayBootstrapToken: preferBootstrap,
       }),
     );
+  });
+
+  it("rejects simultaneous forced and resumable pairing", async () => {
+    await expect(
+      createProgram().parseAsync(["node", "run", "--pair", "first", "--pair-if-needed", "second"], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({ code: "commander.conflictingOption" });
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
   });
 
   it("lets explicit gateway flags override --pair values", async () => {

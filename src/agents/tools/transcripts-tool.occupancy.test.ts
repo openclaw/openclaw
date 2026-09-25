@@ -5,22 +5,35 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
+import * as captureOperations from "../../transcripts/capture-operations.js";
+import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
+import * as transcriptCapture from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
+import { readConfiguredTranscriptStarts } from "../../transcripts/configured-start-status.js";
+import * as configuredStartStatus from "../../transcripts/configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
+import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
-  activeSessions.clear();
+const startTranscripts = transcriptCapture.startTranscripts;
+const beginConfiguredTranscriptStarts = configuredStartStatus.beginConfiguredTranscriptStarts;
+afterEach(async () => {
+  await clearTranscriptCapturesForTest();
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
+  vi.restoreAllMocks();
 });
 
 function harness() {
@@ -31,6 +44,33 @@ function harness() {
   const watches: TranscriptOccupancyWatchRequest[] = [];
   const unwatch = vi.fn();
   const logger = { warn: vi.fn() };
+  const startEvents: ReturnType<typeof createDeferred<void>>[] = [];
+  const startEvent = (count: number) => (startEvents[count - 1] ??= createDeferred());
+  const retryEvents: ReturnType<typeof createDeferred<void>>[] = [];
+  const retryEvent = (count: number) => (retryEvents[count - 1] ??= createDeferred());
+  let retries = 0;
+  vi.spyOn(configuredStartStatus, "beginConfiguredTranscriptStarts").mockImplementation(
+    (config) => {
+      const owner = beginConfiguredTranscriptStarts(config);
+      const record = owner.record.bind(owner);
+      vi.spyOn(owner, "record").mockImplementation((...args) => {
+        record(...args);
+        if (args[2] === "retrying") {
+          retryEvent(++retries).resolve();
+        }
+      });
+      return owner;
+    },
+  );
+  let completedStarts = 0;
+  // Provider entry precedes active publication; observe the real startup completion.
+  vi.spyOn(transcriptCapture, "startTranscripts").mockImplementation(async (params) => {
+    const result = await startTranscripts(params);
+    if (result.status === "active") {
+      startEvent(++completedStarts).resolve();
+    }
+    return result;
+  });
   const provider: TranscriptSourceProvider = {
     id: "room-capture",
     name: "Room capture",
@@ -60,7 +100,6 @@ function harness() {
     guildId: "guild",
     channelId: "voice",
     whenOccupied: true,
-    sessionId: "ignored-id",
   };
   const registry = createEmptyPluginRegistry();
   registry.transcriptSourceProviders.push({
@@ -73,18 +112,18 @@ function harness() {
   });
   const service = (
     entries: NonNullable<NonNullable<OpenClawConfig["transcripts"]>["autoStart"]> = [entry],
+    config: OpenClawConfig = {},
   ) =>
     createTranscriptsAutoStartService({
       stateDir,
-      config: { transcripts: { autoStart: entries } },
+      config: { ...config, transcripts: { autoStart: entries } },
       logger,
       caller: { kind: "operator", source: "scheduled" },
     });
   const started = async (count: number) => {
-    await vi.waitFor(() => {
-      expect(requests).toHaveLength(count);
-      expect(activeSessions.get(requests[count - 1]!.session.sessionId)?.phase).toBe("active");
-    });
+    await startEvent(count).promise;
+    expect(requests).toHaveLength(count);
+    expect(activeSessions.get(requests[count - 1]!.session.sessionId)?.phase).toBe("active");
     return requests[count - 1]!;
   };
   return {
@@ -99,50 +138,313 @@ function harness() {
     store,
     service,
     started,
+    retrying: (count: number) => retryEvent(count).promise,
   };
 }
 
 describe("occupancy-driven transcript lifecycle", () => {
-  it("retains one stopped candidate across failed starts and admits synchronous initial occupancy", async () => {
+  it("refuses a stale occupancy reopen after its recent read is delayed", async () => {
     const h = harness();
-    const identities: Array<{ sessionId: string; startedAt: string }> = [];
-    const entered = Array.from({ length: 3 }, () => createDeferred());
-    h.provider.watchOccupancy = async (request) => {
-      request.onOccupied();
-      return { ok: true, value: { stop: h.unwatch } };
+    const original = {
+      sessionId: "recent-capture",
+      title: "Original meeting",
+      source: {
+        providerId: h.provider.id,
+        accountId: "default",
+        guildId: "guild",
+        channelId: "voice",
+      },
+      startedAt: "2026-08-01T11:50:00.000Z",
+      stoppedAt: "2026-08-01T11:59:00.000Z",
+      metadata: { sessionIdOrigin: "generated" },
     };
-    h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
-      identities.push(request.session);
-      entered[identities.length - 1]!.resolve();
-      if (identities.length < 3) {
-        return { ok: false, error: "not ready" };
-      }
-      h.requests.push(request);
-      return { ok: true, session: request.session };
-    });
+    await h.store.writeSession(original);
+    await h.store.appendUtteranceForSession(original, { text: "Archived speech" });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = h.store.readRecentStoppedSession.bind(h.store);
+    const delayedRead = vi
+      .spyOn(TranscriptsStore.prototype, "readRecentStoppedSession")
+      .mockImplementationOnce(async (...args) => {
+        const recent = await read(...args);
+        expect(recent).toBeDefined();
+        entered.resolve();
+        await release.promise;
+        return recent;
+      });
     await withPluginRuntimeRegistryScope(h.registry, async () => {
       const service = h.service();
       try {
         service.start();
-        for (let count = 1; count < 3; count++) {
-          await entered[count - 1]!.promise;
-          expect(identities).toHaveLength(count);
-          await vi.waitFor(async () =>
-            expect((await h.store.listSessionEntries())[0]?.session.stoppedAt).toBeDefined(),
-          );
-          await vi.advanceTimersByTimeAsync(5_000);
-        }
-        await entered[2]!.promise;
-        await h.started(1);
-        expect(
-          new Set(identities.map(({ sessionId, startedAt }) => `${sessionId}/${startedAt}`)).size,
-        ).toBe(1);
-        expect(await h.store.listSessionEntries()).toHaveLength(1);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        await entered.promise;
+        const replacement = { ...original, title: "Changed by another writer" };
+        await h.store.writeSession(replacement);
+        await h.store.appendUtteranceForSession(replacement, { text: "Saved during recent read" });
+        release.resolve();
+        await vi.waitFor(() => {
+          expect(
+            h.logger.warn.mock.calls.length + vi.mocked(h.provider.start!).mock.calls.length,
+          ).toBeGreaterThan(0);
+        });
+        expect.soft(h.provider.start).not.toHaveBeenCalled();
+        expect.soft(await h.store.readSession(original.sessionId)).toEqual(replacement);
+        expect(await h.store.readUtterancesForSession(original)).toMatchObject([
+          { text: "Archived speech" },
+          { text: "Saved during recent read" },
+        ]);
       } finally {
+        release.resolve();
         await service.stop();
+        delayedRead.mockRestore();
       }
     });
   });
+
+  it.each([undefined, null, "invalid", "supplied", "generated"])(
+    "reopens only a newest capture with recorded generated origin (%s)",
+    async (origin) => {
+      const h = harness();
+      const source = {
+        providerId: h.provider.id,
+        accountId: "default",
+        guildId: "guild",
+        channelId: "voice",
+      };
+      const older = {
+        sessionId: "older-generated",
+        source,
+        startedAt: "2026-08-01T11:40:00.000Z",
+        stoppedAt: "2026-08-01T11:58:00.000Z",
+        metadata: { sessionIdOrigin: "generated" },
+      };
+      const newest = {
+        ...older,
+        sessionId: createTranscriptSessionId(),
+        startedAt: "2026-08-01T11:50:00.000Z",
+        stoppedAt: "2026-08-01T11:59:00.000Z",
+        metadata: origin === undefined ? {} : { sessionIdOrigin: origin },
+      };
+      for (const session of [older, newest]) {
+        await h.store.writeSession(session);
+        await h.store.appendUtteranceForSession(session, { text: "Archived speech" });
+      }
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        try {
+          service.start();
+          await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          h.watches[0]!.onOccupied();
+          const capture = await h.started(1);
+          expect(capture.session.sessionId === newest.sessionId).toBe(origin === "generated");
+          expect(capture.session.sessionId).not.toBe(older.sessionId);
+          expect(capture.session.metadata?.sessionIdOrigin).toBe("generated");
+          await capture.onUtterance({ text: "Current speech" });
+          expect(await h.store.readSession(older.sessionId)).toEqual(older);
+          if (origin !== "generated") {
+            expect(await h.store.readSession(newest.sessionId)).toEqual(newest);
+            expect(await h.store.readUtterancesForSession(newest)).toMatchObject([
+              { text: "Archived speech" },
+            ]);
+          }
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
+
+  it("keeps admitted history with its original agent after the room is reassigned", async () => {
+    const h = harness();
+    const configFor = (agentId: string): OpenClawConfig => ({
+      agents: { list: [{ id: "agent-a", default: true }, { id: "agent-b" }] },
+      bindings: [{ agentId, match: { channel: "room", peer: { kind: "channel", id: "voice" } } }],
+    });
+    await withPluginRuntimeRegistryScope(h.registry, async () => {
+      const first = h.service([h.entry], configFor("agent-a"));
+      first.start();
+      await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+      h.watches[0]!.onOccupied();
+      const original = await h.started(1);
+      await original.onUtterance({ text: "Agent A's meeting" });
+      await first.stop();
+      const saved = await h.store.readSession(original.session.sessionId);
+      const second = h.service([h.entry], configFor("agent-b"));
+      try {
+        second.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(2));
+        h.watches[1]!.onOccupied();
+        const replacement = await h.started(2);
+        expect.soft(replacement.session.sessionId).not.toBe(original.session.sessionId);
+        expect.soft(await h.store.readSession(original.session.sessionId)).toEqual(saved);
+        const toolFor = (agentId: string) =>
+          createTranscriptsTool({
+            stateDir: h.stateDir,
+            config: configFor("agent-b"),
+            agentId,
+            caller: { kind: "operator", source: "local" },
+          });
+        const toolB = toolFor("agent-b");
+        const stops = vi.mocked(h.provider.stop!).mock.calls.length;
+        for (const action of ["stop", "summarize"] as const) {
+          await expect
+            .soft(toolB.execute(action, { action, sessionId: original.session.sessionId }))
+            .rejects.toThrow("session not found");
+        }
+        expect.soft(h.provider.stop).toHaveBeenCalledTimes(stops);
+        expect.soft(await h.store.readSession(original.session.sessionId)).toEqual(saved);
+        await expect(
+          toolFor("agent-a").execute("summarize", {
+            action: "summarize",
+            sessionId: original.session.sessionId,
+          }),
+        ).resolves.toMatchObject({ details: { sessionId: original.session.sessionId } });
+      } finally {
+        await second.stop();
+      }
+    });
+  });
+
+  it.each([
+    { whenOccupied: false, sessionId: undefined, origin: "generated" },
+    { whenOccupied: false, sessionId: "fixed-retry", origin: "supplied" },
+    { whenOccupied: true, sessionId: "ignored-fixed", origin: "generated" },
+  ])(
+    "retains one capture identity across failed starts (whenOccupied=$whenOccupied, ID=$sessionId)",
+    async ({ whenOccupied, sessionId: configuredSessionId, origin }) => {
+      const h = harness();
+      const identities: Array<{ sessionId: string; startedAt: string }> = [];
+      const entered = Array.from({ length: 3 }, () => createDeferred());
+      h.provider.watchOccupancy = async (request) => {
+        request.onOccupied();
+        return { ok: true, value: { stop: h.unwatch } };
+      };
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        expect(request.session.metadata?.sessionIdOrigin).toBe(origin);
+        identities.push(request.session);
+        entered[identities.length - 1]!.resolve();
+        if (identities.length < 3) {
+          return { ok: false, error: "not ready" };
+        }
+        h.requests.push(request);
+        return { ok: true, session: request.session };
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const autoStart = [{ ...h.entry, whenOccupied, sessionId: configuredSessionId }];
+        const service = h.service(autoStart);
+        try {
+          service.start();
+          await entered[0]!.promise;
+          for (let count = 1; count < 3; count++) {
+            await h.retrying(count);
+            expect(identities).toHaveLength(count);
+            expect(readConfiguredTranscriptStarts({ autoStart })?.get(0)?.diagnostic).toBe(
+              "retrying",
+            );
+            await vi.advanceTimersByTimeAsync(5_000);
+          }
+          await entered[2]!.promise;
+          await h.started(1);
+          expect(
+            new Set(identities.map(({ sessionId, startedAt }) => `${sessionId}/${startedAt}`)).size,
+          ).toBe(1);
+          expect(await h.store.listSessionEntries()).toHaveLength(1);
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { history: false, stop: "allowed" },
+    { history: true, stop: "allowed" },
+    { history: true, stop: "denied" },
+    { history: true, stop: "omitted" },
+  ] as const)(
+    "preserves failed-start retry authority through $stop tool stop (history=$history)",
+    async ({ history, stop }) => {
+      const h = harness();
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const tool = createTranscriptsTool({
+          stateDir: h.stateDir,
+          config: { transcripts: { enabled: true } },
+          agentId: "main",
+          caller: { kind: "operator", source: "local" },
+        });
+        if (history) {
+          await tool.execute("initial", { action: "start", ...h.entry });
+          const initial = h.requests[0]!;
+          await initial.onUtterance({ text: "Preserved history" });
+          await tool.execute("initial-stop", {
+            action: "stop",
+            sessionId: initial.session.sessionId,
+          });
+        }
+        const failed = createDeferred<TranscriptStartRequest>();
+        h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(
+          async (request) => {
+            failed.resolve(request);
+            return { ok: false, error: "not ready" };
+          },
+        );
+        const service = h.service();
+        try {
+          service.start();
+          await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          h.watches[0]!.onOccupied();
+          const request = await failed.promise;
+          await h.retrying(1);
+          expect((await h.store.readSession(request.session.sessionId))?.stoppedAt).toBeDefined();
+          const restored = await h.store.readSession(request.session.sessionId);
+          const revision = await h.store.readSummaryInputRevision(request.session);
+          if (stop !== "omitted") {
+            if (stop === "denied") {
+              h.provider.accessControl!.authorize = async () => ({ ok: false, error: "denied" });
+            }
+            const stopping = tool.execute("cancel-retry", {
+              action: "stop",
+              sessionId: request.session.sessionId,
+            });
+            if (stop === "allowed") {
+              await stopping;
+            } else {
+              await expect(stopping).rejects.toThrow("session not found");
+            }
+          }
+          // Historical stop preserves stoppedAt and summary inputs, even when it
+          // cancels a pending retry. The real stop must still revoke that attempt.
+          expect(await h.store.readSession(request.session.sessionId)).toEqual(restored);
+          expect(await h.store.readSummaryInputRevision(request.session)).toBe(revision);
+          const summary = await h.store.readSummary(request.session);
+          h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (next) => {
+            h.requests.push(next);
+            return { ok: true, session: next.session };
+          });
+          await vi.advanceTimersByTimeAsync(5_000);
+          if (stop === "allowed") {
+            expect(h.provider.start).not.toHaveBeenCalled();
+            expect(await h.store.readSession(request.session.sessionId)).toEqual(restored);
+            h.watches[0]!.onEmpty();
+            h.watches[0]!.onOccupied();
+          }
+          expect(await h.store.readSummary(request.session)).toEqual(summary);
+          await request.onUtterance({ text: "Stale failure callback" });
+          const reopened = await h.started(history ? 2 : 1);
+          expect(reopened.session.sessionId).toBe(request.session.sessionId);
+          expect(reopened.session.startedAt).toBe(request.session.startedAt);
+          expect(await h.store.readUtterancesForSession(reopened.session)).toMatchObject(
+            history ? [{ text: "Preserved history" }] : [],
+          );
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
 
   it("expires a failed-start candidate after an empty episode outside the reopen window", async () => {
     const h = harness();
@@ -157,7 +459,8 @@ describe("occupancy-driven transcript lifecycle", () => {
         service.start();
         await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         h.watches[0]!.onOccupied();
-        await vi.waitFor(() => expect(failedId).toBeDefined());
+        await h.retrying(1);
+        expect(failedId).toBeDefined();
         h.watches[0]!.onEmpty();
         await vi.advanceTimersByTimeAsync(11 * 60_000);
         h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(
@@ -191,6 +494,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         },
         startedAt: `2026-07-${30 + index}T10:00:00.000Z`,
         stoppedAt: "2026-08-01T11:59:00.000Z",
+        metadata: { sessionIdOrigin: "generated" },
       });
     }
     await withPluginRuntimeRegistryScope(h.registry, async () => {
@@ -214,6 +518,13 @@ describe("occupancy-driven transcript lifecycle", () => {
 
   it("captures only occupied episodes, keeps reconnects together, and persists notes after grace", async () => {
     const h = harness();
+    const finalized = createDeferred();
+    const stopCapture = captureOperations.stopTranscriptCapture;
+    vi.spyOn(captureOperations, "stopTranscriptCapture").mockImplementation(async (params) => {
+      const result = await stopCapture(params);
+      finalized.resolve();
+      return result;
+    });
     await withPluginRuntimeRegistryScope(h.registry, async () => {
       const service = h.service();
       try {
@@ -222,7 +533,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         expect(h.requests).toHaveLength(0);
         h.watches[0]!.onOccupied();
         const capture = await h.started(1);
-        expect(capture.session.sessionId).not.toBe("ignored-id");
+        expect(capture.session.sessionId).toEqual(expect.any(String));
         await capture.onUtterance({
           text: "Agreed to ship the report.",
           speaker: { label: "Alex" },
@@ -235,11 +546,10 @@ describe("occupancy-driven transcript lifecycle", () => {
         expect(h.requests).toHaveLength(1);
         h.watches[0]!.onEmpty();
         await vi.advanceTimersByTimeAsync(30_000);
-        await vi.waitFor(async () => {
-          expect((await h.store.readSession(capture.session.sessionId))?.stoppedAt).toBeDefined();
-          expect(await h.store.readSummary(capture.session)).toMatchObject({
-            summary: { utteranceCount: 1 },
-          });
+        await finalized.promise;
+        expect((await h.store.readSession(capture.session.sessionId))?.stoppedAt).toBeDefined();
+        expect(await h.store.readSummary(capture.session)).toMatchObject({
+          summary: { utteranceCount: 1 },
         });
         expect(h.provider.stop).toHaveBeenCalledOnce();
       } finally {
@@ -253,29 +563,41 @@ describe("occupancy-driven transcript lifecycle", () => {
     "reopens only within the window after a %i ms gateway gap",
     async (gap) => {
       const h = harness();
+      const entered = Array.from({ length: 2 }, () => createDeferred());
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        entered[h.requests.length - 1]!.resolve();
+        return { ok: true, session: request.session };
+      });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
-        const first = h.service();
+        const first = h.service([{ ...h.entry, title: "Original meeting" }]);
         let original: TranscriptStartRequest;
         try {
           first.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(1));
           h.watches[0]!.onOccupied();
+          await entered[0]!.promise;
           original = await h.started(1);
           await original.onUtterance({ text: "Before restart" });
         } finally {
           await first.stop();
         }
         await vi.advanceTimersByTimeAsync(gap);
-        const second = h.service();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const second = h.service([{ ...h.entry, title: "Future meeting" }]);
         try {
           second.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(2));
           h.watches[1]!.onOccupied();
+          await entered[1]!.promise;
           const reopened = await h.started(2);
           const within = gap < 10 * 60_000;
           expect(reopened.session.sessionId === original.session.sessionId).toBe(within);
           expect(reopened.session.startedAt === original.session.startedAt).toBe(within);
+          expect(reopened.session.title).toBe(within ? "Original meeting" : "Future meeting");
           expect(reopened.session.stoppedAt).toBeUndefined();
+          expect(reopened.session.metadata?.sessionIdOrigin).toBe("generated");
           await original.onUtterance({ text: "Stale callback" });
           await reopened.onUtterance({ text: "After restart" });
           await second.stop();
@@ -310,12 +632,15 @@ describe("occupancy-driven transcript lifecycle", () => {
           ok: false,
           error: "capture unavailable",
         }));
+        const exhausted = createDeferred();
+        h.logger.warn.mockImplementation(() => exhausted.resolve());
         await restarted.onStatus?.({ active: false });
         for (let attempt = 0; attempt < 12; attempt++) {
           await vi.advanceTimersByTimeAsync(5_000);
-          await vi.waitFor(() => expect(h.provider.start).toHaveBeenCalledTimes(attempt + 1));
+          await (attempt < 11 ? h.retrying(attempt + 1) : exhausted.promise);
+          expect(h.provider.start).toHaveBeenCalledTimes(attempt + 1);
         }
-        await vi.waitFor(() => expect(h.logger.warn).toHaveBeenCalledOnce());
+        expect(h.logger.warn).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(h.provider.start).toHaveBeenCalledTimes(12);
         h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(
@@ -382,6 +707,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         const tool = createTranscriptsTool({
           stateDir: h.stateDir,
           config: { transcripts: { enabled: true } },
+          agentId: "main",
           caller: { kind: "operator", source: "local" },
         });
         await tool.execute("manual-stop", {
@@ -419,18 +745,179 @@ describe("occupancy-driven transcript lifecycle", () => {
     );
     await withPluginRuntimeRegistryScope(h.registry, async () => {
       const service = h.service();
-      service.start();
-      await vi.waitFor(() => expect(h.watches).toHaveLength(1));
-      h.watches[0]!.onOccupied();
-      const capture = await h.started(1);
-      h.watches[0]!.onEmpty();
-      await service.stop();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(order).toEqual(["unwatch", "stop"]);
-      expect(h.requests).toHaveLength(1);
-      expect(await h.store.readSummary(capture.session)).toMatchObject({
-        summary: { utteranceCount: 0 },
-      });
+      try {
+        service.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        const capture = await h.started(1);
+        h.watches[0]!.onEmpty();
+        await service.stop();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(order).toEqual(["unwatch", "stop"]);
+        expect(h.requests).toHaveLength(1);
+        expect(await h.store.readSummary(capture.session)).toMatchObject({
+          summary: { utteranceCount: 0 },
+        });
+      } finally {
+        await service.stop();
+      }
     });
   });
+  it.each([
+    { phase: "active", operation: "shutdown" },
+    { phase: "pending", operation: "shutdown" },
+    { phase: "active", operation: "replacement" },
+    { phase: "pending", operation: "replacement" },
+  ] as const)(
+    "finalizes a $phase capture when watcher $operation fails and retries only the watcher",
+    async ({ phase, operation }) => {
+      const h = harness();
+      const startEntered = createDeferred<TranscriptStartRequest>();
+      const releaseStart = createDeferred();
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        startEntered.resolve(request);
+        await releaseStart.promise;
+        return { ok: true, session: request.session };
+      });
+      const failure = new Error("watcher cleanup unavailable");
+      h.unwatch.mockRejectedValueOnce(failure);
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        const selected = operation === "replacement" ? new Set([h.provider.id]) : undefined;
+        try {
+          service.start();
+          await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          h.watches[0]!.onOccupied();
+          const capture = await startEntered.promise;
+          if (phase === "active") {
+            releaseStart.resolve();
+            await h.started(1);
+          }
+          const stopping = service.stop(selected);
+          const failed = expect(stopping).rejects.toMatchObject({ errors: [failure] });
+          await vi.waitFor(() => expect(h.unwatch).toHaveBeenCalledOnce());
+          releaseStart.resolve();
+          await failed;
+
+          expect(h.provider.stop).toHaveBeenCalledOnce();
+          expect(activeSessions.has(capture.session.sessionId)).toBe(false);
+          expect(await h.store.readSummary(capture.session)).toMatchObject({
+            summary: { utteranceCount: 0 },
+          });
+          await service.stop(selected);
+          expect(h.unwatch).toHaveBeenCalledTimes(2);
+          expect(h.provider.stop).toHaveBeenCalledOnce();
+        } finally {
+          releaseStart.resolve();
+          await service.stop();
+        }
+      });
+    },
+  );
+
+  it.each(["shutdown", "replacement"] as const)(
+    "retains a late watcher after failed %s so cleanup can be retried",
+    async (operation) => {
+      const h = harness();
+      const watchEntered = createDeferred();
+      const releaseWatch = createDeferred();
+      let subscribed = false;
+      h.provider.watchOccupancy = async (request) => {
+        h.watches.push(request);
+        watchEntered.resolve();
+        await releaseWatch.promise;
+        subscribed = true;
+        return { ok: true, value: { stop: h.unwatch } };
+      };
+      h.unwatch.mockRejectedValueOnce(new Error("late watcher cleanup unavailable"));
+      h.unwatch.mockImplementation(() => {
+        subscribed = false;
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        const selected = operation === "replacement" ? new Set([h.provider.id]) : undefined;
+        try {
+          service.start();
+          await watchEntered.promise;
+          const stopped = service.stop(selected);
+          const rejected = expect.soft(stopped).rejects.toBeInstanceOf(AggregateError);
+          releaseWatch.resolve();
+          await rejected;
+          expect.soft(h.unwatch).toHaveBeenCalledOnce();
+          expect.soft(subscribed).toBe(true);
+          h.watches[0]!.onOccupied();
+          await service.stop(selected);
+          expect.soft(h.unwatch).toHaveBeenCalledTimes(2);
+          expect.soft(subscribed).toBe(false);
+          expect(h.requests).toHaveLength(0);
+        } finally {
+          releaseWatch.resolve();
+          await service.stop();
+        }
+      });
+    },
+  );
+
+  it.each(["pending start", "acquired watcher"] as const)(
+    "bounds only pending starts while retaining %s cleanup for replacement",
+    async (phase) => {
+      const h = harness();
+      const entered = createDeferred();
+      const release = createDeferred();
+      h.provider.watchOccupancy = async (request) => {
+        h.watches.push(request);
+        if (phase === "pending start") {
+          entered.resolve();
+          await release.promise;
+        }
+        return { ok: true, value: { stop: h.unwatch } };
+      };
+      h.unwatch.mockImplementation(async () => {
+        if (phase === "acquired watcher") {
+          entered.resolve();
+          await release.promise;
+        }
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        const selected = new Set([h.provider.id]);
+        let stopping: Promise<void> | undefined;
+        let outcome: unknown;
+        try {
+          service.start();
+          if (phase === "pending start") {
+            await entered.promise;
+          } else {
+            await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          }
+          stopping = service.stop(selected).then(
+            () => {
+              outcome = "stopped";
+            },
+            (error: unknown) => {
+              outcome = error;
+            },
+          );
+          await entered.promise;
+          await vi.advanceTimersByTimeAsync(5_000);
+          if (phase === "pending start") {
+            expect(outcome).toMatchObject({ message: expect.stringContaining("pending starts") });
+          } else {
+            expect(outcome).toBeUndefined();
+          }
+          expect(h.unwatch).toHaveBeenCalledTimes(phase === "pending start" ? 0 : 1);
+          release.resolve();
+          await stopping;
+          await service.stop(selected);
+          expect(h.unwatch).toHaveBeenCalledOnce();
+          expect(h.requests).toHaveLength(0);
+        } finally {
+          release.resolve();
+          await stopping;
+          await service.stop();
+        }
+      });
+    },
+  );
 });

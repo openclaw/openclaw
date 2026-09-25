@@ -1,21 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
-  requestSessionUsageContextWeight,
-} from "./usage.ts";
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { requestSessionUsage } from "./usage.ts";
 
-describe("buildSessionUsageDateParams", () => {
+describe("usage request calendar", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("uses UTC mode without local timezone parameters", () => {
-    expect(buildSessionUsageDateParams("utc")).toEqual({ mode: "utc" });
-  });
-
-  it("sends the browser IANA timezone with the current UTC offset in local mode", () => {
+  it("sends the browser IANA timezone with the current UTC offset in local mode", async () => {
     const resolvedOptions = new Intl.DateTimeFormat().resolvedOptions();
     vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
       ...resolvedOptions,
@@ -23,11 +19,21 @@ describe("buildSessionUsageDateParams", () => {
     });
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-120);
 
-    expect(buildSessionUsageDateParams("local")).toEqual({
-      mode: "specific",
-      timeZone: "Europe/Vienna",
-      utcOffset: "UTC+2",
+    const request = createGatewayRequestMock().mockResolvedValue({ sessions: [] });
+    await requestSessionUsage(createTestGatewayClient(request), {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      scope: "family",
+      timeZone: "local",
     });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      expect.objectContaining({
+        mode: "specific",
+        timeZone: "Europe/Vienna",
+        utcOffset: "UTC+2",
+      }),
+    );
   });
 });
 
@@ -38,7 +44,7 @@ describe("requestSessionUsage", () => {
   ])("scopes selected context for $key without an all-agent request", async ({ key, agentId }) => {
     const request = vi.fn().mockResolvedValue({ sessions: [] });
     const signal = new AbortController().signal;
-    await requestSessionUsageContextWeight(
+    await requestSessionUsage(
       { request } as never,
       {
         startDate: "2026-07-01",
@@ -47,8 +53,7 @@ describe("requestSessionUsage", () => {
         timeZone: "utc",
         agentId,
       },
-      key,
-      signal,
+      { key, includeContextWeight: true, signal },
     );
     expect(request).toHaveBeenCalledWith(
       "sessions.usage",

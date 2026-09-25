@@ -31,7 +31,6 @@ describe("attachment reply previews", () => {
         ),
         {
           assistantName: "OpenClaw",
-          userAvatar: null,
           userId: null,
           userName: null,
           replyMessageAccess: {

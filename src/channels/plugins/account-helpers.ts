@@ -114,6 +114,7 @@ export function createAccountListHelpers<
 
       return resolveMergedAccountConfig<TConfig>({
         channelConfig,
+        channelId: channelKey,
         accounts,
         accountId,
         omitKeys: options?.omitKeys,

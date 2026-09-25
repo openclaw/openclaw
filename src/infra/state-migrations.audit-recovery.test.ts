@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { describe, expect, it } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { root } from "./fs-safe.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
+import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
 import {
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveHardening,
   FIRST_AUDIT_SCRUB_BYTE,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -15,7 +16,21 @@ import {
 } from "./state-migrations.audit.test-support.js";
 
 describe("legacy audit recovery byte handling", () => {
-  afterEach(resetPluginStateStoreForTests);
+  it("reads legacy audit sources larger than the ordinary read limit", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const original = Buffer.alloc(16 * 1024 * 1024 + 1, " ");
+      original.write("legacy audit archive\n");
+      await audit.write(audit.system.raw, original);
+
+      const snapshot = await readLegacyAuditSourceSnapshot(
+        await root(audit.stateDir),
+        "audit/system-agent.jsonl.migrated.raw",
+      );
+
+      expect(snapshot.rawBytes.equals(original)).toBe(true);
+      expect(snapshot.size).toBe(original.length);
+    });
+  });
 
   it("blanks a zero-slack source within the fixed-size recovery inode", async () => {
     await withAuditMigrationFixture(async (audit) => {
@@ -139,7 +154,7 @@ describe("legacy audit recovery byte handling", () => {
 
       expect(result.warnings.join("\n")).toContain("no longer matches its restore journal target");
       await expect(fs.readFile(rawPath, "utf8")).resolves.toBe(replacementContent);
-      await expect(fs.access(restorePath)).resolves.toBeUndefined();
+      await fs.access(restorePath);
     });
   });
 
@@ -190,13 +205,7 @@ describe("legacy audit recovery byte handling", () => {
       await audit.writeJsonLines(source, [systemAuditEvent("before archive")]);
       await audit.migrate();
       await audit.appendJsonLines(raw, [systemAuditEvent("later row")]);
-      // fs-safe applies the write mode before the migration's explicit hardening check.
-      const chmodSpy = await failChmodCall(
-        audit,
-        "recovery-chmod-probe",
-        3,
-        "simulated recovery chmod failure",
-      );
+      const chmodSpy = failArchiveHardening(audit, sanitized, "simulated recovery chmod failure");
 
       let failed: Awaited<ReturnType<typeof audit.migrate>>;
       try {

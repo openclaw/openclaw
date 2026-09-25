@@ -15,7 +15,12 @@ const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({
@@ -106,20 +111,14 @@ describe("process supervisor first cancellation reason", () => {
     const runId = "manual-cancel-then-timeout";
     const pendingRun = supervisor.spawn({
       runId,
-      sessionId: runId,
-      backendId: "test",
       mode: "child",
       argv: [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
       timeoutMs: 25,
       stdinMode: "pipe-closed",
     });
 
-    expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
     supervisor.cancel(runId, "manual-cancel");
-    expect(supervisor.getRecord(runId)).toMatchObject({
-      state: "exiting",
-      terminationReason: "manual-cancel",
-    });
 
     await vi.advanceTimersByTimeAsync(25);
     const constructionState = await Promise.race([
@@ -137,14 +136,13 @@ describe("process supervisor first cancellation reason", () => {
       timedOut: false,
       noOutputTimedOut: false,
     });
-    expect(supervisor.getRecord(runId)).toMatchObject({
-      state: "exited",
-      terminationReason: "manual-cancel",
-    });
+    expect(run.activity.resultSettled).toBe(true);
 
     const lateAdapter = createCancellationTestAdapter();
+    const killed = createDeferred();
+    lateAdapter.killMock.mockImplementation(() => killed.resolve());
     startup.resolve(lateAdapter);
-    await Promise.resolve();
+    await killed.promise;
     expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
     lateAdapter.settle("SIGKILL");
@@ -175,8 +173,6 @@ describe("process supervisor first cancellation reason", () => {
               const input: SpawnInput = {
                 runId,
                 scopeKey,
-                sessionId: "first-cancellation-reason",
-                backendId: "test",
                 mode,
                 argv: [process.execPath, "-e", ""],
               };
@@ -186,16 +182,9 @@ describe("process supervisor first cancellation reason", () => {
               cancelThrough(supervisor, path.first, runId, scopeKey, firstReason);
               for (const laterReason of laterReasons) {
                 cancelThrough(supervisor, path.later, runId, scopeKey, laterReason);
-                expect(supervisor.getRecord(runId), `after ${laterReason}`).toMatchObject({
-                  state: "exiting",
-                  terminationReason: firstReason,
-                });
+                expect(run.activity.resultSettled, `after ${laterReason}`).toBe(false);
               }
 
-              expect(supervisor.getRecord(runId)).toMatchObject({
-                state: "exiting",
-                terminationReason: firstReason,
-              });
               expect(adapter.killMock).toHaveBeenCalledTimes(1);
 
               const signal =
@@ -211,11 +200,7 @@ describe("process supervisor first cancellation reason", () => {
                 timedOut: firstReason !== "manual-cancel",
                 noOutputTimedOut: firstReason === "no-output-timeout",
               });
-              expect(supervisor.getRecord(runId)).toMatchObject({
-                state: "exited",
-                terminationReason: firstReason,
-                exitSignal: signal,
-              });
+              expect(run.activity.resultSettled).toBe(true);
               expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
               expect(vi.getTimerCount()).toBe(0);
             },

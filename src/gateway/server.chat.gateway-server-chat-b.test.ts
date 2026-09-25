@@ -1,5 +1,6 @@
 // Gateway chat integration tests cover dashboard chat requests, transcript
 // history limits, model overrides, inbound dispatch, and streaming event fanout.
+
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { bindActiveOperatorTurnAuthority } from "../agents/cron-creator-authority-context.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
@@ -20,7 +21,11 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -28,27 +33,30 @@ import {
   loadSessionEntry,
   loadExactSessionEntry,
   loadTranscriptEventsSync,
+  listSessionPendingInputs,
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
-  waitForSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptProjection,
-} from "../config/sessions/session-transcript-reconcile.js";
+  resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
+import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
+  getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
@@ -59,20 +67,39 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import * as chatDisplayProjection from "./chat-display-projection.js";
-import { assertPluginMetadataSnapshotConsistency } from "./plugin-metadata.test-helpers.js";
 import {
+  assertPluginMetadataSnapshotConsistency,
+  createGatewayPluginMetadataSnapshot,
+} from "./plugin-metadata.test-helpers.js";
+import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
+import {
+  createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
   createTextTranscriptEvent,
+  registerChatConnectionIdentityTest,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  captureChatResponse,
+  captureChatResult,
+  type CapturedChatResponse,
+} from "./server.chat-response.test-support.js";
+import {
+  createDirectChatSessionStoreFixture,
+  writeMainChatSessionTranscript as writeMainSessionTranscript,
+  type ChatSessionDirectoryOptions,
+} from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
   connectOk,
@@ -81,37 +108,10 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
-  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-
-async function readWarmChatStartup(ws: Parameters<typeof rpcReq>[0]) {
-  // rpcReq resets the runtime config before each request. Warm startup must reuse
-  // the exact config that prepared metadata, as an ordinary client does.
-  const config = getRuntimeConfig();
-  const id = randomUUID();
-  const response = onceMessage<{
-    type: string;
-    id: string;
-    ok: boolean;
-    payload?: {
-      metadata?: {
-        commands?: Array<{ name?: string; textAliases?: string[] }>;
-        models?: Array<{ id?: string; provider?: string }>;
-      };
-      messages?: unknown[];
-      sessionInfo?: { key?: string; sessionId?: string };
-    };
-  }>(ws, (message) => message.type === "res" && message.id === id);
-  ws.send(
-    JSON.stringify({ type: "req", id, method: "chat.startup", params: makeMainSessionParams() }),
-  );
-  const result = await response;
-  expect(getRuntimeConfig()).toBe(config);
-  return result;
-}
 
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
@@ -165,130 +165,50 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function createChatVisionModelCatalogSnapshot(): Awaited<
-  ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
-> {
-  return {
-    agentId: "main",
-    agentDir: "/tmp/chat-attachment-vision-agent",
-    catalogComplete: false,
-    workspaceDir: "/tmp/chat-attachment-vision-workspace",
-    config: {},
-    entries: [
-      {
-        id: "vision-model",
-        name: "Vision Model",
-        provider: "test-provider",
-        input: ["text", "image"],
-      },
-    ],
-    routeVariants: [],
-  };
-}
-
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
 
-function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    // Matches the real isolated bundled snapshot: no installed-index rows,
-    // with the selected bundled manifests supplied below.
-    plugins: [],
-    diagnostics: [],
-  };
-  const emptySnapshot: PluginMetadataSnapshot = {
-    policyHash,
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
-  };
-  return rebasePluginMetadataSnapshotManifestRegistry(emptySnapshot, {
-    plugins: [
-      {
-        id: "openai",
-        channels: [],
-        providers: ["openai"],
-        cliBackends: [],
-        syntheticAuthRefs: [],
-        providerAuthChoices: [
-          { provider: "openai", method: "oauth", choiceId: "openai" },
-          {
-            provider: "openai",
-            method: "device-code",
-            choiceId: "openai-device-code",
-          },
-          { provider: "openai", method: "api-key", choiceId: "openai-api-key" },
-        ],
-        modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
-        skills: [],
-        hooks: [],
-        origin: "bundled",
-        rootDir: "/test/openai",
-        source: "/test/openai/index.ts",
-        manifestPath: "/test/openai/openclaw.plugin.json",
-      },
-    ],
-    diagnostics: [],
-  });
-}
-const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const autoCleanupTempDirs = createTempDirTracker();
+const sessionStoreFixture = createDirectChatSessionStoreFixture(autoCleanupTempDirs);
+const openDirectChatSession = sessionStoreFixture.open;
+
+afterEach(async () => {
+  await resetDirectChatSession();
+  autoCleanupTempDirs.cleanup();
+});
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
+  sessionStoreFixture.prepare();
 });
 
 afterAll(async () => {
-  await harness.close();
+  try {
+    await sessionStoreFixture.dispose();
+  } finally {
+    await harness.close();
+  }
 });
 
 async function withGatewayChatHarness(
-  run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
+  run: (ctx: {
+    ws: GatewaySocket;
+    createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  }) => Promise<void>,
   options?: { headers?: Record<string, string> },
 ) {
   const ws = await harness.openWs(options?.headers);
-  const createSessionDir = async () => openDirectChatSession().sessionDir;
+  const createSessionDir = async (directoryOptions?: ChatSessionDirectoryOptions) =>
+    openDirectChatSession(directoryOptions).sessionDir;
 
   try {
     await run({ ws, createSessionDir });
   } finally {
+    await resetDirectChatSession();
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    testState.sessionStorePath = undefined;
-    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -330,43 +250,6 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   resetConfigRuntimeState();
 }
 
-async function writeMainSessionTranscript(
-  events: unknown[],
-  sessionId = "sess-main",
-  opts?: {
-    agentId?: string;
-    sessionKey?: string;
-  },
-) {
-  const storePath = testState.sessionStorePath;
-  if (!storePath) {
-    throw new Error("session store path was not initialized");
-  }
-  // These fixtures always seed a complete fresh transcript. Replace it in one
-  // transaction so large history cases do not pay one SQLite commit per event.
-  const transcriptEvents = events
-    .filter((event) => typeof event !== "string" || event.trim())
-    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
-    typeof replaceTranscriptEvents
-  >[1];
-  await replaceTranscriptEvents(
-    {
-      agentId: opts?.agentId ?? "main",
-      sessionId,
-      sessionKey: opts?.sessionKey ?? "agent:main:main",
-      storePath,
-    },
-    transcriptEvents,
-  );
-  // Oversized fixture transcripts take the deferred rebuild path; history
-  // reads need the projection converged before the case under test runs.
-  await waitForSessionTranscriptProjection({
-    agentId: opts?.agentId ?? "main",
-    sessionId,
-    storePath,
-  });
-}
-
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
@@ -374,22 +257,23 @@ async function withDirectChatSession(
   try {
     await run(sessionDir, storePath);
   } finally {
-    resetDirectChatSession();
+    await resetDirectChatSession();
   }
 }
 
 type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
 
-function openDirectChatSession() {
-  const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-  const storePath = path.join(sessionDir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return { sessionDir, storePath };
+function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
+  return getSessionWorkAdmissionRelease({
+    scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
+    identities: [sessionKey],
+  });
 }
 
-function resetDirectChatSession() {
+async function resetDirectChatSession() {
+  await disposeSessionReadContexts();
+  await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
-  testState.sessionStorePath = undefined;
   resetConfigRuntimeState();
 }
 
@@ -412,6 +296,9 @@ async function callDirectChatHandler(
   options: GatewayRequestHandlerOptions,
 ) {
   const { coreGatewayHandlers } = await import("./server-methods.js");
+  if (method === "chat.history" || method === "chat.startup") {
+    await initializeSessionReadContext(options.context);
+  }
   await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
 }
 
@@ -532,21 +419,6 @@ function makeDoneSessionEntry(overrides: StoredSessionEntry = {}): StoredSession
   return { status: "done", ...overrides };
 }
 
-type CapturedChatResult = { ok: boolean; payload?: unknown };
-type CapturedChatResponse = CapturedChatResult & { error?: unknown };
-
-function captureChatResult(results: CapturedChatResult[]): RespondFn {
-  return (ok, payload) => {
-    results.push({ ok, payload });
-  };
-}
-
-function captureChatResponse(responses: CapturedChatResponse[]): RespondFn {
-  return (ok, payload, error) => {
-    responses.push({ ok, payload, error });
-  };
-}
-
 async function sendControlUiChat(params: {
   authenticatedUserId?: string;
   authenticatedUserProfile?: {
@@ -636,7 +508,7 @@ test("chat.send replays a cached result after the session is archived", async ()
     ]);
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   } finally {
-    resetDirectChatSession();
+    await resetDirectChatSession();
   }
 });
 
@@ -665,7 +537,7 @@ async function fetchHistoryMessages(
       ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
     }),
   );
-  expect(historyRes.ok).toBe(true);
+  expect(historyRes.ok, JSON.stringify(historyRes.error)).toBe(true);
   return historyRes.payload?.messages ?? [];
 }
 
@@ -716,17 +588,18 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
 
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
-  createSessionDir: () => Promise<string>;
+  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  freshStore?: boolean;
   sessionId?: string;
 }) {
   await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir();
+  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
   await writeMainSessionStore(params.sessionId);
   return sessionDir;
 }
 
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
-  openDirectChatSession();
+  openDirectChatSession({ fresh: true });
   const sessionKey = `agent:codex:acp:${randomUUID()}`;
   const config: OpenClawConfig = {
     agents: { entries: { main: { default: true } } },
@@ -781,7 +654,7 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
       } finally {
         testState.agentsConfig = undefined;
-        resetDirectChatSession();
+        await resetDirectChatSession();
       }
     },
   );
@@ -805,13 +678,11 @@ describe("gateway server chat", () => {
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
       expect(responses[0]?.payload).toMatchObject({ status: "started" });
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease(sessionKey);
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       testState.agentsConfig = undefined;
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -837,7 +708,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       testState.agentsConfig = undefined;
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -957,6 +828,7 @@ describe("gateway server chat", () => {
       const handler = createAgentEventHandler({
         broadcast: context.broadcast,
         broadcastToConnIds: context.broadcastToConnIds,
+        nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
         chatRunState: context.chatRunState,
@@ -1130,7 +1002,7 @@ describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
     "%s adopts the in-flight run for a non-default agent alias key",
     async (method) => {
-      const { sessionDir } = openDirectChatSession();
+      const { sessionDir } = openDirectChatSession({ fresh: true });
       try {
         // Per-agent stores: bare keys then carry no persisted fixed-store
         // owner, so an explicit non-default agentId is a valid pairing.
@@ -1199,6 +1071,7 @@ describe("gateway server chat", () => {
       const handler = createAgentEventHandler({
         broadcast: context.broadcast,
         broadcastToConnIds: context.broadcastToConnIds,
+        nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
         chatRunState: context.chatRunState,
@@ -1223,6 +1096,7 @@ describe("gateway server chat", () => {
           sessionKey: "main",
           clientRunId: "run-active",
         });
+        const toolArgs = { path: "a" };
 
         handler({
           runId: "provider-run",
@@ -1236,7 +1110,7 @@ describe("gateway server chat", () => {
           seq: 2,
           stream: "tool",
           ts: 1_002,
-          data: { phase: "start", name: "read", toolCallId: "tool-active", args: { path: "a" } },
+          data: { phase: "start", name: "read", toolCallId: "tool-active", args: toolArgs },
         });
         handler({
           runId: "provider-run",
@@ -1290,6 +1164,7 @@ describe("gateway server chat", () => {
           },
         });
 
+        toolArgs.path = "producer changed after emission";
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         await callDirectChat(method, {
           id: method,
@@ -1394,7 +1269,7 @@ describe("gateway server chat", () => {
   test("chat.history exposes selected and synthetic session metadata for startup hydration", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       const updatedAt = Date.now();
       await writeStoredMainSession({
         updatedAt,
@@ -1447,7 +1322,7 @@ describe("gateway server chat", () => {
         };
       }>(ws, "chat.history", makeMainSessionParams());
 
-      expect(synthetic.ok).toBe(true);
+      expect(synthetic.ok, JSON.stringify(synthetic)).toBe(true);
       expect(synthetic.payload?.defaults?.modelProvider).toBeTruthy();
       expect(synthetic.payload?.defaults?.model).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.key).toBe("agent:main:main");
@@ -1501,7 +1376,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await readWarmChatStartup(ws);
+      const startup = await readWarmChatStartup(ws, makeMainSessionParams());
       const agents = await rpcReq<{
         agents?: Array<{
           id?: string;
@@ -1556,30 +1431,28 @@ describe("gateway server chat", () => {
   });
 
   test("chat.startup omits model metadata from a fallback owner", async () => {
-    const config = {
-      agents: {
-        defaults: {},
-        list: [{ id: "main", default: true }, { id: "work" }],
-      },
-    } as OpenClawConfig;
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-        agentId: "main",
-        agentDir: "/tmp/chat-main-agent",
-        catalogComplete: false,
-        workspaceDir: "/tmp/chat-main-workspace",
-        config,
-        entries: [{ id: "main-only", name: "Main only", provider: "test" }],
-        routeVariants: [],
-      })),
-    });
-    testState.agentsConfig = config.agents;
-    openDirectChatSession();
+    testState.agentsConfig = {
+      defaults: {},
+      list: [{ id: "main", default: true }, { id: "work" }],
+    };
+    openDirectChatSession({ fresh: true });
     try {
       await writeSessionStore({
         agentId: "work",
         entries: { "agent:work:main": { sessionId: "sess-work", updatedAt: Date.now() } },
+      });
+      const config = getRuntimeConfig();
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+          agentId: "main",
+          agentDir: "/tmp/chat-main-agent",
+          catalogComplete: false,
+          workspaceDir: "/tmp/chat-main-workspace",
+          config,
+          entries: [{ id: "main-only", name: "Main only", provider: "test" }],
+          routeVariants: [],
+        })),
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       await callDirectChat("chat.startup", {
@@ -1610,7 +1483,6 @@ describe("gateway server chat", () => {
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi.fn(),
-        getRuntimeConfig: () => ({}),
       });
       await callDirectChat("chat.startup", {
         id: "startup-slow-catalog",
@@ -1661,7 +1533,8 @@ describe("gateway server chat", () => {
           createTextTranscriptEvent("user", "paint without metadata"),
         ]);
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-        const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+        const context = createDirectChatContext();
+        await initializeSessionReadContext(context);
         let cursor: string | undefined;
         if (delta) {
           const initial: CapturedChatResponse[] = [];
@@ -1679,7 +1552,7 @@ describe("gateway server chat", () => {
           expect(cursor).toEqual(expect.any(String));
         }
         const metadataRuntime = createGatewayChatMetadataRuntime({
-          getConfig: () => ({}),
+          getConfig: context.getRuntimeConfig,
           getContext: () => context,
           log: context.logGateway,
         });
@@ -1839,13 +1712,12 @@ describe("gateway server chat", () => {
         defaults: testState.agentConfig,
         entries: { main: { thinkingDefault: fixture.configured?.agent } },
       };
-      const config = { agents: testState.agentsConfig };
-
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "slow-catalog-model",
         ...(fixture.thinkingLevel ? { thinkingLevel: fixture.thinkingLevel } : {}),
       });
+      const config = getRuntimeConfig();
       await appendTranscriptMessage(makeMainSessionScope(storePath), {
         eventId: "reasoning-projection-message",
         parentId: null,
@@ -1889,6 +1761,12 @@ describe("gateway server chat", () => {
             fixture.rawCatalog === "slow" ? slowCatalog.promise : Promise.resolve(rawSnapshot),
           ),
         getRuntimeConfig: () => config,
+        readPreparedGatewayModelCatalog: async () =>
+          fixture.preparedEmpty
+            ? { entries: [] }
+            : fixture.preparedReasoning === undefined && !fixture.preparedUnknown
+              ? undefined
+              : { entries: preparedCatalog, pluginRegistry: { providers: [] } },
         readChatStartupProjection: async () =>
           fixture.preparedEmpty
             ? {
@@ -2003,7 +1881,7 @@ describe("gateway server chat", () => {
               expect(
                 projection.thinkingLevels?.map((level) => level.id),
                 mode,
-              ).toEqual(["off"]);
+              ).toEqual(["off", "ultra"]);
             } else {
               expect.soft(projection.thinkingLevels, `${mode} unknown levels`).toBeUndefined();
               expect.soft(projection.thinkingOptions, `${mode} unknown options`).toBeUndefined();
@@ -2043,10 +1921,9 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
-        let releasePluginMetadata: () => boolean = () => false;
         const previousAgentConfig = testState.agentConfig;
         const previousAgentsConfig = testState.agentsConfig;
-        openDirectChatSession();
+        openDirectChatSession({ fresh: true });
         try {
           const config = {
             agents: {
@@ -2068,431 +1945,447 @@ describe("gateway server chat", () => {
           await state.writeConfig(config);
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
-          releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
+          await withPluginMetadataSnapshotScope(
             pluginMetadataSnapshot,
-            {
-              config,
-              compatibleConfigs: [config],
-              env: process.env,
-            },
-          ).release;
-          const persistedConfig = getRuntimeConfig();
-          expect(persistedConfig.auth?.order?.openai).toEqual([
-            "openai:api",
-            "openai:chatgpt",
-            "openai:expired",
-          ]);
-          testState.agentsConfig = persistedConfig.agents;
-          testState.agentConfig = persistedConfig.agents?.defaults;
-          await writeSessionStore({
-            entries: {
-              "agent:work:main": {
+            async () => {
+              const initialConfig = getRuntimeConfig();
+              expect(initialConfig.auth?.order?.openai).toEqual([
+                "openai:api",
+                "openai:chatgpt",
+                "openai:expired",
+              ]);
+              testState.agentsConfig = initialConfig.agents;
+              testState.agentConfig = initialConfig.agents?.defaults;
+              await writeSessionStore({
+                entries: {
+                  "agent:work:main": {
+                    sessionId: "sess-work",
+                    modelProvider: "openai",
+                    model: "gpt-5.5",
+                    authProfileOverride: "openai:chatgpt",
+                    authProfileOverrideSource: "user",
+                    updatedAt: Date.now(),
+                  },
+                  "agent:work:auto": {
+                    sessionId: "sess-work-auto",
+                    modelProvider: "openai",
+                    model: "gpt-5.5",
+                    authProfileOverride: "openai:expired",
+                    authProfileOverrideSource: "auto",
+                    updatedAt: Date.now(),
+                  },
+                  "agent:work:auto-preferred": {
+                    sessionId: "sess-work-auto-preferred",
+                    modelProvider: "openai",
+                    model: "gpt-5.5",
+                    authProfileOverride: "openai:chatgpt",
+                    authProfileOverrideSource: "auto",
+                    updatedAt: Date.now(),
+                  },
+                  "agent:work:legacy-auto": {
+                    sessionId: "sess-work-legacy-auto",
+                    modelProvider: "openai",
+                    model: "gpt-5.5",
+                    authProfileOverride: "openai:expired",
+                    authProfileOverrideCompactionCount: 0,
+                    updatedAt: Date.now(),
+                  },
+                },
+              });
+              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const persistedConfig = { ...initialConfig, session: getRuntimeConfig().session };
+              setRuntimeConfigSnapshot(persistedConfig);
+              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
+              expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
+              expect(loaded.canonicalKey).toBe("agent:work:main");
+              expect(loaded.entry).toMatchObject({
                 sessionId: "sess-work",
                 modelProvider: "openai",
                 model: "gpt-5.5",
                 authProfileOverride: "openai:chatgpt",
-                authProfileOverrideSource: "user",
-                updatedAt: Date.now(),
-              },
-              "agent:work:auto": {
-                sessionId: "sess-work-auto",
-                modelProvider: "openai",
-                model: "gpt-5.5",
-                authProfileOverride: "openai:expired",
-                authProfileOverrideSource: "auto",
-                updatedAt: Date.now(),
-              },
-              "agent:work:auto-preferred": {
-                sessionId: "sess-work-auto-preferred",
-                modelProvider: "openai",
-                model: "gpt-5.5",
-                authProfileOverride: "openai:chatgpt",
-                authProfileOverrideSource: "auto",
-                updatedAt: Date.now(),
-              },
-              "agent:work:legacy-auto": {
-                sessionId: "sess-work-legacy-auto",
-                modelProvider: "openai",
-                model: "gpt-5.5",
-                authProfileOverride: "openai:expired",
-                authProfileOverrideCompactionCount: 0,
-                updatedAt: Date.now(),
-              },
-            },
-          });
-          const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
-          const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
-          expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
-          expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
-          expect(loaded.canonicalKey).toBe("agent:work:main");
-          expect(loaded.entry).toMatchObject({
-            sessionId: "sess-work",
-            modelProvider: "openai",
-            model: "gpt-5.5",
-            authProfileOverride: "openai:chatgpt",
-          });
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: {
-              "openai:chatgpt": {
-                type: "oauth",
+              });
+              await state.writeAuthProfiles({
+                version: 1,
+                profiles: {
+                  "openai:chatgpt": {
+                    type: "oauth",
+                    provider: "openai",
+                    access: "chatgpt-access",
+                    refresh: "chatgpt-refresh",
+                    expires: Date.now() + 30 * 60_000,
+                  },
+                },
+              });
+              await state.writeAuthProfiles(
+                {
+                  version: 1,
+                  profiles: {
+                    "openai:api": {
+                      type: "api_key",
+                      provider: "openai",
+                      key: "platform-api-key",
+                    },
+                    "openai:chatgpt": {
+                      type: "oauth",
+                      provider: "openai",
+                      access: "work-chatgpt-access",
+                      refresh: "work-chatgpt-refresh",
+                      expires: Date.now() + 30 * 60_000,
+                    },
+                    "openai:expired": {
+                      type: "oauth",
+                      provider: "openai",
+                      access: "expired-work-chatgpt-access",
+                      expires: Date.now() - 60_000,
+                    },
+                  },
+                },
+                "work",
+              );
+              const platformRoute = {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
                 provider: "openai",
-                access: "chatgpt-access",
-                refresh: "chatgpt-refresh",
-                expires: Date.now() + 30 * 60_000,
-              },
-            },
-          });
-          await state.writeAuthProfiles(
-            {
-              version: 1,
-              profiles: {
-                "openai:api": {
-                  type: "api_key",
-                  provider: "openai",
-                  key: "platform-api-key",
-                },
-                "openai:chatgpt": {
-                  type: "oauth",
-                  provider: "openai",
-                  access: "work-chatgpt-access",
-                  refresh: "work-chatgpt-refresh",
-                  expires: Date.now() + 30 * 60_000,
-                },
-                "openai:expired": {
-                  type: "oauth",
-                  provider: "openai",
-                  access: "expired-work-chatgpt-access",
-                  expires: Date.now() - 60_000,
-                },
-              },
-            },
-            "work",
-          );
-          const platformRoute = {
-            id: "gpt-5.5",
-            name: "GPT-5.5",
-            provider: "openai",
-            api: "openai-responses" as const,
-            baseUrl: "https://api.openai.com/v1",
-            contextWindow: 1_000_000,
-            reasoning: true,
-            compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
-          };
-          const subscriptionRoute = {
-            ...platformRoute,
-            api: "openai-chatgpt-responses" as const,
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            contextWindow: 400_000,
-            reasoning: false,
-            compat: { supportedReasoningEfforts: ["low"] },
-            params: { apiKey: "private-route-token" },
-          };
-          const catalogSnapshot = {
-            entries: [subscriptionRoute],
-            routeVariants: [subscriptionRoute, platformRoute],
-          };
-          const { loadAuthProfileStoreForRuntime } = await import("../agents/auth-profiles.js");
-          const { resolveAgentDir } = await import("../agents/agent-scope.js");
-          const preparedAuthStoreByAgentId = new Map([
-            [
-              "main",
-              loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "main"), {
-                readOnly: true,
-              }),
-            ],
-            [
-              "work",
-              loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "work"), {
-                inheritedAuthDir: resolveAgentDir(persistedConfig, "main"),
-                readOnly: true,
-              }),
-            ],
-          ]);
-          const requirePreparedAuthStore = (agentId: string) => {
-            const authStore = preparedAuthStoreByAgentId.get(agentId);
-            if (!authStore) {
-              throw new Error(`expected prepared auth store for agent "${agentId}"`);
-            }
-            return authStore;
-          };
-          const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-          const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
-            await import("./server-methods/models-list-result.js");
-          const projectionByKey = new Map<
-            string,
-            Promise<{
-              modelCatalog: ModelCatalogEntry[];
-              metadata: { models: unknown[]; swarmEnabled: boolean };
-            }>
-          >();
-          const projectAgent = (
-            context: GatewayRequestContext,
-            agentId: string,
-            sessionEntry?: Parameters<GatewayRequestContext["readChatMetadata"]>[0]["sessionEntry"],
-          ) => {
-            const profileId = sessionEntry?.authProfileOverride?.trim();
-            const profileSource = sessionEntry?.authProfileOverrideSource;
-            const legacyUserProfile =
-              profileSource === undefined &&
-              sessionEntry?.authProfileOverrideCompactionCount === undefined;
-            const key = [
-              agentId,
-              profileId ?? "",
-              profileId && (profileSource === "user" || legacyUserProfile) ? profileId : "",
-            ].join("\0");
-            const existing = projectionByKey.get(key);
-            if (existing) {
-              return existing;
-            }
-            const projector = createGatewayAgentModelCatalogProjector({
-              cfg: persistedConfig,
-              agentId,
-              snapshot: catalogSnapshot,
-              metadataSnapshot: pluginMetadataSnapshot,
-              preparedAuthStore: requirePreparedAuthStore(agentId),
-              ...(profileId ? { preferredProfileId: profileId } : {}),
-              ...(profileId && (profileSource === "user" || legacyUserProfile)
-                ? { pinnedProfileId: profileId }
-                : {}),
-            });
-            const projection = Promise.all([
-              projector.projectCatalog(),
-              buildModelsListResult({
-                context,
-                agentId,
-                params: { view: "configured" },
-                preloadedCatalog: {
-                  agentId,
-                  config: persistedConfig,
-                  snapshot: catalogSnapshot,
-                },
-                preloadedOnly: true,
-                catalogProjector: projector,
-              }),
-            ]).then(([modelCatalog, metadata]) => ({
-              modelCatalog,
-              metadata: { ...metadata, swarmEnabled: false },
-            }));
-            projectionByKey.set(key, projection);
-            return projection;
-          };
-          const context = createDirectChatContext({
-            loadGatewayModelCatalogSnapshot: vi
-              .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-              .mockResolvedValue({
-                agentId: "work",
-                agentDir: "/tmp/chat-work-agent",
-                catalogComplete: false,
-                workspaceDir: "/tmp/chat-work-workspace",
-                config: persistedConfig,
-                ...catalogSnapshot,
-              }),
-            getRuntimeConfig: () => persistedConfig,
-            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
-              const [neutralProjection, sessionProjection] = await Promise.all([
-                projectAgent(context, agentId),
-                projectAgent(context, agentId, sessionEntry),
-              ]);
-              preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
-                (entry) => entry.reasoning === true,
-              )
-                ? "base"
-                : "off";
-              return {
-                metadata: sessionProjection.metadata,
-                sessionModelCatalog: sessionProjection.modelCatalog,
-                defaultModelCatalog: neutralProjection.modelCatalog,
+                api: "openai-responses" as const,
+                baseUrl: "https://api.openai.com/v1",
+                contextWindow: 1_000_000,
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
               };
-            }),
-          });
-          const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
-            cfg: persistedConfig,
-            agentId: "work",
-            snapshot: catalogSnapshot,
-            metadataSnapshot: pluginMetadataSnapshot,
-            preparedAuthStore: requirePreparedAuthStore("work"),
-            preferredProfileId: "openai:expired",
-          }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
-          expect(expiredPreferenceEvaluation).toMatchObject({
-            availability: true,
-            selectedProfileId: "openai:api",
-            selectedRoute: { authRequirement: "api-key" },
-          });
-          // Main only has subscription auth; work's neutral default selects API auth.
-          // Keep the Off-only default control separate from work's locked session profile.
-          await callDirectChat("chat.startup", {
-            id: "startup-main-neutral-route",
-            params: { sessionKey: "agent:main:main" },
-            respond: captureChatResponse(responses),
-            context,
-          });
-          expect(responses).toHaveLength(1);
-          expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
-          const mainPayload = responses[0]?.payload as {
-            defaults?: GatewaySessionsDefaults;
-            sessionInfo?: { thinkingLevels?: Array<{ id: string }> };
-          };
-          expect(mainPayload.defaults).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
-          expect(mainPayload.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          expect(mainPayload.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
-            "off",
-          ]);
-          responses.length = 0;
-          await callDirectChat("chat.startup", {
-            id: "startup-dual-route-catalog",
-            params: { sessionKey: "agent:work:main" },
-            respond: captureChatResponse(responses),
-            context,
-          });
-
-          expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-          expect(responses).toHaveLength(1);
-          expect(responses[0]?.ok).toBe(true);
-          const payload = responses[0]?.payload as
-            | {
-                metadata?: { models?: unknown[] };
-                sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
-                defaults?: { thinkingLevels?: Array<{ id?: string }> };
-              }
-            | undefined;
-          expect(payload?.metadata?.models).toEqual([
-            expect.objectContaining({
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              provider: "openai",
-              agentRuntime: {
-                id: "codex",
-                cloudPlacementSupported: false,
-                devicePlacementSupported: false,
-                source: "implicit",
-              },
-              contextWindow: 400_000,
-              reasoning: false,
-              available: true,
-            }),
-          ]);
-          expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual([
-            "off",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-          ]);
-          const serialized = JSON.stringify(responses[0]?.payload);
-          expect(serialized).not.toContain("private-route-token");
-          expect(serialized).not.toContain("platform-api-key");
-          expect(serialized).not.toContain("chatgpt-access");
-          expect(serialized).not.toContain("supportedReasoningEfforts");
-          expect(serialized).not.toContain(platformRoute.baseUrl);
-          expect(serialized).not.toContain(subscriptionRoute.baseUrl);
-
-          for (const [index, [sessionKey, sessionId, expectedRoute]] of [
-            ["agent:work:auto-preferred", "sess-work-auto-preferred", "subscription"],
-            ["agent:work:auto", "sess-work-auto", "platform"],
-            ["agent:work:legacy-auto", "sess-work-legacy-auto", "platform"],
-          ].entries()) {
-            await writeMainSessionTranscript(
-              [
-                createTextTranscriptEvent("user", "route reasoning", {
-                  id: "route-message",
-                  parentId: null,
-                }),
-              ],
-              sessionId,
-              { agentId: "work", sessionKey },
-            );
-            responses.length = 0;
-            await callDirectChat("chat.startup", {
-              id: `startup-preferred-route-${index}`,
-              params: { sessionKey },
-              respond: ((ok, responsePayload, error) => {
-                responses.push({ ok, payload: responsePayload, error });
-              }) as RespondFn,
-              context,
-            });
-
-            expect(responses).toHaveLength(1);
-            expect(responses[0]?.ok).toBe(true);
-            const preferredPayload = responses[0]?.payload as
-              | {
-                  metadata?: { models?: Array<{ contextWindow?: number }> };
-                  defaults?: GatewaySessionsDefaults;
-                  sessionInfo?: {
-                    agentRuntime?: unknown;
-                    thinkingLevel?: string;
-                    thinkingDefault?: string;
-                    thinkingLevels?: Array<{ id?: string }>;
-                    thinkingOptions?: string[];
-                  };
+              const subscriptionRoute = {
+                ...platformRoute,
+                api: "openai-chatgpt-responses" as const,
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                contextWindow: 400_000,
+                reasoning: false,
+                compat: { supportedReasoningEfforts: ["low"] },
+                params: { apiKey: "private-route-token" },
+              };
+              const catalogSnapshot = {
+                entries: [subscriptionRoute],
+                routeVariants: [subscriptionRoute, platformRoute],
+              };
+              const { loadAuthProfileStoreForRuntime } = await import("../agents/auth-profiles.js");
+              const { resolveAgentDir } = await import("../agents/agent-scope.js");
+              const preparedAuthStoreByAgentId = new Map([
+                [
+                  "main",
+                  loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "main"), {
+                    readOnly: true,
+                  }),
+                ],
+                [
+                  "work",
+                  loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "work"), {
+                    inheritedAuthDir: resolveAgentDir(persistedConfig, "main"),
+                    readOnly: true,
+                  }),
+                ],
+              ]);
+              const requirePreparedAuthStore = (agentId: string) => {
+                const authStore = preparedAuthStoreByAgentId.get(agentId);
+                if (!authStore) {
+                  throw new Error(`expected prepared auth store for agent "${agentId}"`);
                 }
-              | undefined;
-            expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
-              expectedRoute === "subscription" ? 400_000 : 1_000_000,
-            );
-            const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
-              (level) => level.id,
-            );
-            if (expectedRoute === "subscription") {
-              expect(thinkingLevels, sessionKey).toEqual(["off"]);
-            } else {
-              expect(thinkingLevels, sessionKey).toContain("high");
-            }
-            expect(preferredPayload?.sessionInfo?.thinkingLevel ?? null).toBeNull();
-            let cursor: string | undefined;
-            for (const mode of ["page", "delta"] as const) {
-              responses.length = 0;
-              await callDirectChat("chat.history", {
-                id: `history-preferred-route-${index}-${mode}`,
-                params: { sessionKey, ...(mode === "delta" ? { cursor } : {}) },
+                return authStore;
+              };
+              const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+              const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
+                await import("./server-methods/models-list-result.js");
+              const projectionByKey = new Map<
+                string,
+                Promise<{
+                  modelCatalog: ModelCatalogEntry[];
+                  metadata: {
+                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
+                    swarmEnabled: boolean;
+                  };
+                }>
+              >();
+              const projectAgent = (
+                context: GatewayRequestContext,
+                agentId: string,
+                sessionEntry?: Parameters<
+                  GatewayRequestContext["readChatMetadata"]
+                >[0]["sessionEntry"],
+              ) => {
+                const profileId = sessionEntry?.authProfileOverride?.trim();
+                const profileSource = sessionEntry?.authProfileOverrideSource;
+                const legacyUserProfile =
+                  profileSource === undefined &&
+                  sessionEntry?.authProfileOverrideCompactionCount === undefined;
+                const key = [
+                  agentId,
+                  profileId ?? "",
+                  profileId && (profileSource === "user" || legacyUserProfile) ? profileId : "",
+                ].join("\0");
+                const existing = projectionByKey.get(key);
+                if (existing) {
+                  return existing;
+                }
+                const projector = createGatewayAgentModelCatalogProjector({
+                  cfg: persistedConfig,
+                  agentId,
+                  snapshot: catalogSnapshot,
+                  metadataSnapshot: pluginMetadataSnapshot,
+                  preparedAuthStore: requirePreparedAuthStore(agentId),
+                  ...(profileId ? { preferredProfileId: profileId } : {}),
+                  ...(profileId && (profileSource === "user" || legacyUserProfile)
+                    ? { pinnedProfileId: profileId }
+                    : {}),
+                });
+                const projection = Promise.all([
+                  projector.projectCatalog(),
+                  buildModelsListResult({
+                    source: { kind: "gateway", context },
+                    agentId,
+                    params: { view: "configured" },
+                    preloadedCatalog: {
+                      agentId,
+                      config: persistedConfig,
+                      snapshot: catalogSnapshot,
+                    },
+                    preloadedOnly: true,
+                    catalogProjector: projector,
+                  }),
+                ]).then(([modelCatalog, metadata]) => ({
+                  modelCatalog,
+                  metadata: { ...metadata, swarmEnabled: false },
+                }));
+                projectionByKey.set(key, projection);
+                return projection;
+              };
+              const context = createDirectChatContext({
+                loadGatewayModelCatalogSnapshot: vi
+                  .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+                  .mockResolvedValue({
+                    agentId: "work",
+                    agentDir: "/tmp/chat-work-agent",
+                    catalogComplete: false,
+                    workspaceDir: "/tmp/chat-work-workspace",
+                    config: persistedConfig,
+                    ...catalogSnapshot,
+                  }),
+                getRuntimeConfig: () => persistedConfig,
+                readPreparedGatewayModelCatalog: async () => catalogSnapshot,
+                readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
+                  const [neutralProjection, sessionProjection] = await Promise.all([
+                    projectAgent(context, agentId),
+                    projectAgent(context, agentId, sessionEntry),
+                  ]);
+                  preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
+                    (entry) => entry.reasoning === true,
+                  )
+                    ? "base"
+                    : "off";
+                  return {
+                    metadata: sessionProjection.metadata,
+                    sessionModelCatalog: sessionProjection.modelCatalog,
+                    defaultModelCatalog: neutralProjection.modelCatalog,
+                  };
+                }),
+              });
+              const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+                cfg: persistedConfig,
+                agentId: "work",
+                snapshot: catalogSnapshot,
+                metadataSnapshot: pluginMetadataSnapshot,
+                preparedAuthStore: requirePreparedAuthStore("work"),
+                preferredProfileId: "openai:expired",
+              }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
+              expect(expiredPreferenceEvaluation).toMatchObject({
+                availability: true,
+                selectedProfileId: "openai:api",
+                selectedRoute: { authRequirement: "api-key" },
+              });
+              // Main only has subscription auth; work's neutral default selects API auth.
+              // Keep the Off-only default control separate from work's locked session profile.
+              await callDirectChat("chat.startup", {
+                id: "startup-main-neutral-route",
+                params: { sessionKey: "agent:main:main" },
                 respond: captureChatResponse(responses),
                 context,
               });
               expect(responses).toHaveLength(1);
               expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
-              const history = responses[0]?.payload as {
-                kind?: string;
-                deltaCursor?: string;
-                thinkingLevel?: string;
+              const mainPayload = responses[0]?.payload as {
                 defaults?: GatewaySessionsDefaults;
-                sessionInfo?: NonNullable<typeof preferredPayload>["sessionInfo"];
+                sessionInfo?: { thinkingLevels?: Array<{ id: string }> };
               };
-              const label = `${sessionKey} ${mode}`;
-              if (mode === "delta") {
-                expect(history.kind, label).toBe("delta");
-              } else {
-                expect(history.deltaCursor, label).toEqual(expect.any(String));
-                cursor = history.deltaCursor;
-                expect(history.defaults, `${label} neutral defaults`).toEqual(
-                  preferredPayload?.defaults,
+              expect(mainPayload.defaults).toMatchObject({
+                modelProvider: "openai",
+                model: "gpt-5.5",
+              });
+              expect(mainPayload.defaults?.thinkingLevels?.map((level) => level.id)).toEqual([
+                "off",
+              ]);
+              expect(mainPayload.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
+                "off",
+              ]);
+              responses.length = 0;
+              await callDirectChat("chat.startup", {
+                id: "startup-dual-route-catalog",
+                params: { sessionKey: "agent:work:main" },
+                respond: captureChatResponse(responses),
+                context,
+              });
+
+              expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+              expect(responses).toHaveLength(1);
+              expect(responses[0]?.ok).toBe(true);
+              const payload = responses[0]?.payload as
+                | {
+                    metadata?: { models?: unknown[] };
+                    sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                    defaults?: { thinkingLevels?: Array<{ id?: string }> };
+                  }
+                | undefined;
+              expect(payload?.metadata?.models).toEqual([
+                expect.objectContaining({
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  provider: "openai",
+                  agentRuntime: {
+                    id: "codex",
+                    cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
+                    source: "implicit",
+                  },
+                  contextWindow: 400_000,
+                  reasoning: false,
+                  available: true,
+                }),
+              ]);
+              expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
+                "off",
+              ]);
+              expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual([
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "ultra",
+              ]);
+              const serialized = JSON.stringify(responses[0]?.payload);
+              expect(serialized).not.toContain("private-route-token");
+              expect(serialized).not.toContain("platform-api-key");
+              expect(serialized).not.toContain("chatgpt-access");
+              expect(serialized).not.toContain("supportedReasoningEfforts");
+              expect(serialized).not.toContain(platformRoute.baseUrl);
+              expect(serialized).not.toContain(subscriptionRoute.baseUrl);
+
+              for (const [index, [sessionKey, sessionId, expectedRoute]] of [
+                ["agent:work:auto-preferred", "sess-work-auto-preferred", "subscription"],
+                ["agent:work:auto", "sess-work-auto", "platform"],
+                ["agent:work:legacy-auto", "sess-work-legacy-auto", "platform"],
+              ].entries()) {
+                await writeMainSessionTranscript(
+                  [
+                    createTextTranscriptEvent("user", "route reasoning", {
+                      id: "route-message",
+                      parentId: null,
+                    }),
+                  ],
+                  sessionId,
+                  { agentId: "work", sessionKey },
                 );
-                expect
-                  .soft(history.thinkingLevel, `${label} effective thinking`)
-                  .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
+                responses.length = 0;
+                await callDirectChat("chat.startup", {
+                  id: `startup-preferred-route-${index}`,
+                  params: { sessionKey },
+                  respond: ((ok, responsePayload, error) => {
+                    responses.push({ ok, payload: responsePayload, error });
+                  }) as RespondFn,
+                  context,
+                });
+
+                expect(responses).toHaveLength(1);
+                expect(responses[0]?.ok).toBe(true);
+                const preferredPayload = responses[0]?.payload as
+                  | {
+                      metadata?: { models?: Array<{ contextWindow?: number }> };
+                      defaults?: GatewaySessionsDefaults;
+                      sessionInfo?: {
+                        agentRuntime?: unknown;
+                        thinkingLevel?: string;
+                        thinkingDefault?: string;
+                        thinkingLevels?: Array<{ id?: string }>;
+                        thinkingOptions?: string[];
+                      };
+                    }
+                  | undefined;
+                expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
+                  expectedRoute === "subscription" ? 400_000 : 1_000_000,
+                );
+                const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
+                  (level) => level.id,
+                );
+                if (expectedRoute === "subscription") {
+                  expect(thinkingLevels, sessionKey).toEqual(["off"]);
+                } else {
+                  expect(thinkingLevels, sessionKey).toContain("high");
+                }
+                expect(preferredPayload?.sessionInfo?.thinkingLevel ?? null).toBeNull();
+                let cursor: string | undefined;
+                for (const mode of ["page", "delta"] as const) {
+                  responses.length = 0;
+                  await callDirectChat("chat.history", {
+                    id: `history-preferred-route-${index}-${mode}`,
+                    params: { sessionKey, ...(mode === "delta" ? { cursor } : {}) },
+                    respond: captureChatResponse(responses),
+                    context,
+                  });
+                  expect(responses).toHaveLength(1);
+                  expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
+                  const history = responses[0]?.payload as {
+                    kind?: string;
+                    deltaCursor?: string;
+                    thinkingLevel?: string;
+                    defaults?: GatewaySessionsDefaults;
+                    sessionInfo?: NonNullable<typeof preferredPayload>["sessionInfo"];
+                  };
+                  const label = `${sessionKey} ${mode}`;
+                  if (mode === "delta") {
+                    expect(history.kind, label).toBe("delta");
+                  } else {
+                    expect(history.deltaCursor, label).toEqual(expect.any(String));
+                    cursor = history.deltaCursor;
+                    expect(history.defaults, `${label} neutral defaults`).toEqual(
+                      preferredPayload?.defaults,
+                    );
+                    expect
+                      .soft(history.thinkingLevel, `${label} effective thinking`)
+                      .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
+                  }
+                  expect(
+                    history.sessionInfo?.thinkingLevel ?? null,
+                    `${label} override`,
+                  ).toBeNull();
+                  expect(history.sessionInfo?.agentRuntime, `${label} runtime`).toEqual(
+                    preferredPayload?.sessionInfo?.agentRuntime,
+                  );
+                  expect
+                    .soft(history.sessionInfo?.thinkingDefault, `${label} default`)
+                    .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
+                  expect
+                    .soft(history.sessionInfo?.thinkingLevels, `${label} supported levels`)
+                    .toEqual(preferredPayload?.sessionInfo?.thinkingLevels);
+                  expect
+                    .soft(history.sessionInfo?.thinkingOptions, `${label} supported options`)
+                    .toEqual(preferredPayload?.sessionInfo?.thinkingOptions);
+                }
               }
-              expect(history.sessionInfo?.thinkingLevel ?? null, `${label} override`).toBeNull();
-              expect(history.sessionInfo?.agentRuntime, `${label} runtime`).toEqual(
-                preferredPayload?.sessionInfo?.agentRuntime,
-              );
-              expect
-                .soft(history.sessionInfo?.thinkingDefault, `${label} default`)
-                .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
-              expect
-                .soft(history.sessionInfo?.thinkingLevels, `${label} supported levels`)
-                .toEqual(preferredPayload?.sessionInfo?.thinkingLevels);
-              expect
-                .soft(history.sessionInfo?.thinkingOptions, `${label} supported options`)
-                .toEqual(preferredPayload?.sessionInfo?.thinkingOptions);
-            }
-          }
+            },
+            { config, compatibleConfigs: [config], env: process.env },
+          );
         } finally {
           preparedThinkingPolicy.fallback = "off";
           testState.agentConfig = previousAgentConfig;
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
-          releasePluginMetadata();
         }
       },
     );
@@ -2523,9 +2416,9 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await readWarmChatStartup(ws);
+      const startup = await readWarmChatStartup(ws, makeMainSessionParams());
 
-      expect(startup.ok).toBe(true);
+      expect(startup.ok, JSON.stringify(startup)).toBe(true);
       expect(startup.payload?.metadata?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -2540,17 +2433,9 @@ describe("gateway server chat", () => {
   test.each(["chat.startup", "chat.history"] as const)(
     "%s scopes metadata to agent session keys without explicit agentId",
     async (method) => {
-      openDirectChatSession();
+      openDirectChatSession({ fresh: true });
       try {
-        await writeSessionStore({
-          entries: {
-            "agent:work:main": {
-              sessionId: "sess-work",
-              updatedAt: Date.now(),
-            },
-          },
-        });
-        const config = {
+        const fileConfig = {
           agents: {
             defaults: {
               model: {
@@ -2585,7 +2470,16 @@ describe("gateway server chat", () => {
             },
           },
         } as unknown as OpenClawConfig;
-        await writeGatewayConfig(config);
+        await writeGatewayConfig(fileConfig);
+        await writeSessionStore({
+          entries: {
+            "agent:work:main": {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        const config = getRuntimeConfig();
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
         const metadata = {
           models: [
@@ -2846,7 +2740,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementationOnce(() => firstCatalogSnapshot.promise)
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
-        getRuntimeConfig: () => ({}),
       });
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
@@ -2909,34 +2802,41 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
   test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
     openDirectChatSession();
+    const attachments = await import("./chat-attachments.js");
+    const discard = attachments.discardPreparedInboundMedia;
+    const discarded = createDeferred();
+    const cleanup = vi
+      .spyOn(attachments, "discardPreparedInboundMedia")
+      .mockImplementation((...args) => {
+        const pending = discard(...args);
+        if (args[0].length > 0) {
+          discarded.resolve(pending);
+        }
+        return pending;
+      });
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "vision-model",
       });
-      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const context = createDirectChatContext();
       const inboundDir = path.join(getMediaDir(), "inbound");
       const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
       // A before_agent_run block persists only the redacted reason — no media
       // markers — so dispatch must discard the prepared refs on settle.
       dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const recorder = (
-          params as {
-            replyOptions?: { userTurnTranscriptRecorder?: { markBlocked: () => void } };
-          }
-        ).replyOptions?.userTurnTranscriptRecorder;
-        recorder?.markBlocked();
+        const replyOptions = (params as { replyOptions?: GetReplyOptions }).replyOptions;
+        replyOptions?.userTurnTranscriptRecorder?.markBlocked();
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       await callDirectChat("chat.send", {
@@ -2955,37 +2855,37 @@ describe("gateway server chat", () => {
         }),
         client: {
           connId: "conn-owner",
-          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+          connect: {
+            ...makeGatewayWebchatClient(),
+            device: { id: "dev-owner" },
+            scopes: ["operator.write"],
+          },
         } as never,
-        respond: ((ok, payload, error) => {
-          responses.push({ ok, payload, error });
-        }) as RespondFn,
+        respond: captureChatResponse(responses),
         context,
       });
       expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
-      await waitForFast(async () => {
-        const remaining = await fs.readdir(inboundDir).catch(() => []);
-        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
-      }, FAST_WAIT_OPTS);
+      await discarded.promise;
+      const remaining = await fs.readdir(inboundDir).catch(() => []);
+      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
     } finally {
-      resetDirectChatSession();
+      cleanup.mockRestore();
+      await resetDirectChatSession();
     }
   });
 
-  test("chat.send discards prepared inbound media when setup throws before the ACK", async () => {
-    openDirectChatSession();
+  test("chat.send retains durably admitted media when later setup throws before the ACK", async () => {
+    const { storePath } = openDirectChatSession();
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "vision-model",
       });
       const context = createDirectChatContext({
-        // Throwing from addChatRun exercises handleChatSendSetupError — one of
-        // the pre-persistence exits that previously leaked staged media.
+        // addChatRun runs after durable input admission but before the ACK.
         addChatRun: vi.fn(() => {
           throw new Error("setup exploded before ack");
         }),
-        getRuntimeConfig: () => ({}),
       });
       const inboundDir = path.join(getMediaDir(), "inbound");
       const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
@@ -2997,8 +2897,6 @@ describe("gateway server chat", () => {
           idempotencyKey: "idem-setup-error-media",
           attachments: [
             {
-              // Non-image attachments always offload into the inbound media
-              // store during preparation; the failed send must discard them.
               type: "file",
               mimeType: "text/plain",
               fileName: "notes.txt",
@@ -3008,11 +2906,18 @@ describe("gateway server chat", () => {
         }),
         client: {
           connId: "conn-owner",
-          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              version: "1.0.0",
+              platform: "node",
+            },
+            device: { id: "dev-owner" },
+            scopes: ["operator.write"],
+          },
         } as never,
-        respond: ((ok, payload, error) => {
-          responses.push({ ok, payload, error });
-        }) as RespondFn,
+        respond: captureChatResponse(responses),
         context,
       });
       expect(responses).toEqual([
@@ -3022,15 +2927,30 @@ describe("gateway server chat", () => {
           error: expect.anything(),
         },
       ]);
-      // Prepared inbound media has no transcript reference on this exit; the
-      // admission cleanup owner must discard it or the file is orphaned
-      // forever (the inbound sweep is off unless attachments.ttlHours is set).
-      await waitForFast(async () => {
-        const remaining = await fs.readdir(inboundDir).catch(() => []);
-        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
-      }, FAST_WAIT_OPTS);
+      const pending = listSessionPendingInputs({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        storePath,
+      });
+      expect(pending).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted", runId: "idem-setup-error-media" }],
+      });
+      const media = readPersistedMediaFacts(
+        expectDefined(pending.items[0]?.message, "Expected the retained pending input"),
+      );
+      expect(media).toHaveLength(1);
+      const retainedUrl = expectDefined(media?.[0]?.url, "Expected the pending attachment URL");
+      expect(retainedUrl).toMatch(/^media:\/\/inbound\//);
+      const retainedPath = await resolveMediaReferenceLocalPath(retainedUrl);
+      await expect(fs.readFile(retainedPath, "utf8")).resolves.toBe("offloaded inbound media");
+      const remaining = await fs.readdir(inboundDir);
+      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([
+        path.basename(retainedPath),
+      ]);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3057,7 +2977,6 @@ describe("gateway server chat", () => {
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementationOnce(() => firstCatalogSnapshot.promise),
-        getRuntimeConfig: () => ({}),
       });
 
       const inboundDir = path.join(getMediaDir(), "inbound");
@@ -3188,7 +3107,7 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     } finally {
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3299,7 +3218,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3361,12 +3280,12 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
-    openDirectChatSession();
+    openDirectChatSession({ fresh: true });
     const performDeletion = createDeferred();
     let mutation: Promise<void> | undefined;
     try {
@@ -3457,7 +3376,7 @@ describe("gateway server chat", () => {
     } finally {
       performDeletion.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3514,7 +3433,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -3630,7 +3549,80 @@ describe("gateway server chat", () => {
     } finally {
       releaseMutation.resolve();
       releaseTerminalMutation.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
+    }
+  });
+
+  test("chat.send exposes inline image uploads as managed media without duplicating vision input", async () => {
+    openDirectChatSession();
+    try {
+      testState.agentConfig = { model: { primary: "test-provider/vision-model" } };
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+
+      const context = createDirectChatContext({
+        getRuntimeConfig,
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
+      });
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: Record<string, unknown>;
+            replyOptions?: GetReplyOptions;
+          },
+        ];
+        if (params.replyOptions?.runId === "idem-inline-image-managed-media") {
+          captured = {
+            ctx: params.ctx,
+            replyOptions: params.replyOptions,
+          };
+        }
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "inline-image-managed-media",
+        params: makeChatSendParams({
+          message: "inspect the uploaded file",
+          idempotencyKey: "idem-inline-image-managed-media",
+          attachments: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              fileName: "dot.png",
+              content: pngB64,
+            },
+          ],
+        }),
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
+      expect(captured?.replyOptions?.images).toEqual([
+        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0 },
+      ]);
+      expect(captured?.ctx?.media).toEqual([
+        expect.objectContaining({
+          path: expect.any(String),
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        }),
+      ]);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
     }
   });
 
@@ -3730,7 +3722,8 @@ describe("gateway server chat", () => {
             workspaceDir: expect.any(String),
           }),
         ]);
-        await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+        await getDirectChatSessionWorkRelease();
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -3797,109 +3790,24 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions }
       )?.replyOptions;
       expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
+      const settled = getDirectChatSessionWorkRelease();
+      expect(settled).toBeDefined();
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await settled;
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
-  test("chat.send persists optional connection identity per turn", async () => {
-    openDirectChatSession();
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const context = createDirectChatContext();
-      const send = async (params: {
-        authenticatedUserId?: string;
-        authenticatedUserProfile?: {
-          profileId: string;
-          displayName: string | null;
-          hasAvatar: boolean;
-        };
-        idempotencyKey: string;
-        message: string;
-      }) => {
-        const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
-        await sendControlUiChat({
-          context,
-          ...params,
-          respond: vi.fn() as RespondFn,
-        });
-        await waitForFast(
-          () => expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1),
-          FAST_WAIT_OPTS,
-        );
-      };
-
-      await send({
-        authenticatedUserId: "alice@example.com",
-        authenticatedUserProfile: {
-          profileId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
-          displayName: "Alice",
-          hasAvatar: false,
-        },
-        idempotencyKey: "idem-attributed-alice",
-        message: "prompt from alice",
-      });
-      await send({
-        authenticatedUserId: "bob@example.com",
-        authenticatedUserProfile: {
-          profileId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
-          displayName: "Bob",
-          hasAvatar: true,
-        },
-        idempotencyKey: "idem-attributed-bob",
-        message: "prompt from bob",
-      });
-      await send({
-        idempotencyKey: "idem-unattributed",
-        message: "prompt without identity",
-      });
-
-      const transcriptEvents = loadTranscriptEventsSync(
-        makeMainSessionScope(testState.sessionStorePath),
-      );
-      expect(transcriptEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt from alice",
-              __openclaw: expect.objectContaining({
-                senderId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
-                senderName: "Alice",
-              }),
-            }),
-          }),
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt from bob",
-              __openclaw: expect.objectContaining({
-                senderId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
-                senderName: "Bob",
-              }),
-            }),
-          }),
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt without identity",
-              __openclaw: expect.not.objectContaining({ senderId: expect.anything() }),
-            }),
-          }),
-        ]),
-      );
-    } finally {
-      resetDirectChatSession();
-    }
+  registerChatConnectionIdentityTest({
+    withDirectChatSession,
+    prepareSession: () => writeStoredMainSession(makeDoneSessionEntry()),
+    waitForSessionWork: getDirectChatSessionWorkRelease,
+    sendControlUiChat,
+    readTranscript: () =>
+      loadTranscriptEventsSync(makeMainSessionScope(testState.sessionStorePath)),
   });
 
   test("chat.send preserves a terminal source claim before admitting the next turn", async () => {
@@ -3907,6 +3815,7 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred();
     const priorRunId = "idem-prior-terminal-claim";
     const nextRunId = "idem-after-terminal-claim";
+    const removal = createDeferred();
     try {
       await writeStoredMainSession(
         makeDoneSessionEntry({
@@ -3916,7 +3825,14 @@ describe("gateway server chat", () => {
           restartRecoveryTerminalRunIds: ["idem-older-terminal-claim"],
         }),
       );
-      const context = createDirectChatContext();
+      const context = createDirectChatContext({
+        removeChatRun: vi.fn((runId) => {
+          if (runId === nextRunId) {
+            removal.resolve(undefined);
+          }
+          return undefined;
+        }),
+      });
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
       const freshAdmission = vi.fn(async () => {
@@ -3969,13 +3885,11 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await removal.promise;
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4014,13 +3928,11 @@ describe("gateway server chat", () => {
       ).toHaveLength(1);
 
       dispatchRelease.resolve(undefined);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4080,7 +3992,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseCallback.resolve(undefined);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4193,18 +4105,15 @@ describe("gateway server chat", () => {
         },
       ]);
       if (retryable) {
-        await waitForFast(
-          () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-          FAST_WAIT_OPTS,
-        );
+        await getDirectChatSessionWorkRelease();
+        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-        expect(
-          (
-            dispatchInboundMessageMock.mock.calls[0]?.[0] as
-              | { replyOptions?: GetReplyOptions }
-              | undefined
-          )?.replyOptions?.suppressNextUserMessagePersistence,
-        ).toBe(true);
+        const retryOptions = (
+          dispatchInboundMessageMock.mock.calls[0]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions;
+        expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
       } else {
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       }
@@ -4230,7 +4139,7 @@ describe("gateway server chat", () => {
       ).toHaveLength(1);
     } finally {
       stopListening?.();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4304,7 +4213,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4352,7 +4261,7 @@ describe("gateway server chat", () => {
       });
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4406,7 +4315,7 @@ describe("gateway server chat", () => {
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4442,7 +4351,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4487,7 +4396,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4521,7 +4430,7 @@ describe("gateway server chat", () => {
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4559,10 +4468,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(agentStarts).toHaveBeenCalledOnce();
       expect(recoveredAuthority).toMatchObject({ source: "local" });
@@ -4581,7 +4488,7 @@ describe("gateway server chat", () => {
         restartRecoveryDeliveryRunId: runId,
       });
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4609,10 +4516,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
       expect(context.broadcast).toHaveBeenCalledTimes(1);
       expect(context.broadcast).toHaveBeenCalledWith(
@@ -4625,7 +4530,7 @@ describe("gateway server chat", () => {
         status: "failed",
       });
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4650,10 +4555,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
       expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
@@ -4697,10 +4600,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(
         (
@@ -4710,7 +4611,7 @@ describe("gateway server chat", () => {
         )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4746,7 +4647,7 @@ describe("gateway server chat", () => {
       expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
       expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4802,10 +4703,8 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await waitForFast(
-        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(
         (
@@ -4815,7 +4714,7 @@ describe("gateway server chat", () => {
         )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -4869,12 +4768,10 @@ describe("gateway server chat", () => {
         status: "done",
       });
       expect(ackSnapshot.entry?.restartRecoveryDeliveryRunId).toBeUndefined();
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -5051,12 +4948,11 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve();
       await Promise.all([first, duplicate, withSystemContext, withDifferentThinking]);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(4);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(4);
     } finally {
       dispatchRelease.resolve();
-      resetDirectChatSession();
+      await resetDirectChatSession();
     }
   });
 
@@ -5117,9 +5013,8 @@ describe("gateway server chat", () => {
         RawBody: "/reset examples",
       });
       expect(dispatchContext).not.toHaveProperty("CommandSource");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -5147,14 +5042,12 @@ describe("gateway server chat", () => {
         });
 
       await callSend("first", "first message", "idem-sequential-a");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
 
       await callSend("second", "second message", "idem-sequential-b");
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-      }, FAST_WAIT_OPTS);
+      await getDirectChatSessionWorkRelease();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
 
       expect(responses).toEqual([
         {
@@ -5209,7 +5102,6 @@ describe("gateway server chat", () => {
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         chatQueuedTurns: new Map(),
         broadcast,
-        getRuntimeConfig: () => ({}),
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
@@ -5266,6 +5158,7 @@ describe("gateway server chat", () => {
       expect(onQueuedFollowupReplyBatch).toBeTypeOf("function");
       await onQueuedFollowupReplyBatch?.({
         kind: "queued-followup",
+        completion: { kind: "completed" },
         runId: "queued-followup-agent-run",
         originatingChannel: "webchat",
         payloads: [{ text: "queued follow-up answer" }],
@@ -5284,12 +5177,12 @@ describe("gateway server chat", () => {
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
       const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
-      await expect(
-        createAgentTurnService({ context, isWebchatConnect: () => true }).waitForTurn({
-          runId: "idem-queued-followup",
-          timeoutMs: 10,
-        }),
-      ).resolves.toMatchObject({
+      const service = createAgentTurnService({ context, isWebchatConnect: () => true });
+      const { result: waitResult } = await service.waitForTurn({
+        runId: "idem-queued-followup",
+        timeoutMs: 10,
+      });
+      expect(waitResult).toMatchObject({
         runId: "idem-queued-followup",
         status: "pending",
         timeoutPhase: "queue",
@@ -5336,10 +5229,19 @@ describe("gateway server chat", () => {
       turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "idem-queued-followup",
+          "idem-queued-followup",
+          "agent:main:main",
+        );
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "queued-followup-agent-run",
+          "queued-followup-agent-run",
+          "agent:main:main",
+        );
+      }, FAST_WAIT_OPTS);
 
       let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
@@ -5360,10 +5262,14 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(2),
-        FAST_WAIT_OPTS,
-      );
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(3);
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "idem-queued-followup-post-error",
+          "idem-queued-followup-post-error",
+          "agent:main:main",
+        );
+      }, FAST_WAIT_OPTS);
       const acceptedErrorEvents = broadcast.mock.calls.filter(
         ([event, payload]) =>
           event === "chat" &&
@@ -5580,7 +5486,7 @@ describe("gateway server chat", () => {
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-backfill";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -5656,7 +5562,7 @@ describe("gateway server chat", () => {
           totalMessages?: number;
           completeSnapshot?: boolean;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const messages = history.payload?.messages ?? [];
         expect(messages).toHaveLength(107);
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
@@ -5690,7 +5596,7 @@ describe("gateway server chat", () => {
   test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-delivery-dedupe";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
       const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
@@ -5737,9 +5643,17 @@ describe("gateway server chat", () => {
         );
 
         const history = await rpcReq<{
-          messages?: Array<{ role?: unknown; content?: unknown }>;
+          messages?: Array<{
+            role?: unknown;
+            content?: unknown;
+            __openclaw?: {
+              importedFrom?: unknown;
+              externalId?: unknown;
+              cliSessionId?: unknown;
+            };
+          }>;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const assistantMessages = (history.payload?.messages ?? []).filter(
           (message) => message.role === "assistant",
         );
@@ -5756,6 +5670,13 @@ describe("gateway server chat", () => {
           ),
         ).toHaveLength(1);
         expect(contentBlocks.filter((block) => block.type === "audio")).toHaveLength(1);
+        expect(assistantMessages[0]?.["__openclaw"]).toEqual(
+          expect.objectContaining({
+            importedFrom: "claude-cli",
+            externalId: "assistant-delivery-ready",
+            cliSessionId,
+          }),
+        );
         expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
       } finally {
         homeEnvSnapshot.restore();
@@ -5770,7 +5691,7 @@ describe("gateway server chat", () => {
       const homeEnvSnapshot = captureEnv(["HOME"]);
       try {
         await connectOk(secondWs);
-        const sessionDir = await createSessionDir();
+        const sessionDir = await createSessionDir({ fresh: true });
         const sessionId = "sess-claude-cli-large-snapshot";
         const cliSessionId = "7b8b202c-f6bb-4046-9475-d2f15fd07533";
         const homeDir = path.join(sessionDir, "home");
@@ -5872,7 +5793,7 @@ describe("gateway server chat", () => {
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-local-prefix";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
       const homeEnvSnapshot = captureEnv(["HOME"]);
@@ -5948,7 +5869,7 @@ describe("gateway server chat", () => {
   test("chat.history keeps offset paging when a claude-cli binding has no import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-missing-import";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       setTestEnvValue("HOME", path.join(sessionDir, "empty-home"));
@@ -6004,7 +5925,7 @@ describe("gateway server chat", () => {
   test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-dedupe-loop";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -7034,13 +6955,17 @@ describe("gateway server chat", () => {
       expect(assistantMessage.role).toBe("assistant");
       expect(messages[1]).toMatchObject({
         role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        openclawStreamFallback: {
-          replacementText: "I will clean that up now.",
-          source: "segment",
-          itemId: "msg-progress",
-        },
+        timestamp: 2,
       });
+      expect(messages[1]).toHaveProperty("content", [
+        { type: "text", text: "I will clean that up now." },
+      ]);
+      expect(messages[1]).toHaveProperty("openclawStreamFallback", {
+        replacementText: "I will clean that up now.",
+        source: "segment",
+        itemId: "msg-progress",
+      });
+      expect(messages.slice(1, 3).map(readOpenClawSeq)).toEqual([2, 2]);
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "private reasoning" },
         {
@@ -7125,7 +7050,12 @@ describe("gateway server chat", () => {
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-archive-backed";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       await fs.writeFile(
         `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
         [
@@ -7161,7 +7091,7 @@ describe("gateway server chat", () => {
         },
       });
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       await writeSessionStore({
         agentId: "work",
         entries: {
@@ -7191,7 +7121,12 @@ describe("gateway server chat", () => {
   test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-oversized-archive";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       const oversizedLine = JSON.stringify(
         createTextTranscriptEvent("assistant", "x".repeat(300 * 1024), {
           id: "msg-oversized",
@@ -7418,22 +7353,30 @@ describe("gateway server chat", () => {
 
   test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
         JSON.stringify({ message: { role: "user", content: "ready after rebuild" } }),
       ]);
-      const databaseOptions = {
-        agentId: "main",
-        path: path.join(sessionDir, "openclaw-agent.sqlite"),
-      };
+      const databaseOptions = toDatabaseOptions(
+        resolveSqliteTranscriptScope(makeMainSessionScope(testState.sessionStorePath)),
+      );
       const database = openOpenClawAgentDatabase(databaseOptions);
-      database.db
-        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-        .run("sess-main");
-
-      const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-      expect(rebuilding.ok).toBe(false);
-      expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+      // Keep the writer-held rebuild pending until the real RPC observes its dirty state.
+      await runExclusiveSqliteSessionWrite(
+        databaseOptions,
+        async () => {
+          const marked = database.db
+            .prepare(
+              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+            )
+            .run("sess-main");
+          expect(marked.changes).toBe(1);
+          const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
+          expect(rebuilding.ok).toBe(false);
+          expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+        },
+        "sessions.transcript-index.preflight",
+      );
 
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
       const ready = await rpcReq<{ messages?: unknown[] }>(
@@ -7550,7 +7493,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history fills sparse pages without repeatedly projecting scanned transcript rows", async () => {
+  test("chat.history fills sparse pages with correct visible pagination", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const startedAt = Date.now();
@@ -7563,31 +7506,16 @@ describe("gateway server chat", () => {
       );
       await writeMainSessionTranscript(events);
 
-      let projectedRows = 0;
-      const project = chatDisplayProjection.projectChatDisplayMessagesWithState;
-      const projectionSpy = vi
-        .spyOn(chatDisplayProjection, "projectChatDisplayMessagesWithState")
-        .mockImplementation((messages, options) => {
-          projectedRows += messages.length;
-          return project(messages, options);
-        });
-
-      try {
-        const page = await rpcReq<{
-          messages?: Array<{ __openclaw?: { seq?: number } }>;
-          nextOffset?: number;
-          hasMore?: boolean;
-        }>(ws, "chat.history", makeMainSessionParams({ limit: 25, offset: 0 }));
-        expect(page.ok).toBe(true);
-        expect(page.payload?.messages?.map(readOpenClawSeq)).toEqual(
-          Array.from({ length: 25 }, (_, index) => (index + 5) * 50 + 1),
-        );
-        expect(page.payload).toMatchObject({ hasMore: true, nextOffset: 1_250 });
-        expect(projectedRows).toBeGreaterThan(0);
-        expect(projectedRows).toBeLessThanOrEqual(events.length * 2);
-      } finally {
-        projectionSpy.mockRestore();
-      }
+      const page = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", makeMainSessionParams({ limit: 25, offset: 0 }));
+      expect(page.ok).toBe(true);
+      expect(page.payload?.messages?.map(readOpenClawSeq)).toEqual(
+        Array.from({ length: 25 }, (_, index) => (index + 5) * 50 + 1),
+      );
+      expect(page.payload).toMatchObject({ hasMore: true, nextOffset: 1_250 });
     });
   });
 
@@ -8044,24 +7972,17 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "assistant",
+              // Replay metadata repeats the text; keep each row below the per-message byte cap.
               content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
-                type: "toolcall",
-                name: "message",
-                arguments: {
-                  action: "send",
-                  message: `projected sibling ${index + 1} ${"x".repeat(100_000)}`,
-                },
+                type: "text",
+                text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: `history-progress-${index}`,
+                  phase: "commentary",
+                }),
               })),
               timestamp: Date.now() + 1,
-            },
-          }),
-          JSON.stringify({
-            message: {
-              role: "assistant",
-              toolName: "message",
-              result: { ok: true },
-              content: [{ type: "text", text: "NO_REPLY" }],
-              timestamp: Date.now() + 2,
             },
           }),
         ]);
@@ -8083,7 +8004,7 @@ describe("gateway server chat", () => {
         expect(firstPage.ok).toBe(true);
         const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
         expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 3)).toBe(true);
+        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
         expect(
@@ -8124,7 +8045,15 @@ describe("gateway server chat", () => {
       let aborted = false;
       await connectOk(ws);
 
-      await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
+      // Keep ACK timing independent of earlier custom-store fixture registrations.
+      testState.sessionStorePath = path.join(
+        sessionDir,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
       await writeMainSessionStore();
 
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
@@ -8155,7 +8084,6 @@ describe("gateway server chat", () => {
           idempotencyKey: "idem-abort-1",
           timeoutMs: 30_000,
         }),
-        2_000,
       );
 
       expect(sendRes.ok).toBe(true);
