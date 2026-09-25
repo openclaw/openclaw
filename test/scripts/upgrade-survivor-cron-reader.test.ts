@@ -68,6 +68,7 @@ it.each(["2026.9.4", "2026.9.6"])(
         throw new Error("CLI arguments missing");
       }
       if (args[1] === "add") {
+        expect(args.includes("--no-deliver")).toBe(version === "2026.9.6");
         return reply(jobs.find((job) => job.name === args[args.indexOf("--name") + 1]));
       }
       if (args[1] === "run") {

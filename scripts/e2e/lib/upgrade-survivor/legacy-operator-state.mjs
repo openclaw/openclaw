@@ -310,6 +310,7 @@ function unsetSystemAgent() {
 }
 
 function seedCronJob(job) {
+  const seedNativeHistory = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.9.6";
   const created = cli(
     [
       "cron",
@@ -320,6 +321,7 @@ function seedCronJob(job) {
       "24h",
       "--command",
       "printf survivor-cron",
+      ...(seedNativeHistory ? ["--no-deliver"] : []),
       "--disabled",
       ...(job.agentId === "ops" ? ["--agent", "ops"] : []),
       "--json",
@@ -338,7 +340,7 @@ function seedCronJob(job) {
     "baseline CLI changed the authored cron owner",
   );
   let history;
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.9.6") {
+  if (seedNativeHistory) {
     // Each released run owns its real task_runs shape. Run the default-owner job
     // before adding ops, while the published Gateway can still resolve its owner.
     cli(["cron", "run", created.id, "--wait"], `legacy-operator-run-${job.name}`, { json: true });
