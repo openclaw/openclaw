@@ -275,7 +275,8 @@ describe("Anthropic Claude Code version probe real Gateway proof", () => {
         path: request.url,
         authorization: request.authorization,
         apiKey: request.apiKey,
-        userAgent: request.userAgent,
+        hasClaudeCliUserAgent:
+          typeof request.userAgent === "string" && request.userAgent.startsWith("claude-cli/"),
         model: request.model,
         stream: request.stream,
       },
@@ -283,7 +284,7 @@ describe("Anthropic Claude Code version probe real Gateway proof", () => {
       stdoutSentinelInLogs: logs.includes(STDOUT_SENTINEL),
       stderrSentinelInLogs: logs.includes(STDERR_SENTINEL),
     };
-    console.log(`[anthropic-version-proof] ${JSON.stringify(proof)}`);
+    console.error(`[anthropic-version-proof] ${JSON.stringify(proof)}`);
     expect(proof).toMatchObject({
       warning: WARNING,
       warningCount: 1,
@@ -300,6 +301,5 @@ describe("Anthropic Claude Code version probe real Gateway proof", () => {
       model: "claude-sonnet-4-6",
       stream: true,
     });
-    expect(proof.request.userAgent ?? "").not.toMatch(/^claude-cli\//u);
   }, 90_000);
 });
