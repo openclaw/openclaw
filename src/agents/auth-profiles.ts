@@ -34,7 +34,6 @@ export {
   removeProviderAuthProfilesWithLock,
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
-  upsertAuthProfile,
   upsertAuthProfileWithLock,
 } from "./auth-profiles/profiles.js";
 export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";

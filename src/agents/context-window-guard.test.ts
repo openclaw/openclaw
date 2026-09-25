@@ -9,16 +9,21 @@ import {
 } from "./context-window-guard.js";
 
 describe("context-window-guard", () => {
-  function openRouterModelConfig(params: { contextWindow: number; contextTokens?: number }) {
+  function modelConfig(params: {
+    contextWindow: number;
+    contextTokens?: number;
+    id?: string;
+    provider?: string;
+  }) {
     return {
       models: {
         providers: {
-          openrouter: {
+          [params.provider ?? "openrouter"]: {
             baseUrl: "http://localhost",
             apiKey: "x",
             models: [
               {
-                id: "tiny",
+                id: params.id ?? "tiny",
                 name: "tiny",
                 reasoning: false,
                 input: ["text"],
@@ -79,7 +84,7 @@ describe("context-window-guard", () => {
   });
 
   it("uses models.providers.*.models[].contextWindow when present", () => {
-    const cfg = openRouterModelConfig({ contextWindow: 3_000 });
+    const cfg = modelConfig({ contextWindow: 3_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -96,7 +101,7 @@ describe("context-window-guard", () => {
   it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
     // contextTokens is the effective usable window; contextWindow can be larger
     // provider metadata and should not overstate prompt budget.
-    const cfg = openRouterModelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
+    const cfg = modelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -212,7 +217,7 @@ describe("context-window-guard", () => {
   });
 
   it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
-    const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
+    const cfg = modelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -229,28 +234,11 @@ describe("context-window-guard", () => {
   });
 
   it("matches provider-scoped config ids against bare runtime model ids", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "openrouter/tiny",
-                name: "tiny",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_000_000,
-                contextTokens: 936_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = modelConfig({
+      id: "openrouter/tiny",
+      contextWindow: 1_000_000,
+      contextTokens: 936_000,
+    });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -269,27 +257,7 @@ describe("context-window-guard", () => {
   it("does not read models config context windows across provider id variants", () => {
     // Provider id variants are not aliases in config lookup; crossing them would
     // silently apply the wrong operator override.
-    const cfg = {
-      models: {
-        providers: {
-          "z.ai": {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "glm-5",
-                name: "glm-5",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 12_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = modelConfig({ provider: "z.ai", id: "glm-5", contextWindow: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,

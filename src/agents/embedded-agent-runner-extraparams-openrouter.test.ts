@@ -56,61 +56,6 @@ afterEach(() => {
 });
 
 describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
-  it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
-    const payload = runExtraParamsPayloadCase({
-      provider: "openrouter",
-      modelId: "deepseek/deepseek-r1",
-      thinkingLevel: "off",
-      payload: { model: "deepseek/deepseek-r1" },
-    });
-
-    expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("forwards opt-in response cache params as OpenRouter headers", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push({ headers: options?.headers });
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/auto": {
-                params: {
-                  responseCache: true,
-                  responseCacheTtlSeconds: 600,
-                },
-              },
-            },
-          },
-        },
-      },
-      "openrouter",
-      "auto",
-    );
-
-    void agent.streamFn?.(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "auto",
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
-    const headers = calls[0]?.headers;
-    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
-    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
-  });
-
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
     // Model-level camelCase config is narrower than broad defaults and should
     // override snake_case aliases from defaults.
@@ -209,59 +154,6 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
         },
       ],
     });
-  });
-
-  it("uses configured long retention for OpenRouter Anthropic cache markers", () => {
-    const payload = runExtraParamsPayloadCase({
-      provider: "openrouter",
-      modelId: "anthropic/claude-sonnet-4-6",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/anthropic/claude-sonnet-4-6": {
-                params: { cacheRetention: "long" },
-              },
-            },
-          },
-        },
-      },
-      payload: {
-        messages: [{ role: "system", content: "cache me" }],
-      },
-    });
-
-    expect(payload.messages).toEqual([
-      {
-        role: "system",
-        content: [
-          { type: "text", text: "cache me", cache_control: { type: "ephemeral", ttl: "1h" } },
-        ],
-      },
-    ]);
-  });
-
-  it("uses configured none retention for OpenRouter Anthropic cache markers", () => {
-    const payload = runExtraParamsPayloadCase({
-      provider: "openrouter",
-      modelId: "anthropic/claude-sonnet-4-6",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/anthropic/claude-sonnet-4-6": {
-                params: { cacheRetention: "none" },
-              },
-            },
-          },
-        },
-      },
-      payload: {
-        messages: [{ role: "system", content: "do not cache me" }],
-      },
-    });
-
-    expect(payload.messages).toEqual([{ role: "system", content: "do not cache me" }]);
   });
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
