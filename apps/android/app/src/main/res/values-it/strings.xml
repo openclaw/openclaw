@@ -339,7 +339,6 @@
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In attesa di uno slot di concorrenza"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Consenti l\'accesso alla libreria foto."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Una risposta precedente ha già risolto questa approvazione."</string>
-    <string name="native_2d804b18101e1833" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s su %2$s online"</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessun thread recente"</string>
     <string name="native_2dc73e579b72dae5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Timeout %1$ss"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Leggi le notifiche delle app selezionate"</string>
@@ -850,7 +849,6 @@
     <string name="native_724f0ba5bb7e2dc2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s strumenti non riusciti"</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cancella la ricerca delle sessioni"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Porta"</string>
-    <string name="native_73329d10275ce1a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessuno associato"</string>
     <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Espandi il diagramma"</string>
     <string name="native_7344ef8e67c5337e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inserisci il codice di configurazione"</string>
     <string name="native_735cca45016888d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile caricare i log del Gateway."</string>
@@ -1115,6 +1113,7 @@
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantieni il nodo disponibile durante le attività in corso."</string>
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Prossimo risveglio"</string>
     <string name="native_97fddf2d43e8dfc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Esecuzione non riuscita"</string>
+    <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_9833e6ac40f62763" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Usa la posizione attuale"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessuna voce di registro recente."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway manuale"</string>
@@ -1404,6 +1403,7 @@
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile abilitare la skill."</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rimuovi"</string>
+    <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% online"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessun canale"</string>
     <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Usa Aggiorna chat per verificare lo stato del Gateway."</string>
     <string name="native_c3af8bc58e9f1b08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 strumento bloccato"</string>
@@ -1452,7 +1452,6 @@
     <string name="native_c99cb171b25e1f69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Caricamento dell\'automazione…"</string>
     <string name="native_c9a9639463c21952" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Video"</string>
     <string name="native_c9aa0d6611abe5f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Elimina automazione"</string>
-    <string name="native_c9d69d6ef383c2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s online"</string>
     <string name="native_c9e4f8f40d07909e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Assistente predefinito"</string>
     <string name="native_c9e9b24ded599d1b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scegli un provider %1$s supportato sul Gateway"</string>
     <string name="native_ca184496974204a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non disponibile"</string>

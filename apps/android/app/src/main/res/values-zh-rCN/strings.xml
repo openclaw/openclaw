@@ -339,7 +339,6 @@
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在等待可用并发名额"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"允许访问照片图库。"</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"先前的响应已处理此审批请求。"</string>
-    <string name="native_2d804b18101e1833" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%2$s 个中有 %1$s 个在线"</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有最近的对话"</string>
     <string name="native_2dc73e579b72dae5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"超时 %1$ss"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"读取所选应用的通知"</string>
@@ -850,7 +849,6 @@
     <string name="native_724f0ba5bb7e2dc2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 个工具执行失败"</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"清除会话搜索"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"端口"</string>
-    <string name="native_73329d10275ce1a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无已配对节点"</string>
     <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"展开图表"</string>
     <string name="native_7344ef8e67c5337e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"输入设置代码"</string>
     <string name="native_735cca45016888d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法加载 Gateway 日志。"</string>
@@ -1115,6 +1113,7 @@
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在工作期间保持节点可用。"</string>
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下次唤醒"</string>
     <string name="native_97fddf2d43e8dfc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"运行失败"</string>
+    <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_9833e6ac40f62763" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"使用当前位置"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有最近的日志条目。"</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手动配置 Gateway"</string>
@@ -1404,6 +1403,7 @@
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法启用技能。"</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"移除"</string>
+    <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% 在线"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有频道"</string>
     <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"使用“刷新聊天”检查 Gateway 的运行状况。"</string>
     <string name="native_c3af8bc58e9f1b08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 个工具被阻止"</string>
@@ -1452,7 +1452,6 @@
     <string name="native_c99cb171b25e1f69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在加载自动化…"</string>
     <string name="native_c9a9639463c21952" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"视频"</string>
     <string name="native_c9aa0d6611abe5f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"删除自动化任务"</string>
-    <string name="native_c9d69d6ef383c2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 个在线"</string>
     <string name="native_c9e4f8f40d07909e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"默认助手"</string>
     <string name="native_c9e9b24ded599d1b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在 Gateway 上选择受支持的 %1$s 提供商"</string>
     <string name="native_ca184496974204a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"不可用"</string>

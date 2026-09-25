@@ -339,7 +339,6 @@
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Очікування вільного слота для паралельного виконання"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Дозволити доступ до фототеки."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Попередня відповідь уже вирішила цей запит на схвалення."</string>
-    <string name="native_2d804b18101e1833" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s із %2$s онлайн"</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Немає нещодавніх гілок"</string>
     <string name="native_2dc73e579b72dae5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Час очікування %1$sс"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Читання сповіщень вибраних застосунків"</string>
@@ -850,7 +849,6 @@
     <string name="native_724f0ba5bb7e2dc2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Помилки інструментів: %1$s"</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Очистити пошук сеансів"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Порт"</string>
-    <string name="native_73329d10275ce1a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Немає спарених вузлів"</string>
     <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Розгорнути діаграму"</string>
     <string name="native_7344ef8e67c5337e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введіть код налаштування"</string>
     <string name="native_735cca45016888d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не вдалося завантажити журнали Gateway."</string>
@@ -1115,6 +1113,7 @@
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Підтримувати доступність вузла під час активної роботи."</string>
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наступне пробудження"</string>
     <string name="native_97fddf2d43e8dfc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Помилка виконання"</string>
+    <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_9833e6ac40f62763" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Використати поточне місцезнаходження"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Немає нещодавніх записів у журналі."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway вручну"</string>
@@ -1404,6 +1403,7 @@
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не вдалося ввімкнути навичку."</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Видалити"</string>
+    <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% у мережі"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Немає каналів"</string>
     <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Натисніть «Оновити чат», щоб перевірити стан Gateway."</string>
     <string name="native_c3af8bc58e9f1b08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 інструмент заблоковано"</string>
@@ -1452,7 +1452,6 @@
     <string name="native_c99cb171b25e1f69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Завантаження автоматизації…"</string>
     <string name="native_c9a9639463c21952" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відео"</string>
     <string name="native_c9aa0d6611abe5f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Видалити автоматизацію"</string>
-    <string name="native_c9d69d6ef383c2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s онлайн"</string>
     <string name="native_c9e4f8f40d07909e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Асистент за замовчуванням"</string>
     <string name="native_c9e9b24ded599d1b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Виберіть підтримуваного постачальника %1$s на Gateway"</string>
     <string name="native_ca184496974204a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Недоступно"</string>
