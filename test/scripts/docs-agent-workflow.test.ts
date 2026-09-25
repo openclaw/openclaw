@@ -499,7 +499,7 @@ describe("Docs Agent full-CI admission", () => {
       eventName: "workflow_dispatch" as const,
       runAttempt: 1,
       sha: mainSha,
-      preflightOutputs: { checkout_revision: mainSha },
+      preflightOutputs: { checkout_revision: mainSha, validation_tier: "full" },
       includeAndroid: true,
     };
     expect(evaluate(producer.if, context)).toBe(true);
@@ -509,7 +509,8 @@ describe("Docs Agent full-CI admission", () => {
       { releaseGate: true },
       { releaseScope: "npm-beta" },
       { includeAndroid: false },
-      { preflightOutputs: { checkout_revision: previousSha } },
+      { preflightOutputs: { checkout_revision: previousSha, validation_tier: "full" } },
+      { preflightOutputs: { checkout_revision: mainSha, validation_tier: "main" } },
     ]) {
       expect(evaluate(producer.if, { ...context, ...change })).toBe(false);
     }

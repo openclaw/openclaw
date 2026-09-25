@@ -8,7 +8,7 @@ read_when:
 
 ## Hourly main CI
 
-Full `main` CI runs directly from `ci.yml` at minute 23 of each hour.
+The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.
 GitHub's scheduled event selects the canonical main revision; manual dispatch
 inputs cannot claim scheduled-run policy. The schedule selects the complete
 `main` tier, including Android, without filtering to the last commit. Node,
@@ -31,6 +31,10 @@ worker limits, and retry fallbacks remain unchanged. Control UI and native
 translation source checks stay mandatory; generated locale drift is advisory
 because the post-merge translation workflows own its repair. Ordinary manual
 runs, including `validation_tier=main`, retain strict locale parity.
+
+A main-tier run does not emit the full-validation revision confirmation.
+Docs Agent's automatic write gate requires that full-tier receipt; its explicit
+manual dispatch remains available.
 
 Inspect the scheduled `CI` run and its `openclaw/ci-gate` job directly.
 Each scheduled run starts independently so an older iOS simulator phase cannot

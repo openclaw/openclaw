@@ -79,8 +79,9 @@ not replace their process proofs. Push gates compare the triggering event's
 every commit in that push. They do not accumulate changes from earlier pushes
 whose pending runs were coalesced away (cancelled). If a coalesced or otherwise
 cancelled main run never executes a selected owner-path proof, that proof can
-remain unexecuted until hourly full CI, a later non-cancelled opt-in main run
-selecting the same lane, or applicable manual/release validation runs. The published-upgrade survivor is
+remain unexecuted until a later run selects it. Hourly main-tier CI covers its
+retained lanes; release-only compositions require applicable full manual or
+release validation unless a direct edit selects them. The published-upgrade survivor is
 selected on every admitted canonical main run, so it does not depend on a later
 owner-path match. Ordinary manual CI and Full Release Validation also select it
 independently of changed paths, subject to the target's Docker seed capability.
