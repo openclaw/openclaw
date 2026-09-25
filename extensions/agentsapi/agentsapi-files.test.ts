@@ -364,7 +364,9 @@ describe("Agents API output attachment publication", () => {
           controller.signal,
           host.hostCapabilities.prepareReplyMedia,
         ),
-      ).rejects.toThrow(/no longer active|binding lease revoked|transfer aborted|This operation was aborted/);
+      ).rejects.toThrow(
+        /no longer active|binding lease revoked|transfer aborted|This operation was aborted/,
+      );
       expect(reachedSave).toBe(true);
       expect(await outboundFiles()).toEqual([]);
     },
