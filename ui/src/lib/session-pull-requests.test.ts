@@ -799,15 +799,16 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("resubscribes when foreground promotion changes the bounded server union", async () => {
+  it("updates the bounded server union and snapshots when foreground priority changes", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const normalOwner = {};
     const foregroundOwner = {};
-    store.watch(
-      normalOwner,
-      Array.from({ length: 201 }, (_value, index) => `normal-${String(index).padStart(3, "0")}`),
+    const normalKeys = Array.from(
+      { length: 201 },
+      (_value, index) => `normal-${String(index).padStart(3, "0")}`,
     );
+    store.watch(normalOwner, normalKeys);
     await flushSync();
     harness.request.mockClear();
 
@@ -819,6 +820,22 @@ describe("session pull request snapshot store", () => {
     expect(params.sessionKeys).toHaveLength(200);
     expect(params.sessionKeys[0]).toBe("normal-200");
     expect(params.sessionKeys).not.toContain("normal-199");
+    const snapshot = { pullRequests: [], rateLimited: false, status: "ready" };
+    harness.emit({ sessions: { "normal-199": snapshot, "normal-200": snapshot } });
+    expect(store.get("normal-199")).toBeUndefined();
+    expect(store.get("normal-200")).toEqual(snapshot);
+
+    store.watch(foregroundOwner, ["normal-200"]);
+    await flushSync();
+
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expect(harness.request.mock.lastCall?.[1]).toEqual({
+      sessionKeys: normalKeys.slice(0, 200),
+    });
+    expect(store.get("normal-200")).toBeUndefined();
+    harness.emit({ sessions: { "normal-199": snapshot, "normal-200": snapshot } });
+    expect(store.get("normal-199")).toEqual(snapshot);
+    expect(store.get("normal-200")).toBeUndefined();
     store.unwatch(normalOwner);
     store.unwatch(foregroundOwner);
     await flushSync();
