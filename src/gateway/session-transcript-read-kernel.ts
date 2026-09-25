@@ -162,13 +162,15 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   async function readSnapshotIfPresent<T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
+    options?: { readOnly?: boolean },
   ): Promise<T | undefined> {
     try {
-      return await access.readSnapshot(target, read);
+      return await access.readSnapshot(target, read, options);
     } catch (error) {
       if (
         error instanceof SessionTranscriptStorageUnavailableError &&
-        error.reason === "database-missing"
+        error.reason === "database-missing" &&
+        !options?.readOnly
       ) {
         return undefined;
       }
@@ -193,16 +195,17 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const messages = await access.readSnapshot(
-      target,
-      (projection) =>
-        opts.mode === "recent"
-          ? readRecentSqliteMessageRecords(projection, opts).messages
-          : projectSqliteHistoryEvents(
-              readSessionTranscriptHistoryEventsFromProjection(projection),
-            ),
-      opts,
-    );
+    const messages =
+      (await readSnapshotIfPresent(
+        target,
+        (projection) =>
+          opts.mode === "recent"
+            ? readRecentSqliteMessageRecords(projection, opts).messages
+            : projectSqliteHistoryEvents(
+                readSessionTranscriptHistoryEventsFromProjection(projection),
+              ),
+        opts,
+      )) ?? [];
     if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
       return await archivedTranscriptReader(target).read(opts);
     }
@@ -262,11 +265,11 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       SessionTranscriptReadOptions,
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const page = await access.readSnapshot(
+    const page = (await readSnapshotIfPresent(
       target,
       (projection) => readRecentSqliteMessageRecords(projection, opts),
       opts,
-    );
+    )) ?? { messages: [], totalMessages: 0 };
     if (
       page.totalMessages === 0 &&
       page.messages.length === 0 &&
@@ -293,13 +296,21 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       },
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const page = await access.readSnapshot(
+    const page = await readSnapshotIfPresent(
       target,
       (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, opts),
       opts,
     );
-    if (page.totalMessages === 0 && opts.allowResetArchiveFallback === true) {
+    if ((!page || page.totalMessages === 0) && opts.allowResetArchiveFallback === true) {
       return await archivedTranscriptReader(target).readPage(opts);
+    }
+    if (!page) {
+      return {
+        messages: [],
+        totalMessages: 0,
+        transcriptPath: target.sessionFile,
+        transcriptSource: "active",
+      };
     }
     return {
       ...(Object.hasOwn(page, "activeLeafEntryId")
@@ -328,12 +339,12 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       scope.sessionEntry.sessionId !== scope.sessionId
         ? undefined
         : target.sessionFile;
-    const page = await access.readSnapshot(
+    const page = await readSnapshotIfPresent(
       target,
       (projection) => readSessionTranscriptHistoryAnchorPageFromProjection(projection, opts),
       opts,
     );
-    if (!page.found) {
+    if (!page?.found) {
       if (opts.allowResetArchiveFallback === true) {
         return await new ArchivedTranscriptReader({
           agentId: target.agentId,
@@ -347,7 +358,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         hasOverreadContext: false,
         messages: [],
         offset: 0,
-        totalMessages: page.totalMessages,
+        totalMessages: page?.totalMessages ?? 0,
         transcriptPath: target.sessionFile,
       };
     }
