@@ -305,7 +305,7 @@ describe("openai completions params", () => {
     ["non-reasoning", false, undefined],
     ["thinking-off", true, { reasoning: "off" }],
   ] as const)(
-    "rejects a %s proxy request with no output tokens left",
+    "rejects a %s proxy request with no output tokens left without the margin",
     (_mode, reasoning, options) => {
       const model = makeCompletionsModel({
         baseUrl: "http://localhost:8000/v1",
@@ -313,14 +313,48 @@ describe("openai completions params", () => {
         contextWindow: 1000,
         maxTokens: 1000,
       });
+      // 4,000 ASCII characters estimate to 1,250 input tokens, or 1,000 without the margin.
+      const context = emptyContext("x".repeat(4000));
       for (const remaining of [-1, 0]) {
         expect(() =>
           buildOpenAICompletionsParams(
             { ...model, contextTokens: 1001 + remaining },
-            emptyContext("x".repeat(3200)),
+            context,
             options,
           ),
         ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+      }
+      // A caller that asks for one token itself is never reduced by context pressure.
+      expect(
+        buildOpenAICompletionsParams({ ...model, contextTokens: 1000 }, context, {
+          ...options,
+          maxTokens: 1,
+        }).max_completion_tokens,
+      ).toBe(1);
+    },
+  );
+
+  it.each([
+    ["non-reasoning", false, undefined, 199],
+    ["thinking-off", true, { reasoning: "off" }, 199],
+    ["thinking-enabled", true, undefined, undefined],
+  ] as const)(
+    "handles a %s proxy request between the unmargined and margined estimates",
+    (_mode, reasoning, options, expected) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning,
+        contextWindow: 1000,
+        contextTokens: 1000,
+        maxTokens: 1000,
+      });
+      // 3,200 ASCII characters estimate to 1,000 input tokens, or 800 without the margin.
+      const build = () =>
+        buildOpenAICompletionsParams(model, emptyContext("x".repeat(3200)), options);
+      if (expected === undefined) {
+        expect(build).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+      } else {
+        expect(build().max_completion_tokens).toBe(expected);
       }
     },
   );

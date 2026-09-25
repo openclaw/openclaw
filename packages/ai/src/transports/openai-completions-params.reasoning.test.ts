@@ -340,8 +340,9 @@ describe("openai completions params", () => {
     expect(() =>
       buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "medium" }),
     ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    // 3,200 characters estimate to 800 input tokens without the margin, which fills 800.
     expect(() =>
-      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 1000 }, nearCapContext, {
+      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 800 }, nearCapContext, {
         reasoning: "off",
       }),
     ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));

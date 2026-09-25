@@ -110,7 +110,7 @@ const MIN_USEFUL_OUTPUT_TOKENS = 16;
 // context rejections; exhausted estimates enter the existing overflow recovery.
 // Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
-function estimateOpenAICompletionsInputTokens(payload: {
+function estimateOpenAICompletionsInputChars(payload: {
   messages?: unknown;
   tools?: unknown;
   response_format?: unknown;
@@ -131,9 +131,7 @@ function estimateOpenAICompletionsInputTokens(payload: {
       adjustedChars += 256;
     }
   }
-  return Math.ceil(
-    (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
-  );
+  return adjustedChars;
 }
 
 function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
@@ -520,8 +518,20 @@ export function buildOpenAICompletionsRequest(
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
-      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
+      const inputChars = estimateOpenAICompletionsInputChars(params);
+      const thinkingRequest = model.reasoning && thinkingEnabled !== false;
+      let estimatedInputTokens = Math.ceil(
+        (inputChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
+      );
+      let availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
+      // The margin keeps ordinary caps inside strict servers' limits. Once it leaves no room,
+      // a reply without thinking can still use what the unmargined estimate leaves; if that
+      // undercounts, the provider's own context-length rejection enters the same recovery.
+      const unmargined = availableOutputTokens < 1 && !thinkingRequest;
+      if (unmargined) {
+        estimatedInputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN_ESTIMATE);
+        availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
+      }
       const remainingBudget = Math.max(1, availableOutputTokens);
       if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
@@ -529,12 +539,13 @@ export function buildOpenAICompletionsRequest(
           log,
           `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
-            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}` +
+            (unmargined ? " estimate=unmargined" : ""),
         );
         if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
           // A positive short budget can still carry a short visible reply without thinking.
           // An exhausted estimate only has the one-token fallback, in every thinking mode.
-          if (availableOutputTokens < 1 || (model.reasoning && thinkingEnabled !== false)) {
+          if (availableOutputTokens < 1 || thinkingRequest) {
             throw Object.assign(
               new Error(
                 `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
@@ -546,7 +557,8 @@ export function buildOpenAICompletionsRequest(
           log.warn(
             `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
               `model=${model.id} output=${clampedMaxTokens} ` +
-              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}` +
+              (unmargined ? " estimate=unmargined" : ""),
           );
         }
       }
