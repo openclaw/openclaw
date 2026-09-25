@@ -1295,6 +1295,7 @@
         "inputSchema": {
           "properties": {
             "limit": {
+              "description": "Maximum search results: 25. Defaults to 10.",
               "maximum": 25,
               "minimum": 1,
               "type": "integer"
