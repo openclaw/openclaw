@@ -246,9 +246,9 @@ describe("bounded inbound workspace transfer", () => {
         ownerSignal: new AbortController().signal,
         runTask: async (_argv, { signal }) => {
           transferSignal = signal;
-          await new Promise<void>((resolve) =>
-            signal?.addEventListener("abort", () => resolve(), { once: true }),
-          );
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
           settled = true;
           throw new Error("transfer cancelled");
         },

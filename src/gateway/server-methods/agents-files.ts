@@ -122,12 +122,14 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       } else {
         meta = await statWorkspaceFileSafely(workspaceRoot, name);
       }
-      return {
-        name,
-        path: path.join(workspaceDir, name),
-        missing: meta === null,
-        ...(meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) }),
-      };
+      return Object.assign(
+        {
+          name,
+          path: path.join(workspaceDir, name),
+          missing: meta === null,
+        },
+        meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
+      );
     }),
   );
 }
