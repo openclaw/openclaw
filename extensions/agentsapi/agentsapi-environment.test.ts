@@ -145,8 +145,9 @@ describe("Agents API attempt environment selection", () => {
       );
 
       expect(result.terminal).toEqual({ kind: "ok" });
-      expect(mocks.fetch.mock.calls.map(([request]) => new Request(request.url, request.init).method))
-        .toEqual(["PATCH", "POST", "GET"]);
+      expect(
+        mocks.fetch.mock.calls.map(([request]) => new Request(request.url, request.init).method),
+      ).toEqual(["PATCH", "POST", "GET"]);
       expect(bind).not.toHaveBeenCalled();
       expect(await requestBody(1)).toMatchObject({
         events: [{ type: "agent.session.input.message" }],
@@ -156,7 +157,12 @@ describe("Agents API attempt environment selection", () => {
 
   it.each([
     { name: "hosted to self-hosted", previous: undefined, next: "self_hosted" },
-    { name: "legacy hosted to self-hosted", previous: undefined, next: "self_hosted", legacy: true },
+    {
+      name: "legacy hosted to self-hosted",
+      previous: undefined,
+      next: "self_hosted",
+      legacy: true,
+    },
     { name: "self-hosted to hosted", previous: "self_hosted", next: "openai_hosted" },
     {
       name: "self-hosted workspace change",
@@ -164,16 +170,25 @@ describe("Agents API attempt environment selection", () => {
       next: "self_hosted",
       workspaceDir: "/fixture/other-project",
     },
-  ])("requires reset for $name before native writes", async ({ previous, next, workspaceDir, legacy }) => {
-    const { result, bind } = await attempt(next, savedBinding(previous, legacy ? [] : undefined), workspaceDir);
+  ])(
+    "requires reset for $name before native writes",
+    async ({ previous, next, workspaceDir, legacy }) => {
+      const { result, bind } = await attempt(
+        next,
+        savedBinding(previous, legacy ? [] : undefined),
+        workspaceDir,
+      );
 
-    expect(result.terminal).toMatchObject({
-      kind: "failed",
-      error: expect.objectContaining({ message: expect.stringContaining("reset the OpenClaw session") }),
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-  });
+      expect(result.terminal).toMatchObject({
+        kind: "failed",
+        error: expect.objectContaining({
+          message: expect.stringContaining("reset the OpenClaw session"),
+        }),
+      });
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(bind).not.toHaveBeenCalled();
+    },
+  );
 
   it("adopts a hosted legacy tool fingerprint without changing the remote session", async () => {
     const binding = savedBinding(undefined, []);
@@ -181,8 +196,9 @@ describe("Agents API attempt environment selection", () => {
 
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(bind).toHaveBeenCalledWith(savedBinding(undefined));
-    expect(new Request(mocks.fetch.mock.calls[0]![0].url, mocks.fetch.mock.calls[0]![0].init).method)
-      .toBe("PATCH");
+    expect(
+      new Request(mocks.fetch.mock.calls[0]![0].url, mocks.fetch.mock.calls[0]![0].init).method,
+    ).toBe("PATCH");
   });
 
   it("rejects an invalid runtime environment setting before native writes", async () => {
@@ -217,20 +233,33 @@ async function attempt(
     thinkLevel: "off",
     resolvedApiKey: "fixture-not-a-real-api-key",
     // Per-run plugin overrides do not own live plugin settings.
-    config: { plugins: { entries: { agentsapi: { config: { environment: "invalid-run-override" } } } } },
+    config: {
+      plugins: { entries: { agentsapi: { config: { environment: "invalid-run-override" } } } },
+    },
     hostCapabilities: { reportOutputTokens: vi.fn() },
   } as AgentHarnessAttemptParamsV2;
   const bind = vi.fn<(next: AgentsApiBinding) => Promise<void>>(async () => {});
-  const result = await runAgentsApiAttempt(params, binding, bind, vi.fn(), vi.fn(), {
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey!,
-    storePath: "/fixture/sessions.json",
-  }, () => environment === undefined ? undefined : { environment });
+  const result = await runAgentsApiAttempt(
+    params,
+    binding,
+    bind,
+    vi.fn(),
+    vi.fn(),
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: "/fixture/sessions.json",
+    },
+    () => (environment === undefined ? undefined : { environment }),
+  );
   return { result, bind };
 }
 
-function savedBinding(environment: string | undefined, legacyTools?: AgentsApiFunctionDeclaration[]) {
+function savedBinding(
+  environment: string | undefined,
+  legacyTools?: AgentsApiFunctionDeclaration[],
+) {
   const identity: unknown[] = ["fixture-model", "fixture-not-a-real-api-key"];
   if (environment === "self_hosted") {
     identity.push({ type: "self_hosted", workspace_directory: "/fixture/project" });

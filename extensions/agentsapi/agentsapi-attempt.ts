@@ -228,9 +228,7 @@ export async function runAgentsApiAttempt(
       // Hosted settings preserve the identity of existing saved sessions.
       ...(environment.type === "self_hosted" ? [environment] : []),
     ];
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(sessionIdentity))
-      .digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
       // Normalize bindings created by the unmerged tools implementation.
       const toolsFingerprint = createHash("sha256")
