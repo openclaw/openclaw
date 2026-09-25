@@ -14,6 +14,7 @@ import type {
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { LiveActivity } from "../pages/activity/live-activity.ts";
+import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
@@ -93,6 +94,8 @@ export type ApplicationChatAttachmentHandoff = {
       goalMode?: ChatGoalDraftMode | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
+      incognito?: boolean;
+      reviewPrivateDraft: typeof reviewPrivateComposerDraft;
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {

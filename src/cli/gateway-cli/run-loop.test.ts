@@ -28,6 +28,7 @@ import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-suppo
 import {
   createActiveWorkSnapshot,
   createCloseMock,
+  createGatewayLogger,
   createGatewayServer,
   createRuntimeWithExitSignal,
   createSignaledStart,
@@ -232,12 +233,7 @@ const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
-const gatewayLog = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const gatewayLog = createGatewayLogger();
 const flushLogger = vi.fn(async () => {});
 const writeDiagnosticStabilityBundleForFailureSync = vi.fn(() => ({
   message: "stability bundle recorded",

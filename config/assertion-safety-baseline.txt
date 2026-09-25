@@ -58,13 +58,12 @@ extensions/browser/src/browser/chrome-mcp-routing.ts	1
 extensions/browser/src/browser/chrome-mcp-tabs.ts	1
 extensions/browser/src/browser/chrome.diagnostics.ts	1
 extensions/browser/src/browser/chrome.executables.ts	1
-extensions/browser/src/browser/chrome.profile-decoration.ts	1
 extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/config-mutations.ts	1
 extensions/browser/src/browser/config.ts	1
 extensions/browser/src/browser/errors.ts	4
-extensions/browser/src/browser/extension-install-layout.ts	6
+extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-native-host.ts	1
 extensions/browser/src/browser/extension-relay/auth-v2.ts	8
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	8
@@ -81,12 +80,11 @@ extensions/browser/src/browser/pw-tools-core.interactions.content.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
-extensions/browser/src/browser/pw-tools-core.state.ts	2
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
 extensions/browser/src/browser/routes/agent.act.shared.ts	3
 extensions/browser/src/browser/routes/basic.ts	6
 extensions/browser/src/browser/routes/permissions.ts	1
-extensions/browser/src/browser/routes/tabs.ts	8
+extensions/browser/src/browser/routes/tabs.ts	6
 extensions/browser/src/browser/server-context.remote-tab-ops.harness.ts	2
 extensions/browser/src/browser/server-context.selection.ts	2
 extensions/browser/src/browser/server-context.tab-ops.ts	4
@@ -1648,7 +1646,7 @@ src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/setup.ts	2
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
-src/agents/embedded-agent-runner/run/terminal-preparation.ts	2
+src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
 src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	2
 src/agents/embedded-agent-runner/runs.ts	2
@@ -1996,7 +1994,7 @@ src/channels/message/capabilities.ts	1
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
-src/channels/message/ingress-queue.ts	6
+src/channels/message/ingress-queue.ts	3
 src/channels/message/outbound-bridge.ts	1
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
@@ -3580,7 +3578,6 @@ ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	7
-ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2

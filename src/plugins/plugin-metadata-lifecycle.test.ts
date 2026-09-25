@@ -220,7 +220,7 @@ it.each([true, false])(
         deferredPluginIds: ["turn-owner"],
       });
       expect(cache.retirement).toBeUndefined();
-      owner.beginClose();
+      await owner.beginClose();
       let joined = false;
       const shutdown = owner.close().then((result) => {
         joined = true;
@@ -263,7 +263,7 @@ it.each([false, true])(
               failures: [{ pluginId: "retained-publication", hookId: "instance", error: failure }],
             },
     );
-    owner.beginClose();
+    await owner.beginClose();
     const publication = owner.waitForRetirement();
     let closing: Promise<unknown> | undefined;
     try {
@@ -304,8 +304,9 @@ it.each([false, true])(
 
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();
-  const first = retainGatewayPluginMetadata();
-  const sibling = retainGatewayPluginMetadata();
+  const stopProducers = vi.fn(async () => {});
+  const first = retainGatewayPluginMetadata(stopProducers);
+  const sibling = retainGatewayPluginMetadata(stopProducers);
   const instance = new PluginInstance("sibling-inventory");
   const callback = instance.wrap(() => "still-live");
   cache.setupModules.set("sibling-inventory", instance);
@@ -315,11 +316,12 @@ it("fences admission before retirement while an admitted sibling stays usable", 
   sibling.publish(snapshot);
   setGatewayPluginMetadataSnapshot(snapshot);
   clearMemo.mockClear();
-  first.beginClose();
+  await first.beginClose();
   try {
     expect(() => retainGatewayPluginMetadata()).toThrow(/shut/i);
     expect(cache.retirement).toBeUndefined();
     expect(callback()).toBe("still-live");
+    expect(stopProducers).not.toHaveBeenCalled();
     clearPluginMetadataLifecycleCaches();
     await first.close(finalCleanup);
     expect(finalCleanup).not.toHaveBeenCalled();
@@ -329,11 +331,46 @@ it("fences admission before retirement while an admitted sibling stays usable", 
     expect(callback()).toBe("still-live");
     const newcomer = retainGatewayPluginMetadata();
     await newcomer.close();
+    expect(stopProducers).not.toHaveBeenCalled();
+    const prelude = sibling.beginClose();
+    expect(sibling.beginClose()).toBe(prelude);
     await sibling.close();
+    expect(stopProducers).toHaveBeenCalledOnce();
     expect(clearMemo).toHaveBeenCalledOnce();
     expect(() => callback()).toThrow();
   } finally {
     await Promise.all([first.close(), sibling.close()]);
+  }
+});
+
+it("joins the shared producer stop when the last admitted bootstrap closes", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const stopProducers = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const running = retainGatewayPluginMetadata(stopProducers);
+  const booting = retainGatewayPluginMetadata(stopProducers);
+  let closing: Promise<unknown> | undefined;
+  let closed = false;
+  try {
+    expect(running.beginClose()).toBeUndefined();
+    expect(stopProducers).not.toHaveBeenCalled();
+    closing = booting.close().finally(() => {
+      closed = true;
+    });
+    await entered.promise;
+    expect(closed).toBe(false);
+    expect(running.beginClose()).toBe(booting.beginClose());
+    release.resolve();
+    await closing;
+    await running.close();
+    expect(stopProducers).toHaveBeenCalledOnce();
+    expect(running.beginClose()).toBeUndefined();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([closing, running.close(), booting.close()]);
   }
 });
 
@@ -414,7 +451,7 @@ it("selects a closing sibling's still-bound cache until its retirement begins", 
   secondCache.setupModules.set("closing-sibling", instance);
   const useDependency = instance.wrap(() => "available");
   selectCurrentPluginMetadataCache(firstCache);
-  second.beginClose();
+  await second.beginClose();
   const finalCleanup = vi.fn();
   try {
     await first.close(finalCleanup);

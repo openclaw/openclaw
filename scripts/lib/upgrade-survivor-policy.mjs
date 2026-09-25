@@ -26,6 +26,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "mobile-pairing-reconnect",
   "abandoned-update",
   "projects-doctor",
+  "channel-owner-policy",
   "projects-startup-migration",
   "taskflow-restoration",
   "workshop-doctor-recovery",
@@ -47,6 +48,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
+    scenario !== "channel-owner-policy" &&
     scenario !== "projects-startup-migration" &&
     scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
@@ -168,6 +170,7 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   }
   if (
     scenario === "projects-doctor" ||
+    scenario === "channel-owner-policy" ||
     scenario === "projects-startup-migration" ||
     scenario === "taskflow-restoration"
   ) {

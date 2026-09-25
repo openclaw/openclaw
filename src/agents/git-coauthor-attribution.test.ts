@@ -11,14 +11,8 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import {
-  openOpenClawAgentDatabase,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.js";
 import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
 import {
@@ -37,8 +31,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await withStateDatabaseCoordinatorRuntimeDirectory(coordinatorRuntime, async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     await sharedState.cleanup();
   });
 });

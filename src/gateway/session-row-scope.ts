@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import * as records from "./session-row-projection-record.js";
@@ -81,6 +82,7 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
+  discovery?: GatewaySessionStoreDiscovery,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
@@ -89,6 +91,7 @@ export function prepareSessionRowScopes(
     try {
       const resolved = resolveGatewaySessionStoreTargets(cfg, {
         ...options,
+        discovery,
         includeIncognito: false,
       });
       for (const [identity, physical] of resolved.physicalTargets) {

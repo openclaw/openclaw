@@ -15,10 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -475,7 +472,6 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     prefix: "openclaw-session-authority-worktree-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:authority-worktree-cleanup";

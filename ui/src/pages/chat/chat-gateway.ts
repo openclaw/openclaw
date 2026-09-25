@@ -339,6 +339,21 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   const materializeVisibleStream = (
     materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
   ) => materializeVisibleAssistantStreamMessages(state.chatMessages, state, materializeOpts);
+  const publishInterruptedStream = () => {
+    publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
+    // Message-less terminal events still own the retained partial's outcome
+    // until saved history replaces this live projection.
+    rememberLiveTerminalRun(
+      state.chatMessages.findLast((message) => transcriptRunId(message) === terminalRunId),
+      terminalRunId,
+      terminalAfterBoundaryRunId,
+      payload.state === "aborted"
+        ? "aborted"
+        : projectedRun?.currentRun?.status === "timeout"
+          ? "timeout"
+          : "error",
+    );
+  };
   if (payload.state === "status") {
     if (!payload.runId || payload.runId !== state.chatRunId) {
       return null;
@@ -450,7 +465,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         terminalRunId,
       );
     } else {
-      publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
+      publishInterruptedStream();
     }
     if (payload.errorMessage?.trim()) {
       setChatRunError(
@@ -498,20 +513,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           terminalRunId,
         );
       } else {
-        publishChatSessionProjectionMessages(
-          state,
-          materializeVisibleStream({ includeCurrent: true }),
-          { scope },
-        );
-        const materialized = state.chatMessages.findLast(
-          (message) => transcriptRunId(message) === terminalRunId,
-        );
-        rememberLiveTerminalRun(
-          materialized,
-          terminalRunId,
-          terminalAfterBoundaryRunId,
-          projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
-        );
+        publishInterruptedStream();
       }
     }
     // The shared Gateway projection owns timeout classification; preserve it

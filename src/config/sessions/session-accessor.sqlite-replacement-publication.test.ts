@@ -295,6 +295,7 @@ it.each([
           ? [
               {
                 agentId: "main",
+                databaseIdentity: identity,
                 kind: "reset",
                 previous: { sessionId: "settlement", sessionKeys: [sessionKey] },
                 current: { sessionId: "settlement", sessionKeys: [sessionKey] },

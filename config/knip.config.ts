@@ -119,6 +119,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.

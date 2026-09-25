@@ -358,6 +358,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+      commandOwnerReference: params.opts.assertSourceCurrent?.recoveryReference,
       agentId: sessionAgentId,
       deliver: params.opts.deliver === true,
       sessionStore,
@@ -586,11 +587,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
       if (!entry) {
         throw new Error("Cannot clear pending delivery without a session entry");
       }
-      // This command only creates replayable markers, so transport-only is stale from an earlier run.
+      // Durable delivery IDs retain custody even when this run has no final payload.
       const clearStaleTransportOnly =
         params.opts.deliver === true &&
         !pendingFinalDeliveryMarker.hasSendableFinalPayload &&
-        entry.pendingFinalDelivery?.kind === "transport-only";
+        entry.pendingFinalDelivery?.kind === "transport-only" &&
+        !entry.pendingFinalDelivery.deliveries?.length;
       const clearOwnedPendingFinal =
         deliveryResult?.deliverySucceeded === true &&
         pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
@@ -642,7 +644,10 @@ export async function finalizeEmbeddedAgentCommand(params: {
             (!clearOwnedPendingFinal ||
               current?.pendingFinalDelivery?.intentId ===
                 pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId) &&
-            (!clearStaleTransportOnly || current?.pendingFinalDelivery?.kind === "transport-only"),
+            (!clearStaleTransportOnly ||
+              (current?.pendingFinalDelivery?.kind === "transport-only" &&
+                current.pendingFinalDelivery.intentId === entry.pendingFinalDelivery?.intentId &&
+                !current.pendingFinalDelivery.deliveries?.length)),
         });
       }
     }
