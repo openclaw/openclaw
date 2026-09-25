@@ -9800,7 +9800,7 @@ describe("ci workflow guards", () => {
     },
     {
       label: "hourly main excludes screenshots even with screenshot scope",
-      context: { preflightOutputs: { validation_tier: "main" } },
+      context: { eventName: "schedule", preflightOutputs: { validation_tier: "main" } },
       expected: { "ios-build": true, "ios-screenshot-shard": false },
     },
     {

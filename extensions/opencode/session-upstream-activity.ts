@@ -8,7 +8,12 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENCODE_SESSION_ID_PATTERN } from "./session-catalog-shared.js";
-import { exportOpenCodeSession, queryOpenCodeDatabase } from "./session-catalog.js";
+import {
+  exportOpenCodeSession,
+  isOpenCodeV2,
+  queryOpenCodeDatabase,
+  runOpenCodeApi,
+} from "./session-catalog.js";
 
 type OpenCodeIndicator = {
   threadId: string;
@@ -78,6 +83,59 @@ function readMarker(probe: SessionUpstreamProbe): OpenCodeMarker | undefined {
 async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCodeIndicator>> {
   if (threadIds.length === 0) {
     return new Map();
+  }
+  if (await isOpenCodeV2()) {
+    const { results } = await runTasksWithConcurrency({
+      tasks: threadIds.map((threadId) => async (): Promise<OpenCodeIndicator | undefined> => {
+        let output: string;
+        try {
+          output = await runOpenCodeApi("session.log", [
+            `sessionID=${threadId}`,
+            "follow=false",
+            // log.synced carries the current head even when no events follow this cursor.
+            `after=${Number.MAX_SAFE_INTEGER}`,
+          ]);
+        } catch (error) {
+          if (error instanceof Error && typeof error.cause === "string") {
+            let response: unknown;
+            try {
+              response = JSON.parse(error.cause);
+            } catch {
+              throw error;
+            }
+            if (
+              isRecord(response) &&
+              response["_tag"] === "SessionNotFoundError" &&
+              response.sessionID === threadId
+            ) {
+              return undefined;
+            }
+          }
+          throw error;
+        }
+        for (const line of output.split("\n")) {
+          if (!line.startsWith("data: ")) {
+            continue;
+          }
+          const event: unknown = JSON.parse(line.slice(6));
+          if (
+            isRecord(event) &&
+            event.type === "log.synced" &&
+            event.aggregateID === threadId &&
+            Number.isSafeInteger(event.seq) &&
+            Number(event.seq) >= 0
+          ) {
+            return { threadId, seq: Number(event.seq) };
+          }
+        }
+        throw new Error("OpenCode returned invalid upstream indicators");
+      }),
+      limit: OPENCODE_EXPORT_CONCURRENCY,
+      throwOnError: true,
+    });
+    return new Map(
+      results.flatMap((indicator) => (indicator ? [[indicator.threadId, indicator] as const] : [])),
+    );
   }
   const query = [
     "SELECT s.id AS id, es.seq AS seq",

@@ -943,6 +943,8 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: bundledPluginWorkspace([
+      // The private QA Gateway package profile builds this entry by path.
+      "gateway-entry.ts!",
       // Core loads the CLI facade by basename; QA Lab also owns a nested Vite app.
       "cli.ts!",
       "web/index.html!",

@@ -88,8 +88,8 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
-  # Scheduled main CI shares one non-canceling slot with a coalesced pending tip.
-  # Ordinary manual/release runs remain independent; pushes cannot displace hourly work.
+  # Admit each scheduled run independently so a prior iOS tail cannot block core CI.
+  # The iOS job owns scheduled simulator serialization; manual/release runs stay independent.
   # Canonical main uses run-number parity for two non-canceling slots. Each
   # slot keeps GitHub's single coalesced pending tip while its active run finishes.
   # Passive draft events must not replace runnable CI before job gates: pending
@@ -98,7 +98,7 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
         github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
-        github.event_name == 'schedule' && format('{0}-hourly-main-v1', github.workflow) ||
+        github.event_name == 'schedule' && format('{0}-hourly-main-v2-{1}', github.workflow, github.run_id) ||
         github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -6287,6 +6287,11 @@ jobs:
     name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
+    # Finish active hourly simulator proof and coalesce only pending iOS jobs.
+    # Other invocations and their Release/tests siblings must not displace each other.
+    concurrency:
+      group: ${{ github.event_name == 'schedule' && format('{0}-hourly-ios-v1-{1}', github.workflow, matrix.phase) || format('{0}-ios-v1-{1}-{2}', github.workflow, github.run_id, matrix.phase) }}
+      cancel-in-progress: false
     # PRs compile and lint; hourly main retains simulator tests. Full manual
     # validation also adds the independent Release device phase.
     strategy:

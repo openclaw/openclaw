@@ -33,8 +33,11 @@ because the post-merge translation workflows own its repair. Ordinary manual
 runs, including `validation_tier=main`, retain strict locale parity.
 
 Inspect the scheduled `CI` run and its `openclaw/ci-gate` job directly.
-Scheduled runs share one non-canceling concurrency slot with a coalesced pending
-tip. Manual/release CI stays independent, and security-only pushes cannot cancel
+Each scheduled run starts independently so an older iOS simulator phase cannot
+hold the next hourly core checks. Only scheduled `ios-build` jobs share a
+non-canceling slot: the active proof finishes while GitHub replaces a pending
+iOS job when another arrives. Arrival order need not match revision order.
+Manual/release CI stays independent, and security-only pushes cannot cancel
 scheduled work. CI remains available during release validation;
 `OPENCLAW_RELEASE_PRIORITY_RUN` does not control admission.
 
@@ -125,9 +128,13 @@ runs may be delayed or dropped under load, and public-repository schedules can
 be disabled after inactivity. Full main CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
-If full CI takes longer than an hour, the current run finishes while GitHub
-coalesces pending scheduled runs. No measured cost savings or strict completion
-interval is claimed.
+If iOS proof takes longer than an hour, later hourly runs can finish their other
+checks while waiting for that slot. A superseded pending iOS job leaves its run
+non-green and cannot qualify Docs Agent. Those completed checks still consume
+runner time; per-run worker limits do not bound concurrent hourly runs together.
+The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow.
+This removes workflow admission blocking, not runner-capacity waits. No measured
+cost savings or strict completion interval is claimed.
 
 ## Nightly Full Release Validation
 
