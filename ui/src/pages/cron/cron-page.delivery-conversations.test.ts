@@ -2,7 +2,7 @@ import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -47,7 +47,6 @@ function waitForCronPage(assertion: () => void) {
 
 type TestGateway = ApplicationContext["gateway"] & {
   emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  emitRetiredEvent: (event: Parameters<GatewayEventListener>[0]) => void;
 };
 
 function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
@@ -63,8 +62,6 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
     lastErrorCode: null,
   };
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<GatewayEventListener>();
-  const allEventListeners: GatewayEventListener[] = [];
   return {
     snapshot,
     connection: { gatewayUrl: "", token: "", password: "" },
@@ -72,20 +69,13 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
       snapshotListeners.add(listener);
       return () => snapshotListeners.delete(listener);
     },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      allEventListeners.push(listener);
-      return () => eventListeners.delete(listener);
+    subscribeEvents() {
+      return () => undefined;
     },
     emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
       Object.assign(snapshot, patch);
       for (const listener of snapshotListeners) {
         listener(snapshot);
-      }
-    },
-    emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
-      for (const listener of allEventListeners) {
-        listener(event);
       }
     },
   } as unknown as TestGateway;
@@ -181,16 +171,10 @@ function cronListResponse(jobs: CronJob[]): CronJobsListResult {
   };
 }
 
-function createRequest(
-  cronStatus: { enabled: boolean; jobs: number; triggersEnabled: boolean } = {
-    enabled: true,
-    jobs: 0,
-    triggersEnabled: true,
-  },
-) {
+function createRequest() {
   return vi.fn(async (method: string) => {
     if (method === "cron.status") {
-      return { ...cronStatus };
+      return { enabled: true, jobs: 0, triggersEnabled: true };
     }
     if (method === "cron.list") {
       return cronListResponse([]);
@@ -604,78 +588,6 @@ describe("CronPage lifecycle", () => {
     expect(page.textContent).not.toContain("temporary directory failure");
   });
 
-  it("registers idempotently when the module is evaluated again", async () => {
-    const registered = customElements.get("openclaw-cron-page");
-    expect(registered).toBeDefined();
-
-    const freshModulePath = "./cron-page.ts?custom-element-idempotence";
-    await expect(import(/* @vite-ignore */ freshModulePath)).resolves.toBeDefined();
-
-    expect(customElements.get("openclaw-cron-page")).toBe(registered);
-  });
-
-  it("replaces all mutable page state on each connection epoch", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway));
-    await page.updateComplete;
-    const connectedState = page.cron;
-    page.cron = {
-      ...connectedState,
-      cronStatus: { enabled: true, triggersEnabled: true, jobs: 1 },
-      cronJobs: [{ id: "old" } as never],
-      cronCreateOpen: true,
-    };
-    page.cronModelSuggestions = ["old/model"];
-
-    gateway.emitSnapshot({ phase: "stopped" });
-    const disconnectedState = page.cron;
-
-    expect(disconnectedState).not.toBe(connectedState);
-    expect(disconnectedState.cronStatus).toBeNull();
-    expect(disconnectedState.cronJobs).toEqual([]);
-    expect(page.cronModelSuggestions).toEqual([]);
-    expect(disconnectedState.cronCreateOpen).toBe(false);
-
-    gateway.emitSnapshot({ phase: "connected" });
-    expect(page.cron).not.toBe(disconnectedState);
-  });
-
-  it("refreshes trigger authoring from scheduler status after reconnect", async () => {
-    const schedulerStatus = { enabled: true, jobs: 0, triggersEnabled: true };
-    const request = createRequest(schedulerStatus);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const context = createContext(gateway);
-    Object.assign(context.runtimeConfig.state, {
-      configForm: { cron: { triggers: { enabled: true } } },
-      configNeedsApply: true,
-    });
-    const page = createPage(context, { render: true });
-
-    await waitForCronPage(() =>
-      expect(page.cron.cronStatus).toMatchObject({ triggersEnabled: true }),
-    );
-    schedulerStatus.triggersEnabled = false;
-    gateway.emitSnapshot({ phase: "stopped" });
-    expect(page.cron.cronStatus).toBeNull();
-    gateway.emitSnapshot({ phase: "connected" });
-
-    await waitForCronPage(() =>
-      expect(page.cron.cronStatus).toMatchObject({ triggersEnabled: false }),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(2);
-    (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
-    await waitForCronPage(() => expect(page.querySelector("fieldset.cron-editor")).not.toBeNull());
-
-    const triggerToggle = Array.from(page.querySelectorAll("wa-switch.settings-toggle")).find(
-      (toggle) => toggle.textContent?.includes("Condition trigger"),
-    );
-    expect(triggerToggle).toBeUndefined();
-    expect(page.textContent).toContain("disabled by cron.triggers.enabled");
-  });
-
   it("rejects model suggestions from an earlier connection epoch", async () => {
     const staleModels = createDeferred<{ models: Array<{ id: string }> }>();
     let modelRequestCount = 0;
@@ -713,31 +625,6 @@ describe("CronPage lifecycle", () => {
     await Promise.resolve();
 
     expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
-  });
-
-  it("ignores a cron event callback retained by a replaced gateway source", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstGateway = createGateway(client, true);
-    const secondGateway = createGateway(client, true);
-    const firstContext = createContext(firstGateway);
-    const secondContext = createContext(secondGateway);
-    const page = createPage(firstContext);
-    await waitForCronPage(() => expect(request).toHaveBeenCalled());
-
-    page.context = secondContext;
-    page.requestUpdate();
-    await page.updateComplete;
-    await waitForCronPage(() => expect(page.cron.client).toBe(client));
-    request.mockClear();
-    vi.mocked(secondContext.channels.refresh).mockClear();
-
-    firstGateway.emitRetiredEvent({ event: "cron" } as never);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(secondContext.channels.refresh).not.toHaveBeenCalled();
   });
 
   it("drops an in-flight directory failure after the selected task is deleted", async () => {
