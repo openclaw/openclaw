@@ -220,8 +220,8 @@ describe("Agents API output attachment publication", () => {
     for (const file of output.toolMediaUrls) {
       expect(path.dirname(file)).toBe(path.join(stateDir, "media", "outbound"));
     }
-    expect((await fs.readdir(path.join(stateDir, "media", "outbound"))).sort()).toEqual(
-      output.toolMediaUrls.map((file) => path.basename(file)).sort(),
+    expect((await fs.readdir(path.join(stateDir, "media", "outbound"))).toSorted()).toEqual(
+      output.toolMediaUrls.map((file) => path.basename(file)).toSorted(),
     );
   });
 
