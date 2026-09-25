@@ -7,6 +7,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { renderPanelEmptyState } from "../../components/panel-empty-state.ts";
 import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -60,6 +61,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
   portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
+  workspace: ["openclaw-chat-files-panel", () => import("./components/chat-files-panel.ts")],
   discussion: [
     "openclaw-session-discussion",
     () => import("./components/session-discussion-panel.ts"),
@@ -104,6 +106,23 @@ function ensureLazyElement(
       runtime.listeners.clear();
     });
   return null;
+}
+
+/** A native dock uses the same lazy component and empty state without the web region chrome. */
+export function renderEmbeddedSidebarPanel(
+  definition: SidebarPanelDefinition,
+  requestUpdate: () => void,
+): TemplateResult | typeof nothing {
+  const lazy = definition.available ? ensureLazyElement(definition.slot, requestUpdate) : undefined;
+  return lazy === null
+    ? definition.loading
+    : (lazy ??
+        definition.content ??
+        renderPanelEmptyState({
+          icon: definition.icon,
+          heading: definition.label,
+          ...definition.empty,
+        }));
 }
 
 /**

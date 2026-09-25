@@ -1,0 +1,698 @@
+use super::{AppView, composer_state::PendingSend};
+use crate::{
+    gateway::composer_rpc::{CatalogScope, ChatSend, CommandsList, CommandsResult, ModelsResult},
+    model::{
+        attachments::{Attachment, AttachmentLimits, AttachmentOrigin, large_paste},
+        commands::matching,
+        composer::Draft,
+    },
+};
+use gpui_kit::{
+    component::input::{InputEvent, RopeExt},
+    *,
+};
+use std::path::PathBuf;
+
+impl AppView {
+    pub(super) fn composer_save_draft(&mut self, cx: &App) {
+        self.composer_state.drafts.save(Draft {
+            text: self.composer.read(cx).value().to_string(),
+            attachments: self.composer_state.attachments.clone(),
+        });
+    }
+
+    pub(super) fn composer_begin_connection(
+        &mut self,
+        gateway: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_save_draft(cx);
+        self.composer_state.drafts.bind_gateway(gateway);
+        self.composer_state.restore_pending = true;
+        self.composer_state.attachment_generation += 1;
+        self.composer_state.catalog_generation += 1;
+        self.composer_state.reading = 0;
+        self.composer_state.error = None;
+        self.composer_state.set_attachments(Vec::new());
+        self.composer_state.commands.clear();
+        self.composer_state.models.clear();
+        self.composer_state.catalog_cache.clear();
+        self.composer_state.close_popups();
+        self.composer_state.recall.reset();
+        for pending in self.composer_state.pending.values_mut() {
+            pending.in_flight = false;
+        }
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+    }
+
+    pub(super) fn composer_restore_if_pending(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composer_state.restore_pending
+            && self.session.is_some()
+            && self.chat.selected_session.is_some()
+        {
+            self.composer_restore_draft(window, cx);
+        }
+    }
+
+    pub(super) fn composer_restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let draft = self
+            .chat
+            .selected_session
+            .as_ref()
+            .map(|key| {
+                self.composer_state
+                    .drafts
+                    .select(key, self.chat.selected_agent.as_deref())
+            })
+            .unwrap_or_default();
+        self.composer_state.restore_pending = false;
+        self.composer_state.attachment_generation += 1;
+        self.composer_state.reading = 0;
+        self.composer_state.error = None;
+        self.composer_state.close_popups();
+        self.composer_state.recall.reset();
+        self.composer_state.set_attachments(draft.attachments);
+        self.composer
+            .update(cx, |state, cx| state.set_value(draft.text, window, cx));
+    }
+
+    pub(super) fn composer_history_loaded(&mut self, _cx: &mut Context<Self>) {
+        if let Some(scope) = self.chat.scope() {
+            let pending = self
+                .composer_state
+                .pending
+                .values()
+                .filter(|pending| {
+                    Some(pending.gateway.as_str()) == self.composer_state.drafts.gateway()
+                        && pending.scope.session_key == scope.session_key
+                        && pending.scope.agent_id == scope.agent_id
+                })
+                .map(|pending| {
+                    let mut message = pending.optimistic.clone();
+                    message.pending = pending.in_flight;
+                    if !message.pending && message.send_error.is_none() {
+                        message.send_error = Some(
+                            "Delivery was not confirmed. Retry safely uses the original request."
+                                .into(),
+                        );
+                    }
+                    message
+                })
+                .collect();
+            if self.chat.restore_pending_messages(pending) {
+                self.sync_transcript();
+            }
+        }
+        self.composer_state.recall.seed(
+            self.chat
+                .messages
+                .iter()
+                .filter(|message| message.role == "user")
+                .map(|message| message.text.clone()),
+        );
+    }
+
+    pub(super) fn load_composer_catalogs(&mut self, cx: &mut Context<Self>) {
+        let Some(scope) = self.chat.scope() else {
+            return;
+        };
+        let agent = scope.agent_id.clone();
+        self.composer_state
+            .catalog_cache
+            .retain(|(epoch, _, _), _| *epoch == self.epoch);
+        self.composer_state.catalog_generation += 1;
+        let generation = self.composer_state.catalog_generation;
+        let cache_key = (self.epoch, agent.clone(), scope.session_key.clone());
+        if let Some(entry) = self.composer_state.catalog_cache.get(&cache_key)
+            && let (Some(commands), Some(models)) = (&entry.commands, &entry.models)
+        {
+            self.composer_state.commands = commands.clone();
+            self.composer_state.models = models.clone();
+            self.composer_state.catalogs_loading = false;
+            return;
+        }
+        self.composer_state.commands.clear();
+        self.composer_state.models.clear();
+        self.composer_state.catalogs_loading = true;
+        let params = CommandsList {
+            context: CatalogScope {
+                session_key: scope.session_key.clone(),
+                agent_id: agent.clone(),
+            },
+            scope: "text",
+            include_args: true,
+        };
+        let command_scope = scope.clone();
+        let command_agent = agent.clone();
+        let command_cache_key = cache_key.clone();
+        self.request(
+            "commands.list",
+            serde_json::to_value(params).expect("serialize command scope"),
+            cx,
+            move |this, result, _| {
+                if !this.chat.is_current(&command_scope)
+                    || this.sidebar_state.selected_agent != command_agent
+                    || this.composer_state.catalog_generation != generation
+                {
+                    return;
+                }
+                match result.and_then(|value| {
+                    serde_json::from_value::<CommandsResult>(value)
+                        .map_err(|error| error.to_string())
+                }) {
+                    Ok(result) => {
+                        this.composer_state.commands = result.commands.clone();
+                        this.composer_state
+                            .catalog_cache
+                            .entry(command_cache_key)
+                            .or_default()
+                            .commands = Some(result.commands);
+                    }
+                    Err(error) => {
+                        this.composer_state.error = Some(format!("Commands unavailable: {error}"))
+                    }
+                }
+            },
+        );
+        let params = CatalogScope {
+            session_key: scope.session_key.clone(),
+            agent_id: agent.clone(),
+        };
+        self.request(
+            "models.list",
+            serde_json::to_value(params).expect("serialize model scope"),
+            cx,
+            move |this, result, _| {
+                if !this.chat.is_current(&scope)
+                    || this.sidebar_state.selected_agent != agent
+                    || this.composer_state.catalog_generation != generation
+                {
+                    return;
+                }
+                this.composer_state.catalogs_loading = false;
+                match result.and_then(|value| {
+                    serde_json::from_value::<ModelsResult>(value).map_err(|error| error.to_string())
+                }) {
+                    Ok(mut result) => {
+                        result.models.sort_by(|a, b| {
+                            a.provider
+                                .cmp(&b.provider)
+                                .then_with(|| a.name.cmp(&b.name))
+                        });
+                        this.composer_state.models = result.models.clone();
+                        this.composer_state
+                            .catalog_cache
+                            .entry(cache_key)
+                            .or_default()
+                            .models = Some(result.models);
+                    }
+                    Err(error) => {
+                        this.composer_state.error = Some(format!("Models unavailable: {error}"))
+                    }
+                }
+            },
+        );
+    }
+
+    pub(super) fn composer_event(
+        &mut self,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                self.composer_state.slash_dismissed = false;
+                self.composer_state.slash_index = 0;
+                self.composer_state.recall.reset();
+                self.composer_save_draft(cx);
+            }
+            InputEvent::PressEnter { shift: false, .. } => {
+                if self.composer_state.suppress_enter {
+                    self.composer_state.suppress_enter = false;
+                } else if !self.composer_is_composing(window, cx) {
+                    self.send(window, cx);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn composer_is_composing(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.composer.update(cx, |state, cx| {
+            state.marked_text_range(window, cx).is_some()
+        })
+    }
+
+    pub(super) fn composer_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.composer.focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        if self.composer_is_composing(window, cx) {
+            if key == "enter" {
+                self.composer_state.suppress_enter = true;
+            }
+            return;
+        }
+        if key == "enter" && event.is_held {
+            window.prevent_default();
+            cx.stop_propagation();
+            return;
+        }
+        if key == "enter" {
+            self.composer_state.suppress_enter = false;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.platform || modifiers.control || modifiers.alt || modifiers.shift {
+            return;
+        }
+        let text = self.composer.read(cx).value().to_string();
+        let count = if self.composer_state.slash_dismissed {
+            0
+        } else {
+            matching(&self.composer_state.commands, &text).len()
+        };
+        if count > 0
+            && matches!(
+                key,
+                "up" | "down" | "home" | "end" | "tab" | "enter" | "escape"
+            )
+        {
+            match key {
+                "up" => {
+                    self.composer_state.slash_index =
+                        self.composer_state.slash_index.saturating_sub(1)
+                }
+                "down" => {
+                    self.composer_state.slash_index =
+                        (self.composer_state.slash_index + 1).min(count - 1)
+                }
+                "home" => self.composer_state.slash_index = 0,
+                "end" => self.composer_state.slash_index = count - 1,
+                "escape" => self.composer_state.slash_dismissed = true,
+                "tab" | "enter" => {
+                    self.choose_slash(self.composer_state.slash_index, key == "enter", window, cx)
+                }
+                _ => {}
+            }
+            window.prevent_default();
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if key == "escape" {
+            if self.composer_state.model_open
+                || self.composer_state.effort_open
+                || self.composer_state.usage_open
+            {
+                self.composer_state.close_popups();
+            } else {
+                self.stop(cx);
+            }
+            window.prevent_default();
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if !self.chat.loading {
+            let next = match key {
+                "up" => self
+                    .composer_state
+                    .recall
+                    .up(&text, self.composer.read(cx).selected_range() == (0..0)),
+                "down" => self.composer_state.recall.down(),
+                _ => None,
+            };
+            if let Some(next) = next {
+                self.composer.update(cx, |state, cx| {
+                    state.set_value(next, window, cx);
+                    let end = state.text().offset_to_position(state.text().len());
+                    state.set_cursor_position(end, window, cx);
+                });
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn choose_slash(
+        &mut self,
+        index: usize,
+        execute: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.composer.read(cx).value();
+        let Some(command) = matching(&self.composer_state.commands, &text)
+            .get(index)
+            .cloned()
+            .cloned()
+        else {
+            return;
+        };
+        let value = format!(
+            "/{}{}",
+            command.name.trim_start_matches('/'),
+            if command.accepts_args { " " } else { "" }
+        );
+        self.composer.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+            let end = state.text().offset_to_position(state.text().len());
+            state.set_cursor_position(end, window, cx);
+        });
+        self.composer_state.slash_dismissed = true;
+        if execute && !command.accepts_args {
+            self.send(window, cx);
+        }
+    }
+
+    pub(super) fn attachment_limits(&self) -> Result<AttachmentLimits, String> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.hello().pointer("/policy/attachments"))
+            .cloned()
+            .ok_or_else(|| "Connect to a Gateway advertising attachment limits first".to_owned())
+            .and_then(|value| {
+                serde_json::from_value(value)
+                    .map_err(|error| format!("Invalid attachment policy: {error}"))
+            })
+    }
+
+    pub(super) fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let Some(scope) = self.chat.scope() else {
+            return;
+        };
+        let epoch = self.epoch;
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = prompt.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != epoch || !this.chat.is_current(&scope) {
+                    return;
+                }
+                match result {
+                    Ok(Ok(Some(paths))) => this.attach_paths(paths, cx),
+                    Ok(Err(error)) => this.composer_state.error = Some(error.to_string()),
+                    _ => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let limits = match self.attachment_limits() {
+            Ok(limits) => limits,
+            Err(error) => {
+                self.composer_state.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let Some(scope) = self.chat.scope() else {
+            return;
+        };
+        let epoch = self.epoch;
+        let generation = self.composer_state.attachment_generation;
+        self.composer_state.reading += 1;
+        let task = self.runtime.spawn_blocking(move || {
+            paths
+                .into_iter()
+                .map(|path| Attachment::read(&path, limits))
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != epoch
+                    || !this.chat.is_current(&scope)
+                    || this.composer_state.attachment_generation != generation
+                {
+                    return;
+                }
+                this.composer_state.reading = this.composer_state.reading.saturating_sub(1);
+                match result {
+                    Ok(results) => {
+                        let mut errors = Vec::new();
+                        for attachment in results {
+                            match attachment {
+                                Ok(attachment) => this.add_attachment(Ok(attachment), cx),
+                                Err(error) => errors.push(error),
+                            }
+                        }
+                        if !errors.is_empty() {
+                            this.composer_state.error = Some(errors.join("\n"));
+                        }
+                    }
+                    Err(error) => {
+                        this.composer_state.error =
+                            Some(format!("Could not read attachment: {error}"))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn composer_paste(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
+        let image = item.entries().iter().find_map(|entry| {
+            if let ClipboardEntry::Image(image) = entry {
+                Some(image)
+            } else {
+                None
+            }
+        });
+        let text = item
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                ClipboardEntry::String(value) => Some(value.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let text = large_paste(&text).then_some(text);
+        if image.is_none() && text.is_none() {
+            return false;
+        }
+        let limits = match self.attachment_limits() {
+            Ok(limits) => limits,
+            Err(error) => {
+                self.composer_state.error = Some(error);
+                cx.notify();
+                return true;
+            }
+        };
+        let attachment = if let Some(image) = image {
+            Attachment::from_bytes(
+                format!("Pasted image.{}", image.format().extension()),
+                image.format().mime_type().into(),
+                AttachmentOrigin::Paste,
+                image.bytes().to_vec(),
+                limits,
+            )
+        } else {
+            Attachment::from_bytes(
+                "Pasted text.txt".into(),
+                "text/plain".into(),
+                AttachmentOrigin::Paste,
+                text.unwrap_or_default().into_bytes(),
+                limits,
+            )
+        };
+        self.add_attachment(attachment, cx);
+        true
+    }
+
+    fn add_attachment(&mut self, result: Result<Attachment, String>, cx: &mut Context<Self>) {
+        match result {
+            Ok(attachment) => {
+                let mut attachments = std::mem::take(&mut self.composer_state.attachments);
+                attachments.push(attachment);
+                self.composer_state.set_attachments(attachments);
+                self.composer_state.error = None;
+                self.composer_save_draft(cx);
+            }
+            Err(error) => self.composer_state.error = Some(error),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.composer_state
+            .attachments
+            .retain(|attachment| attachment.id != id);
+        self.composer_state.previews.remove(id);
+        self.composer_save_draft(cx);
+        cx.notify();
+    }
+
+    pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_none()
+            || self.chat.loading
+            || self.composer_state.reading > 0
+            || self.composer_is_composing(window, cx)
+        {
+            return;
+        }
+        let message = self.composer.read(cx).value().to_string();
+        let attachments = self.composer_state.attachments.clone();
+        if message.trim().is_empty() && attachments.is_empty() {
+            return;
+        }
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let Some(gateway) = self.composer_state.drafts.gateway().map(str::to_owned) else {
+            return;
+        };
+        let row = self.selected_row();
+        let session_id = self
+            .chat
+            .session_info
+            .session_id
+            .clone()
+            .or_else(|| row.and_then(|row| row.session_id.clone()));
+        let queue_mode = if self.chat.active_run.is_some()
+            && self
+                .chat
+                .session_info
+                .effective_queue_mode
+                .as_deref()
+                .or_else(|| row.and_then(|row| row.effective_queue_mode.as_deref()))
+                == Some("steer")
+        {
+            Some("steer".to_owned())
+        } else {
+            None
+        };
+        let Some(scope) = self.chat.begin_send_with_attachments(
+            run_id.clone(),
+            message.clone(),
+            attachments.clone(),
+        ) else {
+            return;
+        };
+        let optimistic = self
+            .chat
+            .messages
+            .last()
+            .expect("begin_send inserts an optimistic message")
+            .clone();
+        let request = ChatSend {
+            session_key: scope.session_key.clone(),
+            agent_id: scope.agent_id.clone(),
+            session_id,
+            message: message.clone(),
+            deliver: false,
+            idempotency_key: run_id.clone(),
+            attachments: attachments.iter().map(Attachment::encoded).collect(),
+            queue_mode,
+        };
+        self.composer_state.recall.record(message);
+        self.composer_state.recall.reset();
+        self.composer_state.set_attachments(Vec::new());
+        self.composer_state.error = None;
+        self.composer_state.close_popups();
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.composer_save_draft(cx);
+        self.composer_state.pending.insert(
+            run_id.clone(),
+            PendingSend {
+                gateway,
+                scope,
+                request,
+                optimistic,
+                in_flight: false,
+            },
+        );
+        self.transcript_list.set_follow_mode(FollowMode::Tail);
+        self.retry_send(&run_id, cx);
+    }
+
+    pub(super) fn retry_send(&mut self, id: impl AsRef<str>, cx: &mut Context<Self>) {
+        let id = id.as_ref();
+        let Some(current_scope) = self.chat.scope() else {
+            return;
+        };
+        let Some(pending) = self.composer_state.pending.get_mut(id) else {
+            return;
+        };
+        if pending.in_flight
+            || self.session.is_none()
+            || Some(pending.gateway.as_str()) != self.composer_state.drafts.gateway()
+            || pending.scope.session_key != current_scope.session_key
+            || pending.scope.agent_id != current_scope.agent_id
+        {
+            return;
+        }
+        pending.scope = current_scope;
+        pending.in_flight = true;
+        pending.optimistic.send_error = None;
+        let scope = pending.scope.clone();
+        let run_id = id.to_owned();
+        let agent = pending.request.agent_id.clone();
+        let params = serde_json::to_value(&pending.request).expect("serialize chat request");
+        self.chat.retry_send(id);
+        self.request("chat.send", params, cx, move |this, result, _| {
+            if let Some(pending) = this.composer_state.pending.get_mut(&run_id) {
+                pending.in_flight = false;
+                if let Err(error) = &result {
+                    pending.optimistic.send_error = Some(error.clone());
+                }
+            }
+            if result.is_ok() {
+                this.composer_state.pending.remove(&run_id);
+            }
+            if !this.chat.is_current(&scope) || this.sidebar_state.selected_agent != agent {
+                return;
+            }
+            match result {
+                Ok(payload) => {
+                    this.chat.send_ack(&scope, &run_id, &payload);
+                }
+                Err(error) => {
+                    this.chat.send_failed(&scope, &run_id, error);
+                }
+            }
+            this.sync_transcript();
+        });
+        self.sync_transcript();
+        cx.notify();
+    }
+
+    pub(super) fn discard_send(&mut self, id: impl AsRef<str>, cx: &mut Context<Self>) {
+        let id = id.as_ref();
+        if self
+            .composer_state
+            .pending
+            .get(id)
+            .is_some_and(|pending| pending.in_flight)
+        {
+            return;
+        }
+        self.composer_state.pending.remove(id);
+        self.chat.discard_send(id);
+        self.sync_transcript();
+        cx.notify();
+    }
+}

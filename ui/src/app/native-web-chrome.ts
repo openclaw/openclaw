@@ -8,7 +8,7 @@ export type NativeHistoryState = {
 };
 
 type NativeEmbedHost = {
-  platform: "ios" | "macos" | "android";
+  platform: "ios" | "macos" | "android" | "windows" | "linux";
   formFactor: "phone" | "pad" | "desktop";
 };
 
@@ -35,7 +35,11 @@ export function nativeEmbedHost(): NativeEmbedHost | null {
     return null;
   }
   const { platform, formFactor } = host;
-  return (platform === "ios" || platform === "macos" || platform === "android") &&
+  return (platform === "ios" ||
+    platform === "macos" ||
+    platform === "android" ||
+    platform === "windows" ||
+    platform === "linux") &&
     (formFactor === "phone" || formFactor === "pad" || formFactor === "desktop")
     ? { platform, formFactor }
     : null;

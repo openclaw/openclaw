@@ -126,6 +126,16 @@ export function renderApplicationShell(host: ShellViewHost) {
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  if (activeRoute === "panel-embed") {
+    return html`<main class="panel-embed-shell">
+      <openclaw-router-outlet
+        .router=${runtime.router}
+        .retryContext=${context}
+        .retentionScope=${presentationScope}
+      ></openclaw-router-outlet>
+      <openclaw-toast-host></openclaw-toast-host>
+    </main>`;
+  }
   const sessionRoute = isSessionRouteId(activeRoute);
   // Session routes have an offline outbox, New Session keeps a local draft, and
   // Appearance persists local preference intent for replay. Connection settings

@@ -104,6 +104,7 @@ export type ChatProps = Omit<
       sourceMessageId?: string,
     ) => Promise<boolean>;
     presented?: boolean;
+    hideComposer?: boolean;
     historyState?: ChatState;
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
@@ -571,7 +572,7 @@ export function renderChat(props: ChatProps) {
                   >
                     ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
                     ${scrollToBottomButton} ${gutterStack}
-                    <div class="chat-footer">${chatColumnFooter}</div>
+                    ${props.hideComposer ? nothing : html`<div class="chat-footer">${chatColumnFooter}</div>`}
                   </div>
                 </div>
               </div>
