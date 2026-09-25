@@ -90,6 +90,36 @@ function exitWithFailure(failure: NonNullable<ReturnType<typeof runChecked>>): n
   process.exit(failure.status);
 }
 
+function runGoActionlint(files: string[]): boolean {
+  if (!commandExists("go", ["version"])) {
+    return false;
+  }
+  const binDir = mkdtempSync(join(tmpdir(), "openclaw-check-workflows-actionlint-"));
+  let lintFailure: ReturnType<typeof runChecked> = null;
+  try {
+    const installed = spawnSync(
+      "go",
+      ["install", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`],
+      { stdio: "inherit", env: { ...process.env, GOBIN: binDir } },
+    );
+    // An unavailable pin can still use a cached hook. Lint diagnostics must stay
+    // terminal, so acquisition and execution cannot share a go run exit status.
+    if (installed.error || installed.status !== 0) {
+      return false;
+    }
+    lintFailure = runChecked(
+      join(binDir, process.platform === "win32" ? "actionlint.exe" : "actionlint"),
+      files,
+    );
+  } finally {
+    rmSync(binDir, { force: true, recursive: true });
+  }
+  if (lintFailure) {
+    exitWithFailure(lintFailure);
+  }
+  return true;
+}
+
 function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
   const pythonProbe = probePythonVersion("python3");
   if (!pythonProbe.runnable) {
@@ -163,19 +193,19 @@ const workflows = workflowFiles();
 
 if (hasPinnedActionlint()) {
   run("actionlint", workflows);
-} else if (commandExists("go", ["version"])) {
-  run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`]);
-} else if (
-  commandExists("pre-commit") ||
-  commandExists("python3", ["-m", "pre_commit", "--version"]) ||
-  commandExists("python3", ["--version"])
-) {
-  runPreCommitHook("actionlint", workflows);
-} else {
-  console.error(
-    `[check-workflows] missing workflow linter: install actionlint, Go for actionlint@${ACTIONLINT_REVISION}, or pre-commit.`,
-  );
-  process.exit(1);
+} else if (!runGoActionlint(workflows)) {
+  if (
+    commandExists("pre-commit") ||
+    commandExists("python3", ["-m", "pre_commit", "--version"]) ||
+    commandExists("python3", ["--version"])
+  ) {
+    runPreCommitHook("actionlint", workflows);
+  } else {
+    console.error(
+      `[check-workflows] missing workflow linter: install actionlint, Go for actionlint@${ACTIONLINT_REVISION}, or pre-commit.`,
+    );
+    process.exit(1);
+  }
 }
 
 runPreCommitHook("zizmor", workflows);
