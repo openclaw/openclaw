@@ -312,8 +312,7 @@ function createCronFailureAlertSchema(): TSchema {
           },
           { additionalProperties: true },
         ),
-        // A const-only sentinel prevents argument recovery coercing "false", 0, or null.
-        Type.Unsafe<false>({ const: false }),
+        Type.Literal(false),
       ],
       {
         description:

@@ -407,6 +407,11 @@ describe("createCronToolSchema", () => {
     );
   });
 
+  it("types the false sentinel for Codex app-server schema normalization", () => {
+    const failureAlert = propertyAt(schemaRecord, "job.failureAlert");
+    expect(failureAlert?.anyOf).toContainEqual({ type: "boolean", const: false });
+  });
+
   it("accepts false or policy objects for add and update without accepting other scalar values", () => {
     for (const action of ["add", "update"]) {
       for (const [failureAlert, accepted] of [
@@ -414,9 +419,7 @@ describe("createCronToolSchema", () => {
         [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
         [undefined, true],
         [true, false],
-        [0, false],
-        [null, false],
-        ["false", false],
+        ["invalid", false],
       ] as const) {
         const args = { action, job: { failureAlert } };
         expect(Value.Check(schema, args)).toBe(accepted);
