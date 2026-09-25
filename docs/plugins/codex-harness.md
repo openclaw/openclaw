@@ -405,9 +405,10 @@ command with no confirmed live owner retain their failure handling.
 These retained commands also appear in **Tasks**, where you can follow completion
 or stop an individual command. The task follows the native process after the
 foreground turn ends; its final status does not rewrite the earlier tool row.
-Task updates do not automatically start another model turn. If the native
-connection is lost before completion is confirmed, the task reports an unknown
-outcome instead of success.
+A nonzero exit reports **Command failed**; a confirmed operator cancellation
+reports **Command stopped**. Task updates do not automatically start another model
+turn. If the native connection is lost before completion is confirmed, the task
+reports an unknown outcome instead of success.
 
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and

@@ -116,6 +116,7 @@ it.each([
   "replacement before stop",
   "revoked",
   "incognito",
+  "incognito failed",
   "registry retired",
   "caller revoked",
   "requester reassigned",
@@ -146,8 +147,8 @@ it.each([
         ? identifiedClient(role.scopes, ensureProfileForEmail("viewer@example.com").id)
         : identifiedClient(["operator.admin"]);
       let replacement: ReturnType<typeof updateTask> | undefined;
-      const ownerKey =
-        scenario === "incognito" ? "agent:main:dashboard:incognito-command" : "agent:main:command";
+      const incognito = scenario === "incognito" || scenario === "incognito failed";
+      const ownerKey = incognito ? "agent:main:dashboard:incognito-command" : "agent:main:command";
       if (sessionPolicyCase) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: ownerKey },
@@ -204,8 +205,19 @@ it.each([
                 assertTaskCurrent();
               } else {
                 await command.finish({
-                  status: scenario === "succeeded" ? "succeeded" : "cancelled",
+                  status:
+                    scenario === "succeeded"
+                      ? "succeeded"
+                      : scenario === "incognito failed"
+                        ? "failed"
+                        : "cancelled",
                   endedAt: Date.now(),
+                  ...(scenario === "incognito failed"
+                    ? {
+                        terminalSummary: "SYNTHETIC_TASK_CONTENT",
+                        error: "SYNTHETIC_TASK_CONTENT",
+                      }
+                    : {}),
                 });
                 if (scenario === "session read revoked after stop") {
                   role.sessions = { others: "none" };
@@ -258,10 +270,14 @@ it.each([
             ? 0
             : 1,
         );
-        if (scenario === "incognito") {
-          expect(JSON.stringify(getTaskById(command.task.taskId))).not.toContain(
-            "SYNTHETIC_TASK_CONTENT",
-          );
+        if (incognito) {
+          const task = getTaskById(command.task.taskId);
+          expect(task).toMatchObject({
+            status: scenario === "incognito failed" ? "failed" : "cancelled",
+            terminalSummary: scenario === "incognito failed" ? "Command failed" : "Command stopped",
+            ...(scenario === "incognito failed" ? { error: "Incognito task error." } : {}),
+          });
+          expect(JSON.stringify(task)).not.toContain("SYNTHETIC_TASK_CONTENT");
         }
         if (scenario === "replacement") {
           expect(replacement).toMatchObject({

@@ -100,8 +100,12 @@ export async function createAgentHarnessCommandTask(params: {
           ...terminal,
           ...(incognito
             ? {
-                terminalSummary:
-                  terminal.status === "succeeded" ? "Command completed" : "Command stopped",
+                terminalSummary: {
+                  succeeded: "Command completed",
+                  failed: "Command failed",
+                  cancelled: "Command stopped",
+                  timed_out: "Command timed out",
+                }[terminal.status],
                 ...(terminal.error ? { error: "Incognito task error." } : {}),
               }
             : {}),

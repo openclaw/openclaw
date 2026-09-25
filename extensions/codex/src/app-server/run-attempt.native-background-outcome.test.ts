@@ -18,6 +18,7 @@ describe("native background command outcomes", () => {
     "complete",
     "cancel",
     "natural success",
+    "natural failure",
     "publication failure",
     "refused stop",
     "failed stop",
@@ -39,6 +40,7 @@ describe("native background command outcomes", () => {
       let terminationAttempts = 0;
       let stopAttempts: Promise<PromiseSettledResult<void>[]> | undefined;
       let cancelOwner: (() => Promise<void>) | undefined;
+      let commandTaskId: string | undefined;
       const createTask = commandTaskRuntime.createAgentHarnessCommandTask;
       const admission = vi
         .spyOn(commandTaskRuntime, "createAgentHarnessCommandTask")
@@ -50,6 +52,7 @@ describe("native background command outcomes", () => {
               }
             });
           const task = await createTask(input);
+          commandTaskId = task.task.taskId;
           return {
             ...task,
             release() {
@@ -162,6 +165,7 @@ describe("native background command outcomes", () => {
         });
         expect(tasks.listTaskRecords()).toContainEqual(
           expect.objectContaining({
+            taskId: commandTaskId,
             status: "running",
             task: command.command,
             ownerKey: params.sessionKey,
@@ -183,7 +187,7 @@ describe("native background command outcomes", () => {
           expect(source.signal.aborted).toBe(false);
           // The failed publication has no confirmed durable terminal result.
           expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ status: "running" }),
+            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
           );
           return;
         }
@@ -197,7 +201,7 @@ describe("native background command outcomes", () => {
           expect(releaseTask).toHaveBeenCalledOnce();
           expect(releaseSource).toHaveBeenCalledTimes(releasedBeforeStop + 1);
           expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ status: "running" }),
+            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
           );
           await expect(cancelOwner()).rejects.toThrow();
           return;
@@ -205,8 +209,8 @@ describe("native background command outcomes", () => {
           source.abort();
           await finished.promise;
           await expect(cancelOwner()).rejects.toThrow();
-        } else if (scenario === "complete") {
-          await harness.notify(terminal(0));
+        } else if (scenario === "complete" || scenario === "natural failure") {
+          await harness.notify(terminal(scenario === "complete" ? 0 : 7));
         } else if (scenario === "concurrent stop") {
           stopAttempts = Promise.allSettled([cancelOwner(), cancelOwner()]);
           await terminateStarted.promise;
@@ -224,7 +228,7 @@ describe("native background command outcomes", () => {
         ) {
           await expect(cancelOwner()).rejects.toThrow();
           expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ status: "running" }),
+            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
           );
           if (scenario === "failed stop") {
             await cancelOwner();
@@ -242,8 +246,17 @@ describe("native background command outcomes", () => {
               : "failed";
         expect(tasks.listTaskRecords()).toContainEqual(
           expect.objectContaining({
+            taskId: commandTaskId,
             status: expected,
             task: command.command,
+            terminalSummary:
+              scenario === "source retired"
+                ? "Command outcome unknown"
+                : {
+                    succeeded: "Command completed",
+                    failed: "Command failed",
+                    cancelled: "Command stopped",
+                  }[expected],
           }),
         );
         if (

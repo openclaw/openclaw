@@ -89,7 +89,12 @@ export function prepareCodexNativeCommandTasks(
       entry.nativeCompleted &&
       entry.cancellation === "confirmed" &&
       entry.terminal.status === "failed"
-        ? { ...entry.terminal, status: "cancelled" as const, error: "Cancelled by operator." }
+        ? {
+            ...entry.terminal,
+            status: "cancelled" as const,
+            error: "Cancelled by operator.",
+            terminalSummary: "Command stopped",
+          }
         : entry.terminal;
     await (entry.settlement ??= entry.task
       .finish(terminal)
@@ -153,7 +158,7 @@ export function prepareCodexNativeCommandTasks(
     entry.terminal ??= {
       status: succeeded ? "succeeded" : "failed",
       endedAt: Date.now(),
-      terminalSummary: succeeded ? "Command completed" : "Command stopped",
+      terminalSummary: succeeded ? "Command completed" : "Command failed",
       ...(succeeded ? { clearError: true } : { error: "Native command failed." }),
       ...(typeof item.exitCode === "number" ? { detail: { exitCode: item.exitCode } } : {}),
     };
