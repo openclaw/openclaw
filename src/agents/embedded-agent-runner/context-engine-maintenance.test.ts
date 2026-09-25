@@ -436,57 +436,6 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("coalesces repeated requests into one active run plus one follow-up run for the same session", async () => {
-    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
-      vi.useFakeTimers();
-      const sessionKey = "agent:main:session-2";
-      const releaseMaintenance = createDeferred();
-      try {
-        resetCommandQueueStateForTest();
-
-        let maintenanceCalls = 0;
-        const maintain = vi.fn(async () => {
-          maintenanceCalls += 1;
-          if (maintenanceCalls === 1) {
-            await releaseMaintenance.promise;
-          }
-          return {
-            changed: false,
-            bytesFreed: 0,
-            rewrittenEntries: 0,
-          };
-        });
-
-        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
-
-        await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
-          sessionId: "session-2",
-          sessionKey,
-          sessionFile: "/tmp/session-2.jsonl",
-          reason: "turn",
-        });
-        await backgroundEngine.started;
-        expect(maintain).toHaveBeenCalledTimes(1);
-        await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
-          sessionId: "session-2",
-          sessionKey,
-          sessionFile: "/tmp/session-2.jsonl",
-          reason: "turn",
-        });
-
-        releaseMaintenance.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
-        expect(maintain).toHaveBeenCalledTimes(2);
-      } finally {
-        releaseMaintenance.resolve();
-        await Promise.allSettled([waitForDeferredTurnMaintenanceForSession(sessionKey)]);
-        vi.useRealTimers();
-      }
-    });
-  });
-
   it("queues a follow-up maintenance run when a new turn finishes during an active deferred run", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-rerun-", async () => {
       vi.useFakeTimers();
@@ -542,6 +491,7 @@ describe("runContextEngineMaintenance", () => {
           },
         });
         expect(deferredPromises).toHaveLength(2);
+        expect(maintain).toHaveBeenCalledTimes(1);
         let secondDeferredSettled = false;
         const secondDeferred = expectDefined(
           deferredPromises[1],
@@ -558,6 +508,8 @@ describe("runContextEngineMaintenance", () => {
         releaseSecondMaintenance.resolve();
         await secondDeferred;
         expect(secondDeferredSettled).toBe(true);
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        expect(maintain).toHaveBeenCalledTimes(2);
       } finally {
         releaseFirstMaintenance.resolve();
         releaseSecondMaintenance.resolve();
