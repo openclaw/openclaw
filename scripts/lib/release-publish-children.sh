@@ -163,6 +163,16 @@ sweep_superseded_children() {
   local parent_started_at="" deadline=$((SECONDS + ${RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS:-300}))
   release_active_children=""
   if [[ "$workflow" == plugin-npm-release.yml ]]; then
+    # Plugin npm titles carry no parent tuple. Reclaim them only while no other
+    # publish parent is live, so a waiting child's owner is necessarily terminal.
+    for run_state in requested action_required waiting pending queued in_progress; do
+      runs="$(gh_read run list --repo "$GITHUB_REPOSITORY" --workflow openclaw-release-publish.yml \
+        --status "$run_state" --limit 1000 --json databaseId)" || return 1
+      if jq -e --arg id "$GITHUB_RUN_ID" 'length >= 1000 or any(.[]; (.databaseId | tostring) != $id)' <<< "$runs" >/dev/null; then
+        echo "Another publish parent is live; leaving waiting plugin npm children to it." >&2
+        return 0
+      fi
+    done
     parent_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")" || return 1
     parent_started_at="$(jq -er '.run_started_at | strings' <<< "$parent_json")" || return 1
   fi

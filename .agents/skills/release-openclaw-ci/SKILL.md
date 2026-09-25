@@ -537,7 +537,8 @@ and must be cleared after the release.
   and re-dispatch the parent.
 - Before every child dispatch the parent sweeps a failed earlier parent's
   `waiting`/`queued` children of the same release (ClawHub and core by the
-  `parent=<run>/<attempt>` run title, plugin npm by the release SHA): it
+  `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
+  while no other publish parent is live): it
   rejects their gate, cancels, and waits up to 5 minutes for GitHub to report
   them cancelled (a waiting run takes ~2 minutes). A parent failure also
   cancels its own waiting npm children. Only legacy children without a parent

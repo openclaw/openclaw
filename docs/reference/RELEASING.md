@@ -1684,7 +1684,8 @@ gh workflow run plugin-clawhub-release.yml \
 
 Before dispatching any child publisher, the parent checks waiting children
 for the same release tag across tooling refs (ClawHub and core children by the
-parent identity in their run title, plugin npm by the release SHA). It rejects
+parent identity in their run title; plugin npm by the release SHA, and only
+while no other publish parent is live, so the child's owner is terminal). It rejects
 a superseded child's pending gates and cancels it only after verifying its
 failed parent attempt and confirming no job is running, then waits (bounded, 5
 minutes for the sweep) for the child to finish before dispatching. Target

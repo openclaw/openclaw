@@ -293,6 +293,27 @@ describe("superseded release children", () => {
     ).toHaveLength(1);
   });
 
+  it("leaves plugin npm children alone while another publish parent is live", () => {
+    const result = fixture({
+      children: [
+        child({
+          path: ".github/workflows/plugin-npm-release.yml",
+          display_title: `Plugin NPM Release [all-publishable] ${target}`,
+        }),
+        child({
+          id: 80,
+          path: ".github/workflows/openclaw-release-publish.yml",
+          display_title: "OpenClaw Release Publish",
+          status: "in_progress",
+        }),
+      ],
+    }).run(dispatch("plugin-npm-release.yml"));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("Another publish parent is live");
+    expect(result.calls.some(isCancel)).toBe(false);
+    expect(result.calls.some(isDispatch)).toBe(true);
+  });
+
   it("refuses capped inventories and skips sweeping dry runs", () => {
     const blocked = fixture({ capped: true }).run(dispatch());
     expect(blocked.status).toBe(1);
