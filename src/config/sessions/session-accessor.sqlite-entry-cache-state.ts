@@ -1,8 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import type { SessionEntryCacheDatabase } from "./session-accessor.sqlite-entry-cache-projection.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCacheDatabase,
+  SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   cacheValidityTokensEqual,
   readSessionEntryCacheValidityToken,

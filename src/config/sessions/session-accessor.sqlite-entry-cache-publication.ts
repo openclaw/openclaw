@@ -10,13 +10,13 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
-import type { SessionEntryCacheDatabase } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   publishTrackedCacheUpdate,
   sessionEntryCaches,
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   createSessionEntryCreationOperation,
+  type SessionEntryCacheDatabase,
   type SessionEntryCreationOperation,
   type SessionEntryPlaceholder,
   type SessionTranscriptInitializationPublication,
