@@ -312,13 +312,16 @@ function resolveTwitchGroupPolicy(
   accountId?: string,
 ): "open" | "allowlist" | "disabled" {
   const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
-  if (account?.allowedRoles?.includes("all")) {
-    return "open";
+  if (!account) {
+    return "disabled";
   }
-  if (account?.allowedRoles?.includes("moderator")) {
-    return "allowlist";
+  if (account.allowFrom !== undefined) {
+    return account.allowFrom.length > 0 ? "allowlist" : "disabled";
   }
-  return "disabled";
+  if (account.allowedRoles?.length) {
+    return account.allowedRoles.includes("all") ? "open" : "allowlist";
+  }
+  return "open";
 }
 
 function setTwitchGroupPolicy(
@@ -326,9 +329,51 @@ function setTwitchGroupPolicy(
   policy: "open" | "allowlist" | "disabled",
   accountId?: string,
 ): OpenClawConfig {
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+  const account = getAccountConfig(cfg, resolvedAccountId);
+  if (!account) {
+    return cfg;
+  }
+
   const allowedRoles: TwitchRole[] =
     policy === "open" ? ["all"] : policy === "allowlist" ? ["moderator", "vip"] : [];
-  return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
+  const patch: Partial<TwitchAccountConfig> = { allowedRoles, requireMention: true };
+  if (policy === "disabled") {
+    patch.allowFrom = [];
+  } else if (policy === "allowlist" && account.allowFrom?.length) {
+    patch.allowFrom = account.allowFrom;
+  }
+
+  const twitch = cfg.channels?.twitch;
+  if (
+    resolvedAccountId === DEFAULT_ACCOUNT_ID &&
+    typeof twitch?.username === "string" &&
+    twitch.username
+  ) {
+    return patchTopLevelChannelConfigSection({
+      cfg,
+      channel,
+      enabled: true,
+      clearFields: patch.allowFrom === undefined ? ["allowFrom"] : undefined,
+      patch,
+    });
+  }
+
+  const nextAccount = { ...account, ...patch };
+  if (patch.allowFrom === undefined) {
+    delete nextAccount.allowFrom;
+  }
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    enabled: true,
+    patch: {
+      accounts: {
+        ...twitch?.accounts,
+        [resolvedAccountId]: nextAccount,
+      },
+    },
+  });
 }
 
 const twitchDmPolicy = createChannelDmPolicy({
@@ -399,7 +444,7 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   },
   updatePrompt: ({ cfg, accountId }) => {
     const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
-    return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
+    return Boolean(account?.allowedRoles?.length || account?.allowFrom !== undefined);
   },
   setPolicy: ({ cfg, accountId, policy }) => setTwitchGroupPolicy(cfg, policy, accountId),
   resolveAllowlist: async () => [],

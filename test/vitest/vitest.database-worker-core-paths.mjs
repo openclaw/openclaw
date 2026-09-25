@@ -709,6 +709,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],
   ["src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts", "unitFast"],
   ["src/agents/tools/skill-workshop-tool.history.test.ts", "unitFast"],

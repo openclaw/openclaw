@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
@@ -279,7 +280,21 @@ function publishSqliteSessionEntryCacheUpsert(
   let sideMetadata: SessionEntrySideMetadata | undefined;
   let entry: SessionEntry | undefined;
   try {
-    sideMetadata = readSessionEntrySideMetadata(database, sessionKey);
+    // A tracked entry write leaves participants unchanged. Reuse only facts current
+    // before that write; raw DML and foreign commits still force an authoritative read.
+    const retained =
+      update.entry &&
+      owner.validityToken.sessionNodesGeneration === writeGeneration.before &&
+      owner.validityToken.dataVersion === readSqliteDataVersion(database.db)
+        ? owner.entries.get(sessionKey)
+        : undefined;
+    sideMetadata = readSessionEntrySideMetadata(
+      database,
+      sessionKey,
+      retained
+        ? { participants: retained.participants, participantCount: retained.participantCount }
+        : undefined,
+    );
     entry = update.entry ? projectSessionEntryCacheUpdate(update.entry, sideMetadata) : undefined;
   } catch {
     // A failed derived projection must not roll back an authoritative write.

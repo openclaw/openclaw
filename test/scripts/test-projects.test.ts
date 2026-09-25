@@ -2861,6 +2861,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
     ],
     [
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
+    ],
+    [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
       "src/state/openclaw-agent-execution-cleanup.test.ts",
     ],

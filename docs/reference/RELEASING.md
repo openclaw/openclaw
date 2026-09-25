@@ -496,9 +496,10 @@ The full checklist below explains each step; this section decides the default.
 6. **Flip GitHub as soon as npm is out.** The moment `openclaw@YYYY.M.PATCH`
    is visible on npm under the target dist-tag, publish the GitHub release:
    un-draft it and mark it latest for stable. Never wait for Docker, ClawHub,
-   the macOS/Windows/Linux app publishers, or the parent's finalize step; the
-   macOS publisher requires the public release, so a lingering draft blocks
-   apps. If the parent has not flipped it yet, do it by hand:
+   the macOS/Windows/Linux app publishers, or the parent's finalize step. The
+   macOS publisher attaches assets to a draft as well, so a lingering draft
+   hides the release from users but no longer blocks apps. If the parent has
+   not flipped it yet, do it by hand:
    `gh release edit vYYYY.M.PATCH --repo openclaw/openclaw --draft=false --latest`.
    Run the beta-to-stable dist-tag sync (`openclaw-npm-dist-tags.yml` in
    `openclaw/releases`, `mode=sync_beta_to_stable`) immediately after core npm
@@ -920,7 +921,8 @@ design approval and package-manager integration proof before implementation.
   - Stable npm releases default to `beta`; stable npm publish can target `latest` explicitly via workflow input.
   - Token-based npm dist-tag mutation lives in `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` because `npm dist-tag add` still needs `NPM_TOKEN` while the source repo keeps OIDC-only publish.
   - Public `macOS Release` is validation-only; when a tag lives only on a release branch but the workflow is dispatched from `main`, set `public_release_branch=release/YYYY.M.PATCH`.
-  - Real macOS publish must pass successful macOS `preflight_run_id` and `validate_run_id` in `openclaw/releases`. These app gates run independently and never hold npm or GitHub release finalization.
+  - Real macOS publish must pass successful macOS `preflight_run_id` and `validate_run_id` in `openclaw/releases`. These app gates run independently and never hold npm or GitHub release finalization; promotion attaches assets to the GitHub release whether it is still a draft or public.
+  - Re-dispatching a failed macOS preflight for the same tag and source resumes each variant from its newest checkpoint by default (`ignore_checkpoints=true` rebuilds); the explicit `resume_notarization_*` inputs only pin a specific run.
   - Real publish paths promote prepared artifacts instead of rebuilding them again.
 - For stable correction releases like `YYYY.M.PATCH-N`, the post-publish verifier also checks the same temp-prefix upgrade path from `YYYY.M.PATCH` to `YYYY.M.PATCH-N` so release corrections cannot silently leave older global installs on the base stable payload.
 - npm release preflight fails closed unless the tarball includes both `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload, so we do not ship an empty browser dashboard again.
