@@ -150,7 +150,15 @@ suite.define(() => {
           (error: unknown) => ({ ok: false as const, error }),
         );
         turns.push(result);
-        const registered = await fixture.registration;
+        const registered = await Promise.race([
+          fixture.registration,
+          result.then((settled) => {
+            if (!settled.ok) {
+              throw settled.error;
+            }
+            throw new Error("ask_user settled before question registration");
+          }),
+        ]);
         await fixture.flushEvents();
         const panel = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
         if (!registered.ok) {
