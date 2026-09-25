@@ -724,6 +724,12 @@ node scripts/release-ci-summary.mjs <full-release-run-id>
 Diverged release-branch logs: `--first-parent` plus a bounded count.
 Stop watchers before ending the turn or switching strategy.
 
+For PR and child gates, read the exact workflow run, not the commit's check-run
+list: `commits/<sha>/check-runs` keeps entries from superseded or cancelled
+runs for the same head, so a stale `cancelled` or `failure` can mask a newer
+success. Resolve the newest `CI` run for the head (`actions/runs?head_sha=<sha>`)
+and read `openclaw/ci-gate` from that run's jobs before retrying or reporting.
+
 Interpret state precisely:
 
 - `qualifying`: no decisive blocker yet; selected children are still active.

@@ -2515,6 +2515,11 @@ function isVitestConfigFileTarget(relative: string) {
   return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
+/** Config identities do not require test discovery or CI shard construction. */
+export function listRunnableVitestConfigTargets(): string[] {
+  return [...RUNNABLE_VITEST_CONFIG_TARGETS];
+}
+
 function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: string) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
 }
