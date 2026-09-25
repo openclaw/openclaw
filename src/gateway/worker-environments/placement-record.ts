@@ -28,6 +28,10 @@ export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentit
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
 export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
   executionMode?: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
 };
 
 export type WorkerSessionTurnOwner =

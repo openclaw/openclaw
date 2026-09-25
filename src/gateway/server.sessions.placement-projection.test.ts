@@ -462,9 +462,24 @@ test.each([
     activeOwnerEpoch: null,
     identity: false,
   },
+  {
+    name: "while a move still owns recovery",
+    ownerEpoch: 13,
+    activeOwnerEpoch: 12,
+    identity: false,
+    retryBlock: "move",
+  },
+  {
+    name: "while workspace results still need reconciliation",
+    ownerEpoch: 13,
+    activeOwnerEpoch: 12,
+    identity: false,
+    retryBlock: "workspace-sync",
+  },
 ])(
   "sessions.describe projects a durable terminal reason $name",
-  async ({ ownerEpoch, activeOwnerEpoch, identity }) => {
+  async ({ ownerEpoch, activeOwnerEpoch, identity, ...scenario }) => {
+    const retryBlock = "retryBlock" in scenario ? scenario.retryBlock : undefined;
     await seedSessionRows();
     const active = activePlacementRecord();
     const placement = {
@@ -479,18 +494,39 @@ test.each([
     const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
       () => new Map([[placement.sessionId, placement]]),
     );
+    const move: WorkerPlacementMoveIntent = {
+      operationId: "pending-recovery-move",
+      sessionId: placement.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+      abandonSource: false,
+      lastError: null,
+      createdAtMs: 320,
+      updatedAtMs: 340,
+    };
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
         context: {
-          workerSessionPlacementService: { getMany },
+          workerSessionPlacementService: {
+            getMany,
+            getPlacementMoves: () =>
+              new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
+            getWorkspaceResultReconcilingSessionIds: () =>
+              new Set(retryBlock === "workspace-sync" ? [placement.sessionId] : []),
+          },
           workerEnvironmentService: {
             get: () =>
               ownerEpoch === undefined
                 ? undefined
                 : {
+                    environmentId: active.environmentId,
                     providerId: "machine0",
                     profileId: "team",
                     ownerEpoch,
@@ -513,6 +549,11 @@ test.each([
     });
     const projected = result.payload?.session?.placement;
     expect(projected).toBeDefined();
+    if (ownerEpoch !== undefined && activeOwnerEpoch !== null && !retryBlock) {
+      expect(projected).toHaveProperty("retryOnSend", true);
+    } else {
+      expect(projected).not.toHaveProperty("retryOnSend");
+    }
     if (identity) {
       expect(projected).toMatchObject({ providerId: "machine0", profileId: "team" });
     } else {

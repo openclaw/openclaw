@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ACTIVE_PLACEMENT } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
-import { createReclaimedPlacementRedispatch } from "./reclaimed-placement-redispatch.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 
 const placement = { ...ACTIVE_PLACEMENT, state: "reclaimed" as const };
 const dispatchOptions = { assertCurrent: () => {} };
@@ -12,31 +14,71 @@ const profileSnapshot = {
   settings: { region: "parent", device: "paired-node" },
 } as const;
 
-describe("createReclaimedPlacementRedispatch", () => {
+function reader(
+  record: WorkerSessionPlacementRecord,
+  environment: WorkerEnvironmentPlacementFacts | undefined,
+) {
+  return {
+    readProjection: async () => ({
+      placements: new Map([[record.sessionId, record]]),
+      environments: new Map(environment ? [[environment.environmentId, environment]] : []),
+      moves: new Map(),
+      workspaceResultReconcilingSessionIds: new Set<string>(),
+    }),
+  };
+}
+
+describe("createWorkerPlacementRedispatch", () => {
   it.each([
-    { providerId: "fake", nodeDeviceId: null, executionMode: "worker-turn" },
-    { providerId: "device", nodeDeviceId: "paired-node", executionMode: "worker-turn" },
-    { providerId: "crabbox", nodeDeviceId: "retired-node", executionMode: "remote-exec" },
+    { providerId: "fake", nodeDeviceId: null, executionMode: "worker-turn", state: "reclaimed" },
+    {
+      providerId: "device",
+      nodeDeviceId: "paired-node",
+      executionMode: "worker-turn",
+      state: "reclaimed",
+    },
+    {
+      providerId: "crabbox",
+      nodeDeviceId: "retired-node",
+      executionMode: "remote-exec",
+      state: "reclaimed",
+    },
+    {
+      providerId: "crabbox",
+      nodeDeviceId: "retired-node",
+      executionMode: "remote-exec",
+      state: "failed",
+    },
   ] as const)(
-    "preserves the $providerId profile and resolves its $executionMode destination",
-    async ({ providerId, nodeDeviceId, executionMode }) => {
+    "preserves the $state $providerId profile and resolves its $executionMode destination",
+    async ({ providerId, nodeDeviceId, executionMode, state }) => {
       const profileId = `profile-${providerId}`;
-      const environment = { ...ready, providerId, nodeDeviceId, profileId, profileSnapshot };
+      const environment = {
+        ...ready,
+        environmentId: placement.environmentId,
+        state: "destroyed" as const,
+        providerId,
+        nodeDeviceId,
+        profileId,
+        profileSnapshot,
+      };
+      const source =
+        state === "failed"
+          ? { ...placement, executionMode, state, recoveryError: "Gateway restarted" }
+          : { ...placement, executionMode };
       const requirement = {
         requiredNodeCommands: executionMode === "remote-exec" ? ["codex.exec-server.stdio.v1"] : [],
         consumesWorkerSlot: executionMode === "worker-turn",
       };
       const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
       const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
-      const redispatch = createReclaimedPlacementRedispatch({
-        environments: { get: () => environment },
+      const redispatch = createWorkerPlacementRedispatch({
+        placements: reader(source, environment),
         dispatch,
         resolveDevicePlacementRequirement,
       });
 
-      await expect(redispatch({ ...placement, executionMode }, dispatchOptions)).resolves.toBe(
-        ACTIVE_PLACEMENT,
-      );
+      await expect(redispatch(source, dispatchOptions)).resolves.toBe(ACTIVE_PLACEMENT);
       const identity = {
         sessionId: placement.sessionId,
         sessionKey: placement.sessionKey,
@@ -47,6 +89,12 @@ describe("createReclaimedPlacementRedispatch", () => {
         {
           ...identity,
           profileId,
+          expectedPlacement: {
+            state,
+            generation: source.generation,
+            environmentId: source.environmentId,
+            activeOwnerEpoch: source.activeOwnerEpoch,
+          },
           inheritedProfile: { providerId, profileSnapshot },
           ...(nodeDeviceId ? { devicePlacement: requirement } : {}),
           ...(providerId === "device" ? { deviceId: nodeDeviceId } : {}),
@@ -70,8 +118,14 @@ describe("createReclaimedPlacementRedispatch", () => {
     "rejects $providerId nodes without a runtime requirement owner",
     async ({ providerId, executionMode }) => {
       const dispatch = vi.fn();
-      const redispatch = createReclaimedPlacementRedispatch({
-        environments: { get: () => ({ ...ready, providerId, nodeDeviceId: "paired-node" }) },
+      const source = { ...placement, executionMode };
+      const redispatch = createWorkerPlacementRedispatch({
+        placements: reader(source, {
+          ...ready,
+          environmentId: placement.environmentId,
+          providerId,
+          nodeDeviceId: "paired-node",
+        }),
         dispatch,
       });
       await expect(redispatch({ ...placement, executionMode }, dispatchOptions)).rejects.toThrow(
@@ -83,8 +137,8 @@ describe("createReclaimedPlacementRedispatch", () => {
 
   it("rejects a missing prior environment", async () => {
     const dispatch = vi.fn();
-    const redispatch = createReclaimedPlacementRedispatch({
-      environments: { get: () => undefined },
+    const redispatch = createWorkerPlacementRedispatch({
+      placements: reader(placement, undefined),
       dispatch,
     });
     await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(

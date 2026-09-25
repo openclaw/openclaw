@@ -59,11 +59,11 @@ import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
+import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
@@ -272,7 +272,7 @@ export function createGatewayWorkerPlacementRuntime(
           ...target.storeKeys,
           sessionId,
         ];
-        let placement: ReturnType<typeof startDispatch> | undefined;
+        let placement: Awaited<ReturnType<typeof startDispatch>> | undefined;
         await runExclusiveSessionLifecycleMutation({
           scope: target.storePath,
           identities: lifecycleIdentities,
@@ -313,7 +313,7 @@ export function createGatewayWorkerPlacementRuntime(
               await preflightWorkerWorkspace({ localPath: workspace.path, signal });
             }
             authorize?.();
-            placement = startDispatch();
+            placement = await startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({
               sessionId,
@@ -462,8 +462,8 @@ export function createGatewayWorkerPlacementRuntime(
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
-    redispatchReclaimed: createReclaimedPlacementRedispatch({
-      environments: params.environments,
+    redispatchPlacement: createWorkerPlacementRedispatch({
+      placements: params.placements,
       dispatch: dispatchService.dispatch,
       resolveDevicePlacementRequirement,
     }),

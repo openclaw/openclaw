@@ -47,7 +47,7 @@ describe("staged worker placement result recovery", () => {
   });
 
   async function seedWorkerTurn(harness: ReturnType<typeof createHarness>) {
-    const active = harness.placements.seedActive(2);
+    const active = await harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
@@ -263,7 +263,7 @@ describe("staged worker placement result recovery", () => {
         ownerEpoch: ready.ownerEpoch,
         sessionId: REQUEST.sessionId,
       });
-      seedActivePlacement(placementStore, {
+      await seedActivePlacement(placementStore, {
         environmentId: ready.environmentId,
         ownerEpoch: attached.ownerEpoch,
         executionMode: "remote-exec",
@@ -492,7 +492,7 @@ describe("staged worker placement result recovery", () => {
         workspacePath,
         destroyFailureCount: placementState === "accepted-reclaim" ? 1 : 0,
       });
-      const active = originalHarness.placements.seedActive(2, "remote-exec");
+      const active = await originalHarness.placements.seedActive(2, "remote-exec");
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
