@@ -95,7 +95,7 @@ describe("update history RPCs", () => {
       expect(gatewayUpdateCampaign.adopt().status).toBe("adopted");
       const campaignId = gatewayUpdateCampaign.getState()?.id;
       const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
-      gatewayUpdateCampaign.bindRun(expectDefined(campaignId), run.runId);
+      gatewayUpdateCampaign.bindRun(expectDefined(campaignId, "campaign id"), run.runId);
       finishUpdateRun(run.runId, { status, reason: "database-schema-preflight" });
 
       const respond = await requestUpdateRead("update.status");
@@ -120,7 +120,7 @@ describe("update history RPCs", () => {
         }),
     });
     gatewayUpdateCampaign.adopt();
-    const campaignId = expectDefined(gatewayUpdateCampaign.getState()).id;
+    const campaignId = expectDefined(gatewayUpdateCampaign.getState(), "campaign state").id;
     const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
     gatewayUpdateCampaign.bindRun(campaignId, run.runId);
     finishUpdateRun(run.runId, { status: "failed" });
@@ -147,7 +147,7 @@ describe("update history RPCs", () => {
         }),
     });
     gatewayUpdateCampaign.adopt();
-    const campaign = expectDefined(gatewayUpdateCampaign.getState());
+    const campaign = expectDefined(gatewayUpdateCampaign.getState(), "campaign state");
     const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
     gatewayUpdateCampaign.bindRun(campaign.id, run.runId);
     finishUpdateRun(run.runId, { status: "failed" });
@@ -216,7 +216,7 @@ describe("update history RPCs", () => {
           }),
       });
       gatewayUpdateCampaign.adopt();
-      return expectDefined(gatewayUpdateCampaign.getState());
+      return expectDefined(gatewayUpdateCampaign.getState(), "campaign state");
     };
     const original = announce("2026.9.6");
     const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: original.id } });
