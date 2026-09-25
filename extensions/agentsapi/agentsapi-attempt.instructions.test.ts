@@ -10,15 +10,17 @@ const { fetchWithSsrFGuardMock, prepareAgentWorkspaceContextMock } = vi.hoisted(
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
   prepareAgentWorkspaceContextMock:
-    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime" ).prepareAgentWorkspaceContext>(),
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime").prepareAgentWorkspaceContext
+    >(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-// Keep workspace preparation and the SDK request real; unrelated turn projection
-// and Gateway tool execution have their own boundary tests.
+// Keep workspace preparation and the SDK request real; unrelated turn projection,
+// Gateway tool execution, and output transfers have their own boundary tests.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
   const bootstrap = await vi.importActual<
     typeof import("openclaw/plugin-sdk/agent-harness-runtime")
@@ -45,6 +47,16 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
 vi.mock("./agentsapi-tools.js", () => ({
   buildAgentsApiToolSurface: () => ({ declarations: [], toolMetas: [] }),
 }));
+
+vi.mock("./agentsapi-files.js", async () => {
+  const files = await vi.importActual<typeof import("./agentsapi-files.js")>(
+    "./agentsapi-files.js",
+  );
+  return {
+    ...files,
+    collectOutputs: async () => ({ toolMediaUrls: [], hostOwnedToolMediaUrls: [] }),
+  };
+});
 
 vi.mock("./agentsapi-messages.js", () => ({
   createAgentsApiMessageProjection: () => ({
