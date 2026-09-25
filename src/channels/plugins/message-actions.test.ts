@@ -77,6 +77,7 @@ function activateDiscoveredMessageActionPlugin(params: {
   id: ChannelPlugin["id"];
   label: string;
   describeMessageTool: NonNullable<ChannelPlugin["actions"]>["describeMessageTool"];
+  additionalPlugins?: ChannelPlugin[];
 }) {
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({
@@ -87,7 +88,15 @@ function activateDiscoveredMessageActionPlugin(params: {
     }),
     actions: { describeMessageTool: params.describeMessageTool },
   };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: params.id, source: "test", plugin }]));
+  setActivePluginRegistry(
+    createTestRegistry(
+      [plugin, ...(params.additionalPlugins ?? [])].map((entry) => ({
+        pluginId: entry.id,
+        source: "test",
+        plugin: entry,
+      })),
+    ),
+  );
 }
 
 describe("message action capability checks", () => {
@@ -216,6 +225,12 @@ describe("message action capability checks", () => {
     activateDiscoveredMessageActionPlugin({
       id: "discord",
       label: "Discord",
+      additionalPlugins: [
+        {
+          ...createChannelTestPluginBase({ id: "slack" }),
+          actions: { describeMessageTool: () => ({ actions: [] }) },
+        },
+      ],
       describeMessageTool: ({ accountId }) =>
         accountId
           ? { actions: [], schema: null }
