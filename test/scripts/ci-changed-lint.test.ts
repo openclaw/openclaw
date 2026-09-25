@@ -95,9 +95,14 @@ describe("CI changed lint", () => {
     );
   });
 
-  it.each(["hybrid", "github", "blacksmith"])(
-    "keeps complete package lint with the existing %s owners",
-    async (runnerProfile) => {
+  it.each([
+    { runnerProfile: "hybrid", compactCoreLint: true, coreRows: 2 },
+    { runnerProfile: "hybrid", compactCoreLint: false, coreRows: 5 },
+    { runnerProfile: "github", compactCoreLint: false, coreRows: 5 },
+    { runnerProfile: "blacksmith", compactCoreLint: false, coreRows: 0 },
+  ])(
+    "keeps complete package lint with $runnerProfile owners and $coreRows core rows",
+    async ({ runnerProfile, compactCoreLint, coreRows }) => {
       const paths = [
         "src/utils.ts",
         "ui/src/app-navigation.ts",
@@ -106,7 +111,7 @@ describe("CI changed lint", () => {
         "test/scripts/ci-changed-lint.test.ts",
       ];
       const result = detectChangedLanes(paths);
-      const plan = await createChangedCiLintPlan(result, { runnerProfile });
+      const plan = await createChangedCiLintPlan(result, { runnerProfile, compactCoreLint });
       expect(plan).not.toBeNull();
       if (!plan) {
         throw new Error("Expected a package lint plan");
@@ -186,7 +191,7 @@ describe("CI changed lint", () => {
       });
       if (runnerProfile !== "blacksmith") {
         expect(actual.toSorted()).toEqual(expected);
-        expect(plan.core).toHaveLength(runnerProfile === "hybrid" ? 2 : 5);
+        expect(plan.core).toHaveLength(coreRows);
         expect(plan.central.groups).toEqual(["scripts"]);
         expect(plan.central.extensionStripes).toEqual(runnerProfile === "github" ? [6] : []);
       } else {
@@ -221,6 +226,7 @@ describe("CI changed lint", () => {
     expect(
       await createChangedCiLintPlan(detectChangedLanes([file]), {
         runnerProfile: "hybrid",
+        compactCoreLint: true,
       }),
     ).toBeNull(),
   );

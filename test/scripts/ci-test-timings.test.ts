@@ -1109,6 +1109,62 @@ it.todo("retains todo coverage");
     });
   });
 
+  it("keeps hosted PR membership costs across repartitioning without changing main timings", () => {
+    const runs = [70, 78, 80].map((seconds, index) => {
+      const descriptor = {
+        shard_name: `fixture-process-hosted-${index + 1}`,
+        timing_key: `old-generation-${index}`,
+        configs: ["test/vitest/vitest.cli-process.config.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: index === 2 ? "4" : "2" },
+        includePatterns: ["src/cli/example.process.test.ts"],
+      };
+      return {
+        ...timingRun(index + 1, [
+          {
+            kind: "compactPullRequest",
+            labels: ["ubuntu-24.04"],
+            text: [
+              `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+              compactLog(seconds, descriptor.timing_key),
+            ].join("\n"),
+          },
+        ]),
+        completeInventory: false,
+      };
+    });
+    const previous = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { old: 20 }, github: { old: 30 } },
+    };
+    expect(
+      refitTestTimings([runs[0]!], previous).timings.compactGroupSeconds.githubPullRequest,
+    ).toEqual({});
+    const result = refitTestTimings(runs, previous);
+    expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ old: 20 });
+    expect(result.timings.compactGroupSeconds.github).toEqual({ old: 30 });
+    const measurements = Object.entries(result.timings.compactGroupSeconds.githubPullRequest!);
+    expect(measurements).toHaveLength(1);
+    expect(measurements[0]![0]).toMatch(/^fixture-process#membership#selector-1-/u);
+    expect(measurements[0]![1]).toBe(74);
+    expect(result.contributingRunIds.githubPullRequest).toEqual([1, 2, 3]);
+    expect(ciTestTimingsSchema.parse(result.timings)).toEqual(result.timings);
+
+    // Successful PRs finish their selected plan, not the repository's full inventory.
+    const successful = runs.map((run) => ({ ...run, completeInventory: true }));
+    const unselectedTooling = { "core-tooling-7": 480 };
+    const retained = refitTestTimings(successful, {
+      ...previous,
+      compactGroupSeconds: {
+        ...previous.compactGroupSeconds,
+        githubPullRequest: unselectedTooling,
+      },
+    });
+    expect(retained.timings.compactGroupSeconds.githubPullRequest).toEqual({
+      ...result.timings.compactGroupSeconds.githubPullRequest,
+      ...unselectedTooling,
+    });
+  });
+
   it.each(["missing part", "different generation", "different profile", "different run"])(
     "does not invent a complete parent measurement from %s",
     (condition) => {
@@ -2210,7 +2266,11 @@ describe("committed CI timing loader", () => {
   it("reads the repo-relative file once and honors the disable switch even after caching", async () => {
     const data = {
       ...baseline,
-      compactGroupSeconds: { blacksmith: { group: 110 }, github: { group: 181 } },
+      compactGroupSeconds: {
+        blacksmith: { group: 110 },
+        github: { group: 181 },
+        githubPullRequest: { group: 300 },
+      },
       repoE2eFileSeconds: { "test/example.e2e.test.ts": 90 },
       toolingFileSeconds: {
         blacksmith: { "test/scripts/ci-node-test-plan.test.ts": 300 },
@@ -2222,6 +2282,7 @@ describe("committed CI timing loader", () => {
     expect(loader.readRepoE2eFileTimings()).toEqual(data.repoE2eFileSeconds);
     expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 110 });
     expect(loader.readCompactGroupTimings("github")).toEqual({ group: 181 });
+    expect(loader.readCompactGroupTimings("github", { pullRequest: true })).toEqual({ group: 300 });
     expect(loader.readToolingFileTimings("blacksmith")).toEqual(data.toolingFileSeconds.blacksmith);
     expect(loader.readToolingFileTimings("github")).toEqual(data.toolingFileSeconds.github);
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "0");

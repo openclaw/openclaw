@@ -101,6 +101,24 @@ export function createCompactSplitTimingGeneration(params: CompactSplitTimingGen
   };
 }
 
+export function compactGroupMembershipTimingKey(group: {
+  shard_name: string;
+  configs: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  includePatterns?: readonly string[];
+}): string | undefined {
+  if (!group.includePatterns?.length) {
+    return undefined;
+  }
+  // Neighboring stripes can change without changing this executed workload.
+  return createCompactSplitTimingGeneration({
+    parentShardName: `${group.shard_name.replace(/-hosted-\d+$/u, "")}#membership`,
+    configs: group.configs,
+    env: group.env,
+    stripes: [group.includePatterns],
+  }).timingKeys[0];
+}
+
 export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
   const targets = spec.timingTargets ?? spec.includePatterns;
   if (spec.timingIncludePatterns) {

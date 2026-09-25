@@ -18,7 +18,11 @@ export function runtimePlacementTimingIdentity(
 }
 
 export type CiTestTimings = {
-  compactGroupSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
+  compactGroupSeconds: {
+    blacksmith: Record<string, number>;
+    github: Record<string, number>;
+    githubPullRequest?: Record<string, number>;
+  };
   runtimePlacementTimings: {
     blacksmith: RuntimePlacementTiming[];
     github: RuntimePlacementTiming[];
@@ -152,9 +156,15 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     isSecondsMap(toolingFileSeconds.blacksmith) &&
     isSecondsMap(toolingFileSeconds.github) &&
     isRecord(compactGroupSeconds) &&
-    hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
+    hasExactKeys(compactGroupSeconds, [
+      "blacksmith",
+      "github",
+      ...(Object.hasOwn(compactGroupSeconds, "githubPullRequest") ? ["githubPullRequest"] : []),
+    ]) &&
     isSecondsMap(compactGroupSeconds.blacksmith) &&
     isSecondsMap(compactGroupSeconds.github) &&
+    (!Object.hasOwn(compactGroupSeconds, "githubPullRequest") ||
+      isSecondsMap(compactGroupSeconds.githubPullRequest)) &&
     isRecord(runtimePlacementTimings) &&
     hasExactKeys(runtimePlacementTimings, ["blacksmith", "github"]) &&
     isRuntimePlacementTimings(runtimePlacementTimings.blacksmith) &&

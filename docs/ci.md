@@ -19,6 +19,14 @@ job. Open the page that matches your task.
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
+The PR failure monitor, preflight, static checks, artifact build, and Windows
+tests use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
+six separate extension stripes; current PR Windows targets use four workers on
+`windows-2025`. Hosted PR Node planning uses separate measured group costs,
+serial processes, and smaller file groups. Its limits are 120 compact rows and
+160 total Node rows, with up to 160 active rows. Main and release routing retain
+their existing policies and caps.
+
 PR Node matrices stop sibling rows on failure. Same-repository PRs also cancel
 other job families through a scoped monitor, preserving a failed aggregate that
 names the originating job. Main and manual runs retain complete matrices. See
@@ -34,7 +42,7 @@ Eligible core-source and core-test PRs use targeted type checks when every selec
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid main first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -48,9 +56,9 @@ macOS Swift CI runs the app and independent package suites in separate [native p
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 
-Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
+Short hybrid main jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
 
-Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
+Additional hybrid main check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). PR static checks are hosted directly; main pushes can move lint and central types within their existing hosted row limit. Main artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs). PR qualification targets an approximately 18-minute complete wall, including setup and assignment.
 
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes), sharing each small project's setup within one job.
 
@@ -64,7 +72,7 @@ Build, QA and test orchestration restore the same [protected Node compile cache]
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
-Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the landed 90-row compact, 130-row PR and 70-row push caps.
+Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the 120-row hosted PR compact, 160-row hosted PR total, and 70-row push caps. Other backends retain 90 compact and 130 PR rows.
 
 Compact planning reserves the actual appended plugin rows before applying those
 Node matrix caps, allowing existing hosted tooling compaction to use the

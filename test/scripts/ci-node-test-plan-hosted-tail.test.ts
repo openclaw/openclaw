@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
+import {
+  listWholeConfigFiles,
+  listWholeConfigSplitFiles,
+} from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
@@ -66,4 +69,57 @@ it("keeps hourly hosted tails parallel without losing tests or increasing worker
   expect(updateJobs).toHaveLength(1);
   expect(updateJobs[0]!.groups).toHaveLength(1);
   expect(updateJobs[0]!.groups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
+});
+
+it("keeps measured hosted PR rows bounded while preserving their complete file owners", () => {
+  vi.stubEnv("CI", "true");
+  vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
+  const prOptions = {
+    ...options,
+    compactMode: "pull-request" as const,
+    runnerBackend: "github-pr",
+    includeReleaseOnlyToolingShards: true,
+    includeProofTests: false,
+  };
+  const owners = createNodeTestShards(prOptions);
+  const jobs = createNodeTestShardBundles(prOptions);
+  expect(jobs.length).toBeLessThanOrEqual(120);
+  expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
+  expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(450);
+
+  for (const name of [
+    "agentic-cli",
+    "agentic-cli-process",
+    "agentic-gateway-methods",
+    "core-runtime-infra-storage-state",
+  ]) {
+    const owner = owners.find((entry) => entry.shardName === name)!;
+    const groups = jobs
+      .flatMap((job) => job.groups)
+      .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === name);
+    const expected = (owner.includePatterns ?? listWholeConfigFiles(name)!).filter((file) =>
+      isRuntimeTestFileIncluded(file, prOptions),
+    );
+    expect(groups.flatMap((group) => group.includePatterns!).toSorted(), name).toEqual(
+      expected.toSorted(),
+    );
+    for (const group of groups) {
+      expect(group.configs, name).toEqual(owner.configs);
+      expect(group.requiresDist, name).toBe(owner.requiresDist);
+      if (name === "core-runtime-infra-storage-state") {
+        expect(group.includePatterns!.length).toBeLessThanOrEqual(32);
+      } else {
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, name).toBe("2");
+      }
+    }
+  }
+  const health = jobs
+    .flatMap((job) => job.groups)
+    .filter((group) =>
+      group.includePatterns?.includes("src/cli/gateway-backed-exit-health.process.test.ts"),
+    );
+  expect(health).toHaveLength(1);
+  expect(health[0]!.includePatterns).toEqual([
+    "src/cli/gateway-backed-exit-health.process.test.ts",
+  ]);
 });

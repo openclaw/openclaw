@@ -2768,7 +2768,19 @@ AFTER_CD
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(96);
+    for (const nodeRunnerBackend of ["github-pr", "github", "hybrid", "blacksmith", "runson"]) {
+      expect(
+        evaluateWorkflowExpression(
+          workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"],
+          {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { node_runner_backend: nodeRunnerBackend },
+          },
+        ),
+      ).toBe(nodeRunnerBackend === "github-pr" ? 160 : 96);
+    }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -3038,9 +3050,25 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         }
       }
       expect(job.strategy["max-parallel"]).toBe(5);
-      expect(runStep.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(
-        "${{ runner.environment == 'self-hosted' && 4 || 1 }}",
-      );
+      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+        for (const frozenTarget of [false, true]) {
+          for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+            expect(
+              evaluateWorkflowExpression(runStep.env.OPENCLAW_VITEST_MAX_WORKERS, {
+                eventName,
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                runnerEnvironment,
+                frozenTarget,
+              }),
+            ).toBe(
+              runnerEnvironment === "self-hosted" || (eventName === "pull_request" && !frozenTarget)
+                ? 4
+                : 1,
+            );
+          }
+        }
+      }
       expect(runStep.run).toContain("pnpm test:windows:ci:1 -- --fileParallelism");
       expect(runStep.run).toContain("pnpm test:windows:ci:2 -- --fileParallelism");
     },
@@ -3796,7 +3824,7 @@ setImmediate(() => {
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
+  it("keeps PR preflight hosted and preserves other hybrid control routing", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -3809,7 +3837,9 @@ setImmediate(() => {
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
           jobName === "preflight"
-            ? "blacksmith-16vcpu-ubuntu-2404"
+            ? eventName === "pull_request"
+              ? "ubuntu-24.04"
+              : "blacksmith-16vcpu-ubuntu-2404"
             : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
@@ -3831,12 +3861,16 @@ setImmediate(() => {
           expect(
             evaluateWorkflowExpression(expression, { ...context, eventName, runnerBackend }),
             jobName,
-          ).toBe(jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04");
+          ).toBe(
+            jobName === "preflight" && eventName !== "pull_request"
+              ? "blacksmith-4vcpu-ubuntu-2404"
+              : "ubuntu-24.04",
+          );
         }
       }
     }
     for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "ubuntu-24.04"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
@@ -3861,7 +3895,7 @@ setImmediate(() => {
             headRepository,
           }),
           `${authorAssociation}: ${headRepository}`,
-        ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        ).toBe("ubuntu-24.04");
       }
     }
   });
@@ -4067,21 +4101,15 @@ setImmediate(() => {
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
-      "pr-fail-fast": "blacksmith-4vcpu-ubuntu-2404",
-      preflight: "blacksmith-16vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
-      "build-artifacts": "blacksmith-16vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "check-test-types-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
-      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
       "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
-      "checks-windows": "blacksmith-16vcpu-windows-2025",
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
@@ -4104,7 +4132,11 @@ setImmediate(() => {
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
-    expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
+    expect(configurableJobs).toEqual(
+      Object.keys(expectedHostedRunners)
+        .filter((name) => name !== "pr-fail-fast")
+        .toSorted(),
+    );
     expect(evaluateWorkflowRunner(jobs["check-lint-hosted-extension-shard"]?.["runs-on"])).toBe(
       "ubuntu-24.04",
     );
@@ -4129,7 +4161,7 @@ setImmediate(() => {
         [
           "explicit Blacksmith matches default",
           { runnerBackend: "blacksmith" },
-          evaluateWorkflowExpression(expression, canonicalPullRequest),
+          evaluateWorkflowRunner(expression, canonicalPullRequest),
         ],
         // New contributors stay hosted. GitHub can also report maintainers as
         // CONTRIBUTOR when organization membership is concealed.
@@ -4153,13 +4185,13 @@ setImmediate(() => {
         ],
       ] as const) {
         expect(
-          evaluateWorkflowExpression(expression, { ...canonicalPullRequest, ...overrides }),
+          evaluateWorkflowRunner(expression, { ...canonicalPullRequest, ...overrides }),
           `${jobName}: ${label}`,
         ).toBe(expectedRunner);
       }
       for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
         expect(
-          evaluateWorkflowExpression(expression, {
+          evaluateWorkflowRunner(expression, {
             ...canonicalPullRequest,
             authorAssociation: "CONTRIBUTOR",
             headRepository: "contributor/openclaw",
@@ -4173,22 +4205,29 @@ setImmediate(() => {
 
     for (const jobName of ["check-lint-hosted-core-shard", "ci-gate"] as const) {
       const expression = jobs[jobName]?.["runs-on"];
-      const runner = expectedHybridFirstAttemptRunners[jobName];
+      const runner =
+        jobName === "ci-gate" ? "blacksmith-4vcpu-ubuntu-2404" : "blacksmith-8vcpu-ubuntu-2404";
+      const prRunner = expectedHybridFirstAttemptRunners[jobName];
       for (const [label, overrides, expected] of [
         ["main", { eventName: "push" }, runner],
+        ["heavy packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 1 } }, prRunner],
         [
-          "heavy packed core stripe",
-          { runnerProfile: "hybrid", matrix: { stripe: 1 } },
+          "heavy main packed core stripe",
+          { eventName: "push", runnerProfile: "hybrid", matrix: { stripe: 1 } },
           jobName === "ci-gate" ? runner : "blacksmith-16vcpu-ubuntu-2404",
         ],
-        ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
-        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
+        [
+          "lighter packed core stripe",
+          { runnerProfile: "hybrid", matrix: { stripe: 2 } },
+          prRunner,
+        ],
+        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, prRunner],
         ["noncanonical", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
         ["manual", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
         [
           "trusted fork with hosted profile",
           { headRepository: "contributor/openclaw", runnerProfile: "github" },
-          runner,
+          prRunner,
         ],
         ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
         [
@@ -4282,7 +4321,13 @@ setImmediate(() => {
     for (const { jobName, matrix, runner } of widenedHybridMatrixRows) {
       const expression = jobs[jobName]?.["runs-on"];
       for (const [label, overrides, expectedRunner] of [
-        ["hybrid attempt 1", { runnerBackend: "hybrid" }, runner],
+        [
+          "hybrid attempt 1",
+          { runnerBackend: "hybrid" },
+          jobName === "check-shard" || jobName === "check-additional-shard"
+            ? "ubuntu-24.04"
+            : runner,
+        ],
         ["hybrid main", { eventName: "push", runnerBackend: "hybrid" }, runner],
         ["Blacksmith main", { eventName: "push", runnerBackend: "blacksmith" }, runner],
         ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
@@ -9133,16 +9178,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     // Manifest tests own row admission; these cases execute every full-layout stripe.
     for (const eventName of ["pull_request", "push"] as const) {
+      const stripes =
+        eventName === "pull_request"
+          ? [[1], [2], [3], [4], [5]]
+          : [
+              [1, 2],
+              [3, 4, 5],
+            ];
       expect(
-        [1, 2].map((stripe) =>
-          runLintOwner({ capability: true, eventName, lane: "core", profile: "hybrid", stripe }),
+        stripes.map((_, index) =>
+          runLintOwner({
+            capability: true,
+            eventName,
+            lane: "core",
+            profile: "hybrid",
+            stripe: index + 1,
+          }),
         ),
       ).toEqual(
-        [
-          [1, 2],
-          [3, 4, 5],
-        ].map((stripes) =>
-          stripes.map(
+        stripes.map((group) =>
+          group.map(
             (stripe) =>
               `node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=${stripe}/5 --threads=1`,
           ),
@@ -9195,7 +9250,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(
       runLintOwner({
         capability: true,
-        eventName: "pull_request",
+        eventName: "push",
         failStripe: 4,
         lane: "core",
         profile: "hybrid",
@@ -9203,6 +9258,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     ).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=3/5 --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=4/5 --threads=1",
+    ]);
+    expect(
+      runLintOwner({
+        capability: true,
+        eventName: "pull_request",
+        failStripe: 4,
+        lane: "core",
+        profile: "hybrid",
+        stripe: 4,
+      }),
+    ).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=4/5 --threads=1",
     ]);
 
@@ -10664,7 +10731,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ] as const) {
       const expression = readCiWorkflow().jobs[name]["runs-on"];
       expect(evaluateWorkflowExpression(expression, { ...context, matrix }), `${name} PR`).toBe(
-        expected,
+        [
+          "build-artifacts",
+          "checks-windows",
+          "check-shard",
+          "check-test-types-hosted-core-shard",
+          "check-lint-hosted-core-shard",
+          "check-additional-shard",
+        ].includes(name)
+          ? hosted
+          : expected,
       );
       expect(evaluateWorkflowExpression(expression, { ...dispatch, matrix }), `${name} proof`).toBe(
         expected,

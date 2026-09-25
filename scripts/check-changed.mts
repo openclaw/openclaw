@@ -1151,7 +1151,7 @@ function createCiLintCommands(
 /** Keep complete changed packages with the existing full-CI lint owners. */
 export async function createChangedCiLintPlan(
   result: ChangedLaneResult,
-  { runnerProfile }: { runnerProfile: string },
+  { runnerProfile, compactCoreLint }: { runnerProfile: string; compactCoreLint: boolean },
 ) {
   const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
   if (
@@ -1237,12 +1237,17 @@ export async function createChangedCiLintPlan(
     }),
   });
   if (runnerProfile === "hybrid") {
-    for (const [index, stripes] of [
-      coreStripes.filter((stripe) => stripe <= 2),
-      coreStripes.filter((stripe) => stripe > 2),
-    ].entries()) {
-      if (stripes.length) {
-        core.push(row(index + 1, stripes, []));
+    const groups = compactCoreLint
+      ? [
+          [1, 2],
+          [3, 4, 5],
+        ]
+      : [[1], [2], [3], [4], [5]];
+    const selectedCoreStripes = new Set(coreStripes);
+    for (const [index, stripes] of groups.entries()) {
+      const assignedStripes = stripes.filter((stripe) => selectedCoreStripes.has(stripe));
+      if (assignedStripes.length) {
+        core.push(row(index + 1, assignedStripes, []));
       }
     }
     for (const stripe of extensionStripes) {

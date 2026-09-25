@@ -207,11 +207,19 @@ async function main() {
       const attemptLogs: CiTimingRun["logs"] = [];
       for (const job of timingJobs) {
         console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+        const text = await readGh([
+          "api",
+          `repos/${repo}/actions/jobs/${job.id}/logs`,
+          ...logFlags,
+        ]);
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
-          text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+          text,
         });
+        if (source === "tooling" && job.labels.includes("ubuntu-24.04") && !seedTooling) {
+          attemptLogs.push({ kind: "compactPullRequest", labels: job.labels, text });
+        }
       }
       const { contributingRunIds } = refitTestTimings([
         { id: run.id, createdAt: run.created_at, logs: attemptLogs, completeInventory },
@@ -303,7 +311,8 @@ async function main() {
             ? compact
             : source === "tooling"
               ? contributingRunIds.toolingBlacksmith.length +
-                  contributingRunIds.toolingGithub.length >
+                  contributingRunIds.toolingGithub.length +
+                  contributingRunIds.githubPullRequest.length >
                 0
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
@@ -396,6 +405,9 @@ async function main() {
   const mainContributors = new Set([...blacksmith, ...github]);
   console.log(
     `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${blacksmith.length}; GitHub: ${github.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
+  );
+  console.log(
+    `Independent hosted PR compact contributors: ${contributingRunIds.githubPullRequest.length}.\n`,
   );
   console.log(
     `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,

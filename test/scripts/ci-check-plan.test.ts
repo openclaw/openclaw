@@ -85,6 +85,55 @@ function materializePlan(runnerProfile: string, rows: number) {
 }
 
 describe("CI check-plan completion count", () => {
+  it.each([2, 5])("retains the preflight's %i hybrid core lint owners", async (coreRows) => {
+    const plan = await createCiCheckPlan({
+      changedPaths: ["src/utils.ts"],
+      changedCoreTestPaths: null,
+      runnerProfile: "hybrid",
+      checkMatrix: {
+        include: [{ check_name: "check-lint", task: "lint", runner: "unused" }],
+      },
+      coreTypeMatrix: { include: [] },
+      lintCoreMatrix: {
+        include: Array.from({ length: coreRows }, (_, index) => ({ stripe: index + 1 })),
+      },
+      lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
+    });
+    expect(plan.lint_core_matrix.include).toHaveLength(coreRows);
+    expect(
+      plan.lint_core_matrix.include.map(
+        ({ lint_selection_json }) => JSON.parse(lint_selection_json!).coreStripes,
+      ),
+    ).toEqual(
+      coreRows === 2
+        ? [
+            [1, 2],
+            [3, 4, 5],
+          ]
+        : [[1], [2], [3], [4], [5]],
+    );
+    expect(plan.check_job_count).toBe(
+      admittedCheckRows({
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: "hybrid",
+        preflightOutputs: { run_check_plan: "true", narrow_check_paths_json: "[]" },
+        additionalNeeds: {
+          "check-plan": {
+            result: "success",
+            outputs: Object.fromEntries(
+              Object.entries(plan).map(([name, value]) => [
+                name,
+                typeof value === "string" ? value : JSON.stringify(value),
+              ]),
+            ),
+          },
+        },
+      }).length,
+    );
+  });
+
   it.each(["blacksmith", "github", "hybrid"] as const)(
     "publishes the admitted workflow expansion for %s, including an empty plan",
     (runnerProfile) => {

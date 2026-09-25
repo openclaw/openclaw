@@ -36,6 +36,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         await import("./check-changed.mts")
       ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
         runnerProfile: input.runnerProfile,
+        compactCoreLint: input.lintCoreMatrix.include.length === 2,
       })
     : null;
   const started = performance.now();

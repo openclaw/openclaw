@@ -19,7 +19,8 @@ describe("PR failure cancellation", () => {
       eventName: "pull_request" as const,
       repository: "openclaw/openclaw",
       runAttempt: 1,
-      runnerProfile: "blacksmith" as const,
+      runnerProfile: "hybrid" as const,
+      preflightOutputs: { node_runner_backend: "blacksmith" },
       failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
     };
     for (const runnerBackend of ["", "blacksmith"] as const) {
@@ -134,6 +135,7 @@ describe("PR failure cancellation", () => {
 
   it("limits cancellation authority to the same-repository PR monitor", () => {
     const workflow = readCiWorkflow();
+    expect(workflow.jobs["pr-fail-fast"]["runs-on"]).toBe("ubuntu-24.04");
     expect(
       Object.entries(workflow.jobs)
         .filter(
