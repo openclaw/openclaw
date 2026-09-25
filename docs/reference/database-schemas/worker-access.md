@@ -137,8 +137,12 @@ retention limits, schemas, and update behavior are unchanged.
 
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;
-the host captures live admission identities and rechecks protection before each
-archive and deletion. A deferred WAL checkpoint still blocks another discovery
+the host captures live admission identities and rechecks their protection before
+archive preparation and deletion. Node references are rechecked in the reclamation
+worker transaction before archive persistence or deletion, without a redundant
+host reference scan per candidate. A newly referenced candidate may undergo archive
+preparation, but the transaction preserves its history and publishes no archive.
+A deferred WAL checkpoint still blocks another discovery
 pass until a newer completed checkpoint. Exact lifecycle removal and logical
 maintenance planning limit reference results to the generations they might
 delete. No new cache, index, schema, retention policy, or update step is required.

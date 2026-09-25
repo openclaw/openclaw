@@ -256,6 +256,15 @@ describe("tasks.list Gateway performance", () => {
         const list = await listPromise;
 
         const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
+        const persistedTasks = getTaskRegistryStore().loadSnapshot().tasks;
+        expect(persistedTasks.has(deletedTaskId)).toBe(false);
+        expect(persistedTasks.get(updatedTask.taskId)).toMatchObject({
+          endedAt: TASK_COUNT + 1,
+          lastEventAt: TASK_COUNT + 1,
+        });
+        expect(
+          [...persistedTasks.values()].some((task) => task.runId === "run-created-during-scan"),
+        ).toBe(true);
         const currentTasks = listTaskRecords();
         expect(currentTasks).toHaveLength(TASK_COUNT);
         const adminExpected = expectedTaskIds(currentTasks, 0, 7);

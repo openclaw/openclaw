@@ -1,5 +1,12 @@
 import type { SqlBool } from "kysely";
+import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import type { DB } from "./openclaw-state-db.generated.js";
+import type {
+  UserChannelAuthorization,
+  UserChannelAuthorizationPolicy,
+  UserChannelAuthorizationReference,
+} from "./user-channel-identities.js";
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
@@ -26,8 +33,12 @@ export type UserProfileGitHubAttributionRead = {
 };
 
 export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };
+export type UserChannelIdentitySelector =
+  | UserChannelIdentity
+  | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  authorization?: UserChannelAuthorization;
   profileId: string;
   role: string | null;
   emails: string[];
@@ -41,9 +52,21 @@ export type UserChannelIdentityResult<T> =
 
 export type UserChannelIdentityWorkerOperations = {
   "userProfiles.channelIdentity.change": {
-    input: { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity };
+    input:
+      | { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity }
+      | { action: "policy"; policy: UserChannelAuthorizationPolicy }
+      | {
+          action: "authorize";
+          profileId: string;
+          identity: UserChannelIdentity;
+          policy: UserChannelAuthorizationPolicy;
+          grant: GatewayAccessGrantRef | null;
+        };
     output: UserChannelIdentityResult<
-      { kind: "linked"; link: UserChannelIdentityLink } | { kind: "unlinked"; removed: boolean }
+      | { kind: "linked"; link: UserChannelIdentityLink }
+      | { kind: "unlinked"; removed: boolean }
+      | { kind: "policy" }
+      | { kind: "authorized"; reference: UserChannelAuthorizationReference | undefined }
     >;
   };
 };
@@ -95,13 +118,7 @@ export type UserProfilesDatabase = {
     binding_id: string | null;
     created_at: number;
   };
-  user_profile_identities: {
-    provider: string;
-    subject: string;
-    profile_id: string;
-    canonical_login: string | null;
-    created_at: number;
-  };
+  user_profile_identities: DB["user_profile_identities"];
 };
 
 export type ProfileDisplayRow = Pick<

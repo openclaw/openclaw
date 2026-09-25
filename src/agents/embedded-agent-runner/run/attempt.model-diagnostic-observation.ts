@@ -13,7 +13,6 @@ import type {
   ModelCallObservationState,
   ModelCallObserver,
   ModelCallPromptStats,
-  ModelCallSizeTimingFields,
   ModelCallUsage,
 } from "./attempt.model-diagnostic-lifecycle.js";
 
@@ -44,17 +43,6 @@ function utf8JsonByteLength(value: unknown): number | undefined {
   return jsonLength(value, true);
 }
 
-function assignRequestPayloadBytes(state: ModelCallObservationState, payload: unknown): void {
-  const bytes = utf8JsonByteLength(payload);
-  if (bytes !== undefined) {
-    state.requestPayloadBytes = bytes;
-  }
-}
-
-function utf8StringByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 function jsonCharLength(value: unknown): number | undefined {
   return jsonLength(value, false);
 }
@@ -65,7 +53,7 @@ function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefin
     (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
     typeof chunk.delta === "string"
   ) {
-    return utf8StringByteLength(chunk.delta);
+    return Buffer.byteLength(chunk.delta, "utf8");
   }
   return undefined;
 }
@@ -319,32 +307,6 @@ function observeResponseChunk(
   }
 }
 
-function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
-  return {
-    ...(state.requestPayloadBytes !== undefined
-      ? { requestPayloadBytes: state.requestPayloadBytes }
-      : {}),
-    ...(state.responseStreamBytes > 0 ? { responseStreamBytes: state.responseStreamBytes } : {}),
-    ...(state.timeToFirstByteMs !== undefined
-      ? { timeToFirstByteMs: state.timeToFirstByteMs }
-      : {}),
-  };
-}
-
-function modelCallCompletedContent(state: ModelCallObservationState) {
-  if (!state.modelContent && !state.outputMessages) {
-    return undefined;
-  }
-  return {
-    ...state.modelContent,
-    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
-  };
-}
-
-function modelCallUsageField(state: ModelCallObservationState) {
-  return state.usage ? { usage: state.usage } : {};
-}
-
 export function createModelObserver(params: {
   config?: OpenClawConfig;
   streamContext: unknown;
@@ -368,7 +330,10 @@ export function createModelObserver(params: {
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload) {
-      assignRequestPayloadBytes(state, payload);
+      const bytes = utf8JsonByteLength(payload);
+      if (bytes !== undefined) {
+        state.requestPayloadBytes = bytes;
+      }
     },
     observeResponseChunk(startedAt, chunk) {
       observeResponseChunk(state, startedAt, chunk);
@@ -386,13 +351,28 @@ export function createModelObserver(params: {
       });
     },
     sizeTimingFields() {
-      return modelCallSizeTimingFields(state);
+      return {
+        ...(state.requestPayloadBytes !== undefined
+          ? { requestPayloadBytes: state.requestPayloadBytes }
+          : {}),
+        ...(state.responseStreamBytes > 0
+          ? { responseStreamBytes: state.responseStreamBytes }
+          : {}),
+        ...(state.timeToFirstByteMs !== undefined
+          ? { timeToFirstByteMs: state.timeToFirstByteMs }
+          : {}),
+      };
     },
     completedContent() {
-      return modelCallCompletedContent(state);
+      return state.modelContent || state.outputMessages
+        ? {
+            ...state.modelContent,
+            ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
+          }
+        : undefined;
     },
     usageField() {
-      return modelCallUsageField(state);
+      return state.usage ? { usage: state.usage } : {};
     },
   };
 }

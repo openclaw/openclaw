@@ -340,9 +340,12 @@ async function stopManagedServiceBeforeMutableUpdate(
     return unavailableServiceState({
       kind: "unavailable",
       message:
-        err instanceof ServiceInspectionError || err instanceof GatewayServiceUpdateOwnershipError
-          ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
-          : GATEWAY_SERVICE_INSPECTION_WARNING,
+        err instanceof ServiceInspectionError && err.reason === "windows-task-inspection-failed"
+          ? `${err.message} ${GATEWAY_SERVICE_INSPECTION_WARNING}`
+          : err instanceof ServiceInspectionError ||
+              err instanceof GatewayServiceUpdateOwnershipError
+            ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
+            : GATEWAY_SERVICE_INSPECTION_WARNING,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
     });
   }

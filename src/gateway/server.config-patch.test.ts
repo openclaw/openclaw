@@ -3,17 +3,11 @@ import { randomUUID } from "node:crypto";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { prepareHostConfigSnapshot } from "../config/io.snapshot-preparation.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
-import { applyLoggingConfig, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -21,11 +15,7 @@ import {
 } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
-import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { registerAgentConfigMutationTests } from "./server.config-agent-mutations.test-support.js";
 import {
   configRawPayload,
@@ -33,7 +23,23 @@ import {
   makeRouteBinding,
   withConfigFileFixture,
 } from "./server.config-patch.test-support.js";
-import { startGatewayServer } from "./server.js";
+import {
+  configRpcWorkspacePath,
+  getConfigHash,
+  getCurrentConfigObject,
+  installConfigWriteGatewayHooks,
+  installReadOnlyConfigGatewayHooks,
+  installSharedConfigWriteGatewayHooks,
+  requireClient,
+  requireConfigObject,
+  resetTempDir,
+  restoreConfigFileForTest,
+  rpcReq,
+  sendConfigApply,
+  sendConfigSet,
+  writeJsonFile,
+  writeUnresolvedAuthProfileTokenRef,
+} from "./server.config-rpc-gateway.test-support.js";
 
 const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
 
@@ -55,241 +61,6 @@ vi.mock("./config-reload.js", async (importOriginal) => {
 });
 
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
-const GATEWAY_TOKEN = "config-rpc-synthetic-token";
-
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-let client: GatewayClient | undefined;
-const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-const unarmedConfigWatchers: ReturnType<typeof chokidar.watch>[] = [];
-
-type ConfigRpcGatewayOptions = {
-  configRelativePath?: string;
-  watchConfigFiles?: boolean;
-};
-
-function requireClient(): GatewayClient {
-  if (!client) {
-    throw new Error("gateway test client not started");
-  }
-  return client;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
-async function rpcReq<T extends Record<string, unknown>>(
-  gatewayClient: GatewayClient,
-  method: string,
-  params?: unknown,
-  timeoutMs = 10_000,
-): Promise<{
-  ok: boolean;
-  payload?: T;
-  error?: { message?: string; code?: string; details?: unknown };
-}> {
-  try {
-    return { ok: true, payload: await gatewayClient.request<T>(method, params, { timeoutMs }) };
-  } catch (error) {
-    if (!(error instanceof GatewayClientRequestError)) {
-      throw error;
-    }
-    return {
-      ok: false,
-      error: { message: error.message, code: error.code, details: error.details },
-    };
-  }
-}
-
-function requireConfigObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-async function startConfigRpcGateway({
-  configRelativePath,
-  watchConfigFiles = true,
-}: ConfigRpcGatewayOptions = {}) {
-  state = await createOpenClawTestState({
-    label: "config-rpc",
-    env: {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      // Config RPCs use real model discovery, without an unrelated native marketplace sync.
-      OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server --listen stdio:// -c features.plugins=false",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../dist/extensions"),
-    },
-  });
-  setLoggerOverride({ level: "silent", consoleLevel: "silent" });
-  const config = { agents: { entries: { main: {} } } };
-  const configPath = configRelativePath ? state.statePath(configRelativePath) : state.configPath;
-  if (configRelativePath) {
-    await writeJsonFile(configPath, config);
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-  } else {
-    await state.writeConfig(config);
-  }
-  if (!watchConfigFiles) {
-    const watch = chokidar.watch;
-    vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
-      if ((Array.isArray(paths) ? paths : [paths]).includes(configPath)) {
-        // Keep managed writes and the real read cache active without independent file notifications.
-        const watcher = new chokidar.FSWatcher(options);
-        unarmedConfigWatchers.push(watcher);
-        return watcher;
-      }
-      return watch(paths, options);
-    });
-  }
-  hotReloadRecovery.mockClear();
-  const port = await getFreePort();
-  server = await startGatewayServer(port, {
-    auth: { mode: "token", token: GATEWAY_TOKEN },
-    prepareConfigSnapshot: prepareHostConfigSnapshot,
-    controlUiEnabled: false,
-    hotReloadRecovery,
-  });
-  const connected = createDeferredCore();
-  client = new GatewayClient({
-    url: `ws://127.0.0.1:${port}`,
-    token: GATEWAY_TOKEN,
-    clientName: "gateway-client",
-    clientVersion: "1.0.0",
-    platform: "test",
-    mode: "backend",
-    deviceIdentity: null,
-    scopes: ["operator.admin"],
-    hostDeps: {
-      loadDeviceAuthToken: () => null,
-      storeDeviceAuthToken: () => {},
-      clearDeviceAuthToken: () => {},
-    },
-    onHelloOk: () => connected.resolve(),
-    onConnectError: (error) => connected.reject(error),
-    onClose: (code, reason) => connected.reject(new Error(`closed ${code}: ${reason}`)),
-  });
-  client.start();
-  await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
-  await server.startupSettled;
-}
-
-async function stopConfigRpcGateway() {
-  // This fixture has no run loop. Retire direct RPC restart timers before
-  // teardown and after its owners drain so they cannot reach the next case.
-  await runQaGatewayFixture(
-    async () => resetGatewayRestartStateForInProcessRestart(),
-    async () => {
-      await client?.stopAndWait();
-      client = undefined;
-    },
-    async () => {
-      await server?.close();
-      server = undefined;
-    },
-    () => Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close())),
-    () => resetGatewayRestartStateForInProcessRestart(),
-    () => state?.cleanup(),
-    () => resetLogger(),
-    () => clearPluginMetadataLifecycleCaches(),
-    () => vi.restoreAllMocks(),
-    () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
-  );
-}
-
-async function resetTempDir(name: string): Promise<string> {
-  const dir = state.path("fixtures", name);
-  await fs.rm(dir, { recursive: true, force: true });
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
-
-async function writeJsonFile(filePath: string, value: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-}
-
-async function getConfigHash() {
-  const current = await rpcReq(requireClient(), "config.get", {});
-  expect(current.ok).toBe(true);
-  expect(typeof current.payload?.hash).toBe("string");
-  return String(current.payload?.hash);
-}
-
-async function sendConfigApply(params: { raw: unknown; baseHash?: string }, timeoutMs?: number) {
-  return await rpcReq(requireClient(), "config.apply", params, timeoutMs);
-}
-
-async function sendConfigSet(params: { raw: string; baseHash?: string }, timeoutMs?: number) {
-  return await rpcReq(requireClient(), "config.set", params, timeoutMs);
-}
-
-async function getCurrentConfigObject() {
-  const current = await rpcReq<{
-    raw?: string | null;
-    valid?: boolean;
-    hash?: string;
-    path?: string;
-    config?: Record<string, unknown>;
-    sourceConfig?: Record<string, unknown>;
-  }>(requireClient(), "config.get", {});
-  expect(current.ok).toBe(true);
-  expect(typeof current.payload?.hash).toBe("string");
-  expect(typeof current.payload?.path).toBe("string");
-  return {
-    hash: String(current.payload?.hash),
-    path: String(current.payload?.path),
-    raw: current.payload?.raw,
-    valid: current.payload?.valid,
-    config: requireConfigObject(current.payload?.sourceConfig, "editable source config"),
-    runtimeConfig: requireConfigObject(current.payload?.config, "runtime config"),
-  };
-}
-
-async function restoreConfigFileForTest(
-  original: Awaited<ReturnType<typeof getCurrentConfigObject>>,
-) {
-  await writeJsonFile(original.path, original.config);
-}
-
-async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
-  deleteTestEnvValue(missingEnvVar);
-  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
-  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-  await fs.writeFile(
-    authStorePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        profiles: {
-          "custom:token": {
-            type: "token",
-            provider: "custom",
-            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
-}
-
-function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {
-  beforeEach(() => startConfigRpcGateway(options));
-  beforeEach(() => {
-    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
-  });
-  afterEach(stopConfigRpcGateway);
-}
 
 describe("gateway config methods", () => {
   installConfigWriteGatewayHooks();
@@ -497,6 +268,12 @@ describe("gateway config methods", () => {
       }
     },
   );
+});
+
+describe("gateway config methods", () => {
+  installSharedConfigWriteGatewayHooks({
+    fixturePaths: ["logging.json", "logging-first", "logging-second", "logging-current"],
+  });
 
   it.each([
     ...(["EPERM", "EEXIST"] as const).flatMap((code) =>
@@ -860,14 +637,22 @@ describe("gateway config methods", () => {
       invalidateConfigGetResponseCache();
     }
   });
+});
+
+describe("gateway config methods", () => {
+  installConfigWriteGatewayHooks();
 
   registerAgentConfigMutationTests({
     getCurrentConfigObject,
     getConfigHash,
     rpc: (method, params) => rpcReq(requireClient(), method, params),
-    workspacePath: (name) => state.path(name),
+    workspacePath: configRpcWorkspacePath,
     reloadBarrier,
   });
+});
+
+describe("gateway config methods", () => {
+  installSharedConfigWriteGatewayHooks();
 
   it("round-trips config.set and returns the live config path", async () => {
     const { createConfigIO } = await import("../config/config.js");
@@ -1031,6 +816,10 @@ describe("gateway config methods", () => {
       requireConfigObject(res.payload?.config, "response config");
     },
   );
+});
+
+describe("gateway config methods", () => {
+  installConfigWriteGatewayHooks();
 
   it("accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted", async () => {
     const { createConfigIO } = await import("../config/config.js");
@@ -1317,6 +1106,10 @@ describe("gateway config methods", () => {
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.error).toBeUndefined();
   });
+});
+
+describe("gateway config methods", () => {
+  installSharedConfigWriteGatewayHooks();
 
   it.each(["config.set", "config.apply", "config.patch"] as const)(
     "preserves literal nulls in full replacements and patch deletion through %s",
@@ -1462,6 +1255,11 @@ describe("gateway config methods", () => {
       await restoreConfigFileForTest(original);
     }
   });
+});
+
+describe("gateway config methods", () => {
+  // Channel policy replaces plugin runtime, which global per-case cleanup retires.
+  installConfigWriteGatewayHooks();
 
   it("accepts exact numeric record keys in replacePaths", async () => {
     const original = await getCurrentConfigObject();
@@ -1573,13 +1371,14 @@ describe("gateway config.apply", () => {
 });
 
 describe("gateway config recovery errors", () => {
-  installConfigWriteGatewayHooks({
+  installSharedConfigWriteGatewayHooks({
     configRelativePath: path.join(
       "long-config-location-".repeat(4),
       "long-config-location-".repeat(4),
       "long-config-location-".repeat(4),
       "openclaw.json",
     ),
+    fixturePaths: ["logging.json"],
   });
 
   it.each(["config.set", "config.patch", "config.apply"])(
@@ -1669,24 +1468,6 @@ describe("gateway config recovery errors", () => {
     },
   );
 });
-
-function installReadOnlyConfigGatewayHooks() {
-  // Authored fixtures exercise RPC reads/rejections without asynchronous file reloads.
-  beforeAll(() => startConfigRpcGateway({ watchConfigFiles: false }));
-  beforeEach(() => {
-    resetGatewayRestartStateForInProcessRestart();
-    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
-    hotReloadRecovery.mockClear();
-  });
-  afterEach(() =>
-    runQaGatewayFixture(
-      async () => resetGatewayRestartStateForInProcessRestart(),
-      () => vi.restoreAllMocks(),
-      () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
-    ),
-  );
-  afterAll(stopConfigRpcGateway);
-}
 
 describe("gateway noncommitting config RPCs", () => {
   installReadOnlyConfigGatewayHooks();
