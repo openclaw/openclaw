@@ -272,9 +272,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   override updated() {
-    if (this.state && this.context) {
-      this.revisionRecovery.sync(this.context, this.state);
-    }
     // Only kick a load when none is in flight and the last attempt did not
     // fail: loadProposals early-returns resolve immediately and their finally
     // schedules another update, so re-kicking here would spin forever when a
@@ -287,6 +284,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       !state.skillWorkshopError;
     if (this.gatewayConnected && canLoad) {
       this.loadProposals(false);
+    }
+    // Establish the proposal scope before restoring a revision notice: recovery
+    // must neither block the first list load nor lose its draft to the scope reset.
+    if (this.state && this.context) {
+      this.revisionRecovery.sync(this.context, this.state);
     }
     this.ensureWorkshopAgentIdentity();
     const runtimeConfig = this.context?.runtimeConfig;

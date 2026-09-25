@@ -7,6 +7,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import "../../app/router-outlet.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { inspectResult, manifest } from "../../test-helpers/skill-workshop-proposal-fixture.ts";
+import { skillWorkshopRevisionAdmissionsFor } from "./revision-recovery.ts";
 import { page as skillWorkshopRoute } from "./route.ts";
 import "./skill-workshop-page.ts";
 import {
@@ -23,6 +24,53 @@ afterEach(() => {
 });
 
 describe("Workshop route refresh", () => {
+  it("loads proposals before restoring a retained failed revision on mount", async () => {
+    const response = createDeferred<ReturnType<typeof manifest>>();
+    const request = vi.fn(async (method: string) =>
+      method === "skills.proposals.list" ? response.promise : inspectResult(),
+    );
+    const context = createContext(request, {
+      methods: ["skills.proposals.list", "skills.proposals.inspect"],
+    });
+    const instructions = "Preserve these revision instructions after returning.";
+    await skillWorkshopRevisionAdmissionsFor(context).start(
+      {
+        instructions,
+        proposalAgentId: "research",
+        proposalId: "proposal-1",
+        proposalSlug: "inbox-cleaner",
+      },
+      async () => {
+        throw new Error("Revision admission failed");
+      },
+    ).completion;
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.context = context;
+    document.body.append(page);
+    try {
+      await settleLitElement(page);
+      expect(
+        request.mock.calls.filter(([method]) => method === "skills.proposals.list"),
+      ).toHaveLength(1);
+      expect(page.state?.skillWorkshopRevisionDraft).toBe(instructions);
+      expect(page.state?.skillWorkshopError).toContain("Revision admission failed");
+      response.resolve(manifest());
+      await settleLitElement(page);
+      expect(page.querySelector<HTMLTextAreaElement>(".sw-revision-dialog__input")?.value).toBe(
+        instructions,
+      );
+      expect(
+        request.mock.calls.filter(([method]) => method === "skills.proposals.list"),
+      ).toHaveLength(1);
+    } finally {
+      response.resolve(manifest());
+      page.remove();
+      skillWorkshopRevisionAdmissionsFor(context).dispose();
+    }
+  });
+
   it.each(["created", "stale"] as const)(
     "shows a %s proposal change on the first warm return to Workshop",
     async (change) => {
