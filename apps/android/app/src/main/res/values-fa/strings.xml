@@ -122,7 +122,6 @@
     <string name="native_0f4c8529742b31ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شروع گفتگو"</string>
     <string name="native_0f559ff270904904" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فراخوانی‌های ابزار گفتگو که در رشتهٔ فعال منتظر هستند، اینجا قابل مشاهده می‌مانند."</string>
     <string name="native_0f56cc286a4f23d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گواهی نیاز به بررسی دارد"</string>
-    <string name="native_0fa1e9a651114683" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بررسی دسترسی به تلفن ممکن نشد. دوباره تلاش کنید."</string>
     <string name="native_0ff98f05be01ce5e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خودکارسازی به‌روزرسانی شد."</string>
     <string name="native_100ac08064a6d586" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ نشست اخیری وجود ندارد"</string>
     <string name="native_102acc10e67a297d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اسکریپت"</string>
@@ -325,7 +324,6 @@
     <string name="native_2a33d984de881573" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطای شبکه"</string>
     <string name="native_2a6a87f47d16260c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هزینه ورودی"</string>
     <string name="native_2ac86a8e8f1d6cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال کاوش در آبگیرهای جزرومدی"</string>
-    <string name="native_2b10f8ed08588247" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابزارهای اشکال‌زدایی"</string>
     <string name="native_2b7d5b8c98a1bc16" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شروع ناموفق بود: %1$s"</string>
     <string name="native_2b94e7d148bd55cf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"متن کامل پیام برای نمایش بیش از حد بزرگ است."</string>
     <string name="native_2bb186b55caf8791" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"درخواست نشده"</string>
@@ -343,7 +341,6 @@
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در پاسخی قبلی، تکلیف این درخواست تأیید مشخص شده است."</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ رشته‌گفتگوی اخیری وجود ندارد"</string>
     <string name="native_2dc73e579b72dae5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مهلت %1$s ثانیه"</string>
-    <string name="native_2ddba0d7fed04290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال تأیید دسترسی…"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن اعلان‌های برنامه‌های انتخاب‌شده"</string>
     <string name="native_2e0078a8322d6f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضعیت دسترسی نامشخص است"</string>
     <string name="native_2e4aaf05df1cbfb3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اضافی"</string>
@@ -474,7 +471,6 @@
     <string name="native_3fb20f30e3f6845c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پایان گفتگو"</string>
     <string name="native_3fb8bbabfcedb87c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آخرین خطا"</string>
     <string name="native_40032c1c0e3b26eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برخی مدل‌ها به‌روزرسانی نشدند. برای تلاش دوباره، روی «تازه‌سازی» بزنید."</string>
-    <string name="native_400456fe9927ec72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل صفحه‌نمایش"</string>
     <string name="native_400dc06511b8dbc3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اقداماتی را که به توجه شما نیاز دارند بررسی کنید."</string>
     <string name="native_40212b20f4b14b04" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای همهٔ عامل‌ها غیرفعال است."</string>
     <string name="native_404a1bbbd05b1669" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شروع حالت صوتی"</string>
@@ -572,7 +568,6 @@
     <string name="native_4c12829cf9d317cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ارسال خلاصهٔ انتشار"</string>
     <string name="native_4c27eb153d751834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هنوز هیچ خودکارسازی‌ای وجود ندارد."</string>
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"این مهارت به %1$s مورد برای راه‌اندازی نیاز دارد. Android موارد نصب‌شده را نمایش می‌دهد؛ تغییرات راه‌اندازی/پیکربندی فقط از طریق دسکتاپ یا CLI انجام می‌شود."</string>
-    <string name="native_4c74919e163e81e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به Gateway اجازه دهید از این قابلیت‌ها در این تلفن استفاده کند. مجوزهای Android و تنظیمات شما همچنان اعمال می‌شوند."</string>
     <string name="native_4c8346f441fa1651" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s مورد اخیر"</string>
     <string name="native_4c8906cf76f5740a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کانال‌ها"</string>
     <string name="native_4c9bba30fb790a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدون فاز"</string>
@@ -859,7 +854,6 @@
     <string name="native_735cca45016888d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بارگذاری گزارش‌های دروازه ممکن نشد."</string>
     <string name="native_738690c98913d392" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فایل باینری تغییر کرده است"</string>
     <string name="native_73bf01fe0c2e8dae" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ارائه‌دهنده آماده"</string>
-    <string name="native_73ff8e4fd41ca9ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تأیید دسترسی و ادامه"</string>
     <string name="native_740aa42cc068cf01" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ ارائه‌دهندهٔ %1$s روی Gateway پیکربندی نشده است"</string>
     <string name="native_744ea732e226adc1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مشاهده"</string>
     <string name="native_746f71ec623adc37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"میلی‌ثانیه از مبدأ یونیکس (اختیاری)"</string>
@@ -1211,7 +1205,6 @@
     <string name="native_a52403af63fa3f46" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"این برنامه از Gateway قدیمی‌تر است. OpenClaw را در این دستگاه به‌روزرسانی کنید، سپس دوباره تلاش کنید."</string>
     <string name="native_a52ace420f2175d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"همه"</string>
     <string name="native_a599c8e0ee88a421" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پیش از تغییر مجوزها، این گفتگو را تازه‌سازی کنید."</string>
-    <string name="native_a5a54389f5afa1ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فعال‌سازی صوتی"</string>
     <string name="native_a5ce966f2cb8f0b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به operator.admin نیاز دارد"</string>
     <string name="native_a61935d6be7b9f04" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در انتظار بررسی"</string>
     <string name="native_a626442da425ff22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ مهارتی نصب نشده است."</string>
@@ -1259,7 +1252,6 @@
     <string name="native_abf88bc4972bb194" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در انتظار %1$s دقیقه"</string>
     <string name="native_ac07bf982425811c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s."</string>
     <string name="native_ac1c17acbaa7cf14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای نصب مهارت‌های ClawHub به Gateway متصل شوید."</string>
-    <string name="native_ac295eb2e4d5ee74" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تأیید دسترسی به تلفن ممکن نشد. وضعیت تأیید را دوباره بررسی کنید."</string>
     <string name="native_ac3a53754a79a614" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · میکروفون: در حال گوش دادن"</string>
     <string name="native_ac4ae1579a18e0bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای بررسی و تغییر تنظیمات Gateway، با دسترسی operator.admin دوباره متصل شوید."</string>
     <string name="native_ac86a21af42c90f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گسترش نشست‌های فرزند"</string>
@@ -1372,7 +1364,6 @@
     <string name="native_bdff71b20b9cf392" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جستجوی خودکارسازی‌ها"</string>
     <string name="native_be7e2f20129365c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصاویر"</string>
     <string name="native_be969becb173e0c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گوشی‌های متصل و میزبان‌های گره پس از جفت‌سازی در اینجا نمایش داده می‌شوند."</string>
-    <string name="native_bea220e9d7ffdfaa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابزارهای سیستم"</string>
     <string name="native_bf1870ff5c6322fb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
     <string name="native_bf350e6a0ed60b7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"این خودکارسازی در Gateway تغییر کرده است. پیش از ذخیرهٔ مجدد، آخرین نسخه را بررسی کنید."</string>
     <string name="native_bf399ffa03617a96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توقف تایپ صوتی"</string>
@@ -1431,7 +1422,6 @@
     <string name="native_c57d7e92019708b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"voice"</string>
     <string name="native_c58ab237bd246028" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"role add"</string>
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو نیاز به رسیدگی دارد"</string>
-    <string name="native_c5cf8340d501d272" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دسترسی به تلفن تغییر کرده است. درخواست را بررسی کنید و دوباره تلاش کنید."</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw نام‌ها، شناسه‌های بسته و وضعیت برنامه‌های قابل مشاهده در این تلفن را زمانی که Gateway جفت‌شدهٔ OpenClaw شما درخواست کند، جمع‌آوری و ارسال می‌کند. این به دستیار شما امکان می‌دهد با استفاده از برنامه‌های نصب‌شده به پرسش‌ها پاسخ دهد و اقداماتی انجام دهد."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway متصل نیست"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خط‌مشی"</string>
@@ -1624,7 +1614,6 @@
     <string name="native_df194cb3eb3cb3cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اجرای خودکارسازی در صف قرار گرفت."</string>
     <string name="native_df2e1ea7f2793fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Turn"</string>
     <string name="native_df539a150f19b260" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خودکارسازی شروع شد."</string>
-    <string name="native_df743d3e530679e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اطلاعات دستگاه"</string>
     <string name="native_df796c655f6f5ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گروه جدید"</string>
     <string name="native_dfe0c2e802b1ff63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطای سرور"</string>
     <string name="native_dfe114ba9a41375d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Video Generation"</string>
