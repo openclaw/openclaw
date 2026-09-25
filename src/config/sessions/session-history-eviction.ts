@@ -26,7 +26,12 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
-import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import {
+  finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+  planOldestCapacityEligibleSqliteLiveEntryRemoval,
+  reclaimSqliteLiveSessionEntriesToHighWater,
+  refreshSqliteSessionPlannerStatisticsBestEffort,
+} from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import {
   createHistoryEvictionReclamationPlan,
@@ -124,10 +129,23 @@ export async function inspectSqliteSessionHistoryDiskBudget(
     limit: 1,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
-  return {
-    diskBudget,
-    wouldMutate: candidates.length > 0 || archivedCandidates.candidates.length > 0,
-  };
+  if (candidates.length > 0 || archivedCandidates.candidates.length > 0) {
+    return { diskBudget, wouldMutate: true };
+  }
+  if (highWaterBytes <= 0 || maxDiskBytes <= 0) {
+    return { diskBudget, wouldMutate: false };
+  }
+  if (usage.totalBytes - usage.databaseWalBytes <= highWaterBytes) {
+    return { diskBudget, wouldMutate: false };
+  }
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  const livePlan = planOldestCapacityEligibleSqliteLiveEntryRemoval({
+    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+    database,
+    storePath: params.storePath,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
+  });
+  return { diskBudget, wouldMutate: livePlan.entryRemovals.length > 0 };
 }
 
 function collectCandidateAdditionalProtection(params: {
@@ -363,6 +381,40 @@ async function enforceSessionHistoryMaintenanceForDatabase(
       onCheckpointIncomplete: (checkpoint) =>
         deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
     });
+  };
+  const reclaimLiveFreePages = async (): Promise<boolean> => {
+    const pageDiagnostics: SqliteSessionArchivePruningDiagnostics = {
+      trigger: "after-eviction",
+    };
+    const checkpointCompleted = await withSqliteSessionPageReclamation(
+      databaseOptions,
+      (reclaimPages) =>
+        runExclusiveSqliteSessionWrite(
+          resolved,
+          async () => {
+            try {
+              return await reclaimSqliteFreePages(databaseOptions, pageDiagnostics, {
+                reclaimPages,
+                onCheckpointIncomplete: (checkpoint) =>
+                  deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
+              });
+            } catch {
+              return true;
+            }
+          },
+          "session.history.free-pages",
+        ),
+    );
+    if (!checkpointCompleted) {
+      pruning = {
+        usage: await measureSessionPhysicalDiskUsage(params.storePath),
+        removedFiles: 0,
+        completed: false,
+        checkpointIncomplete: pageDiagnostics.checkpointIncomplete ?? 1,
+        checkpoint: pageDiagnostics.checkpoint,
+      };
+    }
+    return checkpointCompleted;
   };
   let pruning = await pruneArchives("initial");
   let { usage, removedFiles } = pruning;
@@ -604,6 +656,34 @@ async function enforceSessionHistoryMaintenanceForDatabase(
       }
     }
   }
+  // Historical generations and cap-archived sessions first. Idle durable live
+  // nodes are last-resort capacity victims so maxDiskBytes still bounds the
+  // store. Skip when the high-water mark is not a usable stop condition.
+  if (usage.totalBytes > highWaterBytes && highWaterBytes > 0 && maxDiskBytes > 0) {
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const live = await reclaimSqliteLiveSessionEntriesToHighWater({
+      archiveDirectory,
+      database,
+      finalizePlans: finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+      highWaterBytes,
+      pruneArchivesToHighWater: async () => {
+        pruning = await pruneArchives("after-eviction");
+        return pruning;
+      },
+      reclaimFreePages: reclaimLiveFreePages,
+      resolved,
+      storePath: params.storePath,
+      usage,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    });
+    removedEntries += live.removedEntries;
+    removedFiles += live.removedFiles;
+    usage = live.usage;
+    if (pruning.checkpointIncomplete) {
+      return finish();
+    }
+  }
+
   if (removedEntries > 0) {
     await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
     usage = await measureSessionPhysicalDiskUsage(params.storePath);
