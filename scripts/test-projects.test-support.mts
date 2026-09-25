@@ -2766,6 +2766,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     [
       "pr-correction-preparation",
       "pr-crabbox-gate-plan",
+      "pr-main-refresh",
       "pr-merge-hosted",
       "pr-metadata",
       "pr-prepare-gates",
