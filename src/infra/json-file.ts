@@ -18,7 +18,14 @@ function resolveJsonSymlinkTarget(pathname: string): string | undefined {
     return undefined;
   }
 
-  return path.resolve(path.dirname(pathname), fs.readlinkSync(pathname));
+  const target = path.resolve(path.dirname(pathname), fs.readlinkSync(pathname));
+  try {
+    // Follow intermediate links before the no-follow reader opens the final file.
+    return fs.realpathSync(target);
+  } catch {
+    // Unreadable targets remain absent, just like failures inside tryReadJsonSync.
+    return undefined;
+  }
 }
 
 export function resolveJsonSaveTarget(pathname: string): string {
