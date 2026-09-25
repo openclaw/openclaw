@@ -65,7 +65,7 @@ internal class GatewayNodeApproval {
   private val lock = Any()
   private var generation = 0L
   private var pendingContext: GatewayNodeApprovalContext? = null
-  private var confirmedSurface: GatewayNodeApprovalSurface? = null
+  private var confirmedApproval: ConfirmedApproval? = null
   private val mutableState = MutableStateFlow(GatewayNodeApprovalActionState())
   val state = mutableState.asStateFlow()
 
@@ -73,7 +73,7 @@ internal class GatewayNodeApproval {
     synchronized(lock) {
       generation += 1
       pendingContext = null
-      confirmedSurface = null
+      // An unfinished confirmation survives transport replacement, scoped by refresh to its target.
       mutableState.value = GatewayNodeApprovalActionState()
     }
   }
@@ -85,20 +85,27 @@ internal class GatewayNodeApproval {
     val (epoch, confirmed) =
       synchronized(lock) {
         if (mutableState.value.approving) return
-        ++generation to confirmedSurface
+        ++generation to confirmedApproval?.takeIf { it.matches(context) }
       }
     try {
       val verified =
         verifiedSurface(nodes, context, context.desired.onboardingSurface()) &&
-          (confirmed == null || verifiedSurface(nodes, context, confirmed))
-      val pending = if (!verified && canManage(context)) readPending(context, epoch) else null
+          (confirmed == null || verifiedSurface(nodes, context, confirmed.surface))
+      val pending = if (!verified && canManage(context)) readPending(context, epoch, nodes) else null
       publish(context, epoch) {
+        confirmedApproval = confirmed?.takeUnless { verified }
         pendingContext = context
         mutableState.value =
           GatewayNodeApprovalActionState(
             pending = pending?.summary,
             verified = verified,
-            errorText = if (verified) null else mutableState.value.errorText,
+            errorText =
+              if (verified) {
+                null
+              } else {
+                mutableState.value.errorText
+                  ?: if (confirmed != null) nativeText("Could not verify phone access. Check approval again.") else null
+              },
           )
       }
     } catch (err: CancellationException) {
@@ -133,7 +140,9 @@ internal class GatewayNodeApproval {
         return
       }
       // Refreshes must preserve the full access the user confirmed, even if policy changes during approval.
-      publish(context, epoch) { confirmedSurface = pending.surface }
+      publish(context, epoch) {
+        confirmedApproval = ConfirmedApproval(context.lease.endpointStableId, context.selfNodeId, context.desired, pending.surface)
+      }
       var failure: NativeText? = null
       try {
         request(context, epoch, "node.pair.approve", buildJsonObject { put("requestId", JsonPrimitive(expectedRequestId)) })
@@ -149,6 +158,7 @@ internal class GatewayNodeApproval {
         verifiedSurface(nodes, context, pending.surface) &&
           verifiedSurface(nodes, context, context.desired.onboardingSurface())
       publish(context, epoch) {
+        if (verified) confirmedApproval = null
         mutableState.value =
           GatewayNodeApprovalActionState(
             verified = verified,
@@ -175,9 +185,19 @@ internal class GatewayNodeApproval {
     val surface: GatewayNodeApprovalSurface,
   )
 
+  private data class ConfirmedApproval(
+    val gatewayId: String,
+    val selfNodeId: String,
+    val desired: GatewayNodeApprovalSurface,
+    val surface: GatewayNodeApprovalSurface,
+  ) {
+    fun matches(context: GatewayNodeApprovalContext): Boolean = gatewayId == context.lease.endpointStableId && selfNodeId == context.selfNodeId && desired == context.desired
+  }
+
   private suspend fun readPending(
     context: GatewayNodeApprovalContext,
     epoch: Long,
+    nodes: JsonObject? = null,
   ): Pending? {
     if (!canManage(context)) return null
     val root = request(context, epoch, "node.pair.list")
@@ -192,6 +212,16 @@ internal class GatewayNodeApproval {
       "operator.admin" in context.scopes ||
         (requiredScopes != null && requiredScopes.isNotEmpty() && requiredScopes.all { it in context.scopes })
     if (!allowed || !context.desired.contains(surface) || !surface.contains(context.desired.onboardingSurface())) return null
+    // Pairing storage can retain an older request after a rate-limited reconnect.
+    // The catalog identifies the request matching the connected phone's declaration.
+    val node = selfNode(nodes ?: request(context, epoch, "node.list"), context) ?: return null
+    if (
+      (node["connected"] as? JsonPrimitive)?.booleanOrNull != true ||
+      node["approvalState"].asStringOrNull() !in setOf("pending-approval", "pending-reapproval") ||
+      normalizeGatewayApprovalRequestId(node["pendingRequestId"].asStringOrNull()) != requestId
+    ) {
+      return null
+    }
     return Pending(GatewayPendingNodeApproval(requestId, surface.capabilities.sorted(), surface.commands.sorted()), surface)
   }
 
@@ -204,14 +234,19 @@ internal class GatewayNodeApproval {
     context: GatewayNodeApprovalContext,
     required: GatewayNodeApprovalSurface,
   ): Boolean {
-    val node =
-      (nodes["nodes"] as? JsonArray)
-        ?.mapNotNull { it.asObjectOrNull() }
-        ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId } ?: return false
+    val node = selfNode(nodes, context) ?: return false
     return node["approvalState"].asStringOrNull() == "approved" &&
       (node["connected"] as? JsonPrimitive)?.booleanOrNull == true &&
       parseSurface(node)?.contains(required) == true
   }
+
+  private fun selfNode(
+    nodes: JsonObject,
+    context: GatewayNodeApprovalContext,
+  ): JsonObject? =
+    (nodes["nodes"] as? JsonArray)
+      ?.mapNotNull { it.asObjectOrNull() }
+      ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId }
 
   private suspend fun request(
     context: GatewayNodeApprovalContext,

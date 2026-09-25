@@ -210,6 +210,7 @@ it.each([
   "version-mismatch",
   "closed-host",
   "closed-host-blocked",
+  "closed-host-blocked-last",
   "closed-host-revoked",
   "closed-host-replaced",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
@@ -221,7 +222,7 @@ it.each([
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
   const siblingLease =
-    closedHost || proof.startsWith("two-leases")
+    (closedHost && proof !== "closed-host-blocked-last") || proof.startsWith("two-leases")
       ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
       : undefined;
   if (proof === "two-leases") {
@@ -240,7 +241,7 @@ it.each([
   const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
     ? undefined
     : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (proof === "closed-host-blocked") {
+  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
     database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
     const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
     try {
@@ -330,14 +331,13 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    if (proof === "prepared-existing") {
-      expect(quickCheck).toHaveBeenCalledOnce();
-    }
+    expect(quickCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
         proof === "closed-host" ||
         proof === "closed-host-blocked" ||
+        proof === "closed-host-blocked-last" ||
         proof === "two-leases" ||
         proof === "two-leases-missing-metadata" ||
         proof === "version-mismatch"

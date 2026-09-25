@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,

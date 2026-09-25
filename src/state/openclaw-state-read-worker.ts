@@ -96,7 +96,7 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
     return structuredClone(command);
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
-    return { type: command.type, identity: { ...command.identity } };
+    return { type: command.type, identity: structuredClone(command.identity) };
   }
   if (command.type === "userProfiles.githubAttribution.resolve") {
     return { type: command.type, profileIds: [...command.profileIds] };
@@ -400,13 +400,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
-    return (
-      bytes +
-      Object.values(command.identity).reduce(
-        (total, value) => total + Buffer.byteLength(value, "utf8"),
-        0,
-      )
-    );
+    return bytes + Buffer.byteLength(JSON.stringify(command.identity), "utf8");
   }
   if (command.type === "userProfiles.email.resolve") {
     return bytes + Buffer.byteLength(command.email, "utf8");

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Binding, NodePath } from "@babel/traverse";
+import type { NodePath } from "@babel/traverse";
 import type { Identifier } from "@babel/types";
 import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
@@ -72,9 +72,10 @@ export function buildPluginTypeScriptSource(root: string) {
       const { parse, parseExpression }: typeof import("@babel/parser") = require("@babel/parser");
       const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
       const { default: generate }: typeof import("@babel/generator") = require("@babel/generator");
+      const { transformSync }: typeof import("esbuild") = require("esbuild");
       const sourceText = fs.readFileSync(input, "utf8");
       const mode = sources.get(destination)?.mode;
-      const nativeOptions = {
+      const transformOptions = {
         sourcefile: input,
         loader: input.endsWith(".jsx") ? "jsx" : input.endsWith("x") ? "tsx" : "ts",
         target: "es2022",
@@ -85,19 +86,19 @@ export function buildPluginTypeScriptSource(root: string) {
           compilerOptions: { experimentalDecorators: true, useDefineForClassFields: true },
         },
       } satisfies import("esbuild").TransformOptions;
+      // Analyze runtime JavaScript so erased types, legacy syntax and value scopes share one owner.
+      const analysis = transformSync(sourceText, {
+        ...transformOptions,
+        sourcefile: path.relative(root, input),
+      }).code;
       let parsed: ReturnType<typeof parse>;
       try {
-        parsed = parse(sourceText, {
+        parsed = parse(analysis, {
           sourceFilename: input,
           sourceType: "unambiguous",
           allowAwaitOutsideFunction: true,
           allowReturnOutsideFunction: true,
-          plugins: [
-            ...(/\.[cm]?tsx?$/.test(input) ? ["typescript" as const] : []),
-            "decorators-legacy",
-            "importAssertions",
-            ...(input.endsWith("x") ? ["jsx" as const] : []),
-          ],
+          plugins: input.endsWith("x") ? ["jsx"] : [],
         });
       } catch (error) {
         if (error instanceof SyntaxError) {
@@ -107,37 +108,6 @@ export function buildPluginTypeScriptSource(root: string) {
         }
         throw error;
       }
-      if (mode !== "sync" && mode !== "async") {
-        // Babel scopes omit TypeScript value bindings, including merged namespaces and enums.
-        const { transformSync }: typeof import("esbuild") = require("esbuild");
-        parsed = parse(transformSync(sourceText, nativeOptions).code, {
-          sourceFilename: input,
-          sourceType: "unambiguous",
-          allowAwaitOutsideFunction: true,
-          allowReturnOutsideFunction: true,
-          plugins: input.endsWith("x") ? ["jsx"] : [],
-        });
-      }
-      const runtimeBinding = (binding: Binding | undefined) => {
-        if (!binding) {
-          return false;
-        }
-        const declaration = binding.path;
-        if (
-          declaration.isTSTypeAliasDeclaration() ||
-          declaration.isTSInterfaceDeclaration() ||
-          ("declare" in declaration.node && declaration.node.declare) ||
-          (declaration.parentPath?.isVariableDeclaration() && declaration.parentPath.node.declare)
-        ) {
-          return false;
-        }
-        const imported = declaration.findParent((candidate) => candidate.isImportDeclaration());
-        return !(
-          (imported?.isImportDeclaration() && imported.node.importKind === "type") ||
-          (declaration.isImportSpecifier() && declaration.node.importKind === "type") ||
-          (declaration.isTSImportEqualsDeclaration() && declaration.node.importKind === "type")
-        );
-      };
       let usesCommonJs = false;
       let needsHelper = false;
       let explicitInterop = false;
@@ -153,16 +123,11 @@ export function buildPluginTypeScriptSource(root: string) {
           namespace = program.scope.generateUidIdentifier("pluginNamespace").name;
         },
         ReferencedIdentifier(reference) {
-          if (
-            !reference.isIdentifier() ||
-            reference.findParent(
-              (candidate) => candidate.isTSType() || candidate.isTSTypeAnnotation(),
-            )
-          ) {
+          if (!reference.isIdentifier()) {
             return;
           }
           const name = reference.node.name;
-          if (runtimeBinding(reference.scope.getBinding(name))) {
+          if (reference.scope.getBinding(name)) {
             return;
           }
           if (name === "module" || name === "exports") {
@@ -173,36 +138,23 @@ export function buildPluginTypeScriptSource(root: string) {
             needsHelper ||= name === "require";
           }
         },
-        TSExportAssignment() {
-          usesCommonJs = true;
-        },
-        ImportDeclaration(declaration) {
-          needsHelper ||= declaration.node.importKind !== "type";
-        },
-        TSImportEqualsDeclaration(declaration) {
-          needsHelper ||=
-            declaration.node.importKind !== "type" &&
-            declaration.node.moduleReference.type === "TSExternalModuleReference";
+        ImportDeclaration() {
+          needsHelper = true;
         },
         ExportNamedDeclaration(declaration) {
-          needsHelper ||=
-            declaration.node.exportKind !== "type" && Boolean(declaration.node.source);
-          explicitInterop ||=
-            declaration.node.exportKind !== "type" &&
-            declaration.node.specifiers.some(
-              (specifier) =>
-                (specifier.type !== "ExportSpecifier" || specifier.exportKind !== "type") &&
-                (specifier.exported.type === "StringLiteral"
-                  ? specifier.exported.value === "module.exports"
-                  : specifier.exported.name === "module.exports"),
-            );
+          needsHelper ||= Boolean(declaration.node.source);
+          explicitInterop ||= declaration.node.specifiers.some((specifier) =>
+            specifier.exported.type === "StringLiteral"
+              ? specifier.exported.value === "module.exports"
+              : specifier.exported.name === "module.exports",
+          );
         },
-        ExportAllDeclaration(declaration) {
-          needsHelper ||= declaration.node.exportKind !== "type";
-          wildcardExports ||= declaration.node.exportKind !== "type";
+        ExportAllDeclaration() {
+          needsHelper = true;
+          wildcardExports = true;
         },
-        CallExpression(call) {
-          needsHelper ||= call.node.callee.type === "Import";
+        ImportExpression() {
+          needsHelper = true;
         },
         MemberExpression(member) {
           needsHelper ||=
@@ -397,9 +349,8 @@ export { value as "openclaw:async-commonjs" };`
           );
         }
       }
-      const { transformSync }: typeof import("esbuild") = require("esbuild");
       const emitted = transformSync(generate(parsed).code, {
-        ...nativeOptions,
+        ...transformOptions,
         format: esm ? "esm" : "cjs",
       });
       fs.writeFileSync(destination, emitted.code, { mode: 0o600 });

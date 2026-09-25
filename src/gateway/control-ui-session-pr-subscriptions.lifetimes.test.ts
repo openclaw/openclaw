@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
@@ -25,6 +26,71 @@ describe("recipient publication lifetimes", () => {
   const changedSessions = {
     shared: { ...changed, status: "rate-limited" },
   };
+
+  it.each(["disconnect", "replace with another key", "replace with the same key"] as const)(
+    "tracks shared cache ownership during %s of a preparing watcher",
+    async (action) => {
+      vi.useFakeTimers();
+      const entered = createDeferred();
+      const held = createDeferred<ControlUiSessionPrTarget>();
+      let holdPreparation = true;
+      let settled = false;
+      const load = vi.fn(
+        async (_params: ControlUiSessionPullRequestsParams, _signal: AbortSignal | undefined) =>
+          READY,
+      );
+      active = createTestControlUiSessionPrSubscriptions({
+        broadcastToConnIds: vi.fn(),
+        load,
+        prepareRead: async (connId, session) => () => {
+          if (connId === "preparing" && holdPreparation) {
+            holdPreparation = false;
+            entered.resolve();
+            return held.promise;
+          }
+          return Promise.resolve({
+            ...target,
+            params: { sessionKey: session.sessionKey, agentId: "main" },
+            identity: session.sessionKey,
+          });
+        },
+      });
+      await active.replace("first", ["shared"]);
+      const original = load.mock.calls[0]![1];
+      const preparing = active.replace("preparing", ["shared"]).then(() => {
+        settled = true;
+      });
+      try {
+        await entered.promise;
+        active.unsubscribe("first");
+        expect(original?.aborted).toBe(false);
+        if (action === "disconnect") {
+          active.unsubscribe("preparing");
+        } else {
+          await active.replace("preparing", [
+            action === "replace with the same key" ? "shared" : "other",
+          ]);
+        }
+        const retained = action === "replace with the same key";
+        expect(original?.aborted).toBe(!retained);
+        expect(settled).toBe(false);
+
+        await active.replace("next", ["shared"]);
+        const sharedLoads = load.mock.calls.filter(([params]) => params.sessionKey === "shared");
+        expect(sharedLoads).toHaveLength(retained ? 1 : 2);
+        if (!retained) {
+          expect(sharedLoads[1]![1]).not.toBe(original);
+          expect(sharedLoads[1]![1]?.aborted).toBe(false);
+        }
+        held.resolve(target);
+        await preparing;
+        expect(settled).toBe(true);
+      } finally {
+        held.resolve(target);
+        await preparing;
+      }
+    },
+  );
 
   it("retries an unchanged snapshot missed during recipient preparation without duplicating delivery", async () => {
     vi.useFakeTimers();

@@ -21,6 +21,8 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
   retainWork(): () => void;
+  readonly retainedWorkCount: number;
+  waitForRetainedWork(signal: AbortSignal, includeConsumers?: boolean): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
