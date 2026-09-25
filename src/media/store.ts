@@ -24,7 +24,6 @@ import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { resolveConfigDir } from "../utils.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
-const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by store and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
@@ -42,7 +41,6 @@ const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
 const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const queuePlaybackCacheOperation = createAsyncLock();
 type CleanOldMediaOptions = {
@@ -73,7 +71,7 @@ function resolveMediaSubdir(subdir: string, caller: string): string {
 }
 
 function resolveMediaScopedDir(subdir: string, caller: string): string {
-  const mediaDir = resolveMediaDir();
+  const mediaDir = getMediaDir();
   const safeSubdir = resolveMediaSubdir(subdir, caller);
   const dir = safeSubdir ? path.join(mediaDir, safeSubdir) : mediaDir;
   if (!isPathInside(mediaDir, dir)) {
@@ -90,7 +88,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
   return safeSubdir ? path.posix.join(safeSubdir, id) : id;
 }
 
-function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
+function openMediaStore(maxBytes = MEDIA_MAX_BYTES, rootDir = getMediaDir()) {
   return fileStore({
     rootDir,
     dirMode: 0o700,
@@ -134,12 +132,12 @@ export function extractOriginalFilename(filePath: string): string {
 
 /** Returns the configured absolute media-store root without creating it. */
 export function getMediaDir() {
-  return resolveMediaDir();
+  return path.join(resolveConfigDir(), "media");
 }
 
 /** Creates the configured media-store root with private directory permissions. */
 export async function ensureMediaDir() {
-  const mediaDir = resolveMediaDir();
+  const mediaDir = getMediaDir();
   await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
   return mediaDir;
 }
@@ -228,7 +226,7 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
     return;
   }
-  const mediaDir = resolveMediaDir();
+  const mediaDir = getMediaDir();
   await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
   const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
@@ -241,7 +239,7 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     }
     const scopedDir = path.join(mediaDir, entry.name);
     const recursive = options.recursive === true;
-    await openMediaStore(MAX_BYTES, scopedDir).pruneExpired({
+    await openMediaStore(MEDIA_MAX_BYTES, scopedDir).pruneExpired({
       ttlMs,
       recursive,
       maxDepth: recursive ? undefined : 0,
@@ -282,7 +280,7 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
       PLAYBACK_TRANSCODE_SUBDIR,
       "prunePlaybackTranscodeCache",
     );
-    await openMediaStore(MAX_BYTES, cacheDir).pruneExpired({
+    await openMediaStore(MEDIA_MAX_BYTES, cacheDir).pruneExpired({
       ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
       recursive: true,
       pruneEmptyDirs: true,
@@ -294,7 +292,7 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
 /** Prunes stale delivery staging without touching inbound replay or SQLite-owned outgoing media. */
 export async function pruneOutboundMedia(): Promise<void> {
   const outboundDir = resolveMediaScopedDir(OUTBOUND_STAGING_SUBDIR, "pruneOutboundMedia");
-  await openMediaStore(MAX_BYTES, outboundDir).pruneExpired({
+  await openMediaStore(MEDIA_MAX_BYTES, outboundDir).pruneExpired({
     ttlMs: OUTBOUND_STAGING_TTL_MS,
     recursive: true,
     pruneEmptyDirs: true,
@@ -309,10 +307,6 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
   // Trust metadata must not outlive the staged file that it authorizes.
   const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
   await pruneStaleTrustedGeneratedHtmlMarkers();
-}
-
-function looksLikeUrl(src: string) {
-  return hasHttpUrlPrefix(src);
 }
 
 /** Media-store file metadata returned after bytes are persisted under a safe media ID. */
@@ -386,20 +380,6 @@ function resolveSavedMediaExtension(params: {
     getFileExtension(params.detectionFilePathHint) ??
     ""
   );
-}
-
-function buildSavedMediaResult(params: {
-  dir: string;
-  id: string;
-  size: number;
-  contentType?: string;
-}): SavedMedia {
-  return {
-    id: params.id,
-    path: path.join(params.dir, params.id),
-    size: params.size,
-    contentType: params.contentType,
-  };
 }
 
 async function writeSavedMediaBuffer(params: {
@@ -476,7 +456,10 @@ async function writeMediaStreamToFile(params: {
   };
 }
 
-function toSaveMediaSourceError(err: FsSafeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
+function toSaveMediaSourceError(
+  err: FsSafeError,
+  maxBytes = MEDIA_MAX_BYTES,
+): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -508,11 +491,11 @@ export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
   subdir = "",
-  maxBytes = MAX_BYTES,
+  maxBytes = MEDIA_MAX_BYTES,
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  if (looksLikeUrl(source)) {
+  if (hasHttpUrlPrefix(source)) {
     const { saveRemoteMediaForStore } = await import("./store.remote.runtime.js");
     return await saveRemoteMediaForStore({
       source,
@@ -534,7 +517,7 @@ export async function saveMediaSource(
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
     await writeSavedMediaBuffer({ subdir, id, buffer });
-    return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
+    return { id, path: path.join(dir, id), size: buffer.byteLength, contentType: mime };
   } catch (err) {
     if (err instanceof FsSafeError) {
       throw toSaveMediaSourceError(err, maxBytes);
@@ -548,7 +531,7 @@ export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
   subdir = "inbound",
-  maxBytes = MAX_BYTES,
+  maxBytes = MEDIA_MAX_BYTES,
   originalFilename?: string,
   detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
@@ -573,7 +556,7 @@ export async function saveMediaBuffer(
   });
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ subdir, id, buffer });
-  return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
+  return { id, path: path.join(dir, id), size: buffer.byteLength, contentType: mime };
 }
 
 /** Streams media into a sibling temp file before atomically publishing the final media ID. */
@@ -581,7 +564,7 @@ export async function saveMediaStream(
   stream: AsyncIterable<unknown>,
   contentType?: string,
   subdir = "inbound",
-  maxBytes = MAX_BYTES,
+  maxBytes = MEDIA_MAX_BYTES,
   originalFilename?: string,
   detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
@@ -651,32 +634,17 @@ export async function saveMediaStream(
     },
     () => !consumptionStarted,
   );
-  return buildSavedMediaResult({ dir, ...result });
+  return {
+    id: result.id,
+    path: path.join(dir, result.id),
+    size: result.size,
+    contentType: result.contentType,
+  };
 }
 
 /**
- * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
- *
- * This is the read-side counterpart to saveMediaBuffer and is used by the
- * agent runner to hydrate opaque `media://inbound/<id>` URIs written by the
- * Gateway's claim-check offload path.
- *
- * Security:
- * - Rejects IDs and subdirs containing path traversal, absolute paths, empty
- *   segments, or null bytes to prevent path injection outside the media root.
- * - Verifies the resolved path is a regular file (not a symlink or directory)
- *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
- *
- * @param id      The media ID as returned by SavedMedia.id (may include
- *                extension and original-filename prefix,
- *                e.g. "photo---<uuid>.png" or "图片---<uuid>.png").
- * @param subdir  The subdirectory the file was saved into (default "inbound").
- * @returns       Absolute path to the file on disk.
- * @throws        If the ID is unsafe, the file does not exist, or is not a
- *                regular file.
- *
- * Prefer readMediaBuffer when the caller needs the bytes; this path-returning
- * helper is for channel surfaces that need a stable local attachment path.
+ * Returns a validated store path for channels that require local attachments.
+ * Prefer readMediaBuffer when the caller needs bytes bound to the opened file.
  */
 export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   const relativePath = resolveMediaRelativePath(id, subdir, "resolveMediaBufferPath");
@@ -703,7 +671,7 @@ type ReadMediaBufferResult = {
 export async function readMediaBuffer(
   id: string,
   subdir = "inbound",
-  maxBytes = MAX_BYTES,
+  maxBytes = MEDIA_MAX_BYTES,
 ): Promise<ReadMediaBufferResult> {
   const relativePath = resolveMediaRelativePath(id, subdir, "readMediaBuffer");
   await using opened = await openMediaStore(maxBytes)
@@ -727,22 +695,8 @@ export async function readMediaBuffer(
 }
 
 /**
- * Deletes a file previously saved by saveMediaBuffer.
- *
- * This is used by parseMessageWithAttachments to clean up files that were
- * successfully offloaded earlier in the same request when a later attachment
- * fails validation and the entire parse is aborted, preventing orphaned files
- * from accumulating on disk ahead of the periodic TTL sweep.
- *
- * Uses a media-root handle to apply the same path-safety guards as the read
- * path while removing the file under the pinned media root.
- *
- * Errors are intentionally not suppressed — callers that want best-effort
- * cleanup should catch and discard exceptions themselves (e.g. via
- * Promise.allSettled).
- *
- * @param id     The media ID as returned by SavedMedia.id.
- * @param subdir The subdirectory the file was saved into (default "inbound").
+ * Deletes a stored attachment through the pinned media root.
+ * Errors propagate so the caller owns best-effort cleanup policy.
  */
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");

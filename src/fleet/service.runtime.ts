@@ -44,6 +44,7 @@ import {
   cleanupFailedCreateContainer,
   cleanupFailedCreateNetwork,
   detectHostSelinux,
+  inspectionHasFleetOwner,
   inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
@@ -58,7 +59,10 @@ import {
   restorePreviousCell,
   withFleetCellOperation,
   verifyReplacementHealthy,
+  type FleetHealthResult,
 } from "./service-support.runtime.js";
+
+export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
@@ -103,11 +107,6 @@ type FleetListEntry = {
   image: string;
   created: string;
 };
-
-export type FleetHealthResult =
-  | { status: "ok"; url: string; httpStatus: number }
-  | { status: "failed"; url: string; error: string; httpStatus?: number }
-  | { status: "skipped"; url: string; reason: string };
 
 type FleetStatusResult = {
   tenant: string;
@@ -462,9 +461,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       let container: FleetStatusResult["container"];
       let health: FleetHealthResult;
       if (inspection.kind === "ok") {
-        const managed =
-          inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-          inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir);
+        const managed = inspectionHasFleetOwner(record, inspection);
         container = {
           state: managed ? inspection.state : "unknown",
           running: inspection.running,

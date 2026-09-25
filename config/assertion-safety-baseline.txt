@@ -2071,7 +2071,7 @@ src/claws/project.ts	4
 src/claws/provenance.ts	6
 src/claws/reader.ts	5
 src/claws/schema.ts	3
-src/claws/update-capability-changes.ts	11
+src/claws/update-capability-changes.ts	7
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
@@ -2919,7 +2919,7 @@ src/meeting-bot/browser-node.ts	2
 src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2
-src/meeting-bot/platform-adapter.ts	8
+src/meeting-bot/platform-adapter.ts	7
 src/meeting-bot/plugin-entry.ts	5
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
@@ -3264,7 +3264,7 @@ src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
-src/system-agent/agent-turn.ts	4
+src/system-agent/agent-turn.ts	2
 src/system-agent/assistant-prompts.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
@@ -3276,7 +3276,7 @@ src/system-agent/rescue-message.ts	2
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
 src/talk/agent-consult-tool.ts	2
-src/talk/agent-run-control-shared.ts	4
+src/talk/agent-run-control-shared.ts	2
 src/talk/client-voice-confirmation.ts	1
 src/talk/client-voice-mutation-digest-owner.ts	1
 src/talk/client-voice-session-store.ts	1
@@ -3307,10 +3307,10 @@ src/tts/openai-compatible-speech-provider.ts	1
 src/tts/status-config.ts	1
 src/tts/tts-config.ts	5
 src/tts/tts-core.ts	1
-src/tts/tts-payload.ts	2
+src/tts/tts-payload.ts	1
 src/tts/tts-provider-resolution.ts	2
-src/tts/tts-request.ts	2
-src/tts/tts-settings.ts	4
+src/tts/tts-request.ts	1
+src/tts/tts-settings.ts	3
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	4
 src/tui/components/chat-log.ts	2

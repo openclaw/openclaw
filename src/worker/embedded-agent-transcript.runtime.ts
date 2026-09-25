@@ -85,7 +85,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
   };
 }
 
-type WorkerTranscriptClient = {
+export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
