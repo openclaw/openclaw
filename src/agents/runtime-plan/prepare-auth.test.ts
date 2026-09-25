@@ -319,7 +319,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   it("keeps unknown no-observation models on the legacy auth plan", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "openai",
-      modelId: "gpt-5.4-nano",
+      modelId: "gpt-9-unreleased",
       env: {},
       harnessId: "codex",
       harnessRuntime: "codex",

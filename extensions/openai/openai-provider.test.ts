@@ -9,6 +9,11 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
+import {
+  expectCatalogEntry,
+  expectFields,
+  expectNoCatalogEntry,
+} from "./catalog-expectations.test-support.js";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -238,30 +243,6 @@ async function runWrappedPayloadCase(params: {
     payload,
     options: capturedOptions,
   };
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
-function expectCatalogEntry(entries: unknown, id: string, expected: Record<string, unknown>): void {
-  expect(Array.isArray(entries)).toBe(true);
-  const entry = (entries as Array<Record<string, unknown>>).find(
-    (candidate) => candidate.id === id,
-  );
-  expectFields(entry, expected);
-}
-
-function expectNoCatalogEntry(entries: unknown, id: string): void {
-  expect(Array.isArray(entries)).toBe(true);
-  const entryIds = new Set((entries as Array<Record<string, unknown>>).map((entry) => entry.id));
-  expect(entryIds.has(id)).toBe(false);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -702,6 +683,23 @@ describe("buildOpenAIProvider", () => {
       expect(result.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
     },
   );
+
+  it("keeps the offline ChatGPT catalog to ids with a subscription contract", async () => {
+    // With the codex runtime enabled this catalog becomes the model's observed
+    // route. Listing gpt-5.4-nano here made it ChatGPT-only, so an API key was
+    // rejected as incompatible with the route (#148559).
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
+    const result = await runCatalogWithFetchGuard({
+      fetchGuard,
+      auth: { mode: "oauth", apiKey: "secretref-managed", source: "none" },
+    });
+    expect(fetchGuard).not.toHaveBeenCalled();
+    expect(result.provider.api).toBe("openai-chatgpt-responses");
+    const ids = result.provider.models?.map((model) => model.id) ?? [];
+    expect(ids).toContain("gpt-5.4-mini");
+    expect(ids).not.toContain("gpt-5.4-nano");
+    expect(ids).not.toContain("chat-latest");
+  });
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);

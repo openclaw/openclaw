@@ -27,6 +27,88 @@ describe("OpenAI model route contract", () => {
     ]);
   });
 
+  // #148559: gpt-5.4-nano has no static route contract, and OpenAI serves it only
+  // on the Platform API. With nothing authored or observed it takes the Platform
+  // route alone; every authored or observed ChatGPT route keeps the answer it had
+  // before, and the dual-route sibling is unaffected.
+  it("routes gpt-5.4-nano to the Platform API alone when nothing is authored or observed", () => {
+    const result = resolveUnconfiguredModel("gpt-5.4-nano");
+    expect(result).toMatchObject({
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    });
+    expect(result.kind === "routes" ? result.routes : []).toHaveLength(1);
+    expect(resolveUnconfiguredModel("gpt-5.4-mini")).toMatchObject({
+      kind: "routes",
+      routes: [
+        { api: "openai-responses", authRequirement: "api-key" },
+        { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "authored Platform base URL",
+      context: { configuredProvider: { baseUrl: "https://api.openai.com/v1" } },
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    },
+    {
+      name: "authored custom base URL",
+      context: { configuredProvider: { baseUrl: "https://relay.example.test/v1" } },
+      routes: [
+        {
+          api: "openai-completions",
+          baseUrl: "https://relay.example.test/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    },
+    {
+      name: "authored ChatGPT adapter",
+      context: { configuredProvider: { api: "openai-chatgpt-responses" as const } },
+      routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
+    },
+    {
+      name: "observed ChatGPT row",
+      context: {
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses" as const,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
+      },
+      routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
+    },
+  ])("keeps the $name route for gpt-5.4-nano", ({ context, routes }) => {
+    expect(
+      resolveModelRoutes({ provider: "openai", modelId: "gpt-5.4-nano", ...context }),
+    ).toMatchObject({ kind: "routes", routes });
+  });
+
+  // The openai manifest catalog lists nano on the Platform transport, so the
+  // runtime always observes a Platform row for it; that row resolves the same
+  // Platform route as the unobserved case.
+  it("keeps gpt-5.4-nano on the Platform route when only a Platform row is observed", () => {
+    const result = resolveModelRoutes({
+      provider: "openai",
+      modelId: "gpt-5.4-nano",
+      observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
+    });
+    expect(result).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    });
+    expect(result.kind === "routes" ? result.routes : []).toHaveLength(1);
+  });
+
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");
@@ -63,6 +145,10 @@ describe("OpenAI model route contract", () => {
 
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
+      // The three membership filters below skip an id that sits in no route set,
+      // so assert the runtime invariant directly: every modern id resolves to at
+      // least one route with nothing authored or observed (gpt-5.4-nano, #148559).
+      expect(resolveUnconfiguredModel(modelId)).toMatchObject({ kind: "routes" });
     }
     for (const modelId of dualRouteModelIds) {
       const resolution = resolveUnconfiguredModel(modelId);

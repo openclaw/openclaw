@@ -1361,7 +1361,9 @@ describe("modelsStatusCommand auth overview", () => {
     expect(textRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("reports missing static transport observation as indeterminate", async () => {
+  // OpenAI serves nano only on the Platform API, so an OAuth-only setup is
+  // reported as missing the API key it needs rather than as ready.
+  it("reports an OAuth-only contract-less first-party id as missing API-key auth", async () => {
     const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
@@ -1382,13 +1384,56 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     const payload = parseFirstJsonLog(localRuntime);
-    expect(payload.auth.missingProvidersInUse).toEqual([]);
     expect(payload.auth.modelRouteIssues).toEqual([
-      expect.objectContaining({
-        kind: "indeterminate",
+      {
+        kind: "missing-auth",
         provider: "openai",
         model: "gpt-5.4-nano",
-      }),
+        authRequirement: "api-key",
+        message: "No usable api-key authentication is available for openai/gpt-5.4-nano.",
+      },
+    ]);
+    expect(localRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports an OAuth-only nano as missing API-key auth when the catalog observes a Platform row", async () => {
+    const localRuntime = createTestRuntime();
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.4-nano",
+        profiles: {
+          "openai:subscription": {
+            type: "oauth",
+            provider: "openai",
+            access: "subscription-access",
+            refresh: "subscription-refresh",
+            expires: Date.now() + 10 * 60_000,
+          },
+        },
+        catalog: [
+          {
+            id: "gpt-5.4-nano",
+            name: "GPT 5.4 Nano",
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+          },
+        ],
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
+      },
+    );
+
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.auth.modelRouteIssues).toEqual([
+      {
+        kind: "missing-auth",
+        provider: "openai",
+        model: "gpt-5.4-nano",
+        authRequirement: "api-key",
+        message: "No usable api-key authentication is available for openai/gpt-5.4-nano.",
+      },
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
   });

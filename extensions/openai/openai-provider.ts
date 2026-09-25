@@ -29,6 +29,10 @@ import {
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
+  shouldResolveDynamicModelThroughCodex,
+  shouldUseCodexResponsesHooks,
+} from "./codex-route-selection.js";
+import {
   applyOpenAIConfig,
   OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_DEFAULT_MODEL,
@@ -48,8 +52,8 @@ import {
   OPENAI_GPT_56_TERRA_MODEL_ID,
   OPENAI_GPT_6_MODEL_IDS,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
+  isOpenAIChatGPTModernModelId,
   isOpenAIPlatformOnlyRouteModelId,
-  isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
@@ -547,7 +551,11 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
-      if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
+      // Offline hints may only name ids with a subscription contract. A modern id
+      // outside the ChatGPT catalog (gpt-5.4-nano) that slips in here becomes the
+      // model's only observed route once the codex runtime is enabled, and an
+      // API-key credential is then rejected as incompatible with that route.
+      if (!isOpenAIChatGPTModernModelId(modelId)) {
         return [];
       }
       // New model availability comes from successful account discovery.
@@ -746,17 +754,6 @@ function normalizeOpenAITransport(
   };
 }
 
-function shouldUseCodexResponsesHooks(params: {
-  provider?: string;
-  api?: ProviderRuntimeModel["api"] | null;
-  baseUrl?: string;
-}): boolean {
-  if (params.api === "openai-chatgpt-responses") {
-    return true;
-  }
-  return typeof params.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
-}
-
 function resolveConfiguredProviderAuthTransport(
   providerConfig: ProviderResolveDynamicModelContext["providerConfig"],
 ) {
@@ -769,35 +766,6 @@ function resolveConfiguredProviderAuthTransport(
   }
 
   return undefined;
-}
-
-function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelContext): boolean {
-  if (
-    shouldUseCodexResponsesHooks({
-      provider: ctx.provider,
-      api: ctx.providerConfig?.api,
-      baseUrl: ctx.providerConfig?.baseUrl,
-    })
-  ) {
-    return true;
-  }
-  if (
-    ctx.providerConfig?.api === "openai-responses" ||
-    ctx.providerConfig?.api === "openai-completions" ||
-    (ctx.providerConfig?.baseUrl && !isOpenAICodexBaseUrl(ctx.providerConfig.baseUrl))
-  ) {
-    return false;
-  }
-  // The auth planner owns profile ordering and projects the selected physical
-  // route into providerConfig before materialization. Until then, only a
-  // one-route model contract may choose a transport.
-  if (isOpenAIPlatformOnlyRouteModelId(ctx.modelId)) {
-    return false;
-  }
-  if (isOpenAISubscriptionOnlyRouteModelId(ctx.modelId)) {
-    return true;
-  }
-  return ctx.agentRuntimeId === "codex";
 }
 
 function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
