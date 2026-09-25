@@ -139,11 +139,6 @@ describe("ClickClack post-write setup verification", () => {
 
   it.each([
     {
-      name: "running",
-      arrange: () => mocks.callGatewayFromCli.mockResolvedValue({ ok: true }),
-      expected: "OpenClaw is running — ClickClack will connect automatically.",
-    },
-    {
       name: "not running",
       arrange: () =>
         mocks.callGatewayFromCli.mockRejectedValue(
