@@ -49,23 +49,29 @@ Configure the provider plugin before selecting its model:
   server such as Kev. Install and enable the external plugin, then configure a
   protected hosted credential or an explicit loopback `baseUrl`. Hosted
   evaluations send the selected evidence to TypeSafe and incur its normal usage charges.
+- [Vercel AI Gateway](/providers/vercel-ai-gateway#decision-models) serves hosted
+  Jev through the Gateway. Decision evaluation needs its own SecretRef at
+  `plugins.entries.vercel-ai-gateway.config.apiKey` on an enabled plugin entry;
+  the chat-model key from onboarding does not apply.
 
 The current plugins declare these model references:
 
-| Model reference                      | Model                  | Preparation                                            |
-| ------------------------------------ | ---------------------- | ------------------------------------------------------ |
-| `onnx/deberta-v3-base-zeroshot-v2.0` | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-base-v3.0`            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-edge-v3.0`            | GLiClass Edge v3       | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-instruct-base-v1.0`   | GLiClass Instruct Base | Local export                                           |
-| `onnx/gliclass-instruct-edge-v1.0`   | GLiClass Instruct Edge | Local export                                           |
-| `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
-| `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
-| `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
-| `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
-| `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
+| Model reference                            | Model                          | Preparation                                            |
+| ------------------------------------------ | ------------------------------ | ------------------------------------------------------ |
+| `onnx/deberta-v3-base-zeroshot-v2.0`       | DeBERTa Zero-shot v2           | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-base-v3.0`                  | GLiClass Base v3               | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-edge-v3.0`                  | GLiClass Edge v3               | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-instruct-base-v1.0`         | GLiClass Instruct Base         | Local export                                           |
+| `onnx/gliclass-instruct-edge-v1.0`         | GLiClass Instruct Edge         | Local export                                           |
+| `onnx/gliner2.5-base-v1`                   | GLiNER 2.5 Base                | Download pinned ONNX artifacts                         |
+| `onnx/gliner2.5-small-v1`                  | GLiNER 2.5 Small               | Download pinned ONNX artifacts                         |
+| `typesafe/jev-1.13.0`                      | Jev 1.13.0                     | TypeSafe credential                                    |
+| `typesafe/jev-latest`                      | Jev                            | TypeSafe credential; follows the vendor's latest model |
+| `typesafe/kev-latest`                      | Kev (local server)             | Running System One server and explicit loopback URL    |
+| `vercel-ai-gateway/typesafe-ai/jev`        | Jev (Vercel AI Gateway)        | Decision SecretRef on the plugin entry                 |
+| `vercel-ai-gateway/typesafe-ai/jev-1.13.0` | Jev 1.13.0 (Vercel AI Gateway) | Decision SecretRef on the plugin entry                 |
 
-Both plugins are currently unpublished candidates. Their setup pages explain
+The ONNX and TypeSafe plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 

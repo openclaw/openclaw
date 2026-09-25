@@ -6,6 +6,23 @@
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "contracts": {
+    "decisionProviders": [
+      "vercel-ai-gateway"
+    ]
+  },
+  "decisionModels": [
+    {
+      "provider": "vercel-ai-gateway",
+      "id": "typesafe-ai/jev",
+      "name": "Jev (Vercel AI Gateway)"
+    },
+    {
+      "provider": "vercel-ai-gateway",
+      "id": "typesafe-ai/jev-1.13.0",
+      "name": "Jev 1.13.0 (Vercel AI Gateway)"
+    }
+  ],
   "modelCatalog": {
     "discovery": {
       "vercel-ai-gateway": "refreshable"
@@ -67,9 +84,70 @@
       "cliDescription": "Vercel AI Gateway API key"
     }
   ],
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Vercel AI Gateway credential",
+      "help": "Select a SecretRef. Create protected credentials in Settings \u2192 Secrets. Never paste credentials in chat.",
+      "sensitive": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "apiKey": {
+        "type": "object",
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "env"
+              },
+              {
+                "type": "string",
+                "const": "store"
+              },
+              {
+                "type": "string",
+                "const": "file"
+              },
+              {
+                "type": "string",
+                "const": "exec"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
+    }
   }
 }
