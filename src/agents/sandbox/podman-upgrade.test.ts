@@ -47,7 +47,7 @@ it.each([false, true])(
     const sentinelPath = path.join(workspaceDir, "keep.txt");
     await fs.writeFile(sentinelPath, "Preserve workspace data across Podman recovery.\n");
     const snapshotWorkspace = async () => ({
-      files: (await fs.readdir(workspaceDir)).sort(),
+      files: (await fs.readdir(workspaceDir)).toSorted(),
       sentinelHash: createHash("sha256")
         .update(await fs.readFile(sentinelPath))
         .digest("hex"),
