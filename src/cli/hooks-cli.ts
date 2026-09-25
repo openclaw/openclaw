@@ -5,7 +5,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { decorativePrefix } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -32,6 +31,7 @@ import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import {
   formatHookInfo,
   formatHookMissingSummary,
@@ -147,10 +147,6 @@ async function loadHooksReport<T>(
   return consume(report);
 }
 
-function resolveHooksAgentOption(command: Command | undefined): string | undefined {
-  return resolveOptionFromCommand<string>(command, "agent");
-}
-
 function resolveHookSelection(
   report: HookStatusReport,
   hookName: string,
@@ -258,11 +254,7 @@ export function registerHooksCli(program: Command): void {
     .description("Manage internal agent hooks")
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/hooks"));
   const hasJsonOutput = (opts: { json?: boolean } | undefined): boolean =>
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
@@ -281,6 +273,16 @@ export function registerHooksCli(program: Command): void {
     }
   });
 
+  const runHooksList = (opts: HooksListOptions, command: Command) =>
+    runOneShotHooksCliAction(async () => {
+      const json = hasJsonOutput(opts);
+      const output = await loadHooksReport(
+        resolveOptionFromCommand<string>(command, "agent"),
+        (report) => formatHooksList(report, { ...opts, json }),
+      );
+      writeHooksOutput(output, json);
+    }, "root");
+
   hooks
     .command("list")
     .description("List all hooks")
@@ -288,15 +290,7 @@ export function registerHooksCli(program: Command): void {
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts: HooksListOptions, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        const json = hasJsonOutput(opts);
-        const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
-          formatHooksList(report, { ...opts, json }),
-        );
-        writeHooksOutput(output, json);
-      }, "root"),
-    );
+    .action(runHooksList);
 
   hooks
     .command("info <name>")
@@ -306,10 +300,16 @@ export function registerHooksCli(program: Command): void {
     .action(async (name, opts: HookInfoOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
         const json = hasJsonOutput(opts);
-        const result = await loadHooksReport(resolveHooksAgentOption(command), (report) => {
-          const hook = resolveHookSelection(report, name);
-          return { output: formatHookInfo(hook, name, { ...opts, json }), exitCode: hook ? 0 : 1 };
-        });
+        const result = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => {
+            const hook = resolveHookSelection(report, name);
+            return {
+              output: formatHookInfo(hook, name, { ...opts, json }),
+              exitCode: hook ? 0 : 1,
+            };
+          },
+        );
         writeHooksOutput(result.output, json);
         return result.exitCode;
       }, "root"),
@@ -323,32 +323,25 @@ export function registerHooksCli(program: Command): void {
     .action(async (opts: HooksCheckOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
         const json = hasJsonOutput(opts);
-        const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
-          formatHooksCheck(report, { ...opts, json }),
+        const output = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => formatHooksCheck(report, { ...opts, json }),
         );
         writeHooksOutput(output, json);
       }, "root"),
     );
 
-  hooks
-    .command("enable <name>")
-    .description("Enable a hook")
-    .option("--agent <id>", "Agent id whose workspace to inspect")
-    .action(async (name, _opts: { agent?: string }, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        await setHookEnabled(name, true, resolveHooksAgentOption(command));
-      }),
-    );
-
-  hooks
-    .command("disable <name>")
-    .description("Disable a hook")
-    .option("--agent <id>", "Agent id whose workspace to inspect")
-    .action(async (name, _opts: { agent?: string }, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        await setHookEnabled(name, false, resolveHooksAgentOption(command));
-      }),
-    );
+  for (const enabled of [true, false]) {
+    hooks
+      .command(`${enabled ? "enable" : "disable"} <name>`)
+      .description(enabled ? "Enable a hook" : "Disable a hook")
+      .option("--agent <id>", "Agent id whose workspace to inspect")
+      .action(async (name, _opts: { agent?: string }, command: Command) =>
+        runOneShotHooksCliAction(() =>
+          setHookEnabled(name, enabled, resolveOptionFromCommand<string>(command, "agent")),
+        ),
+      );
+  }
 
   hooks
     .command("relay", { hidden: true })
@@ -411,13 +404,5 @@ export function registerHooksCli(program: Command): void {
       await runPluginUpdateCommand({ ids: id ? [id] : [], opts });
     });
 
-  hooks.action(async (opts: HooksListOptions, command: Command) =>
-    runOneShotHooksCliAction(async () => {
-      const json = hasJsonOutput(opts);
-      const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
-        formatHooksList(report, { ...opts, json }),
-      );
-      writeHooksOutput(output, json);
-    }, "root"),
-  );
+  hooks.action(runHooksList);
 }

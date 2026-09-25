@@ -181,6 +181,7 @@ export async function prepareAgentRunTaskTracking(params: {
     try {
       params.assertResumeAdmissionCurrent();
       await registerPluginSubagentRunFromGateway({
+        assertAdmissionCurrent: params.assertResumeAdmissionCurrent,
         cfg: params.cfg,
         runId: params.runId,
         childSessionKey: params.resolvedSessionKey,

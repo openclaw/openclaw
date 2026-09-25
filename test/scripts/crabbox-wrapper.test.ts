@@ -1290,6 +1290,7 @@ function testHomeEnv(home: string): Record<string, string> {
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
+    XDG_STATE_HOME: "",
   };
 }
 
@@ -2513,80 +2514,172 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("Actions run can show cancelled during external lease cleanup");
   });
 
-  it("rejects reused Blacksmith Testboxes that were not created by Crabbox", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+  it.each([false, true])(
+    "rejects reused Testboxes without a key at the selected root (custom state=%s)",
+    (customState) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const env = testHomeEnv(home);
+      if (customState) {
+        env.XDG_STATE_HOME = path.join(home, "selected state");
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.66.0";
+        const legacyKey = path.join(
+          testCrabboxConfigDir(home),
+          "testboxes",
+          "tbx_direct",
+          "id_ed25519",
+        );
+        mkdirSync(path.dirname(legacyKey), { recursive: true });
+        writeFileSync(legacyKey, "fake test key\n", "utf8");
+      }
+      const result = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", "tbx_direct", "--", "echo ok"],
+        { env },
+      );
 
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("provider=blacksmith-testbox --id tbx_direct");
+      expect(result.stderr).toContain("has no Crabbox SSH key");
+      expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
+    },
+  );
+
+  it.each([
+    { id: "tbx_owned", createKey: true, state: "", version: "0.56.0", selectedKey: false },
+    { id: "tbx_legacy", createKey: true, state: "state", version: "0.57.0", selectedKey: false },
+    { id: "tbx_first", createKey: true, state: "state", version: "0.58.0", selectedKey: true },
+    { id: "tbx_default", createKey: true, state: "", version: "0.66.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.66.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.66.0", selectedKey: false },
+    ...(process.platform === "win32"
+      ? [
+          {
+            id: "tbx_namespaced",
+            createKey: true,
+            state: "namespaced",
+            version: "0.66.0",
+            selectedKey: true,
+          },
+        ]
+      : []),
+  ])(
+    "delegates reusable Testbox identity $id to Crabbox $version",
+    ({ id, createKey, state, version, selectedKey }) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const directory = path.join(home, state);
+      const env = {
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: state
+          ? state === "namespaced"
+            ? path.toNamespacedPath(directory)
+            : directory
+          : "",
+        OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+      };
+      const keyRoot = selectedKey
+        ? path.join(env.XDG_STATE_HOME, "crabbox")
+        : testCrabboxConfigDir(home);
+      if (createKey) {
+        const keyPath = path.join(keyRoot, "testboxes", id, "id_ed25519");
+        mkdirSync(path.dirname(keyPath), { recursive: true });
+        writeFileSync(keyPath, "fake test key\n", "utf8");
+      }
+      const { output } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+        { env },
+      );
+      expect(output.args).toEqual([
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--id",
+        id,
+        "--reclaim",
+        "--shell",
+        "--",
+        expect.stringContaining("'echo ok'"),
+      ]);
+    },
+  );
+
+  it.each([
+    "relative-state",
+    " ",
+    ...(process.platform === "win32" ? ["C:state", "\\state", "/state"] : []),
+  ])("rejects the relative lease key root %j before running a reused Testbox", (stateRoot) => {
+    const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+    const id = "tbx_relative";
+    const legacyKey = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(legacyKey), { recursive: true });
+    writeFileSync(legacyKey, "fake test key\n", "utf8");
     const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", "tbx_direct", "--", "echo ok"],
-      { env: testHomeEnv(home) },
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.66.0",
+        },
+      },
     );
-
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=blacksmith-testbox --id tbx_direct");
-    expect(result.stderr).toContain("has no Crabbox SSH key");
-    expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
+    expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
   it.each([
-    { id: "tbx_owned", createKey: true },
-    { id: "blue-hermit", createKey: false },
-  ])("delegates reusable Testbox identity $id to Crabbox", ({ id, createKey }) => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    if (createKey) {
-      const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    { version: "0.57.0", stateDirectory: "state" },
+    { version: "0.66.0", stateDirectory: "state" },
+    { version: "0.57.0", stateDirectory: "state " },
+  ])(
+    "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
+    ({ version, stateDirectory }) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const id = "tbx_claimed";
+      const stateRoot = path.join(home, ".local", stateDirectory);
+      const keyRoot =
+        version === "0.66.0" ? path.join(stateRoot, "crabbox") : testCrabboxConfigDir(home);
+      const keyPath = path.join(keyRoot, "testboxes", id, "id_ed25519");
       mkdirSync(path.dirname(keyPath), { recursive: true });
       writeFileSync(keyPath, "fake test key\n", "utf8");
-    }
-    const { output } = runSuccessfulDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
-      { env: testHomeEnv(home) },
-    );
-    expect(output.args).toEqual([
-      "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--id",
-      id,
-      "--reclaim",
-      "--shell",
-      "--",
-      expect.stringContaining("'echo ok'"),
-    ]);
-  });
+      const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      writeFileSync(
+        claimPath,
+        `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
+        "utf8",
+      );
 
-  it("fails before reuse when a Blacksmith Testbox is claimed by another repo", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const id = "tbx_claimed";
-    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
-    mkdirSync(path.dirname(keyPath), { recursive: true });
-    writeFileSync(keyPath, "fake test key\n", "utf8");
-    const stateRoot = path.join(home, ".local", "state");
-    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
-    mkdirSync(path.dirname(claimPath), { recursive: true });
-    writeFileSync(
-      claimPath,
-      `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
-      "utf8",
-    );
+      const result = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+        {
+          env: {
+            ...testHomeEnv(home),
+            XDG_STATE_HOME: stateRoot,
+            OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+          },
+        },
+      );
 
-    const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
-      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
-    );
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
+      expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
-    expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
-
-    const reclaimed = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
-      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
-    );
-    expect(reclaimed.status).toBe(0);
-    expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
-  });
+      const reclaimed = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
+        {
+          env: {
+            ...testHomeEnv(home),
+            XDG_STATE_HOME: stateRoot,
+            OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+          },
+        },
+      );
+      expect(reclaimed.status).toBe(0);
+      expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+    },
+  );
 
   it.each([
     { label: "successful", status: 0 },
@@ -3377,7 +3470,7 @@ esac
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("bun_version=1.4.0");
+    expect(remoteCommand).toContain("bun_version=1.4.2");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -3683,7 +3776,7 @@ esac
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const { output } = runSuccessfulMacosScript(script);
-    expect(output.scriptContent).toContain("bun_version=1.4.0");
+    expect(output.scriptContent).toContain("bun_version=1.4.2");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );

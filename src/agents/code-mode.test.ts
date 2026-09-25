@@ -21,7 +21,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
-import { readToolInputSchema } from "./sessions/tools/read-tool-contract.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,

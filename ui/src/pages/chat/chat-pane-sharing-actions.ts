@@ -24,7 +24,6 @@ import {
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.ts";
 
-type HeaderScope = ChatPaneConnectionScope;
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
@@ -116,6 +115,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       this.sessionSharingStates = next;
     };
     this.setSessionSharingState(cacheKey, loadingState);
+    let next: ChatSessionSharingState;
     try {
       const result = await scope.client.request<SessionSharingResult>(SESSION_MEMBERS_LIST_METHOD, {
         sessionKey: currentRow.key,
@@ -123,33 +123,29 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
           ? { agentId: this.sessionSharingAgentId(currentRow.key) }
           : {}),
       });
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow) ||
-        !ownsLoadingState()
-      ) {
-        if (this.isConnectionScopeCurrent(scope)) {
-          clearOwnedLoadingState();
-        }
-        return;
-      }
-      this.setSessionSharingState(cacheKey, { loading: false, result });
+      next = { loading: false, result };
     } catch (error) {
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow) ||
-        !ownsLoadingState()
-      ) {
-        if (this.isConnectionScopeCurrent(scope)) {
-          clearOwnedLoadingState();
-        }
-        return;
-      }
-      this.setSessionSharingState(cacheKey, { loading: false, error: formatUiError(error) });
+      next = { loading: false, error: formatUiError(error) };
     }
+    if (
+      !this.ownsHeaderOutcomeScope(scope) ||
+      !this.currentSessionSharingRow(scope, currentRow) ||
+      !ownsLoadingState()
+    ) {
+      if (this.isConnectionScopeCurrent(scope)) {
+        clearOwnedLoadingState();
+      }
+      return;
+    }
+    this.setSessionSharingState(cacheKey, next);
   }
 
-  protected failSharing(scope: HeaderScope, key: string, session: string, error: unknown): void {
+  protected failSharing(
+    scope: ChatPaneConnectionScope,
+    key: string,
+    session: string,
+    error: unknown,
+  ): void {
     if (!this.ownsHeaderOutcomeScope(scope)) {
       return;
     }
@@ -422,7 +418,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     );
   }
 
-  protected ownsHeaderOutcomeScope(scope: HeaderScope): boolean {
+  protected ownsHeaderOutcomeScope(scope: ChatPaneConnectionScope): boolean {
     return this.isConnectionScopeCurrent(scope) && this.ownsHeaderOutcome(scope.headerOutcomeOwner);
   }
 }

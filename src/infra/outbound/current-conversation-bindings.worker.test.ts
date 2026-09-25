@@ -14,8 +14,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
+import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
 import {
   inspectCurrentConversationBindingRecordAsync,
   readCurrentConversationBindingSelectionAsync,
@@ -337,3 +339,80 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
     }
   });
 });
+
+it.each(
+  (["transaction", "commit"] as const).flatMap((stage) =>
+    (["manager", "registry"] as const).map((owner) => ({ stage, owner })),
+  ),
+)(
+  "joins expiry pruning refused by the actual $owner at $stage without deleting its row",
+  async ({ stage, owner }) => {
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      await withOpenClawTestState({ label: `binding-list-prune-${owner}-${stage}` }, async () => {
+        const manager =
+          owner === "manager"
+            ? createAccountScopedConversationBindingManager({
+                channel: "fixture",
+                accountId: "owner",
+                cfg: {},
+                stateKey: Symbol("binding-list-retirement"),
+                toStoredTargetKind: (kind) => kind,
+                toSessionBindingTargetKind: (kind) => kind,
+              })
+            : undefined;
+        try {
+          const service = getSessionBindingService();
+          const bound = await service.bind({
+            conversation: {
+              channel: owner === "manager" ? "fixture" : INTERNAL_MESSAGE_CHANNEL,
+              accountId: owner === "manager" ? "owner" : "default",
+              conversationId: "expired-list",
+            },
+            targetSessionKey: "agent:main:current",
+            targetKind: "session",
+          });
+          updateCurrentConversationBindingRecord(bound.conversation, () => ({
+            ...bound,
+            expiresAt: 1,
+          }));
+          const { db } = openOpenClawStateDatabase();
+          const query = db.prepare(
+            "SELECT * FROM current_conversation_bindings WHERE binding_id = ?",
+          );
+          const before = query.get(bound.bindingId);
+          expect(before).toBeDefined();
+          let retirements = 0;
+          const createAdmission = admission.createSqliteWorkerOperationAdmission;
+          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
+            createAdmission((request, grant) => {
+              if (request.stage === stage) {
+                retirements += 1;
+                if (manager) {
+                  manager.stop();
+                } else {
+                  setActivePluginRegistry(createTestRegistry([]));
+                }
+              }
+              admit(request, grant);
+            }),
+          );
+          await expect(
+            createBoundDeliveryRouter().resolveDestination({
+              eventKind: "task_completion",
+              targetSessionKey: bound.targetSessionKey,
+              failClosed: true,
+            }),
+          ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
+          expect(retirements).toBe(1);
+          expect(query.get(bound.bindingId)).toEqual(before);
+        } finally {
+          vi.restoreAllMocks();
+          manager?.stop();
+        }
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  },
+);

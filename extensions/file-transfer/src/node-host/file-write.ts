@@ -117,18 +117,14 @@ async function writeBoundTarget(input: {
   const { anchorRoot, relativeTarget } = anchor;
   try {
     await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
-    const opened = await anchorRoot.open(relativeTarget);
-    try {
-      const stats = await opened.handle.stat({ bigint: true });
-      return {
-        ok: true,
-        path: opened.realPath,
-        overwritten: false,
-        identity: fileIdentity(stats),
-      };
-    } finally {
-      await opened.handle.close().catch(() => undefined);
-    }
+    await using opened = await anchorRoot.open(relativeTarget);
+    const stats = await opened.handle.stat({ bigint: true });
+    return {
+      ok: true,
+      path: opened.realPath,
+      overwritten: false,
+      identity: fileIdentity(stats),
+    };
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "already-exists") {
       return err(
@@ -390,10 +386,9 @@ export async function handleFileWrite(
   let canonicalPath = targetPath;
   let finalIdentity: FileIdentity | undefined;
   try {
-    const opened = await parentRoot.open(targetFileName);
+    await using opened = await parentRoot.open(targetFileName);
     canonicalPath = opened.realPath;
     finalIdentity = fileIdentity(await opened.handle.stat({ bigint: true }));
-    await opened.handle.close().catch(() => undefined);
   } catch (openErr) {
     if (openErr instanceof FsSafeError) {
       return writeFsSafeError(openErr, targetPath);

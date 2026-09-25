@@ -127,17 +127,21 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves symlink destinations when replacing existing JSON files",
-    async () => {
-      await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
+  it.runIf(process.platform !== "win32").each([1, 2])(
+    "preserves %i-level symlink destinations when replacing existing JSON files",
+    async (levels) => {
+      await withJsonSymlink(({ root, targetDir, targetPath, linkPath }) => {
         fs.mkdirSync(targetDir, { recursive: true });
         writeExistingJson(targetPath);
         fs.symlinkSync(targetPath, linkPath);
+        const configuredPath = levels === 1 ? linkPath : path.join(root, "config-outer.json");
+        if (levels === 2) {
+          fs.symlinkSync(path.basename(linkPath), configuredPath);
+        }
 
-        writeJsonTarget(linkPath, SAVED_PAYLOAD);
+        writeJsonTarget(configuredPath, SAVED_PAYLOAD);
 
-        expectSavedPayloadThroughSymlink(linkPath, targetPath);
+        expectSavedPayloadThroughSymlink(configuredPath, targetPath);
       });
     },
   );

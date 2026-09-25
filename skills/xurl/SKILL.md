@@ -32,13 +32,11 @@ metadata:
 
 Use `xurl` for X API work. Shortcut commands return JSON; raw mode works for any v2 endpoint.
 
-## Secret safety
+## Auth
 
-- Never read, print, summarize, upload, or inspect `~/.xurl`.
-- Never ask user to paste tokens/secrets into chat.
-- Do not run auth commands with inline secrets.
-- Do not use `--verbose` in agent sessions; it can expose auth headers.
-- Check auth with `xurl auth status`.
+- `~/.xurl` holds tokens; check auth with `xurl auth status` instead of reading it.
+- Pass secrets to auth commands through the prompt, not inline, so they stay out of shell history.
+- `--verbose` prints auth headers into tool output.
 
 ## Common shortcuts
 

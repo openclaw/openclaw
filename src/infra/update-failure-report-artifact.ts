@@ -154,18 +154,6 @@ function isAttemptArtifactName(base: path.ParsedPath, entry: string): boolean {
   return /^[a-f0-9]{64}$/u.test(artifactKey);
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 export async function discardSavedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
   saved: SavedUpdateFailureReport,
@@ -238,10 +226,8 @@ export async function savePreparedUpdateFailureReport(
   };
   const reportDir = path.dirname(prepared.savedReportPath);
   ensureCurrentAuthority();
-  const reportDirExisted = await pathExists(reportDir);
-  ensureCurrentAuthority();
-  await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
-  saved.reportDirCreated = !reportDirExisted;
+  const created = await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
+  saved.reportDirCreated = created !== undefined;
   ensureCurrentAuthority();
   try {
     await fs.writeFile(stagedReportPath(prepared), prepared.body, {

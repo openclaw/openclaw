@@ -69,21 +69,9 @@ export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape {
   };
 }
 
-function buildBindingHash(params: {
-  channel: ConfiguredAcpBindingChannel;
-  accountId: string;
-  conversationId: string;
-}): string {
-  return sha256HexPrefixCore(`${params.channel}:${params.accountId}:${params.conversationId}`, 16);
-}
-
 /** Builds the stable generated ACP session key for a configured binding. */
 export function buildConfiguredAcpSessionKey(spec: ConfiguredAcpBindingSpec): string {
-  const hash = buildBindingHash({
-    channel: spec.channel,
-    accountId: spec.accountId,
-    conversationId: spec.conversationId,
-  });
+  const hash = sha256HexPrefixCore(`${spec.channel}:${spec.accountId}:${spec.conversationId}`, 16);
   return `agent:${sanitizeAgentId(spec.agentId)}:acp:binding:${spec.channel}:${spec.accountId}:${hash}`;
 }
 
