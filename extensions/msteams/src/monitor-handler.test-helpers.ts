@@ -200,9 +200,11 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
   const app = {
-    tokenManager: {
-      getBotToken: async () => ({ toString: () => "bot-token" }),
-      getGraphToken: async () => ({ toString: () => "graph-token" }),
+    tokenProvider: {
+      getAppToken: async (scope: string) => ({
+        toString: () =>
+          scope === "https://graph.microsoft.com/.default" ? "graph-token" : "bot-token",
+      }),
     },
     api: {},
     graph: {},

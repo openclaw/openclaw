@@ -276,19 +276,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     serviceLoaded &&
     service.runtime?.status === "running"
   ) {
-    // The RPC probe failed while the service is loaded and running. Only the case where
-    // the gateway process is up and owns the listening port (health.healthy === true with
-    // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
-    // gets recovery guidance. `healthy` can also be set from bare reachability after
-    // ownership failed (see restart-health.ts), which can coexist with a non-empty
-    // staleGatewayPids; treat that combination as ambiguous rather than owns-port so it
-    // doesn't contradict the dedicated stale-PID diagnostic below. Every other
-    // health.healthy === false sub-case — a just-started gateway that has not bound the port
-    // yet, a foreign process holding the port, or a stale gateway PID — is either a normal
-    // warm-up window or is already covered by the dedicated stale-PID / port-not-listening /
-    // port-conflict diagnostics below, so it keeps the warm-up hint (as does unknown health
-    // from shallow status). A wedged gateway that owns the port is reported as healthy ===
-    // true with no stale gateway PIDs, so it is steered by the first branch.
+    // Port ownership proves the process is listening, not that startup completed.
     if (rpc.timedOut && rpc.gatewayReached) {
       defaultRuntime.log(
         warnText(
@@ -298,7 +286,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     } else if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
       defaultRuntime.log(
         warnText(
-          "Gateway process is running and owns the gateway port, so this is not a warm-up delay. Check the probe credentials/config, or restart the gateway and inspect its logs if it stays unresponsive.",
+          "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the probe credentials/config and logs if it stays unresponsive.",
         ),
       );
     } else {

@@ -1,4 +1,3 @@
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -12,6 +11,7 @@ import { waitForSessionParticipantRecording } from "../sessions/session-particip
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -42,10 +42,7 @@ export async function prepareSessionCreateParent(input: {
   }
   const parent = loadGatewaySessionEntryReadOnly(input.key, { agentId: input.agentId });
   if (!parent.entry?.sessionId) {
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown parent session: ${input.key}`),
-    };
+    return invalidSessionRequest(`unknown parent session: ${input.key}`);
   }
   const ownershipError = resolvePluginSessionOwnershipError({
     action: input.params.fork === true ? "fork" : "link",
@@ -57,10 +54,7 @@ export async function prepareSessionCreateParent(input: {
     return { ok: false as const, error: ownershipError };
   }
   if (isModelSelectionLocked(parent.entry)) {
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
-    };
+    return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   }
   return { ok: true as const, entry: parent.entry, canonicalKey: parent.canonicalKey, target };
 }

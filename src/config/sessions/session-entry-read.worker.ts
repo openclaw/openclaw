@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -7,6 +12,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
@@ -20,6 +26,7 @@ import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   assertCanonicalSqliteSessionRowsCurrent,
+  canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
@@ -107,6 +114,39 @@ export function readExactSessionEntriesWithLifecycle(
                 if (typeof identity !== "string") {
                   throw new Error("Private session facts require their process-held owner");
                 }
+                const presentKeys = new Set(selected.value.map(({ sessionKey }) => sessionKey));
+                const missingKeys = request.sessionKeys.filter((key) => !presentKeys.has(key));
+                const placeholders = missingKeys.length
+                  ? executeSqliteQuerySync(
+                      database.db,
+                      getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+                        .selectFrom("session_nodes as node")
+                        .leftJoin("session_windows as window", (join) =>
+                          join
+                            .onRef("window.session_id", "=", "node.current_session_id")
+                            .onRef("window.session_key", "=", "node.session_key"),
+                        )
+                        .select([
+                          "node.session_key",
+                          "node.current_session_id",
+                          "node.entry_json",
+                          "node.entry_valid",
+                          "window.session_id as retained_session_id",
+                        ])
+                        .where("node.session_key", "in", sqliteStringSet(missingKeys)),
+                    ).rows.map((row) => {
+                      if (
+                        row.entry_json !== "{}" ||
+                        row.entry_valid !== -1 ||
+                        row.retained_session_id !== row.current_session_id
+                      ) {
+                        throw canonicalSessionKeyMigrationRequiredError(
+                          `invalid retained session row requires repair for ${row.session_key}`,
+                        );
+                      }
+                      return { sessionKey: row.session_key, sessionId: row.current_session_id };
+                    })
+                  : [];
                 return {
                   kind: "session-exact-entries" as const,
                   entries: selected.value,
@@ -114,6 +154,7 @@ export function readExactSessionEntriesWithLifecycle(
                   sharing: {
                     source: { agentId: database.agentId, path: database.path },
                     databaseIdentity: `file:${identity}`,
+                    placeholders,
                     members: selected.value.map(({ sessionKey }) => ({
                       sessionKey,
                       identityIds: listSessionMembersInDatabase(database, sessionKey).map(

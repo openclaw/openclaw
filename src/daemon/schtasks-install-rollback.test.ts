@@ -380,7 +380,11 @@ it.each([
     native.probe.mockReturnValue({ status: "found", state: 2, enabled: false });
   }
   if (failure === "unknown-state") {
-    native.probe.mockReturnValue({ status: "unknown", detail: "unavailable" });
+    native.probe.mockReturnValue({
+      status: "unknown",
+      detail: "unavailable",
+      diagnostic: { kind: "invalid-response" },
+    });
   }
   if (failure === "unknown-process") {
     native.runtime.mockResolvedValue({ status: "unknown" });

@@ -629,13 +629,26 @@ const enSettings = {
       action: "Connect provider",
       title: "Connect a provider",
       noOptions: "No account connection methods are available.",
-      method: "Connection method",
+      accounts: "Accounts available to this agent",
+      noAccounts: "No connected accounts for this provider.",
+      connectAccount: "Connect an account",
+      apiKeyHint: "Connect with a key from your provider account.",
+      compareMethods: "Compare connection methods",
       searchProviders: "Search providers…",
       noMatches: "No providers match your search.",
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
       done: "Provider credentials saved.",
+      missingSelection:
+        "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
+      chooseAccount: "Choose account",
+      useAccount: "Use this account",
+      useAccountDescription:
+        "Test {model} with this account and use it for this agent's default. Conversations with their own account selection keep it.",
+      activated: "Account verified and selected for this agent's default model.",
+      selectionChanged:
+        "The selected model or account changed. Close this dialog and choose again.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",

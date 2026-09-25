@@ -12,7 +12,8 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -119,28 +120,21 @@ export async function verifyPreviousManagedGatewayForUpdate(
   }
   // Recovery retains the observed verdict even if its receipt cannot be written.
   params.assertCurrent?.();
-  recordPreviousGatewayVerification(params.opts.run, verified);
-}
-
-function recordPreviousGatewayVerification(
-  run: UpdateCommandOptions["run"],
-  verified: boolean,
-): void {
-  if (!run) {
-    return;
+  const run = params.opts.run;
+  if (run) {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "previous gateway verification",
+        status: "completed",
+        detail: verified
+          ? "Previous package is running and ready."
+          : "Previous gateway was not verified; automatic rollback cannot restart it.",
+        endedAtMs: Date.now(),
+      },
+      { env: run.env },
+    );
   }
-  recordUpdateRunStep(
-    run.runId,
-    {
-      step: "previous gateway verification",
-      status: "completed",
-      detail: verified
-        ? "Previous package is running and ready."
-        : "Previous gateway was not verified; automatic rollback cannot restart it.",
-      endedAtMs: Date.now(),
-    },
-    { env: run.env },
-  );
 }
 
 export function recordUpdateGatewayHealth(

@@ -152,15 +152,11 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       ${
         !params.compact && params.facts?.length
           ? html`<span class="new-session-page__menu-meta">
-              ${
-                params.facts?.length
-                  ? html`<span class="new-session-page__menu-facts">
-                      ${params.facts.map(
-                        (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-                      )}
-                    </span>`
-                  : nothing
-              }
+              <span class="new-session-page__menu-facts">
+                ${params.facts.map(
+                  (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+                )}
+              </span>
             </span>`
           : nothing
       }
@@ -284,17 +280,18 @@ export function renderCloudProfileMenuItems(params: {
       (selected && params.selectedMachine
         ? machines.find((option) => option.id === params.selectedMachine)
         : undefined) ?? defaultCloudMachine(profile, osId);
+    const hasSubmenu =
+      params.compact &&
+      !params.disabled &&
+      !profileDisabledReason &&
+      ((profile.operatingSystems?.some((option) => !option.disabledReason) ?? false) ||
+        machines.length > 0);
 
     const item = renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
         label: params.compact ? profile.id : t("newSession.cloudWorker", { profile: profile.id }),
-        hasSubmenu:
-          params.compact &&
-          !params.disabled &&
-          !profileDisabledReason &&
-          ((profile.operatingSystems?.filter((option) => !option.disabledReason).length ?? 0) > 0 ||
-            machines.length > 0),
+        hasSubmenu,
         selectedSummary:
           params.compact && selected
             ? [os?.label, machine?.label].filter(Boolean).join(" · ")
@@ -326,11 +323,7 @@ export function renderCloudProfileMenuItems(params: {
       },
       params.submitting,
     );
-    return params.compact &&
-      !params.disabled &&
-      !profileDisabledReason &&
-      ((profile.operatingSystems?.filter((option) => !option.disabledReason).length ?? 0) > 0 ||
-        machines.length > 0)
+    return hasSubmenu
       ? html`<openclaw-tooltip
           class="new-session-page__environment-details new-session-page__cloud-config-card"
           placement="right"

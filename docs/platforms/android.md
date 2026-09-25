@@ -332,6 +332,7 @@ In the Android app:
 
 - The app keeps its Gateway connection alive via a **foreground service** (persistent notification).
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
+- After pairing, choose the phone permissions to enable. If the Gateway requires node approval, review the requested capabilities and tap **Approve access and continue** when offered. Setup finishes after the app verifies approval. Otherwise, follow the displayed Gateway approval commands, then tap **I have approved**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
