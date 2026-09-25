@@ -1007,20 +1007,45 @@ describe("scripts/docker/setup.sh", () => {
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
   });
 
-  it.each([false, true])(
-    "guards direct Compose launches against an unsupported image (supported=%s)",
-    async (supported) => {
+  it.each([
+    {
+      name: "current",
+      help: "--port <port>\n--published-port <port>",
+      helpStatus: 0,
+      expectedStatus: 0,
+      mapped: true,
+    },
+    { name: "legacy", help: "--port <port>", helpStatus: 0, expectedStatus: 0, mapped: false },
+    {
+      name: "failed help",
+      help: "--port <port>\n--published-port <port>",
+      helpStatus: 1,
+      expectedStatus: 1,
+      mapped: false,
+    },
+    {
+      name: "malformed help",
+      help: "A note about --port <port>",
+      helpStatus: 0,
+      expectedStatus: 1,
+      mapped: false,
+    },
+  ])(
+    "preserves direct Compose image startup ($name)",
+    async ({ name, help, helpStatus, expectedStatus, mapped }) => {
       const activeSandbox = requireSandbox(sandbox);
       const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
         services: { "openclaw-gateway": { command: string[] } };
       };
-      const commandRoot = join(activeSandbox.rootDir, `compose-command-${supported}`);
+      const commandRoot = join(activeSandbox.rootDir, `compose-command-${name}`);
       await mkdir(join(commandRoot, "dist"), { recursive: true });
       await writeFile(
         join(commandRoot, "dist", "index.js"),
         `
-      if (process.argv.includes("--help")) console.log(${JSON.stringify(supported ? "--published-port <port>" : "--port <port>")});
-      else console.log(JSON.stringify(process.argv.slice(2)));
+      if (process.argv.includes("--help")) {
+        console.log(${JSON.stringify(help)});
+        process.exit(${helpStatus});
+      } else console.log(JSON.stringify(process.argv.slice(2)));
     `,
       );
       const [command, ...args] = parsed.services["openclaw-gateway"].command.map((value) =>
@@ -1033,20 +1058,22 @@ describe("scripts/docker/setup.sh", () => {
         throw new Error("Compose Gateway command must not be empty.");
       }
       const result = spawnSync(command, args, { cwd: commandRoot, encoding: "utf8" });
-      expect(result.status, result.stderr).toBe(supported ? 0 : 1);
-      if (supported) {
+      expect(result.status, result.stderr).toBe(expectedStatus);
+      if (expectedStatus === 0) {
         expect(JSON.parse(result.stdout)).toEqual([
           "gateway",
           "--bind",
           "lan",
           "--port",
           "18789",
-          "--published-port",
-          "19123",
+          ...(mapped ? ["--published-port", "19123"] : []),
         ]);
+        if (!mapped) {
+          expect(result.stderr).toContain("mapped-port origin defaults require a compatible image");
+        }
       } else {
         expect(result.stdout).toBe("");
-        expect(result.stderr).toContain("Select a compatible OPENCLAW_IMAGE");
+        expect(result.stderr).toContain("Could not inspect Gateway help");
       }
     },
   );

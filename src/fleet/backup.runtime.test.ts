@@ -32,7 +32,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
       "openclaw.fleet.disk-limit": "10g",
     },
     environment: { OPENCLAW_GATEWAY_TOKEN: "old-token" },
-    imageId: "sha256:image",
+    imageId: `sha256:${"a".repeat(64)}`,
     command: ["node", "dist/index.js", "gateway", "--port", "18789"],
     memory: "2147483648",
     cpus: "2",
@@ -477,20 +477,27 @@ describe("fleet restore runtime", () => {
     };
   }
 
-  it("refuses an incompatible image before replacing restored state", async () => {
+  it("restores an older image with its exact inspected command", async () => {
     const archive = await createArchive();
-    const containers = containerMock();
-    vi.mocked(containers.prepareGatewayImage).mockRejectedValueOnce(
+    const current = inspection();
+    current.command.push("--allow-unconfigured");
+    const containers = containerMock(current);
+    vi.mocked(containers.prepareGatewayImage).mockRejectedValue(
       new Error("missing --published-port"),
     );
-    const original = await fs.readFile(path.join(record.dataDir, "state.txt"), "utf8");
-    await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
-      "missing --published-port",
+    const result = await restoreFleetCell(restoreParams(containers, archive));
+    expect(containers.prepareGatewayImage).not.toHaveBeenCalled();
+    expect(containers.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: current.imageId,
+        command: ["node", "dist/index.js", "gateway", "--port", "18789", "--allow-unconfigured"],
+      }),
+      false,
     );
-    expect(containers.stop).not.toHaveBeenCalled();
-    expect(containers.remove).not.toHaveBeenCalled();
-    expect(containers.run).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(record.dataDir, "state.txt"), "utf8")).toBe(original);
+    expect(result.token).toBe("new-token");
+    await expect(fs.readFile(path.join(record.dataDir, "restored.txt"), "utf8")).resolves.toBe(
+      "new-data",
+    );
   });
 
   it("rejects tenant mismatch and running cells before mutation", async () => {

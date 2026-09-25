@@ -27,9 +27,11 @@ changing saved configuration or replacing the Gateway. If the image is too old,
 select a compatible image or build this checkout from source, then retry.
 The check does not upgrade your selected image automatically. Docker setup
 keeps the selected image name in `.env` and uses the checked image ID for that
-invocation. Running `docker compose up` directly also reports an incompatible
-image, but manual recreation may already have replaced the old container;
-use `docker-setup.sh` to check compatibility before replacement.
+invocation. Running `docker compose up` directly keeps the original Gateway
+command for older images whose help advertises `--port` but not
+`--published-port`. It reports that mapped-port origin defaults require a
+compatible image; saved origin policy stays unchanged. Images with the new flag
+receive the mapped port. Failed or malformed help checks stop startup.
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 

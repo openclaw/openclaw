@@ -617,9 +617,8 @@ export async function restoreFleetCell(params: {
       user: inspection.user,
     });
     const imageOwner = resolveRestoreOwner(params.hostIdentity, containerUser);
-    // Build and validate the replacement profile before any destructive step so a
-    // drifted-but-managed container (bad provenance label, invalid inspected limits)
-    // fails preflight instead of after the old container and state are gone.
+    // Validate the inspected generation before replacing its container or state.
+    // Restore replays its command even when the image predates current CLI flags.
     const token = params.generateToken();
     const attemptId = params.generateAttemptId();
     replacementAttemptId = attemptId;
@@ -634,6 +633,7 @@ export async function restoreFleetCell(params: {
         context: "restore",
       }),
       image: inspection.imageId,
+      command: inspection.command,
       attemptId,
     });
     await params.checkpoint();
