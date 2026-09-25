@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -21,6 +22,7 @@ import type {
   NativeModelSourceCapture,
 } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type {
   CodexAppServerRequestResult,
   CodexServerNotification,
@@ -75,6 +77,48 @@ export function successfulSendInputOutput(params: {
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
+
+/** Join real native persistence and recovery before asserting outcomes or releasing fixture stores. */
+export function captureNativeSubagentMonitorWork() {
+  const pending = new Set<Promise<void>>();
+  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+  const deliverPending = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+  const completion = vi
+    .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
+    .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, ...args) {
+      const work = deliverPending.call(this, ...args);
+      pending.add(work);
+      return work;
+    });
+  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+  const reconcile = CodexNativeSubagentRecoveryCoordinator.prototype.reconcileTaskCandidate;
+  const recovery = vi
+    .spyOn(CodexNativeSubagentRecoveryCoordinator.prototype, "reconcileTaskCandidate")
+    .mockImplementation(function (this: CodexNativeSubagentRecoveryCoordinator, candidate, after) {
+      const work = reconcile.call(this, candidate, after);
+      pending.add(work);
+      return work;
+    });
+  return {
+    async settle(): Promise<unknown[]> {
+      const failures: unknown[] = [];
+      while (pending.size > 0) {
+        const work = [...pending];
+        pending.clear();
+        const results = await Promise.allSettled(work);
+        failures.push(
+          ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      }
+      // Surface unexpected native work failures to the fixture.
+      return failures;
+    },
+    [Symbol.dispose]() {
+      recovery.mockRestore();
+      completion.mockRestore();
+    },
+  };
+}
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };

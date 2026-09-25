@@ -460,8 +460,9 @@ export class CodexNativeSubagentCompletionDelivery {
       ) {
         const current = read()[0];
         // Recovery can rewrite an already-terminal outcome still awaiting delivery.
-        // Only absence or a conflicting terminal decision retires this projection.
+        // Lost assignment ownership or a conflicting terminal decision retires this projection.
         if (
+          !this.claim(state, child, read) ||
           !current ||
           (current.status !== completion.status &&
             current.status !== "queued" &&
@@ -502,7 +503,7 @@ export class CodexNativeSubagentCompletionDelivery {
             (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
         )
       ) {
-        if (read().length === 0) {
+        if (!this.claim(state, child, read)) {
           this.dependencies.unregisterChild(child);
           return false;
         }
