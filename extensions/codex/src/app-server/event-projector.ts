@@ -392,6 +392,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordItemIdentity(item),
+    );
+    if (this.projectionClosed) {
+      return;
+    }
     if (item?.type === "agentMessage" && item.text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
