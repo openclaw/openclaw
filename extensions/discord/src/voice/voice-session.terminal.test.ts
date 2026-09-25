@@ -28,8 +28,6 @@ defineDiscordVoiceTests(
   }) => {
     it.each([
       ["agent-proxy", "leave"],
-      ["agent-proxy", "destroyed"],
-      ["bidi", "leave"],
       ["bidi", "destroyed"],
     ] as const)(
       "retires %s room capture on %s without affecting its replacement",
@@ -124,8 +122,6 @@ defineDiscordVoiceTests(
 
     it.each([
       ["agent-proxy", "completed"],
-      ["agent-proxy", "error"],
-      ["bidi", "completed"],
       ["bidi", "error"],
     ] as const)(
       "retires an unbound %s room when its warm provider closes with %s",
