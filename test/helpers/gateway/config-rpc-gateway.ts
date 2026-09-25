@@ -26,27 +26,6 @@ let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 let client: GatewayClient | undefined;
 const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
 const unarmedConfigWatchers: ReturnType<typeof chokidar.watch>[] = [];
-let observationSpan = 0;
-
-async function observeConfigRpcPhase<T>(phase: string, run: () => T | Promise<T>): Promise<T> {
-  const span = ++observationSpan;
-  const emit = (event: "started" | "settled" | "failure") => {
-    try {
-      process.stderr.write(`[config-patch-observer] fixture ${span} ${phase} ${event}\n`);
-    } catch {
-      // Diagnostic output must not replace the original hook outcome.
-    }
-  };
-  emit("started");
-  try {
-    const result = await run();
-    emit("settled");
-    return result;
-  } catch (error) {
-    emit("failure");
-    throw error;
-  }
-}
 
 type ConfigRpcGatewayOptions = {
   configRelativePath?: string;
@@ -163,8 +142,7 @@ async function startConfigRpcGateway({
   });
   client.start();
   await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
-  const startupSettled = server.startupSettled;
-  await observeConfigRpcPhase("startupSettled", () => startupSettled);
+  await server.startupSettled;
 }
 
 async function stopConfigRpcGateway() {
@@ -173,16 +151,16 @@ async function stopConfigRpcGateway() {
   await runQaGatewayFixture(
     async () => resetGatewayRestartStateForInProcessRestart(),
     async () => {
-      await observeConfigRpcPhase("client.stopAndWait", () => client?.stopAndWait());
+      await client?.stopAndWait();
       client = undefined;
     },
     async () => {
-      await observeConfigRpcPhase("server.close", () => server?.close());
+      await server?.close();
       server = undefined;
     },
     () => Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close())),
     () => resetGatewayRestartStateForInProcessRestart(),
-    () => observeConfigRpcPhase("state.cleanup", () => state?.cleanup()),
+    () => state?.cleanup(),
     () => resetLogger(),
     () => clearPluginMetadataLifecycleCaches(),
     () => vi.restoreAllMocks(),
@@ -276,11 +254,11 @@ export async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) 
 }
 
 export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {
-  beforeEach(() => observeConfigRpcPhase("beforeEach", () => startConfigRpcGateway(options)));
+  beforeEach(() => startConfigRpcGateway(options));
   beforeEach(() => {
     pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
-  afterEach(() => observeConfigRpcPhase("afterEach", stopConfigRpcGateway));
+  afterEach(stopConfigRpcGateway);
 }
 
 export function installSharedConfigWriteGatewayHooks({
