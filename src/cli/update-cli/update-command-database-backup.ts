@@ -1,5 +1,4 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   acquireGatewayMaintenanceCoordinator,
@@ -10,7 +9,6 @@ import {
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
-import type { UpdatePostInstallDoctorResult } from "../../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -85,55 +83,6 @@ export async function captureUpdateDatabases(params: {
   };
   execution.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
   return { backup: restorable ? backup : undefined, step };
-}
-
-export function recordUpdateDatabaseWrites(
-  backup: UpdateDatabaseBackup,
-  writes: UpdatePostInstallDoctorResult["databaseWrites"] | undefined,
-  step: UpdateStepResult,
-) {
-  const paths = Object.keys(backup.sourceGenerations).toSorted();
-  let receipt: UpdateStepResult | undefined;
-  if (
-    !writes ||
-    JSON.stringify(Object.keys(writes.generations).toSorted()) !== JSON.stringify(paths)
-  ) {
-    step.warnings = [
-      ...(step.warnings ?? []),
-      "Doctor did not provide complete database write-generation evidence; rollback requires the last verified generation to remain unchanged.",
-    ];
-  } else {
-    const fingerprint = sha256Hex(
-      JSON.stringify(paths.map((file) => [file, writes.generations[file]])),
-    );
-    const diagnostics = [
-      `Post-migration write inventory: ${paths.length} databases; SHA-256 ${fingerprint}. Snapshots: ${backup.directory}.`,
-      ...paths.map(
-        (file) => `Database write fingerprint: ${file}; ${writes.generations[file] ?? "absent"}`,
-      ),
-    ];
-    receipt = {
-      name: "database migration writes",
-      command: "record Doctor database write fingerprints",
-      cwd: backup.directory,
-      durationMs: 0,
-      exitCode: 0,
-      diagnostics,
-    };
-    step.diagnostics = [...(step.diagnostics ?? []), ...diagnostics];
-    if (!writes.unchanged) {
-      backup.restoreRefusal ??= "databases changed after snapshot capture; the writer is unknown";
-    } else if (!backup.restoreRefusal) {
-      backup.postMigrationGenerations = writes.generations;
-    }
-  }
-  if (backup.restoreRefusal) {
-    step.warnings = [
-      ...(step.warnings ?? []),
-      `Automatic database restoration unavailable: ${backup.restoreRefusal}. Snapshots retained at ${backup.directory}.`,
-    ];
-  }
-  return receipt;
 }
 
 /** Called only before this update admits a candidate Gateway, after its child has settled. */
