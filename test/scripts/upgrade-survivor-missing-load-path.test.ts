@@ -208,7 +208,7 @@ const prepared = path.join(env.OPENCLAW_STATE_DIR, "converged-plugin-inputs");
 if (attempt > 1) assert.equal(fs.readFileSync(prepared, "utf8"), "published convergence retained");
 fs.appendFileSync(env.FIXTURE_LAUNCHES, JSON.stringify({
   attempt, pid: process.pid, config: env.OPENCLAW_CONFIG_PATH, state: env.OPENCLAW_STATE_DIR,
-  registry: env.NPM_CONFIG_REGISTRY, args,
+  registry: env.NPM_CONFIG_REGISTRY, args, token: env.OPENCLAW_GATEWAY_TOKEN, password: env.OPENCLAW_GATEWAY_PASSWORD,
 }) + "\\n");
 const mode = env.FIXTURE_MODE;
 if (mode === "live-refusal" || mode === "timeout") {
@@ -286,6 +286,8 @@ printf 'baseline-complete\\n'
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "https://candidate.example.invalid",
       OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://published.example.invalid",
       NPM_CONFIG_REGISTRY: "https://candidate.example.invalid",
+      OPENCLAW_GATEWAY_TOKEN: "fixture-inherited-token",
+      OPENCLAW_GATEWAY_PASSWORD: "fixture-inherited-password",
       FIXTURE_MODE: mode,
       FIXTURE_LAUNCHES: launchFile,
       FIXTURE_READY: readyFile,
@@ -298,11 +300,22 @@ printf 'baseline-complete\\n'
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { pid: number; config: string; state: string });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          pid: number;
+          config: string;
+          state: string;
+          token?: string;
+          password?: string;
+        },
+    );
   expect(observed).toHaveLength(launches);
   expect(new Set(observed.map((entry) => entry.pid)).size).toBe(launches);
   for (const entry of observed) {
     expect(entry).toMatchObject({ config: configPath, state });
+    expect(entry.token).toBeUndefined();
+    expect(entry.password).toBeUndefined();
   }
   expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
   const refusedLog = path.join(
