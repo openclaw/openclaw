@@ -124,11 +124,30 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ? existingClaim
           : undefined;
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
-        throw new Error(
-          guarded.status === "blocked"
-            ? "card is blocked; use workboard_unblock before claiming."
-            : "card dependencies are not done.",
+        if (guarded.status === "blocked") {
+          throw new Error("card is blocked; use workboard_unblock before claiming.");
+        }
+        const parentIds = cardParentIds(guarded).map((parentId) => parentId.trim());
+        const parentCards = new Map(
+          (await this.store.listCardStatuses(parentIds)).map((parent) => [parent.id, parent]),
         );
+        const unfinished = parentIds
+          .filter((parentId) => parentCards.get(parentId)?.status !== "done")
+          .map((parentId) => `${parentId} is ${parentCards.get(parentId)?.status ?? "missing"}`);
+        if (unfinished.length > 0) {
+          throw new Error(`card dependencies are not done: ${unfinished.join(", ")}.`);
+        }
+        // Every parent is done, so this is not a dependency failure: reporting an
+        // empty list here would be the misdiagnosis this PR removes. A promotable
+        // card in this state was held back by its own future schedule (see
+        // dependencyTargetStatus), so name the time instead. Any other status
+        // falls through to the guards below, which report the real reason.
+        const scheduledAt = guarded.metadata?.automation?.scheduledAt;
+        if (guarded.status === "scheduled" && scheduledAt && scheduledAt > now) {
+          throw new Error(
+            `card is scheduled for ${new Date(scheduledAt).toISOString()}; claim after that time.`,
+          );
+        }
       }
       if (guarded.status === "scheduled") {
         throw new Error("card is scheduled for later.");

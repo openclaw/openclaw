@@ -685,4 +685,55 @@ describe("Workboard dependency status reads", () => {
       raw.close();
     }
   });
+
+  it("reports a blocked child with a done parent as blocked, not a dependency failure", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const parent = await store.create({ title: "Parent", status: "done" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    const claimed = await store.claim(child.id, { ownerId: "main", token: "claim-token" });
+    await store.block(child.id, { ownerId: "main", token: claimed.token, reason: "Needs input." });
+
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(
+      "card is blocked; use workboard_unblock before claiming.",
+    );
+  });
+
+  it("names the offending parent and status when a dependency is not done", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const parent = await store.create({ title: "Parent", status: "ready" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(
+      `card dependencies are not done: ${parent.id} is ready.`,
+    );
+  });
+
+  it("claims a card whose parents are all done and is not blocked", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const parent = await store.create({ title: "Parent", status: "done" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    const claimed = await store.claim(child.id, { ownerId: "main", ttlSeconds: 60 });
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.metadata?.claim?.ownerId).toBe("main");
+  });
+
+  it("reports the schedule instead of an empty dependency list when every parent is done", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const scheduledAt = Date.now() + 60 * 60_000;
+    const parent = await store.create({ title: "Parent", status: "done" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+    await store.update(child.id, { status: "scheduled", scheduledAt });
+
+    const error = await store.claim(child.id, { ownerId: "main" }).then(
+      () => undefined,
+      (caught: unknown) => caught as Error,
+    );
+    expect(error?.message).toBe(
+      `card is scheduled for ${new Date(scheduledAt).toISOString()}; claim after that time.`,
+    );
+    // The old formatter rendered "card dependencies are not done: ." here.
+    expect(error?.message).not.toContain("dependencies are not done");
+  });
 });
