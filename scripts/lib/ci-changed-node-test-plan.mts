@@ -898,12 +898,7 @@ export function createChangedNodeTestShards(
           policyTargets.length > 0,
       ),
   );
-  const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
-  const completeOwnerTargets = new Set(
-    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
-      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
-    ),
-  );
+  const policyTargets = new Set([...policyTargetsByPath.values()].flat());
   const regularPaths = resolutionPaths.filter(
     (changedPath) =>
       !documentationPaths.has(changedPath) &&
@@ -1121,7 +1116,7 @@ export function createChangedNodeTestShards(
         changedPaths.includes(target) ||
         options.includeReleaseOnlyToolingShards !== false ||
         changedPaths.some(isToolingTestOwnerPath) ||
-        completeOwnerTargets.has(target) ||
+        policyTargets.has(target) ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>
@@ -1145,7 +1140,10 @@ export function createChangedNodeTestShards(
   const prTargetPlans: typeof targetPlans = [];
   for (const entry of targetPlans) {
     const { target, plans } = entry;
-    if (isCiProofTestFile(target) || !isRuntimeTestFileIncluded(target, runtimeSelection, cwd)) {
+    if (
+      isCiProofTestFile(target) ||
+      (!policyTargets.has(target) && !isRuntimeTestFileIncluded(target, runtimeSelection, cwd))
+    ) {
       continue;
     }
     const separateExecution =
@@ -1207,7 +1205,8 @@ export function createChangedNodeTestShards(
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
           onFallback: options.onFallback,
-          ...runtimeSelection,
+          // These exact targets already passed deferral above, including explicit policy watches.
+          includeReleaseOnlyRuntimeTests: true,
         })
       : null
     : [];

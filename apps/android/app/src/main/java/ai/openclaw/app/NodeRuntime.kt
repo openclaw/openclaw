@@ -1400,6 +1400,8 @@ class NodeRuntime private constructor(
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> = _nodeCapabilityApproval.asStateFlow()
+  private val nodeApproval = GatewayNodeApproval()
+  val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> = nodeApproval.state
 
   private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
@@ -3074,6 +3076,14 @@ class NodeRuntime private constructor(
   }
 
   fun refreshNodesDevices() = launchGatewayRefresh { refreshNodesDevicesFromGateway() }
+
+  fun approveNodeCapabilities(expectedRequestId: String) {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    scope.launch {
+      nodeApproval.approve(expectedRequestId)
+      refreshNodesDevicesFromGateway()
+    }
+  }
 
   fun approveDevicePairing(
     requestId: String,
@@ -4834,6 +4844,7 @@ class NodeRuntime private constructor(
   }
 
   private fun refreshAcceptedGatewayConnection(connection: GatewayConnectionContext? = activeGatewayConnection) {
+    nodeApproval.invalidate()
     if (connection == null) return
     val endpoint = connectedEndpoint ?: return
     launchGatewayLifecycle({
@@ -8424,6 +8435,7 @@ class NodeRuntime private constructor(
 
   private suspend fun refreshNodesDevicesFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
+    val approvalContext = captureNodeApprovalContext(gatewayScope)
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     var refreshStarted = false
     val currentScope =
@@ -8483,6 +8495,7 @@ class NodeRuntime private constructor(
       if (!scopePublished || !approvalPublished) {
         return
       }
+      if (approvalContext != null && nodesRoot != null) nodeApproval.refresh(approvalContext, nodesRoot)
       publishGatewayData(gatewayScope) {
         if (selfNodeConnected && !_nodeConnected.value) {
           updateStatus {
@@ -9260,12 +9273,42 @@ class NodeRuntime private constructor(
   ): List<GatewayExecApprovalSummary> = filterNot { it.isExpiredExecApproval(nowMs) }
 
   private fun invalidateNodeCapabilityApprovalState() {
+    nodeApproval.invalidate()
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
       _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
       _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
       _nodesDevicesRefreshing.value = false
     }
+  }
+
+  private fun currentNodeApprovalSurface(): GatewayNodeApprovalSurface =
+    GatewayNodeApprovalSurface(
+      capabilities = invokeDispatcher.buildCapabilities().toSet(),
+      commands = invokeDispatcher.buildInvokeCommands().toSet(),
+      permissions = connectionManager.buildPermissions(),
+    )
+
+  private fun captureNodeApprovalContext(gatewayScope: GatewayDataScope): GatewayNodeApprovalContext? {
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return null
+    val desired = currentNodeApprovalSurface()
+    val grantedScopes = _operatorScopes.value
+    return GatewayNodeApprovalContext(
+      lease = lease,
+      selfNodeId = identityStore.loadOrCreate().deviceId,
+      scopes = grantedScopes,
+      desired = desired,
+      commitIfCurrent = { block ->
+        var current = false
+        publishGatewayData(gatewayScope) {
+          if (_operatorScopes.value == grantedScopes && currentNodeApprovalSurface() == desired) {
+            current = true
+            block()
+          }
+        }
+        current
+      },
+    )
   }
 
   private suspend fun refreshChannelsFromGateway() =

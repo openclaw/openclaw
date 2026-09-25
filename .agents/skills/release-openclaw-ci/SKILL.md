@@ -49,10 +49,13 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
-  to reserved capacity with unchanged labels. Configure eligible runners and repo
+  and the Release Publish parent plus its publish children to reserved capacity
+  with unchanged labels; credentialed publish and approval jobs stay on default
+  GitHub-hosted labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.
+- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match.
 - Two publication modes (RELEASING.md "Publication modes"). Strict default: a
   stable tag needs stable/full evidence with soak and blocking performance and no
   failed non-proof lane. Operator fast path: `stable_soak_waiver` /
@@ -392,6 +395,8 @@ gh workflow run openclaw-performance.yml \
 - Record regressions in release evidence and investigate their product impact.
   Performance results are advisory for beta, stable, and full profiles; no
   performance waiver is needed for npm/ClawHub publication or main closeout.
+- Closeout replay reuses sealed waiver text without retyping; only new operator
+  text must carry the version prefix.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 

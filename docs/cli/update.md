@@ -168,7 +168,15 @@ package once, then lets that candidate decide whether the live installation can
 be updated. Registry targets and explicit artifacts such as `--tag ./openclaw.tgz`
 use the same flow. The stage is reused for verification, canary rehearsal, and
 activation; a refusal or pre-mutation failure removes it and leaves the installed
-package and serving Gateway in place.
+package and serving Gateway in place. After admission and package verification,
+a matching installed version and artifact build identity remain a no-op unless
+the update needs to replace the installation method or a separate serving root.
+The temporary candidate is removed without activating it.
+
+When replacement is needed, the updater retains its running worker files before
+changing the installed package. Linux OverlayFS installations use private copies
+so hard-link copy-up cannot invalidate the retained files’ identity checks.
+Other supported filesystems keep the hard-link fast path and copy fallback.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the

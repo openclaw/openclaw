@@ -360,11 +360,19 @@ suite.define(() => {
                   quickApiKeySetup: true,
                   loginOptions: [
                     {
+                      id: "openai-token-sharing",
+                      brandId: "openai",
+                      label: "Sign in with ChatGPT",
+                      hint: "Use your Codex allowance with per-instance usage tracking and token limits",
+                      kind: "oauth",
+                      featured: false,
+                    },
+                    {
                       id: "openai-device-code",
                       brandId: "openai",
                       groupLabel: "OpenAI",
                       label: "Codex login (device code)",
-                      hint: "Approve Codex access using a code in your browser",
+                      hint: "Use a browser code when OpenClaw runs on a remote VM",
                       kind: "device-code",
                       featured: true,
                       docsUrl: "https://docs.openclaw.ai/providers/openai/authentication",
@@ -373,15 +381,7 @@ suite.define(() => {
                       id: "openai",
                       brandId: "openai",
                       label: "Codex login (browser)",
-                      hint: "Sign in to Codex with your ChatGPT account",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                    {
-                      id: "openai-token-sharing",
-                      brandId: "openai",
-                      label: "Sign in with ChatGPT",
-                      hint: "Use your ChatGPT allowance through the Responses API",
+                      hint: "Sign in to Codex locally with your ChatGPT account",
                       kind: "oauth",
                       featured: false,
                     },
@@ -434,13 +434,9 @@ suite.define(() => {
           dialog.getByRole("button").filter({
             has: page.locator("strong").filter({ hasText: label }),
           });
-        for (const method of [
-          "Codex login (device code)",
-          "Codex login (browser)",
-          "Sign in with ChatGPT",
-        ]) {
-          await connectionMethod(method).waitFor();
-        }
+        expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
+          ["Sign in with ChatGPT", "Codex login (device code)", "Codex login (browser)"],
+        );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
         await dialog

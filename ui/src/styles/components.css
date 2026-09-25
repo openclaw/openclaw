@@ -5161,6 +5161,35 @@ td.data-table-key-col {
   height: 100%;
 }
 
+.cmd-palette__plugin-icon {
+  display: grid;
+  flex: 0 0 26px;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cmd-palette__plugin-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cmd-palette__plugin-icon--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  color: var(--text-strong);
+}
+
+.cmd-palette__plugin-icon--fallback svg {
+  width: 18px;
+  height: 18px;
+}
+
 .cmd-palette__avatar {
   position: relative;
   flex: 0 0 38px;

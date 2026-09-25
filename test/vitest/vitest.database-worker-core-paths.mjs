@@ -674,6 +674,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-store.retention.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
   "src/plugin-state/plugin-state-store.schema.test.ts",
+  "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/agents/tools/cron-tool.output-contract.test.ts",
@@ -723,6 +724,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],
   ["src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts", "unitFast"],
   ["src/agents/tools/skill-workshop-tool.history.test.ts", "unitFast"],

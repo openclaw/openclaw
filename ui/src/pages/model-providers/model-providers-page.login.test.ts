@@ -60,6 +60,13 @@ function loginHarness(
         quickApiKeySetup: true,
         loginOptions: [
           {
+            id: "example-browser",
+            brandId: "example",
+            label: "Example browser sign-in",
+            kind: "oauth",
+            featured: true,
+          },
+          {
             id: "example-secret",
             brandId: "example",
             label: "Example API key",
@@ -67,13 +74,6 @@ function loginHarness(
             hint: "Use your Example account key",
             kind: "secret",
             featured: false,
-          },
-          {
-            id: "example-browser",
-            brandId: "example",
-            label: "Example browser sign-in",
-            kind: "oauth",
-            featured: true,
           },
         ],
       },
@@ -189,6 +189,43 @@ async function submitCredential(page: ModelProvidersPageTestElement) {
 }
 
 describe("Models provider login", () => {
+  it("shows the provider's first login method first and focuses it", async () => {
+    const { context } = loginHarness({
+      capabilities: [
+        {
+          provider: "openai",
+          apiKeySupported: false,
+          quickApiKeySetup: false,
+          loginOptions: [
+            {
+              id: "openai/siwc",
+              brandId: "openai",
+              label: "Sign in with ChatGPT",
+              kind: "oauth",
+              featured: false,
+            },
+            {
+              id: "openai/device-code",
+              brandId: "openai",
+              label: "Codex login (device code)",
+              kind: "device-code",
+              featured: true,
+            },
+          ],
+        },
+      ],
+    });
+    const page = appendPage(context);
+    await openPicker(page);
+    await selectProvider(page, "openai");
+    const options = [...page.querySelectorAll("[data-models-login-choice] button")];
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Sign in with ChatGPT",
+      "Codex login (device code)",
+    ]);
+    expect(document.activeElement).toBe(options[0]);
+  });
+
   it.each([
     { kind: "oauth", cancel: false, submit: false, callbackOnly: false },
     { kind: "oauth", cancel: false, submit: false, callbackOnly: true },
