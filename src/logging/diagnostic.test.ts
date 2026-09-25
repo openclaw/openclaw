@@ -1,5 +1,6 @@
 // Diagnostic logger tests cover event emission, metrics, and support output.
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -357,6 +358,7 @@ describe("stuck session diagnostics threshold", () => {
     vi.useFakeTimers();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
+    vi.spyOn(diagnosticLogger, "isEnabled").mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -420,34 +422,54 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("includes the current app-agent SQLite assistant reply in heartbeat diagnostics", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-heartbeat-app-agent-",
-    });
-    const sessionKey = "agent:oauth-agent:main";
-    const sessionId = "oauth-session";
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+  it.each([true, false])(
+    "keeps heartbeat enrichment off the main thread with its sink enabled=%s",
+    async (enabled) => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      vi.mocked(diagnosticLogger.isEnabled).mockReturnValue(enabled);
+      const openClawState = await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-heartbeat-app-agent-",
+      });
+      const sessionKey = "agent:oauth-agent:main";
+      const sessionId = "oauth-session";
+      const logged = Promise.withResolvers<void>();
+      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
+        if (message.startsWith(`stuck session: sessionId=${sessionId} `)) {
+          logged.resolve();
+        }
+      });
 
-    try {
-      await replaceSessionEntry(
-        { agentId: "oauth-agent", sessionKey },
-        { sessionId, updatedAt: 1 },
-      );
-      appendTranscriptMessageSync(
-        { agentId: "oauth-agent", sessionId, sessionKey },
-        { message: { role: "assistant", content: "the reimbursement was approved" } },
-      );
+      try {
+        await replaceSessionEntry(
+          { agentId: "oauth-agent", sessionKey },
+          { sessionId, updatedAt: 1 },
+        );
+        appendTranscriptMessageSync(
+          { agentId: "oauth-agent", sessionId, sessionKey },
+          { message: { role: "assistant", content: "the reimbursement was approved" } },
+        );
 
-      startEnabledDiagnosticHeartbeat({ recoverStuckSession: vi.fn() });
-      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
-      vi.advanceTimersByTime(61_000);
-
-      expectLoggerMessageContaining(warnSpy, 'lastAssistant="the reimbursement was approved"');
-    } finally {
-      await openClawState.cleanup();
-    }
-  });
+        const recoverStuckSession = vi.fn();
+        startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+        logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+        vi.advanceTimersByTime(61_000);
+        expect(prepare).not.toHaveBeenCalled();
+        prepare.mockRestore();
+        expect(recoverStuckSession).toHaveBeenCalled();
+        if (enabled) {
+          await logged.promise;
+          expectLoggerMessageContaining(warnSpy, 'lastAssistant="the reimbursement was approved"');
+        } else {
+          expect(warnSpy).not.toHaveBeenCalled();
+        }
+      } finally {
+        await openClawState.cleanup();
+      }
+    },
+  );
 
   it("never copies an incognito assistant reply into durable heartbeat diagnostics", async () => {
     const openClawState = await createOpenClawTestState({
