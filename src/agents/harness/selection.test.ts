@@ -128,6 +128,10 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
 }));
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 const privateHarnessParamCases = [
+  {
+    field: "runtimePluginToolGrant",
+    value: { pluginId: "grant-owner", toolNames: ["optional_tool"] },
+  },
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },

@@ -1,7 +1,3 @@
-// Authority boundary (ClawSweeper P1): the runtime plugin tool grant comes
-// ONLY from the Gateway-admitted attempt held by the Host closure.
-// Harness-supplied options must never forward a grant; Host overwrites
-// unconditionally (fail-closed).
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,7 +110,11 @@ async function admittedAttempt(
   } as HostAttempt;
 }
 
-async function buildSurface(attempt: HostAttempt, harnessOptions: Record<string, unknown> = {}) {
+async function buildSurface(
+  attempt: HostAttempt,
+  harnessOptions: Record<string, unknown> = {},
+  beforeSurface?: () => void,
+) {
   const workspaceDir = path.join(tempDir, "workspace");
   await fs.mkdir(workspaceDir, { recursive: true });
   const pluginConfig = {
@@ -136,6 +136,7 @@ async function buildSurface(attempt: HostAttempt, harnessOptions: Record<string,
     setGatewayPluginMetadataSnapshot(fresh);
 
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "test-host" });
+    beforeSurface?.();
     try {
       const tools = host.capabilities.createToolSurface?.({
         config: pluginConfig,
@@ -201,11 +202,16 @@ describe("host runtime plugin tool grant authority", () => {
     }
   });
 
-  it("denies a foreign plugin tool before any I/O", async () => {
+  it("keeps the admitted grant when shared attempt authority is mutated after host capture", async () => {
+    const grant = { pluginId: PLUGIN_A, toolNames: [TOOL_A] };
     const attempt = await admittedAttempt("grant-negative", {
-      runtimePluginToolGrant: { pluginId: PLUGIN_A, toolNames: [TOOL_A] },
+      runtimePluginToolGrant: grant,
     });
-    const { host, tools } = await buildSurface(attempt);
+    const { host, tools } = await buildSurface(attempt, {}, () => {
+      grant.pluginId = PLUGIN_B;
+      grant.toolNames.push(TOOL_B);
+      attempt.runtimePluginToolGrant = { pluginId: PLUGIN_B, toolNames: [TOOL_B] };
+    });
     try {
       const names = tools.map((tool) => tool.name);
       expect(names).toContain(TOOL_A);
@@ -213,6 +219,20 @@ describe("host runtime plugin tool grant authority", () => {
       // No execution path exists for the foreign tool, so its I/O sentinel
       // must be absent: denial happened before any plugin B I/O.
       await expect(fs.stat(path.join(tempDir, "io-b.txt"))).rejects.toThrow();
+    } finally {
+      host.close();
+    }
+  });
+
+  it("does not admit optional tools without a host grant", async () => {
+    const attempt = await admittedAttempt("grant-absent");
+    const { host, tools } = await buildSurface(attempt, {
+      runtimePluginToolGrant: { pluginId: PLUGIN_B, toolNames: [TOOL_B] },
+    });
+    try {
+      const names = tools.map((tool) => tool.name);
+      expect(names).not.toContain(TOOL_A);
+      expect(names).not.toContain(TOOL_B);
     } finally {
       host.close();
     }
