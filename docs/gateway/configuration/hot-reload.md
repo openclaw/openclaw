@@ -51,6 +51,42 @@ write was rejected before persistence, save the intended workspace path while
 it is stopped. Then run [`openclaw doctor --fix`](/cli/doctor) and restart.
 Reload never migrates workspace state.
 
+### File observation
+
+Config hot reload uses fs-safe observation. File notifications are advisory;
+config and include validation still decide what may be read and applied. Rejected
+lexical include entries remain observable so repairs can trigger a reload, but
+watching a symlink does not authorize reading its target.
+
+Native observation is supported only on Node.js/Linux with trusted procfs. It
+watches pinned directories, with guarded metadata reconciliation for missed
+notifications. Other hosts, including macOS, Windows, and Bun, default to
+explicit polling. Readiness is not a complete event history or proof that an
+external writer has finished. Config keeps its 200 ms metadata settling window
+before handling ordinary file edits.
+
+The existing `CHOKIDAR_USEPOLLING` environment variable remains supported:
+`1` enables polling; `false`, `0`, or an empty value explicitly selects native
+observation and prevents automatic polling degradation. On an unsupported host,
+that native-only override leaves hot reload disabled after bounded retries;
+unset it or select polling to restore observation. With no override, config can
+also fall back to polling after bounded native retries on Linux.
+`CHOKIDAR_INTERVAL` retains the polling cadence, defaulting to 100 ms; positive
+values below 20 ms use the observation engine's 20 ms minimum. Polling uses one
+cadence for all selected file types.
+
+Each config observer admits at most four native workers, grouping up to 128
+entry scopes per subscription. Reaching this application limit uses the same
+bounded retry and polling-degradation policy above; explicitly disabling polling
+still prevents that fallback. Retirement finishes before replacement admission.
+
+Observers retain admitted ancestor identities. Replacing files or descendants
+within those ancestors is supported; losing an admitted ancestor does not
+authorize silently watching a replacement or a broader parent. If hot reload is
+disabled after root loss or a retirement failure, correct the filesystem layout
+and restart the Gateway. Gateway-managed writes remain separate from external
+file notifications.
+
 ### Reload modes
 
 | Mode                   | Behavior                                                                                                                                |

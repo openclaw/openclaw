@@ -13,6 +13,7 @@ import {
   normalizeRunNodePath as normalizePath,
   runNodeWatchedPaths,
 } from "./run-node-watch-paths.mts";
+import type { Watcher, WatcherFactory, WatchPathStats } from "./watch-node-observation.mts";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -35,17 +36,6 @@ type WatchChild = {
   on(event: "exit", callback: (code: number | null, signal: ProcessSignal | null) => void): unknown;
   on(event: "error", callback: (error: Error) => void): unknown;
 };
-type WatchPathStats = { isDirectory(): boolean };
-type WatchOptions = {
-  ignoreInitial: boolean;
-  ignored: (watchPath: string, stats?: WatchPathStats) => boolean;
-};
-type Watcher = {
-  on(event: "add" | "change" | "unlink", callback: (path: string) => void): void;
-  on(event: "error", callback: (error: unknown) => void): void;
-  close?: () => { catch?(onRejected: () => void): unknown } | void;
-};
-type WatcherFactory = (paths: string[], options: WatchOptions) => Watcher;
 type WatchPathClassifier = {
   refreshGeneratedPluginAssetPaths(): void;
   isRestartRelevantRunNodePath(repoPath: unknown): boolean;
@@ -63,7 +53,7 @@ type WatchMainParams = {
     },
   ) => WatchChild;
   createWatcher?: WatcherFactory;
-  loadChokidar?: () => Promise<{ watch: WatcherFactory }>;
+  loadWatcher?: () => Promise<WatcherFactory>;
   watchPaths?: string[];
   pathClassifier?: WatchPathClassifier;
   process?: NodeJS.Process;
@@ -81,7 +71,7 @@ type WatchDeps = Required<
   Pick<
     WatchMainParams,
     | "spawn"
-    | "loadChokidar"
+    | "loadWatcher"
     | "watchPaths"
     | "pathClassifier"
     | "process"
@@ -252,10 +242,8 @@ const printFriendlyWatchStartupError = (err: unknown) => {
   console.error(err);
 };
 
-const loadChokidar = async () => {
-  const mod = await import("chokidar");
-  return mod.default ?? mod;
-};
+const loadWatcher = async (): Promise<WatcherFactory> =>
+  (await import("./watch-node-observation.mts")).createSourceObserver;
 
 const waitForWatcherRelease = async (lockPath: string, pid: number, deps: WatchDeps) => {
   const deadline = deps.now() + WATCH_LOCK_WAIT_MS;
@@ -351,7 +339,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
     lockDisabled: params.lockDisabled === true,
     pathClassifier: params.pathClassifier ?? createRunNodePathClassifier({ rootDir: cwd }),
     createWatcher: params.createWatcher,
-    loadChokidar: params.loadChokidar ?? loadChokidar,
+    loadWatcher: params.loadWatcher ?? loadWatcher,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   } satisfies WatchDeps;
 
@@ -417,6 +405,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         return;
       }
       settled = true;
+      shuttingDown = true;
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
       }
@@ -426,13 +415,27 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       if (onSigTerm) {
         deps.process.off("SIGTERM", onSigTerm);
       }
-      releaseWatchLock(lockHandle);
-      watcher?.close?.()?.catch?.(() => {});
-      if (watcherStartupError && typeof outcome !== "string") {
-        reject(watcherStartupError);
-      } else {
-        resolve(outcome);
-      }
+      // Keep ownership until physical observation retires. A replacement must
+      // not acquire the lock while this owner still has live watcher resources.
+      void (async () => {
+        try {
+          await watcher?.close?.();
+        } catch (error) {
+          if (watcherStartupError) {
+            throw new AggregateError(
+              [watcherStartupError, error],
+              "Watcher startup and retirement failed",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        releaseWatchLock(lockHandle);
+        if (watcherStartupError && typeof outcome !== "string") {
+          throw watcherStartupError;
+        }
+        return outcome;
+      })().then(resolve, reject);
     };
 
     const settleIfSignaled = (child: WatchChild | null, signal: ProcessSignal | null) => {
@@ -551,7 +554,8 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       });
     };
 
-    const handleWatcherError = () => {
+    const handleWatcherError = (error: unknown) => {
+      logWatcher(`Source observation failed: ${errorMessage(error) || String(error)}`, deps);
       requestShutdown(1);
     };
 
@@ -567,9 +571,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
 
     const resolveCreateWatcher = async () => {
       try {
-        const chokidarModule = await deps.loadChokidar();
-        return (watchPaths: string[], options: WatchOptions) =>
-          chokidarModule.watch(watchPaths, options);
+        return await deps.loadWatcher();
       } catch (err) {
         if (isInvalidPackageConfigError(err)) {
           printFriendlyWatchStartupError(err);
@@ -669,10 +671,11 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       })();
     };
 
-    const requestRestart = (changedPath: string) => {
+    const requestRestart = (changedPath?: string) => {
       if (
         shuttingDown ||
-        isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier)
+        (changedPath !== undefined &&
+          isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier))
       ) {
         return;
       }
@@ -719,14 +722,13 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         return;
       }
       watcher = createWatcher(deps.watchPaths, {
-        ignoreInitial: true,
+        cwd: deps.cwd,
+        env: deps.env,
         ignored: (watchPath, stats) =>
           isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, deps.pathClassifier, stats),
+        onChange: requestRestart,
+        onError: handleWatcherError,
       });
-      watcher.on("add", requestRestart);
-      watcher.on("change", requestRestart);
-      watcher.on("unlink", requestRestart);
-      watcher.on("error", handleWatcherError);
     };
 
     const startWatcher = () => {

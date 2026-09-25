@@ -376,7 +376,24 @@ defaults rather than exposing per-install timing switches.
 ### File-watcher pressure
 
 The "Memory file watching is tracking ..." warning reports an advisory count of
-watched paths or directories, not a measured host limit or confirmed exhaustion.
+registered directories in native mode or observed directories in polling mode.
+Neither is a portable kernel-watch count, measured host limit, or confirmed
+exhaustion. Polling inventory measures scan work, not native watch registrations.
+
+A separate application limit admits at most 16 Memory Node observation workers
+per process, across watcher instances and including retiring workers. Its
+"memory observation worker limit reached" warning is not an operating-system
+capacity error. The affected instance refreshes on search instead of silently
+switching to polling; explicit polling does not consume this worker budget.
+Only successful actual close frees a reserved worker slot.
+
+Native observation requires Node.js/Linux with trusted procfs. Other hosts,
+including macOS, Windows, and Bun, default to polling without consuming this
+worker budget. `CHOKIDAR_USEPOLLING=1` explicitly selects polling. A `false`, `0`,
+or empty value requests native-only observation even on an unsupported host;
+that refusal uses refresh-on-search rather than silently enabling polling.
+Unset the override or select polling to restore automatic observation.
+
 Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
 are combined: an empty per-agent list does not remove global roots. Changing only

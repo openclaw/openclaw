@@ -729,7 +729,8 @@ File-backed skills refresh mid-session when:
 - The skills watcher detects a `SKILL.md` change.
 - The Gateway restarts, including when `skills.load.watch` is `false`.
 - A new eligible remote node connects.
-- Native file-watch capacity is exhausted and the next agent turn starts.
+- Native file-watch capacity or the Skills observation worker limit is reached
+  and the next agent turn starts.
 - A previously idle or evicted workspace resumes watching on its next agent turn.
 
 The refreshed list is picked up on the next agent turn in the same session.
@@ -749,12 +750,41 @@ turn reacquires retired roots and refreshes file-backed skills before using them
 managed library revisions remain pinned. This bounds retained subscriptions, not
 the total number of operating-system file watches.
 
+Separately, Skills admits at most 16 Node observation workers per process across
+all workspaces, including workers still retiring. Shared targets keep their
+existing subscription. Targets denied by this application limit report that
+observation is unavailable and refresh through agent preparation; healthy
+watchers continue running. Later preparation can retry denied targets after
+capacity becomes available. A slot is released only after successful actual
+close, never after a failed close. Explicit polling uses no Node watch workers
+and does not consume this budget; reaching the limit never selects polling
+implicitly. This fixed ceiling is not a measured host limit or a performance
+claim.
+
 <AccordionGroup>
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
     `SKILL.md` files change, including skill roots first created after startup.
     Removing and recreating a skill folder or its parent keeps discovery on the
     configured path, including on Windows.
+    Observation uses fs-safe directory subscriptions rather than separate native
+    and fallback engines. Trusted symlink targets remain separately admitted;
+    watching a link entry does not grant access to its target. Replacing the
+    admitted stable ancestor itself requires fresh admission after a Gateway
+    restart, rather than silently expanding observation authority.
+
+    Native observation requires Node.js/Linux with trusted procfs. Skills
+    default to explicit polling on other hosts, including macOS, Windows, and
+    Bun. `CHOKIDAR_USEPOLLING` still overrides the mode (`1` for polling; `false`,
+    `0`, or an empty value for native-only observation). A native-only request
+    on an unsupported host reports observation unavailable and refreshes Skills
+    during agent preparation instead of silently enabling polling. Unset the
+    override or select polling to restore automatic observation.
+    `CHOKIDAR_INTERVAL` controls polling with a 100 ms default and 20 ms minimum.
+    Native notifications are advisory and guarded metadata scans reconcile
+    missed changes; neither readiness nor metadata stability proves a writer
+    has finished.
+
     Configure under `skills.load`:
 
     ```json5

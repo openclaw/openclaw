@@ -228,15 +228,26 @@ describe("detectChangedScope", () => {
     },
   );
 
-  it("routes Skills watcher ownership to desktop Node proof without native app builds", () => {
+  it("routes file observation ownership to desktop Node proof without native app builds", () => {
     for (const changedPath of [
       "src/skills/runtime/refresh.ts",
-      "src/skills/runtime/refresh-content-native.ts",
-      "src/skills/runtime/refresh-ancestor-native.ts",
-      "src/skills/runtime/refresh-watch-close.ts",
-      "src/skills/runtime/refresh-content-native.test.ts",
-      "src/skills/runtime/refresh-content-native.entries.test.ts",
-      "src/skills/runtime/refresh.native-content.integration.test.ts",
+      "src/skills/runtime/refresh-observation-source.ts",
+      "src/skills/runtime/refresh-file-stability.ts",
+      "src/skills/runtime/refresh-observation-source.test.ts",
+      "src/skills/runtime/refresh.observation.integration.test.ts",
+      "src/config/source-file.ts",
+      "src/config/source-file.recovery.integration.test.ts",
+      "src/infra/fs-observation-root.ts",
+      "src/infra/fs-observation-root.test.ts",
+      "src/infra/fs-observation-mode.ts",
+      "src/infra/fs-observation-mode.test.ts",
+      "scripts/watch-node-observation.mts",
+      "scripts/watch-node-source-targets.mts",
+      "src/infra/watch-node-observation.integration.test.ts",
+      "src/infra/watch-node-observation.lifecycle.test.ts",
+      "src/infra/watch-node-observation.targets.test.ts",
+      "extensions/memory-core/src/memory/file-watcher.ts",
+      "extensions/memory-core/src/remote/memory-files-worker.ts",
       "src/skills/runtime/refresh.missing-root.integration.test.ts",
       "src/skills/runtime/refresh.symbolic-source.integration.test.ts",
     ]) {

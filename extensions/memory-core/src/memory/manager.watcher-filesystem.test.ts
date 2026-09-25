@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import nativeFs from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import * as observation from "@openclaw/fs-safe/watch";
+import {
+  resolveMemorySearchConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { MEMORY_INDEX_CHUNKS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
@@ -14,37 +16,52 @@ import {
 } from "../test-helpers.js";
 import { MemoryIndexManager } from "./manager.js";
 
-function activeFilesystemWatchers() {
-  return process.getActiveResourcesInfo().filter((resource) => resource === "FSEventWrap").length;
-}
+// Copy the real installed ESM exports only to allow readiness/lifetime instrumentation.
+vi.mock("@openclaw/fs-safe/watch", async (original) => ({
+  ...(await original<typeof import("@openclaw/fs-safe/watch")>()),
+}));
 
-describe("memory watchers on the real filesystem", () => {
-  it.each(["replacement", "removal"] as const)(
+const nativeSupported =
+  process.platform === "linux" &&
+  process.release.name === "node" &&
+  !process.versions.bun &&
+  !process.versions.deno;
+
+describe.each(["node", "poll"] as const)("memory %s watchers on the real filesystem", (mode) => {
+  it.skipIf(mode === "node" && !nativeSupported).each(["replacement", "removal"] as const)(
     "keeps search fresh after root %s and releases watchers on close",
     async (operation) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", mode === "poll" ? "true" : "false");
+      vi.stubEnv("CHOKIDAR_INTERVAL", "20");
       const state = await createOpenClawTestState({ label: "memory-watch-filesystem" });
-      const initialWatchers = activeFilesystemWatchers();
-      const openWatchers = new Set<nativeFs.FSWatcher>();
+      // Explicit workspace admission must survive an ignored-name ancestor.
+      const workspaceDir = state.path("node_modules", "workspace");
+      const subscriptions: observation.WatchSubscription[] = [];
       const turnContext = new AsyncLocalStorage<string>();
       const pendingInputContext = new AsyncLocalStorage<string>();
       const watcherContexts: Array<{ turn?: string; pendingInput?: string }> = [];
       const timerContexts: typeof watcherContexts = [];
-      const originalWatch = nativeFs.watch;
-      const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+      const originalWatch = observation.watch;
+      const watchObserver = vi.spyOn(observation, "watch").mockImplementation((...args) => {
         watcherContexts.push({
           turn: turnContext.getStore(),
           pendingInput: pendingInputContext.getStore(),
         });
-        const watcher = originalWatch(...args);
-        openWatchers.add(watcher);
-        watcher.once("close", () => openWatchers.delete(watcher));
-        return watcher;
+        expect(args[1].mode).toBe(mode);
+        // Disable periodic repair only for the native proof. Polling must notice
+        // later edits autonomously at the configured cadence, never reconcile().
+        const subscription = originalWatch(
+          args[0],
+          mode === "node" ? { ...args[1], intervalMs: 2_147_483_647 } : args[1],
+        );
+        subscriptions.push(subscription);
+        return subscription;
       });
-      syncBuiltinESMExports();
+      let debounceMs: number | undefined;
       const originalSetTimeout = globalThis.setTimeout;
       const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-        // Observe the real startup pressure check and filesystem debounce timers.
-        if (args[1] === 10_000 || args[1] === 1500) {
+        // Observe the real domain debounce timers.
+        if (args[1] === debounceMs) {
           timerContexts.push({
             turn: turnContext.getStore(),
             pendingInput: pendingInputContext.getStore(),
@@ -55,15 +72,16 @@ describe("memory watchers on the real filesystem", () => {
       let manager: MemoryIndexManager | null = null;
       let index: DatabaseSync | undefined;
       try {
+        await fs.mkdir(workspaceDir, { recursive: true });
         await configureMemoryCoreDreamingStateForTests(state.env);
-        const memoryDir = path.join(state.workspaceDir, "memory");
+        const memoryDir = path.join(workspaceDir, "memory");
         await fs.mkdir(memoryDir);
         // Preserve an indexed file while the watched root is absent.
-        await fs.writeFile(path.join(state.workspaceDir, "MEMORY.md"), "Evergreen sentinel.");
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Evergreen sentinel.");
         await fs.writeFile(path.join(memoryDir, "old.md"), "Amethyst sentinel.");
         const cfg: OpenClawConfig = {
           plugins: { enabled: false },
-          agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
+          agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] },
           memory: {
             search: {
               provider: "none",
@@ -73,6 +91,7 @@ describe("memory watchers on the real filesystem", () => {
             },
           },
         };
+        debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
         manager = await turnContext.run("opening turn", () =>
           pendingInputContext.run("accepted input", async () => {
             const opened = await MemoryIndexManager.get({ cfg, agentId: "main" });
@@ -87,10 +106,12 @@ describe("memory watchers on the real filesystem", () => {
         const activeManager = manager;
         await activeManager.sync({ reason: "test-initial-index" });
         expect(activeManager.status().fts?.available).toBe(true);
-        expect(openWatchers.size).toBeGreaterThan(0);
-        // Bun emits watcher close events but does not expose Node's FSEventWrap census.
-        if (!process.versions.bun) {
-          expect(activeFilesystemWatchers()).toBeGreaterThan(initialWatchers);
+        expect(subscriptions.length).toBeGreaterThan(0);
+        await Promise.all(subscriptions.map((entry) => entry.ready));
+        // Polling may already have begun its next scan after initial readiness.
+        for (const entry of subscriptions) {
+          expect(["ready", "reconciling"]).toContain(entry.health().state);
+          expect(entry.health()).toMatchObject({ mode, workers: mode === "poll" ? 0 : 1 });
         }
         const indexPath = activeManager.status().dbPath;
         if (!indexPath) {
@@ -144,16 +165,17 @@ describe("memory watchers on the real filesystem", () => {
         index.close();
         index = undefined;
         await activeManager.close();
-        await expect.poll(() => openWatchers.size).toBe(0);
-        if (!process.versions.bun) {
-          await expect.poll(activeFilesystemWatchers).toBe(initialWatchers);
+        // close() is the library's joined physical teardown contract, including
+        // workers invisible to a main-thread FSEventWrap census.
+        for (const entry of subscriptions) {
+          expect(entry.health()).toMatchObject({ state: "closed", workers: 0, directories: 0 });
         }
       } finally {
         index?.close();
         await manager?.close();
         timerObserver.mockRestore();
         watchObserver.mockRestore();
-        syncBuiltinESMExports();
+        vi.unstubAllEnvs();
         resetMemoryCoreDreamingStateForTests();
         await state.cleanup();
       }

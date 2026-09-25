@@ -164,6 +164,34 @@ If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
+File-backed Memory uses fs-safe observation on the host that owns the workspace,
+including remote workspaces. File changes settle before indexing, and new dirty
+work waits behind an in-progress index operation without starting another timer
+loop. Core memory-root aliases and their admitted targets are tracked separately;
+extra-path symbolic root entries remain excluded.
+
+Memory admits at most 16 Node observation workers per process across its watcher
+instances, including workers still retiring. Selections under the same admitted
+Root share a subscription in groups of up to 128 scopes. If another worker would
+exceed this application limit, the affected Memory watcher reports the limit,
+marks its index dirty, and uses the refresh-on-search behavior below instead of
+partially watching its sources or switching to polling. Other instances keep
+watching. The affected instance remains degraded until it is recreated; joined
+successful closes free capacity for new instances, but failed closes do not.
+This ceiling is not a measured host limit or a performance claim.
+
+Native observation is supported only on Node.js/Linux with trusted procfs.
+Memory defaults to explicit polling on other hosts, including macOS, Windows,
+and Bun, to keep automatic refresh available. The existing `CHOKIDAR_USEPOLLING`
+override selects polling (`1`) or native-only observation (`false`, `0`, or an
+empty value). A native-only request on an unsupported host reports observation
+unavailable and uses refresh-on-search; it never silently switches to polling.
+Unset that override or select polling to restore automatic observation.
+Polling uses `CHOKIDAR_INTERVAL`, defaulting to 100 ms with a 20 ms minimum, for
+all file types. Notifications and metadata scans are advisory, not a complete
+change history. Observation never silently admits a replacement for a lost
+authority root.
+
 If the host runs out of native file-watch capacity, Memory Core logs one warning
 and disables its watchers. Later searches trigger incremental synchronization
 to discover file changes. A search can return the previous index while that

@@ -665,10 +665,8 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");

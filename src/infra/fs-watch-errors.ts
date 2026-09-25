@@ -1,4 +1,4 @@
-// Chokidar forwards native watch failures and directory-scan errors through the same event.
+// Classify registration failures only; scan-side ENOSPC may mean a full disk.
 export function getFileWatchCapacityCode(
   error: unknown,
 ): "EMFILE" | "ENFILE" | "ENOSPC" | undefined {

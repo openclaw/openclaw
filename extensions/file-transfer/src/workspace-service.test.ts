@@ -586,6 +586,9 @@ describe("registered node workspace service", () => {
     expect(await fs.readFile(file, "utf8")).toBe("Gateway decoy");
     const controller = new AbortController();
     const changes: string[] = [];
+    const initialChange = createDeferred<void>();
+    const laterChange = createDeferred<void>();
+    let initialized = false;
     const watching = memory.watch(
       {
         agentId: "main",
@@ -595,18 +598,39 @@ describe("registered node workspace service", () => {
           sync: { watchDebounceMs: 10 },
         },
       },
-      (event) => changes.push(event),
+      (event) => {
+        changes.push(event);
+        if (event === "unavailable") {
+          const failure = new Error("Harness Memory observation became unavailable");
+          initialChange.reject(failure);
+          laterChange.reject(failure);
+        } else if (initialized) {
+          laterChange.resolve();
+        } else {
+          initialChange.resolve();
+        }
+      },
       controller.signal,
     );
     void watching.catch(() => {});
+    void laterChange.promise.catch(() => {});
+    const stopped = watching.then(() => {
+      throw new Error("Harness Memory observation stopped before its notification");
+    });
+    void stopped.catch(() => {});
     try {
-      await vi.waitFor(
-        async () => {
-          await fs.writeFile(remoteFile, "New Harness memory");
-          expect(changes).toContain("change");
-        },
-        { timeout: 5_000, interval: 200 },
-      );
+      // Startup itself invalidates Memory. Consume that notification before the
+      // sole later write; neither startup nor a Gateway-local decoy is edit proof.
+      await Promise.race([initialChange.promise, stopped]);
+      expect(changes).toEqual(["change"]);
+      changes.length = 0;
+      initialized = true;
+      await fs.writeFile(remoteFile, "New Harness memory");
+      await Promise.race([laterChange.promise, stopped]);
+      expect(changes).toContain("change");
+      expect(changes).not.toContain("unavailable");
+      expect(await memory.readForIndexing(file)).toMatchObject({ content: "New Harness memory" });
+      expect(await fs.readFile(file, "utf8")).toBe("Gateway decoy");
     } finally {
       controller.abort();
       await watching.catch(() => {});

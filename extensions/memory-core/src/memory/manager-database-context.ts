@@ -467,6 +467,17 @@ const reindexDatabase = new AsyncLocalStorage<{
 export abstract class MemoryManagerDatabaseContext {
   protected abstract publishedDatabase: MemoryIndexDatabase;
   protected closed = false;
+  protected publishedDatabaseReleased = false;
+
+  /** Called only after the manager has drained accepted work and watcher callbacks. */
+  protected async releasePublishedDatabaseAfterWorkerClose(): Promise<void> {
+    if (!this.publishedDatabaseReleased) {
+      // A failed write-capable worker join retains the lease for a later close.
+      await this.publishedDatabase.closePublicationWorker();
+      this.publishedDatabase.release();
+      this.publishedDatabaseReleased = true;
+    }
+  }
 
   protected async withDatabaseWrite<T>(write: () => T): Promise<T> {
     const database = this.database;

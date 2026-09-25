@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { createFileWatchNotifier } from "../../infra/file-watch-notifier.js";
 import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
 import type * as Status from "../lifecycle/clawhub-status.js";
 import type * as Store from "../lifecycle/clawhub-store.js";
@@ -131,9 +132,26 @@ export async function serveWorkspaceSkills(options: {
     let queued = false;
     let unavailable = false;
     let unsubscribe: (() => void) | undefined;
+    let retiring: Promise<void> | undefined;
+    let outputClosing: Promise<void> | undefined;
+    let notifier: ReturnType<typeof createFileWatchNotifier> | undefined;
+    const retire = () => {
+      stopped = true;
+      unsubscribe?.();
+      retiring ??= closeSkillsWatchers();
+      outputClosing ??= notifier?.close();
+      void retiring.catch(() => {});
+      void outputClosing?.catch(() => {});
+      lines.close();
+    };
+    notifier = createFileWatchNotifier(output, retire);
+    const errors: unknown[] = [];
     try {
       // SAFETY: The same-version watch adapter sends this contract; workspace identity is checked next.
       const request = (await lines.read()) as WatchRequest;
+      if (stopped) {
+        throw new Error("Skills watch transport closed before admission");
+      }
       assertWorkspace(request, workspace);
       const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
         agentWorkspaceDir: workspace,
@@ -160,8 +178,8 @@ export async function serveWorkspaceSkills(options: {
           }
           unavailable = false;
         }
-        output.write(
-          `${JSON.stringify(recovered ? "available" : event.reason === "watch-unavailable" ? "unavailable" : "change")}\n`,
+        notifier?.send(
+          recovered ? "available" : event.reason === "watch-unavailable" ? "unavailable" : "change",
         );
         // Native events also invalidate discovery targets (for example a new symlink).
         if (event.reason === "watch" && !queued && !unavailable) {
@@ -183,11 +201,18 @@ export async function serveWorkspaceSkills(options: {
           throw error;
         }
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
-      stopped = true;
-      unsubscribe?.();
-      lines.close();
-      await closeSkillsWatchers();
+      retire();
+      const results = await Promise.allSettled([retiring, outputClosing]);
+      errors.push(
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      );
+      notifier = undefined;
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "Skills watch retirement failed");
     }
     return;
   }

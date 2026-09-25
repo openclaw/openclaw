@@ -49,6 +49,21 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### File-watch notification output
+
+`createFileWatchNotifier(output, onFailure)` from
+`openclaw/plugin-sdk/file-access-runtime` owns same-version JSON-line watch
+notifications. Its `send(event)` accepts `change`, `unavailable`, or `available`.
+These are invalidations, not an event log: repeated pending kinds coalesce in
+last-occurrence order, with one line in flight and at most three pending kinds.
+The final availability transition is retained under output backpressure.
+
+`close()` stops new notifications and joins accepted writes without ending the
+borrowed stream. A write failure or premature stream closure calls `onFailure`
+once and rejects retirement. The caller must stop its observation owner and
+join that physical cleanup independently; notification delivery never grants
+filesystem read authority or certifies observer retirement.
+
 ### Streaming file verification
 
 `sha256File(pathOrHandle, { maxBytes, signal })` from

@@ -141,7 +141,7 @@ function buildExecRunOverlay(params: {
         : {}),
     },
     // This process exits after one turn, so live skill invalidation cannot be
-    // observed and would leave Chokidar retaining the otherwise-finished CLI.
+    // observed and would leave file observers retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
   };
 }

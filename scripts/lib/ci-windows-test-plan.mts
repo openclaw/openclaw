@@ -108,7 +108,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/shared/pid-alive.env.test.ts": 1.4,
   "src/shared/runtime-import.test.ts": 1.4,
   "src/shared/worker-bundle-archive.test.ts": 4,
-  "src/skills/runtime/refresh-watch-close.test.ts": 0.1,
   "src/skills/runtime/refresh-watch-path.test.ts": 0.2,
   "src/skills/runtime/refresh.missing-root.integration.test.ts": 5.4,
   "src/skills/runtime/refresh.windows.test.ts": 0.3,
