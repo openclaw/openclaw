@@ -451,6 +451,58 @@ publish. The objectives are to seal validation in approximately 20 minutes and
 publish within an hour of the cut; they are targets, not measured guarantees.
 The full checklist below explains each step; this section decides the default.
 
+#### Orchestrated stable release
+
+`pnpm release:stable YYYY.M.PATCH` runs the fast path as one resumable state
+machine with the phases `cut → validate → publish → sync-beta → flip-github →
+macos → closeout`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
+rerunning the command continues from the first incomplete phase, `--from <phase>`
+restarts from that phase, `--status` prints the table, and `--dry-run` prints
+every command it would run without executing anything. The operator answers
+exactly two prompts: confirm the cut SHA (`--confirm-cut-sha <sha>` when there
+is no terminal) and approve publication (`--approve-publication`). Every refusal
+prints `Next:` with the exact commands to run before resuming.
+
+Each phase runs the existing helpers, in the order the manual fallback below
+describes: `cut` creates `release/YYYY.M.PATCH` at the confirmed SHA and refuses
+until version, changelog, and contribution record are on the branch tip;
+`validate` tags `release-publish/<sha12>-<epoch>` once at the tooling SHA,
+dispatches `pnpm ci:full-release` with the beta profile (nightly evidence is
+reused by the helper), continues a failed parent with `pnpm frv continue --failed`
+at most twice, and composes the standard soak-waiver wording; `publish` runs
+`pnpm release:candidate`, pushes the final tag, starts the macOS validate and
+preflight lanes from the tag, dispatches `OpenClaw Release Publish` once with
+`wait_for_clawhub=false`, approves the parent's `npm-release` gate, and
+completes when `openclaw@YYYY.M.PATCH` is visible on npm; it never approves or
+cancels a child run (the API cannot prove which parent dispatched one), so
+until the approval receipt and self-sweeping parent land it prints the exact
+child-approval and stale-child sweep commands for the operator instead; `sync-beta` runs the beta-to-stable
+dist-tag sync; `flip-github` un-drafts the release and marks it latest;
+`macos` waits for the preflight, dispatches the real publish, and requires the
+appcast on `main`; `closeout` waits for the publish parent, requires the exact
+shipped version and changelog on `main`, and dispatches the closeout run unless
+the release already carries the closeout manifest and checksum assets.
+
+The orchestrator probes four capabilities and otherwise falls back to today's
+manual commands: a publish parent at the tooling SHA that runs the dist-tag
+sync itself (`sync-beta` verifies for 20 minutes before dispatching the sync),
+a parent that sweeps its predecessors' stale children (`sweep_superseded_children`;
+otherwise the sweep commands are printed before dispatch), a parent approval
+receipt at the tooling SHA that lets npm children skip their own gate (otherwise
+the child approval commands are printed), and a closeout workflow on `main` that
+resolves waivers from the sealed publish evidence (dispatched with the tag alone
+instead of the recorded waivers). Runs dispatched on `main` are reconciled by
+workflow path, ref, the operator's own login, and a ten-minute window; two
+matches refuse instead of guessing.
+Pass `--stable-soak-waiver` / `--lane-waiver` to override the composed waiver
+text, `--plugin-sdk-api-acknowledgement` when the candidate reports SDK API
+changes, and `--from macos --macos-preflight-run-id <id>` /
+`--macos-validate-run-id <id>` after a manual notarization resume. A state
+directory is bound to one cut and one tooling SHA; selecting another needs a
+fresh `--state-dir`, which the refusal prints.
+
+#### Manual fallback
+
 1. **One cut.** Create `release/YYYY.M.PATCH` from `main`, named exactly that:
    no `-cutN`, staging, or preview suffixes. Version alignment, the changelog
    entry, and the contribution record land on that branch in one commit, so
