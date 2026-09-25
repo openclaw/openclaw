@@ -105,7 +105,7 @@ it("models.list preserves provider starters and retires unavailable account rows
                       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       contextWindow: 32768, maxTokens: 4096,
                     })),
-                  } };
+                  }, outcomes: [{ provider, status: "ready" }] };
                 },
               },
             });
