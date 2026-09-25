@@ -179,6 +179,11 @@ export const sharedVitestConfig = {
         replacement: "undici/index.js",
       },
       {
+        // Keep the installed WebSocket package and its mocks on one module identity in Bun.
+        find: /^ws$/u,
+        replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
+      },
+      {
         find: "discord-api-types/v10",
         replacement: path.join(
           repoRoot,
