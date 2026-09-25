@@ -170,12 +170,10 @@ describe("outbound message progress companion", () => {
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
-      (
-        opened.db
-          .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action != ?")
-          .get("message.outbound.finished") as { count: number }
-      ).count,
-    ).toBe(0);
+      opened.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action != ?")
+        .get("message.outbound.finished"),
+    ).toEqual({ count: 0 });
   });
 
   it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
@@ -199,16 +197,10 @@ describe("outbound message progress companion", () => {
     expect(recoveredReplay).toBeUndefined();
     const { db } = openOpenClawStateDatabase(database);
     expect(tableExists(db, "outbound_message_progress")).toBe(true);
-    expect(
-      (
-        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
-          count: number;
-        }
-      ).count,
-    ).toBe(2);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
-    ).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
+      count: 2,
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
@@ -532,36 +524,7 @@ describe("outbound message progress companion", () => {
     ).toEqual(["sent"]);
   });
 
-  it("prunes expired progress without touching retained terminal rows", () => {
-    const database = databaseOptions();
-    const occurredAt = Date.now() - 31 * 24 * 60 * 60_000;
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordAuditEventInDatabase(terminalInput({ occurredAt: Date.now() }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-
-    pruneExpiredOutboundMessageProgressInDatabase({
-      database: { ...database, database: openOpenClawStateDatabase(database) },
-      now: Date.now(),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    expect(
-      (
-        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
-          count: number;
-        }
-      ).count,
-    ).toBe(0);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
-    ).toBe(1);
-  });
-
-  it("bounds each expired progress maintenance transaction", () => {
+  it("bounds expired progress maintenance while preserving retained terminal rows", () => {
     const database = databaseOptions();
     recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
       ...database,
@@ -570,6 +533,7 @@ describe("outbound message progress companion", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
+    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), { ...database, database: openOpenClawStateDatabase(database) });
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
@@ -608,5 +572,6 @@ describe("outbound message progress companion", () => {
         now,
       }),
     ).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
   });
 });

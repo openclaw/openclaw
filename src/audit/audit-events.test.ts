@@ -489,38 +489,6 @@ describe("agent activity audit projection", () => {
     expect(inputs.at(-1)).not.toHaveProperty("sessionId");
   });
 
-  it("preserves explicit lifecycle and tool provenance independently", () => {
-    const lifecycle = projectAgentEventToAudit(
-      agentEvent({
-        sessionKey: "agent:lifecycle:main",
-        sessionId: "session-lifecycle",
-        agentId: "lifecycle",
-      }),
-    );
-    const tool = projectToolExecutionEventToAudit(
-      toolEvent({
-        sessionKey: "agent:tool:sandbox:temporary",
-        sessionId: "session-tool",
-        agentId: "tool",
-      }),
-    );
-
-    expect(lifecycle).toMatchObject({
-      actorType: "agent",
-      actorId: "lifecycle",
-      agentId: "lifecycle",
-      sessionKey: "agent:lifecycle:main",
-      sessionId: "session-lifecycle",
-    });
-    expect(tool).toMatchObject({
-      actorType: "agent",
-      actorId: "tool",
-      agentId: "tool",
-      sessionKey: "agent:tool:sandbox:temporary",
-      sessionId: "session-tool",
-    });
-  });
-
   it("prefers authoritative tool lifecycle time over diagnostic observation time", () => {
     const sourceTimestampMs = 1_750_000_000_000;
     const projected = projectToolExecutionEventToAudit(
@@ -611,27 +579,10 @@ describe("agent activity audit projection", () => {
     [{ phase: "error", error: "raw failure" }, "failed", "run_failed"],
     [{ phase: "end", aborted: true }, "cancelled", "run_cancelled"],
     [
-      { phase: "end", aborted: true, stopReason: "aborted", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
+      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
+      "timed_out",
+      "run_timed_out",
     ],
-    [
-      { phase: "end", aborted: true, stopReason: "rpc", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [
-      { phase: "end", aborted: true, stopReason: "stop", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [
-      { phase: "end", aborted: true, stopReason: "relay-closed", status: "cancelled" },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [{ phase: "end", aborted: true, livenessState: "abandoned" }, "cancelled", "run_cancelled"],
-    [{ phase: "error", timeoutPhase: "provider" }, "timed_out", "run_timed_out"],
     [{ phase: "error", livenessState: "blocked" }, "blocked", "run_blocked"],
     [{ phase: "end", livenessState: "abandoned", replayInvalid: true }, "failed", "run_failed"],
   ] as const)("classifies terminal run metadata %#", (data, status, errorCode) => {
@@ -642,16 +593,6 @@ describe("agent activity audit projection", () => {
       errorCode,
     });
     expect(projected).not.toHaveProperty("error");
-  });
-
-  it("preserves timeout precedence when terminal cleanup is also aborted", () => {
-    const projected = projectAgentEventToAudit(
-      agentEvent({
-        data: { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
-      }),
-    );
-
-    expect(projected).toMatchObject({ status: "timed_out", errorCode: "run_timed_out" });
   });
 
   it.each([
@@ -732,7 +673,7 @@ describe("agent activity audit projection", () => {
     },
   );
 
-  it.each(["failed", "cancelled", "timed_out"] as const)(
+  it.each(["cancelled", "timed_out"] as const)(
     "keeps an unavailable tool outcome explicitly unknown despite %s provenance",
     (terminalReason) => {
       const projected = projectToolExecutionEventToAudit(

@@ -39,6 +39,45 @@ function oldSchemaSql(): string {
   return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
 }
 
+function insertCronReceipt(
+  db: DatabaseSync,
+  receiptId: string,
+  jobId: string,
+  options: {
+    runId?: string;
+    status?: string;
+    startedAt?: number;
+    finishedAt?: number;
+  } = {},
+) {
+  db.prepare(
+    `INSERT INTO cron_run_receipts (
+       receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+       status, owner_pid, started_at_ms, finished_at_ms
+     ) VALUES (?, 'default', ?, 'revision-1', 'main', ?, ?, 1, ?, ?)`,
+  ).run(
+    receiptId,
+    jobId,
+    options.runId ?? "run-1",
+    options.status ?? "running",
+    options.startedAt ?? 60,
+    options.finishedAt ?? null,
+  );
+}
+
+function insertExecutionBinding(
+  db: DatabaseSync,
+  owner: "cron" | "task" | "flow",
+  ownerId: string,
+  executionId = "execution-1",
+) {
+  db.prepare(
+    `INSERT INTO execution_owner_lifecycle_bindings (
+       owner_kind, owner_id, context_id, execution_id
+     ) VALUES (?, ?, 'context-1', ?)`,
+  ).run(owner, ownerId, executionId);
+}
+
 function createOldOwnerDatabase() {
   const pathname = path.join(tempDirs.make("owner-lifecycle-"), "openclaw.sqlite");
   const oldReader = new DatabaseSync(pathname);
@@ -51,14 +90,7 @@ function createOldOwnerDatabase() {
        ) VALUES ('primary', 'global', ?, 1, 1)`,
     )
     .run(OPENCLAW_STATE_SCHEMA_VERSION);
-  oldReader
-    .prepare(
-      `INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
+  insertCronReceipt(oldReader, "cron-1", "job-1");
   oldReader
     .prepare(
       `INSERT INTO task_runs (
@@ -340,17 +372,8 @@ describe("owner-native execution lifecycle receipts", () => {
     db.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
     db.prepare("UPDATE task_runs SET status = 'succeeded'").run();
     db.prepare("UPDATE flow_runs SET status = 'succeeded', ended_at = 70").run();
-    db.prepare(
-      `INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "skipped", 1, 60, 70);
-    db.prepare(
-      `INSERT INTO execution_owner_lifecycle_bindings (
-         owner_kind, owner_id, context_id, execution_id
-       ) VALUES (?, ?, ?, ?)`,
-    ).run("cron", "cron-2", "context-1", "execution-other");
+    insertCronReceipt(db, "cron-2", "job-2", { status: "skipped", finishedAt: 70 });
+    insertExecutionBinding(db, "cron", "cron-2", "execution-other");
     const context = executionContext();
 
     const first = presentExecutionDecisionReceiptsInDatabase(db, {
@@ -431,17 +454,8 @@ describe("owner-native execution lifecycle receipts", () => {
       bindFirst: async (options: ReturnType<typeof createOldOwnerDatabase>) =>
         await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
       addSuccessor: (db: DatabaseSync) => {
-        db.prepare(
-          `INSERT INTO cron_run_receipts (
-             receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-             status, owner_pid, started_at_ms, finished_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
-        db.prepare(
-          `INSERT INTO execution_owner_lifecycle_bindings (
-             owner_kind, owner_id, context_id, execution_id
-           ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
-        ).run();
+        insertCronReceipt(db, "cron-2", "job-2", { startedAt: 63 });
+        insertExecutionBinding(db, "cron", "cron-2");
       },
       deleteAnchor: (db: DatabaseSync) => {
         db.prepare(
@@ -472,11 +486,7 @@ describe("owner-native execution lifecycle receipts", () => {
           "silent",
           63,
         );
-        db.prepare(
-          `INSERT INTO execution_owner_lifecycle_bindings (
-             owner_kind, owner_id, context_id, execution_id
-           ) VALUES ('task', 'task-2', 'context-1', 'execution-1')`,
-        ).run();
+        insertExecutionBinding(db, "task", "task-2");
       },
       deleteAnchor: (db: DatabaseSync) => {
         db.prepare(
@@ -496,11 +506,7 @@ describe("owner-native execution lifecycle receipts", () => {
              flow_id, owner_key, status, notify_policy, goal, created_at, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         ).run("flow-2", "owner-2", "running", "silent", "private", 63, 63);
-        db.prepare(
-          `INSERT INTO execution_owner_lifecycle_bindings (
-             owner_kind, owner_id, context_id, execution_id
-           ) VALUES ('flow', 'flow-2', 'context-1', 'execution-1')`,
-        ).run();
+        insertExecutionBinding(db, "flow", "flow-2");
       },
       deleteAnchor: (db: DatabaseSync) => {
         db.prepare(
@@ -568,26 +574,12 @@ describe("owner-native execution lifecycle receipts", () => {
     const options = createOldOwnerDatabase();
     const db = openOpenClawStateDatabase(options).db;
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
-    db.prepare(
-      `INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
-    db.prepare(
-      `INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
+    insertCronReceipt(db, "cron-2", "job-2", { startedAt: 63 });
+    insertCronReceipt(db, "cron-1", "job-1");
     expect(
       await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
     ).toBe("bound");
-    db.prepare(
-      `INSERT INTO execution_owner_lifecycle_bindings (
-         owner_kind, owner_id, context_id, execution_id
-       ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
-    ).run();
+    insertExecutionBinding(db, "cron", "cron-2");
     const firstPage = presentExecutionDecisionReceiptsInDatabase(db, {
       context: executionContext(),
       decisionCursor: "c:0:0",
@@ -600,28 +592,8 @@ describe("owner-native execution lifecycle receipts", () => {
       "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
     ).run();
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
-    db.prepare(
-      `INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      "cron-replacement",
-      "default",
-      "job-replacement",
-      "revision-1",
-      "main",
-      "run-2",
-      "running",
-      1,
-      60,
-      null,
-    );
-    db.prepare(
-      `INSERT INTO execution_owner_lifecycle_bindings (
-         owner_kind, owner_id, context_id, execution_id
-       ) VALUES ('cron', 'cron-replacement', 'context-1', 'execution-other')`,
-    ).run();
+    insertCronReceipt(db, "cron-replacement", "job-replacement", { runId: "run-2" });
+    insertExecutionBinding(db, "cron", "cron-replacement", "execution-other");
 
     expect(() =>
       presentExecutionDecisionReceiptsInDatabase(db, {

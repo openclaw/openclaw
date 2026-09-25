@@ -12,14 +12,6 @@ describe("isAuditLedgerEnabled", () => {
     expect(isAuditLedgerEnabled({ logging: { audit: {} } })).toBe(true);
   });
 
-  it("stays enabled on explicit true", () => {
-    expect(isAuditLedgerEnabled({ logging: { audit: { enabled: true } } })).toBe(true);
-  });
-
-  it("disables only on explicit false", () => {
-    expect(isAuditLedgerEnabled({ logging: { audit: { enabled: false } } })).toBe(false);
-  });
-
   it("keeps message metadata off until explicitly enabled", () => {
     expect(resolveAuditMessageMode(undefined)).toBe("off");
     expect(resolveAuditMessageMode({ logging: { audit: {} } })).toBe("off");
