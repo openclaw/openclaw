@@ -65,6 +65,26 @@ function commit(root: string, excluded: string[] = []) {
   return { root, sha: git("rev-parse", "HEAD"), git };
 }
 
+function commitMissingBlob(source: ReturnType<typeof commit>, path: string) {
+  const original = readFileSync(join(source.root, path));
+  const input = join(source.root, ".git", "missing-blob-input");
+  writeFileSync(input, `unavailable fixture blob: ${source.root}/${path}\n`);
+  const oid = source.git("hash-object", input);
+  expect(() => source.git("--no-lazy-fetch", "cat-file", "-e", oid)).toThrow();
+
+  // A missing reference works regardless of loose, packed, or alternate object storage.
+  const mode = source.git("ls-files", "--stage", "--", path).slice(0, 6);
+  source.git("update-index", "--cacheinfo", `${mode},${oid},${path}`);
+  const tree = source.git("write-tree", "--missing-ok");
+  const sha = source.git("commit-tree", tree, "-p", source.sha, "-m", "missing fixture blob");
+  source.git("update-ref", "HEAD", sha, source.sha);
+
+  expect(source.git("rev-parse", `HEAD:${path}`)).toBe(oid);
+  expect(() => source.git("--no-lazy-fetch", "cat-file", "blob", oid)).toThrow();
+  expect(readFileSync(join(source.root, path))).toEqual(original);
+  return sha;
+}
+
 function fixture(
   files: Record<string, string> = {},
   parser = false,
@@ -522,11 +542,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const lanes = expandUpdateFirstHopCompatLanes([lane]);
-    const result = f.run({ docker: { lanes } });
+    const selectedLanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes: selectedLanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes: selectedLanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,
@@ -638,12 +658,18 @@ describe("frozen admission bootstrap repairs", () => {
     "rejects a missing committed tooling object %s without hydration",
     (path) => {
       const f = fixture();
-      const oid = f.tooling.git("rev-parse", `${f.tooling.sha}:${path}`);
+      const sha = commitMissingBlob(f.tooling, path);
       f.tooling.git("config", "remote.origin.url", "fixture::unavailable");
       f.tooling.git("config", "remote.origin.promisor", "true");
-      rmSync(join(f.tooling.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
-      const result = f.run({});
+      f.tooling.git("config", "extensions.partialClone", "origin");
+      f.tooling.git("config", "protocol.fixture.allow", "always");
+      const result = f.run({}, { tooling: { root: f.tooling.root, sha } });
       expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        path === entrypoint || path === reader
+          ? "unable to read committed tooling bootstrap"
+          : "unable to read selected source (cat-file)",
+      );
       expect(result.stdout).toBe("");
     },
   );

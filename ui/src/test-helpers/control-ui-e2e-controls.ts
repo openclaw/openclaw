@@ -248,6 +248,7 @@ export function createMockGatewayControls(
             continue;
           }
           if (error instanceof Error && error.name === "TimeoutError") {
+            error.message = `Waiting for mock Gateway request ${method}: ${error.message}`;
             await captureControlUiE2eFailureDiagnostics(page, {
               error,
               label: method,

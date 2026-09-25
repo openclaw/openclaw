@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import type {
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import * as processOwner from "./cli-process.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
@@ -117,6 +119,46 @@ function attachLiveSession(context: CliBackendExecuteContext) {
     },
   };
   return () => current;
+}
+
+function interceptFirstWrite(
+  context: CliBackendExecuteContext,
+  intercept: (
+    child: ChildProcessWithoutNullStreams,
+    complete: (error: Error | null | undefined) => void,
+    forward: () => void,
+  ) => void,
+) {
+  const createOwner = processOwner.createClaudeCliProcessOwner;
+  vi.spyOn(processOwner, "createClaudeCliProcessOwner").mockImplementation(
+    (currentContext, secretInput) => {
+      const owner = createOwner(currentContext, secretInput);
+      if (currentContext()?.cwd !== context.cwd) {
+        return owner;
+      }
+      const spawn = owner.spawn;
+      vi.spyOn(owner, "spawn").mockImplementation((options) => {
+        const child = spawn(options);
+        const write = child.stdin.write.bind(child.stdin);
+        vi.spyOn(child.stdin, "write").mockImplementationOnce((chunk, encoding, callback) => {
+          const complete = typeof encoding === "function" ? encoding : callback;
+          if (!complete) {
+            throw new Error("Expected the transport's write completion callback.");
+          }
+          intercept(child, complete, () => {
+            if (typeof encoding === "string") {
+              write(chunk, encoding, () => {});
+            } else {
+              write(chunk, () => {});
+            }
+          });
+          return true;
+        });
+        return child;
+      });
+      return owner;
+    },
+  );
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
@@ -240,6 +282,135 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     expect(formatErrorMessageForDisplay(error)).toContain(
       "stderr (process-wide; may include earlier turns): previous turn diagnostic",
     );
+  });
+
+  it.each(["before exit", "after exit"])(
+    "preserves the native startup failure when its write fails %s",
+    async (order) => {
+      const context = await contextForChild(`
+        import { writeSync } from "node:fs";
+        writeSync(2, "PermissionError: startup rejected\\n");
+        process.exit(1);
+      `);
+      const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      let nativeExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+      interceptFirstWrite(context, (child, complete) => {
+        child.once("exit", (code, signal) => {
+          nativeExit = { code, signal };
+        });
+        const deliver = () => {
+          complete(pipeError);
+          child.stdin.emit("error", pipeError);
+        };
+        // The real child has exited; only delivery of its exit event is controlled.
+        const emit = child.emit.bind(child);
+        vi.spyOn(child, "emit").mockImplementation((event, ...args) => {
+          if (event !== "exit") {
+            return emit(event, ...args);
+          }
+          if (order === "before exit") {
+            deliver();
+            queueMicrotask(() => emit(event, ...args));
+            return true;
+          }
+          const emitted = emit(event, ...args);
+          deliver();
+          return emitted;
+        });
+      });
+
+      const error = await collect(context).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({ message: "Claude Code process exited with code 1" });
+      expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: startup rejected");
+      expect(nativeExit).toEqual({ code: 1, signal: null });
+    },
+  );
+
+  it("preserves a live child's write failure when cleanup causes its later exit", async () => {
+    const context = await contextForChild(`
+      import { closeSync, writeSync } from "node:fs";
+      import { MessageChannel } from "node:worker_threads";
+      const { port1 } = new MessageChannel();
+      port1.on("message", () => {});
+      process.on("SIGTERM", () => process.exit(23));
+      closeSync(0);
+      writeSync(1, JSON.stringify({ type: "system", subtype: "stdin_closed" }) + "\\n");
+    `);
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    let nativeExited = false;
+    interceptFirstWrite(context, (child, complete) => {
+      child.once("exit", () => {
+        nativeExited = true;
+      });
+      child.stdout.once("data", () => {
+        complete(pipeError);
+        child.stdin.emit("error", pipeError);
+      });
+    });
+
+    await expect(collect(context)).rejects.toBe(pipeError);
+    expect(nativeExited).toBe(true);
+  });
+
+  it("preserves explicit abort and immediately erases credentials during a write failure", async () => {
+    const context = await contextForChild(PROTOCOL_CHILD);
+    const controller = new AbortController();
+    context.abortSignal = context.abortSignal
+      ? AbortSignal.any([context.abortSignal, controller.signal])
+      : controller.signal;
+    context.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR = "3";
+    const reason = new Error("Synthetic owner cancelled the pending input.");
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    let credential: Buffer | undefined;
+    let retainedBeforeAbort: boolean | undefined;
+    let erasedDuringAbort: boolean | undefined;
+    interceptFirstWrite(context, (child, complete) => {
+      queueMicrotask(() => {
+        complete(pipeError);
+        child.stdin.emit("error", pipeError);
+        retainedBeforeAbort = credential?.some((byte) => byte !== 0);
+        controller.abort(reason);
+        erasedDuringAbort = credential?.every((byte) => byte === 0);
+      });
+    });
+
+    await expect(
+      collect(context, {
+        fd: 3,
+        createData: () => {
+          const bytes = Buffer.from("opaque-cancelled-process-credential");
+          credential ??= bytes;
+          return bytes;
+        },
+      }),
+    ).rejects.toBe(reason);
+    expect(retainedBeforeAbort).toBe(true);
+    expect(erasedDuringAbort).toBe(true);
+  });
+
+  it("preserves a protocol failure over a delayed write error and cleanup exit", async () => {
+    const context = await contextForChild(`
+      import { createInterface } from "node:readline";
+      import { writeSync } from "node:fs";
+      createInterface({ input: process.stdin }).once("line", (line) => {
+        const message = JSON.parse(line);
+        writeSync(1, JSON.stringify({ type: "control_response", response: {
+          request_id: message.request_id, subtype: "error",
+        } }) + "\\n");
+      });
+      process.stdin.once("end", () => process.exit(23));
+    `);
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    interceptFirstWrite(context, (child, complete, forward) => {
+      child.once("exit", () => {
+        complete(pipeError);
+        child.stdin.emit("error", pipeError);
+      });
+      forward();
+    });
+
+    await expect(collect(context)).rejects.toThrow(/^Claude CLI initialization failed\.$/);
   });
 
   it.each([

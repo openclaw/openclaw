@@ -37,7 +37,7 @@ macOS Swift CI runs the app and independent package suites in separate [native p
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 
-Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
+Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit. Admitted hybrid and RunsOn first attempts route baseline ratchets to the Blacksmith 16-class and the final gate to the 4-class after successful preflight; their former hosted slots remain reserved for admission, so no extra optional rows move to hosted runners.
 
 Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
 

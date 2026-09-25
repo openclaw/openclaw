@@ -219,7 +219,7 @@ function closeSession(
     turn.controller.abort();
     turn.events.end();
   }
-  session.transport?.close();
+  session.transport?.close(turn?.error);
 }
 
 function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {

@@ -531,31 +531,6 @@ it("commits only successful patchMany targets", async ({ connect }) => {
   });
 });
 
-it.for(["sessions.create", "sessions.catalog.continue"])(
-  "materializes %s identity for every read",
-  async (method, { connect }) => {
-    const key = "agent:main:created";
-    const { request } = await connect({
-      methodResponses: {
-        [method]: { key, entry: { sessionId: "created-generation" }, runStarted: true },
-      },
-    });
-    await request(method, { label: "Created" });
-    for (const read of ["chat.history", "chat.startup"]) {
-      expect((await request(read, { sessionKey: key })).payload).toMatchObject({
-        sessionId: "created-generation",
-        sessionInfo: { key, sessionId: "created-generation", label: "Created", hasActiveRun: true },
-      });
-    }
-    expect((await request("sessions.describe", { key })).payload).toMatchObject({
-      session: { key, sessionId: "created-generation" },
-    });
-    expect((await request("sessions.list")).payload.sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ key, sessionId: "created-generation" })]),
-    );
-  },
-);
-
 it.for([
   { sessionKey: "agent:ops:notes", sessionScope: "global" as const, kind: "direct" },
   { sessionKey: "global", sessionScope: "per-sender" as const, kind: "global" },

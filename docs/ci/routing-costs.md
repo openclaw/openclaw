@@ -53,11 +53,313 @@ Independent hosted checks reached at most 664 seconds in this sample. Artifact b
 
 Numbered compact bins change when membership changes. A matching suffix does not establish a matching workload. Full manual native qualification, including iOS and Android, is not proven within fifteen minutes by these Linux measurements.
 
-## RunsOn remains unqualified
+## RunsOn qualification
+
+Successful children in failed PR-shaped run `36038423993` provide exact admission
+observations, not green qualification. The two serial Gateway-methods children
+(jobs `107766128467` and `107766128662`) took 390.70 and 372.33 seconds on the
+existing RunsOn memory32 on-demand pool. The planner separates each complete
+child from its trailing siblings after resolving the execution runner. It
+preserves their two-worker job ceilings, ordered selectors, deadlines and
+runtime policy; unmatched siblings retain their original forecast. Prices bind
+the requested runner contract and full child identity, expire when those inputs
+change, and do not transfer AWS timings to Blacksmith or PR timings to main.
+
+The retained Blacksmith32 tooling child in job `107766133218` took 225.96 seconds,
+so its forecast rises from 48 to 311 seconds using measured headroom and the
+existing 60-second setup reserve. Its runner remains unchanged. The two
+Blacksmith8 extension children in job `107766132924` took 287.51 and 208.48 seconds;
+exact selector floors separate them under the existing 300-second envelope.
+Two further complete serial cohorts (jobs `107766128451` and `107766128634`)
+took 507.40 and 522.21 test seconds against 360-second forecasts. Their complete
+ordered observations allow greedy whole-child splits within the same 360-second
+work allowance. Both retain their native provider and two-worker ceiling. The
+latter keeps the Blacksmith32 allocation of its update-CLI envelope; its other
+children have no independent AWS comparison. Neither job declares runtime build
+preparation. Partial or reordered cohorts cannot use these aggregate placements.
+
+The frozen broad-PR replay adds four compact rows and one plugin row: 123 Node
+rows including the cron control, within the existing 130-row cap. Main-shaped
+plans are unchanged. No native wall-time improvement is established by this
+replay; the complete exact-head qualification remains required.
+
+The next candidate diversifies every RunsOn request across five AMD types and
+both AZs exposed by the installed stack. The former 32-class Node rows need at least eight CPUs and
+32 GiB; UI, cron and eligible long tooling rows use 4–8 CPUs and 16 GiB. Existing memory gates and worker limits
+still admit execution. Runtime builds and the measured update-CLI envelope
+retain Blacksmith. The slow retained CLI process cohort is split using the
+existing runtime admission owner and complete file costs; its former seven-file
+child took 720 seconds inside a 1,142-second job.
+
+The memory32 class now uses on-demand after failed run `36050763810` recorded
+four confirmed Spot interruptions and two unconfirmed shutdown cancellations
+among 17 Spot allocations. All selected `m8a.2xlarge`; 16 used one AZ despite the
+unchanged five-family request and unrestricted configured AZs. The earlier
+`36038423993` sample had zero interruptions in 17 `c7a.4xlarge` Spot allocations,
+so its result does not establish reliability of the newly selected pool.
+Repricing the same 5,420 allocation seconds at the saved M8a rates adds about
+$0.48 ($0.24917 Spot versus $0.73302 on-demand). Those intervals include incomplete
+work; this buys no-retry reliability, not a pure-compute break-even win or a
+complete-run price. An on-demand campaign cannot claim Spot qualification.
+
+The unchanged 134-file tooling envelope finished at +880 seconds in that failed
+run: 557 seconds per job and 516.08 seconds in the timed runner, using 1.636 busy
+cores on two available CPUs. Its three child spans totaled 514.64 seconds. The
+prior matching envelope took 502/461.56 job/runner seconds with 1.607 busy cores.
+Both had the same 7.656 GiB reported RAM and two-worker policy; no memory peak
+was recorded. Complete source-cohort prices now inform the existing long-tooling
+routing threshold before provider selection. The conservative 634-second
+Blacksmith forecast moves this intact envelope to the existing general16
+on-demand pool, without another shard or worker. Native comparison must establish
+performance there; no speedup follows from the larger requested capacity alone.
+
+For the remaining Spot-eligible pool, a known planner prediction plus a
+320-second native timing reserve must fit 480 seconds. Longer or unknown rows use on-demand;
+UI has no complete per-row forecast. This market-only reserve covers the
+307-second maximum observed gap between prediction and Spot allocation wall,
+including startup and underestimated test work. It never changes a deadline. The
+GitHub-projects UI spec stays on Blacksmith in a disjoint inventory partition
+until its previous AWS RPC timeout has an established cause. No coverage or
+hosted lint/type routing changes accompany these placements.
+
+Ordinary PR run `35881459999`, job `107251427442`, exposed a separate tooling
+tail: 85 files in three serial two-worker children took 674.40 test seconds
+inside a 786-second Blacksmith 8-class job. It averaged 1.5065 busy cores on
+two available CPUs with 7.656 GiB delivered RAM; peak RSS was not recorded.
+The exact ordered child contracts remain together in the RunsOn PR plan with
+the same 549-second prediction, while main omits that release-only tooling.
+Long ordinary tooling envelopes now request the existing 4–8-CPU, 16-GiB
+on-demand pool without another shard or worker. Native qualification must
+establish its runtime; the larger memory floor alone is not a speed claim.
+The ordinary run also had a 137-second hosted gate wait and a Gateway fixture
+type error. Its raw wall was 17m24s; removing queue time arithmetically does not
+qualify the route.
+
+The first diversified run, `35887809735` at `40cd43b1c572`, finished in 14m19s
+with all 57 AWS jobs passing and no interruptions. Blacksmith used 223.700
+machine-minutes / $8.1072; verified AWS allocations add $2.399377, totaling
+$10.506577. Four retained-host failure rows and the aggregate gate prevent this
+run from counting as green qualification. Actual Spot allocations used
+`c7a.4xlarge` in `us-east-1b`; on-demand M8a allocations used both configured AZs.
+
+Four Spot jobs took 524–594 seconds despite predictions of 308–315 seconds.
+The former 150-second reserve covered startup but not this forecast error.
+The revised 320-second reserve would move those four and one additional row to
+on-demand, retaining 17 of the observed 22 Spot rows. At the same actual instance
+types and allocation durations, that adds $0.389317, for $10.895894 total.
+This is a market-budget scenario, not a measured replacement run or a fitted
+interruption model; direct on-demand prefers M8a and must be priced from its
+next actual allocation receipts.
+
+The final single-pool controls at `791e06f63af6` all failed and exceeded 15 minutes:
+
+| Shape | Hybrid run    | RunsOn run    | Blacksmith minutes | Combined reference cost | Raw wall        |
+| ----- | ------------- | ------------- | ------------------ | ----------------------- | --------------- |
+| Main  | `35856548503` | `35859004781` | 558.583 → 213.650  | $28.9979 → $10.9620     | 19m24s → 21m28s |
+| PR    | `35861500888` | `35863745223` | 674.683 → 238.267  | $31.6341 → $10.5561     | 20m19s → 21m13s |
+
+Raw Blacksmith reductions of 61.75% and 64.68% include interrupted partial work;
+they are not successful equivalent-coverage savings. The same-source, same-Node
+cron comparison did pass 255 files / 3,488 tests on both providers, taking
+479 seconds on Blacksmith and 297 on AMD Spot. Its allocation estimates were
+$0.510933 and $0.014176 respectively. Ordinary migrated rows used different
+Node versions; the new candidate pins the actual runtime.
+
+The two RunsOn runs lost all 19 `c8a.4xlarge` Spot allocations in two correlated
+waves in one AZ. Across all types, 19 of 36 Spot allocations were interrupted;
+none of 78 on-demand allocations was interrupted. This does not estimate a
+stationary failure probability for the diversified pool. At the old
+$0.3081/hour Spot and $0.86216/hour on-demand references, repeated full-length
+attempts break even at a 64.26% interruption probability. A hypothetical single
+Spot attempt followed by on-demand replacement, using the observed 189.84-second
+mean lost allocation, breaks even at 81.97% for an eight-minute job. No such
+retry is enabled. The observed AMD cohort exceeds both thresholds; the pooled
+52.78% mixture does not establish an eight-minute statistical boundary. The
+480-second cutoff protects critical-path slack instead of claiming a fitted
+hazard model.
+
+### Repeated slowdown retention
+
+At `acd418249c462122f120a2455989cf553243b941`, RunsOn PR-shaped runs
+`35944538318` and `35945850656` and hybrid control `35947306985` executed
+the same source and runtime. Six complete rows exceeded the 25% slowdown
+threshold in both AWS samples with matching ordered work and effective worker
+policies. Their measured co-resident owners identify the retained envelopes;
+generated row numbers do not. If packing separates the owners or changes their
+resource contract, the exception no longer matches.
+
+At that revision, main shared the four storage envelopes. Its update/archive row omitted one
+release-only tooling file from the measured PR contract; the larger native fit
+covers the included work, but no exact main-row speed ratio is inferred from
+that PR comparison.
+
+| Co-resident workload owners                          | RunsOn job seconds, two samples | Blacksmith control seconds |
+| ---------------------------------------------------- | ------------------------------: | -------------------------: |
+| Worktree acceleration and retirement snapshots       |                       296 / 290 |                        225 |
+| Canonical descendants and transcript session custody |                       335 / 354 |                        240 |
+| Update repair history and archived usage identity    |                       351 / 355 |                        246 |
+| Shared embedded run and inference activation         |                       288 / 303 |                        198 |
+| Unified declaration tooling                          |                       289 / 288 |                        212 |
+| SDK declarations and changed-test planning           |                       527 / 551 |                        379 |
+
+The controls used the Blacksmith 32-label with eight actual CPUs and about
+31 GiB; AWS used `c7a.4xlarge` with sixteen CPUs and about 31 GiB. Setup and
+cache differences remain part of these whole-job observations, so the comparison
+does not isolate hardware causality. Cron stays on RunsOn: its complete
+same-run comparison was 360 versus 323 seconds, below the retention threshold.
+
+The SDK/planner pair's 148-second prediction plus the existing market reserve
+admitted Spot, but both executions exceeded eight minutes. Its guarded
+Blacksmith route addresses that repeated forecast exception without changing
+other rows' reserves. A two-CPU, 8-GiB process scope passed its complete workload
+but reached a 7.728-GiB kernel memory peak; the 16-label retains memory headroom.
+A constrained process scope is not whole-VM performance proof. Actual-label,
+exact-head qualification remains required for every reduced allocation.
+
+The four storage envelopes passed separate two-CPU, 8-GiB scopes with zero
+memory-limit or OOM events. Worktree and descendant peaks were 3.937 and
+4.974 GiB on a constrained Blacksmith 16-label VM. Update/archive and
+embedded/inference peaks were 4.666 and 4.336 GiB on AWS Ubuntu 26.04 after
+two Blacksmith source transfers failed before tests started. The latter results
+retain that provider and OS limitation. Their proposed 8-label allocations still
+require actual Blacksmith CI; no test was repeated for the transport failures.
+Unified declarations also passed its complete 80-file inventory on the AWS
+scope with a 4.564-GiB peak and the original compiler admission guard. These
+measurements describe the recorded workloads, not every later companion set.
+
+Main's inventory and packing update at `63fa1d2dedac` changed all six
+envelopes. The guarded storage and SDK/planner exceptions no longer matched
+those broad plans: their owners separated, gained children, or changed
+concurrency. The unified-declaration row had 47 files, only ten shared with its
+previous 80-file probe. That revision retained its original Blacksmith 32-label;
+the older process fit did not qualify the changed workload on a smaller host.
+Its RunsOn planner emitted 81 compact PR descriptors (79 Node rows), plus 41
+plugin Node rows before the cron comparator, and 68 main descriptors (67 Node).
+
+The later integration at `aeb32f35468d` emits 77 compact PR descriptors
+(75 Node rows), plus 42 plugin Node rows: 117 before the comparator, 118 with
+it. Main has 65 compact descriptors and 64 Node rows. No guarded small-host
+exception activates. Unified declarations now has 38 files, including both
+declaration compiler fixtures, and retains the original Blacksmith 32-label.
+Neither the historical 80-file fit nor the intervening 47-file plan qualifies
+this workload on a smaller allocation.
+
+That integration also adds a baseline-ratchet prerequisite before nondist Node
+jobs. Both cron providers share it and retain their paired admission priority.
+The new dependency and changed inventories require fresh exact-head wall and
+cost measurements; earlier workflow timings do not qualify this revision.
+
+The four candidate walls were 743, 810, 740 and 992 seconds. All tests passed,
+but the last run fails the fifteen-minute requirement. Its Blacksmith cron
+comparator was last in the 118-row Node matrix and waited 572 seconds before a
+299-second execution. Both cron providers now receive the same existing
+admission priority, ahead of ordinary rows. This corrects the ordering omission;
+it does not explain the full wait, including 285 seconds after every other Node
+row had started. Matrix caps, routing, worker limits and deadlines are unchanged.
+The repository backend remains hybrid. Final same-head qualification and costs
+are recorded in [PR #156158](https://github.com/openclaw/openclaw/pull/156158).
+
+Reference hourly prices on September 23 are $0.1655 Spot / $0.48688 on-demand
+for `m8a.2xlarge`, versus $0.4256 / $1.23876 for `m8azn.3xlarge`.
+A 400-minute Node allocation envelope would cost about $3.25 on-demand on M8a
+or $8.26 on M8azn, before ancillary charges; that is a sizing reference, not a
+measured complete run. Direct on-demand prefers M8a; Spot's faster-family
+preference can fall back to higher-priced on-demand capacity. Every final
+report must price actual types and markets from allocation receipts, include
+failed work, and report each exact-head workflow's wall. Regional public rates
+are not invoices and exclude storage, networking, control-plane and teardown.
+
+The following earlier measurements explain retained placements and superseded
+candidates; they do not qualify the diversified candidate.
+
+The first expanded [main qualification](https://github.com/openclaw/openclaw/actions/runs/35815956831)
+at `c2bca829359` used 166.45 Blacksmith machine-minutes / $5.8117 versus the
+327.88-minute / $17.2237 baseline: a raw 49.23% reduction with broader UI/Windows
+coverage. Verified launch-through-completion AWS allocations add $2.6033 at the
+observed Spot/on-demand reference rates, for $8.4150 before ancillary charges.
+It failed in 18m03s: one Spot interruption, failures on the retained real-Gateway
+path, and a 123-second hosted gate wait. This is not a green performance qualification.
+
+The [PR-shaped qualification](https://github.com/openclaw/openclaw/actions/runs/35815959256)
+at that same head passed in 24m24s, using 206.47 Blacksmith minutes / $5.8211 and
+$3.3443 of observed-market AWS allocation estimates. Five AMD jobs waited
+573–578 seconds before assignment; the extra hosted cron control was the final
+718-second compute job. The hosted comparator is now removed because hosted
+cron is not a candidate route; the complete cron suite and Blacksmith comparator
+remain. Removing it alone does not solve the separate AWS admission delay.
+
+Two execution exceptions determine the current routing. Identical cron contracts
+on that same head took 420 seconds on Intel 8-vCPU Spot versus 324 on Blacksmith,
+a 29.6% regression; the candidate switches that row to AMD while preserving its
+two-worker ceiling. The matching update-CLI row took 732 versus 524 seconds
+(39.7% slower), concentrated in `src/cli/update-cli.test.ts`, with nearly unchanged
+CPU work. Blacksmith used Node 24.19.0 while AWS used 24.21.0, so this observation
+does not isolate a hardware cause. Its existing Blacksmith allocation preserves
+the row's measured worker and memory policy; the advertised 8-class supplies
+only two CPUs and cannot preserve that admission. No storage or fixture timeout
+workaround is added. Both revised routes still require native verification at
+their new head.
+
+The subsequent [hybrid main control](https://github.com/openclaw/openclaw/actions/runs/35828387224)
+at `1b460535d579` failed in 22m14s, using 476 Blacksmith machine-minutes / $23.7893.
+Its preflight and final gate waited 220 and 232 seconds for assignment. The
+remaining 14m42s is arithmetic, not a passing or projected workflow result.
+Type errors and two fixture failures prevent using this run as final acceptance;
+comparisons after those repairs require a fresh shared head.
+
+All 63 decoded Node/UI group jobs in that control used Node 24.19.0. The updated
+packing placed the retained update test in a two-child row with two workers each,
+eight observed CPUs and 30.95 GiB, completing in 352 seconds. The existing
+24-GiB overlapping-child admission floor excludes the smaller Blacksmith class
+for that row. This newer execution contract supersedes the earlier serial-row
+description without establishing an AWS performance ratio for the new packing.
+
+All eight Control UI rows passed on Intel Spot, with identical per-shard file
+inventories and complete-job times 1–10% shorter than their earlier Blacksmith
+runs. The historical Gateway history-reader LRU assertion passed in 5.27 seconds
+on AMD. Cross-head inventory comparisons do not establish identical source bytes;
+the qualification PR records those source and coverage differences explicitly.
+
+[Main baseline 35810905247](https://github.com/openclaw/openclaw/actions/runs/35810905247)
+reported eight actual CPUs in every one of its forty 32-class jobs. Test-step
+`time -p` CPU time divided by elapsed time measured 2.32–5.18 busy cores on average,
+not peak utilization. Eight rows used two children with two workers each; the
+other 32 had one child slot and an eight-worker ceiling, with smaller group pins.
+The 32-GiB replacement preserves the paired-plan 24-GiB and isolated Gateway
+28-GiB admission floors; an 8-vCPU/16-GiB replacement would serialize those rows.
+
+Fetch **all pages** of jobs: that main run has 105 records, including skipped
+placeholders. Active Blacksmith 32/16/8-class jobs consumed 236.22/39.95/51.72
+machine-minutes, or $15.118/$1.278/$0.827 at historical list rates. The complete
+327.88-minute total is the baseline; the first 100 records undercount it.
+The main runs at 02:34–02:47 UTC on September 23 consumed 298–328 Blacksmith
+minutes and already exceeded the 900-second workflow objective. Queue delay
+must remain visible in the native comparison.
+
+The September 23 public regional Spot feed quotes `c8a.4xlarge` at $0.3081/hour
+and `c8i.2xlarge` at $0.1763/hour in `us-east-1`. At equal runtime, the forty-row
+236.22-minute slice would cost about $1.213 on AMD versus $15.118 on Blacksmith;
+at 25% longer, about $1.516. These are upper-scope projections: build rows are
+retained, and actual AWS cost also includes launch, teardown, storage, networking
+and the control plane. Record exact-head per-class timings and allocation facts
+in the qualification PR before claiming savings or the fifteen-minute objective.
+
+For fallback budgeting, the September 23 [Vantage instance catalog](https://instances.vantage.sh/)
+lists Linux on-demand at $0.86216/hour for `c8a.4xlarge`, $0.43108/hour for
+`c8a.2xlarge`, and $0.37484/hour for `c8i.2xlarge` in that region. The same entire large slice would cost about $3.394
+at equal runtime or $4.243 at 25% longer, before overhead. This secondary public
+reference is not a billing receipt or evidence that fallback occurred.
 
 The [on-demand pilot](https://github.com/openclaw/openclaw/actions/runs/35549787290) measured the two critical compact jobs at 561/816 seconds on Blacksmith versus 755/1259 seconds on `c8i.4xlarge`: 35%/54% slower. Full Gateway-core failed on AWS at every tested worker count. Cron scaled from 156 to 138 seconds on `c8i.8xlarge` and 126 to 110 seconds on `c8a.8xlarge` at 8 versus 16 workers, but lacks a matching Blacksmith control. Checks, artifact builds, extensions, and UI have no pilot comparison.
 
-The opt-in `runson` profile derives from hybrid and extracts the three `core-runtime-cron-parallel-*` children into one serial job on `c8i.8xlarge`: 32 vCPUs, 64 GiB RAM, `ubuntu24-full-x64`, and an 80 GB gp3 root. On the retained cron comparison inventory, all 258 files kept their two-worker job and group ceilings, and the source Blacksmith jobs retained their other children. RunsOn inherits hybrid's current splitting and packing before adding its cron row. Current inventory counts and pricing are recorded in [measured compact packing](/ci/routing-costs#measured-compact-packing); the earlier fixed nine-to-four projection is not a universal result. The pilot's eight-worker, 156-second cron wall remains historical context, while the complete two-worker comparison below owns the available provider evidence.
+The pilot's compact comparisons had no runtime-build phase, so retaining builds
+does not qualify their replacement. The AMD candidate requires fresh complete
+job measurements. Its Gateway failure was the 64-target retained-history-reader
+fixture timing out, while NVMe variants failed an overlay-mount verifier before
+tests. Current fixture seeding skips unrelated maintenance; only a fresh AWS run
+can establish that it resolves the earlier timeout.
+
+The initial opt-in `runson` profile derived from hybrid and extracted the three `core-runtime-cron-parallel-*` children into one serial job on `c8i.8xlarge`: 32 vCPUs, 64 GiB RAM, `ubuntu24-full-x64`, and an 80 GB gp3 root. On that retained cron comparison inventory, all 258 files kept their two-worker job and group ceilings, and the source Blacksmith jobs retained their other children. The historical inventory counts and pricing are recorded in [measured compact packing](/ci/routing-costs#measured-compact-packing); the earlier fixed nine-to-four projection is not a universal result. The pilot's eight-worker, 156-second cron wall remains historical context, while the complete two-worker comparison below records that earlier provider evidence.
 
 The compatible CLI observations retain **558 and 703-second forecasts including one 60-second setup allowance**. Separating their serial pair does not establish a 600-second maximum for each indivisible child. Eligible serial tooling pairs now split above a 600-second complete-wall estimate; packing separate short jobs uses a 720-second admission limit. These are placement estimates, not raised test deadlines or guarantees about the fifteen-minute workflow wall.
 
@@ -149,7 +451,7 @@ The immutable nine-job calibration cohort fits four jobs with canonical forecast
 
 Compact counts include dist descriptors; broad-PR Node counts include 40 extension rows. RunsOn adds one cron job to the hybrid plan. All counts stay inside the unchanged 70/130/90 caps. Together, current Node and extension packing remove a net nine setups from a broad PR: an estimated 6.75–9 Blacksmith 8-class minutes, or $0.108–$0.144 before runtime interactions. Main adds one setup, approximately 0.75–1 minute or $0.012–$0.016. These counts and costs are planner arithmetic, not native performance acceptance. Final measurements are recorded in [PR #155403](https://github.com/openclaw/openclaw/pull/155403).
 
-Ordinary main still does not select AWS. The admitted main-shaped qualification can select RunsOn and excludes comparison controls. Its initial preflight stays hosted until authorization. Qualifications retain their coverage shape on reruns while using hosted routing, resource policies and deadlines; raw GitHub context continues to own authentication, concurrency and cache publication.
+These historical counts predate the expanded class routing above. The repository variable remains unchanged; configuring `runson` now admits canonical main first attempts. The admitted main-shaped qualification can select RunsOn and excludes comparison controls. Its initial preflight stays hosted until authorization. Qualifications retain their coverage shape on reruns while using hosted routing, resource policies and deadlines; raw GitHub context continues to own authentication, concurrency and cache publication.
 
 ## Whole-run acceptance
 

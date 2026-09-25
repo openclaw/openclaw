@@ -58,7 +58,18 @@ function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []
     copyFileSync(implementation, prepared);
     modules.push([pathToFileURL(implementation), pathToFileURL(prepared)]);
   }
-  return preparedScriptWrapperEnv(modules, env);
+  const serviceFixture = `import { registerSourceRunnerServiceFixture } from ${JSON.stringify(
+    new URL("./fixtures/source-runner-service.mjs", import.meta.url).href,
+  )}; registerSourceRunnerServiceFixture(${JSON.stringify(process.cwd())});`;
+  return preparedScriptWrapperEnv(modules, {
+    ...env,
+    NODE_OPTIONS: [
+      env.NODE_OPTIONS,
+      `--import=data:text/javascript,${encodeURIComponent(serviceFixture)}`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  });
 }
 
 function writePrebuiltRuntime(root: string) {

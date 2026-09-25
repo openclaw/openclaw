@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
+import * as timers from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
@@ -33,6 +34,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   identifiedClient,
   listSessions,
@@ -48,6 +50,10 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+}));
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -723,6 +729,173 @@ it("refreshes prepared ACP metadata on publication and fences replacement lifecy
     } finally {
       projection.dispose();
       releaseForeground();
+    }
+  });
+});
+
+it("hands a resident slice to the oldest exact read without waiting for later reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const entries = ["bulk-first", "bulk-suffix", "exact-first", "exact-later"].map((name) => ({
+      scope: { agentId: "main", sessionKey: `agent:main:handoff-${name}` },
+      entry: { sessionId: `handoff-${name}`, updatedAt: 1 },
+    }));
+    for (const { scope, entry } of entries) {
+      replaceSessionEntrySync(scope, entry);
+    }
+    let elapsed = 0;
+    let workMs = 0;
+    const rendered: string[] = [];
+    const suffixRendered = createDeferredCore();
+    vi.useFakeTimers({ toFake: ["setImmediate"] });
+    // This runner retains the promise timer binding when installing the fake clock.
+    const immediate = vi.spyOn(timers, "setImmediate").mockImplementation(
+      <T>(value?: T) =>
+        new Promise<T>((resolve) => {
+          setImmediate(() => resolve(value!));
+        }),
+    );
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const readInputs = rowInputs.readSessionRowInputs;
+    vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+      const inputs = readInputs(params);
+      rendered.push(params.key);
+      elapsed += workMs;
+      if (workMs > 0 && params.key === entries[1]!.scope.sessionKey) {
+        suffixRendered.resolve();
+      }
+      return inputs;
+    });
+    const releaseForeground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const firstBulk = createDeferredCore();
+    const releaseBulk = createDeferredCore();
+    const exact = entries.slice(2).map((row) =>
+      Object.assign({}, row, {
+        entered: createDeferredCore(),
+        release: createDeferredCore(),
+        respond: vi.fn(),
+      }),
+    );
+    const pending: Promise<unknown>[] = [];
+    try {
+      await projection.ensureMaterialized();
+      await vi.advanceTimersToNextTimerAsync();
+      rendered.length = 0;
+      workMs = 20;
+      const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
+      let holdBulk = true;
+      vi.spyOn(databaseFactsRead, "withSessionRowDatabaseFacts").mockImplementation(
+        async (owner, consume) => {
+          const hold = holdBulk;
+          if (hold) {
+            holdBulk = false;
+          }
+          await readFacts(owner, consume);
+          if (hold) {
+            firstBulk.resolve();
+            await releaseBulk.promise;
+          }
+        },
+      );
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (databases, consume) =>
+          readDatabases(databases, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  const reply = await owner.readRowFacts(input);
+                  const held =
+                    input.sessionKeys.length === 1 &&
+                    exact.find((row) => row.scope.sessionKey === input.sessionKeys[0]);
+                  if (held) {
+                    held.entered.resolve();
+                    await held.release.promise;
+                  }
+                  return reply;
+                },
+              })),
+            ),
+          ),
+      );
+      const describe = (row: (typeof exact)[number]) => {
+        replaceSessionEntrySync(row.scope, { ...row.entry, updatedAt: 2, label: "Current row" });
+        const request = Promise.resolve(
+          sessionByKeyReadHandlers["sessions.describe"]!({
+            req: { type: "req", id: row.entry.sessionId, method: "sessions.describe" },
+            params: { key: row.scope.sessionKey },
+            client: null,
+            context,
+            isWebchatConnect: () => false,
+            respond: row.respond,
+          }),
+        );
+        pending.push(request);
+        return request;
+      };
+      for (const { scope, entry } of entries.slice(0, 2)) {
+        replaceSessionEntrySync(scope, { ...entry, updatedAt: 2 });
+      }
+      const drain = projection.ensureMaterialized();
+      pending.push(drain);
+      await vi.advanceTimersToNextTimerAsync();
+      await firstBulk.promise;
+      expect(rendered).toEqual([entries[0]!.scope.sessionKey]);
+
+      const firstRequest = describe(exact[0]!);
+      await exact[0]!.entered.promise;
+      releaseBulk.resolve();
+      await vi.advanceTimersToNextTimerAsync();
+      expect(
+        rendered,
+        "Unrelated resident work ran while the oldest exact read was pending",
+      ).toEqual([entries[0]!.scope.sessionKey]);
+
+      const laterRequest = describe(exact[1]!);
+      await exact[1]!.entered.promise;
+      expect(rendered, "Resident suffix ran while exact A was held").toEqual([
+        entries[0]!.scope.sessionKey,
+      ]);
+      exact[0]!.release.resolve();
+      await firstRequest;
+      expect(exact[0]!.respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({ key: exact[0]!.scope.sessionKey, label: "Current row" }),
+      });
+      await vi.advanceTimersToNextTimerAsync();
+      await suffixRendered.promise;
+      expect(rendered).toEqual([
+        entries[0]!.scope.sessionKey,
+        exact[0]!.scope.sessionKey,
+        entries[1]!.scope.sessionKey,
+      ]);
+      expect(exact[1]!.respond).not.toHaveBeenCalled();
+
+      await vi.runOnlyPendingTimersAsync();
+      immediate.mockRestore();
+      vi.useRealTimers();
+      exact[1]!.release.resolve();
+      await laterRequest;
+      await drain;
+      expect(projection.dirtyRowCount).toBe(0);
+      expect(exact[1]!.respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({ key: exact[1]!.scope.sessionKey, label: "Current row" }),
+      });
+    } finally {
+      releaseBulk.resolve();
+      for (const row of exact) {
+        row.release.resolve();
+      }
+      projection.dispose();
+      releaseForeground();
+      if (vi.isFakeTimers()) {
+        await vi.runOnlyPendingTimersAsync();
+        immediate.mockRestore();
+        vi.useRealTimers();
+      }
+      await Promise.allSettled(pending);
     }
   });
 });

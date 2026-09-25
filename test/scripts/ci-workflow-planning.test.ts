@@ -217,6 +217,7 @@ function runCiManifestFixture(options: {
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
   uiRealGatewayShards?: boolean;
+  uiRetainedE2e?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
 }) {
@@ -285,7 +286,7 @@ function runCiManifestFixture(options: {
                 OPENCLAW_CI_TEST_PROOF_TIER: String(options.includeProofTests),
               },
               requiresDist: false,
-              runner: runson ? "runson-c8i-8xlarge" : "ubuntu-24.04",
+              runner: runson ? "runson-general-16" : "ubuntu-24.04",
               shardName: runson ? "changed-runson-cron" : "bundled-node-plan",
             }];
           };
@@ -317,12 +318,15 @@ function runCiManifestFixture(options: {
         `\nexport { isToolingTestOwnerPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
       );
     }
-    if (options.uiReleaseTier) {
+    if (options.uiReleaseTier || options.uiRetainedE2e) {
       appendFileSync(
         path.join(scriptsDir, "ci-node-test-plan.mts"),
         `\nexport const createUiTestShardGroups = (options) => ({
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", env: {fixtureTier: JSON.stringify(options)}}],
           e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", env: {fixtureTier: JSON.stringify(options)}}],
+          ...(options.runnerBackend === "runson" && ${Boolean(options.uiRetainedE2e)} ? {
+            e2eBlacksmith: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e-blacksmith", includePatterns: ["ui/src/e2e/new-session-page.github-projects.e2e.test.ts"]}],
+          } : {}),
         });\n`,
       );
       if (options.uiRealGatewayShards !== false) {
@@ -738,6 +742,7 @@ function runRunnerProfileFixture(options: {
   headRepository?: string;
   repository?: string;
   runAttempt?: number;
+  ref?: string;
   requestedProfile?: "default" | "hybrid" | "runson";
   ciShape?: "default" | "main";
   qualificationDispatch?: boolean;
@@ -771,6 +776,7 @@ function runRunnerProfileFixture(options: {
         AUTHOR_ASSOCIATION: options.authorAssociation ?? "",
         CONFIGURED_RUNNER_PROFILE: options.configuredProfile ?? "",
         GITHUB_EVENT_NAME: options.eventName,
+        GITHUB_REF: options.ref ?? "refs/heads/main",
         GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: options.repository ?? "openclaw/openclaw",
         HEAD_REPOSITORY: options.headRepository ?? options.repository ?? "openclaw/openclaw",
@@ -1957,7 +1963,7 @@ describe("ci workflow guards", () => {
       return rows;
     }
 
-    it("counts hosted qualification controls and preflight without counting the AWS cron row", () => {
+    it("counts hosted qualification preflight without counting either cron provider", () => {
       const common = {
         bundledPlanner: true,
         historicalCompatibility: false,
@@ -1984,10 +1990,10 @@ describe("ci workflow guards", () => {
           runnerProfile: "hybrid",
         },
       );
-      expect(actual.filter((job) => job === "checks-node-core-test-nondist-shard")).toHaveLength(1);
+      expect(actual.filter((job) => job === "checks-node-core-test-nondist-shard")).toHaveLength(0);
       expect(actual).toContain("preflight");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 1,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -2029,17 +2035,18 @@ describe("ci workflow guards", () => {
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
-      const originalBase = emittedHostedRows({
-        ...baseline.outputs,
-        hybrid_hosted_offload: "false",
-      }).length;
-      expect(Number(baseline.outputs.hybrid_hosted_base_rows)).toBe(originalBase);
+      const originalBase =
+        emittedHostedRows({
+          ...baseline.outputs,
+          hybrid_hosted_offload: "false",
+        }).length + 2;
+      expect(Number(baseline.outputs.hybrid_hosted_base_rows)).toBe(originalBase - 2);
       for (const baseRows of [40, 41, 45, 46]) {
         const manifest = manifestWithHostedNodeRows(baseRows - originalBase, { scopeEnv });
         expect(manifest.status, manifest.output).toBe(0);
         if (baseRows === 46) {
           expect(manifest.output).toContain(
-            "::warning::Hybrid base manifest has 46 hosted jobs, above the 45-row offload budget; keeping optional offloads on Blacksmith.",
+            "::warning::Hybrid base admission has 44 hosted jobs plus 2 reserved rows, above the 45-row offload budget; keeping optional offloads on Blacksmith.",
           );
         }
         const hosted = emittedHostedRows(manifest.outputs);
@@ -2047,9 +2054,10 @@ describe("ci workflow guards", () => {
           androidSelected ? 2 : 0,
         );
         expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
-        expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows);
+        expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows - 2);
+        expect(manifest.outputs.hybrid_hosted_reserved_rows).toBe("2");
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
-        expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 5 : baseRows);
+        expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 3 : baseRows - 2);
         for (const name of ["security-fast", "checks-ui", "checks-ui-e2e"]) {
           expect(hosted.includes(name), name).toBe(baseRows <= 40);
         }
@@ -2275,7 +2283,7 @@ describe("ci workflow guards", () => {
       const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
       for (const healthy of ["true", "false", ""]) {
         for (const baseRows of [30, 31, 32, 33, 40, 41, 45, 46]) {
-          const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
+          const manifest = manifestWithHostedNodeRows(baseRows - originalBase - 2, {
             scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
           });
           expect(manifest.status, manifest.output).toBe(0);
@@ -2391,6 +2399,8 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.hybrid_hosted_offload).toBe("false");
         expect(manifest.outputs.hybrid_hosted_checks).toBe("false");
         expect(manifest.outputs.hybrid_hosted_main_checks).toBe("false");
+        expect(manifest.outputs.hybrid_paid_controls).toBe("false");
+        expect(manifest.outputs.hybrid_hosted_reserved_rows).toBe("0");
       },
     );
 
@@ -2409,6 +2419,106 @@ describe("ci workflow guards", () => {
         "blacksmith-4vcpu-ubuntu-2404",
       );
       expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
+    });
+
+    it.each([
+      { eventName: "push" as const, runnerBackend: "hybrid" as const },
+      { eventName: "pull_request" as const, runnerBackend: "hybrid" as const },
+      { eventName: "push" as const, runnerBackend: "runson" as const },
+      { eventName: "pull_request" as const, runnerBackend: "runson" as const },
+      { eventName: "workflow_dispatch" as const, runnerBackend: "runson" as const },
+    ])(
+      "routes admitted control gates without hosted queue waits ($eventName, $runnerBackend)",
+      (options) => {
+        const qualification = options.eventName === "workflow_dispatch";
+        const manifest = manifestWithHostedNodeRows(0, {
+          ...options,
+          runnerProfile: "hybrid",
+          nodeRunnerBackend: options.runnerBackend,
+          nodeTestShards: undefined,
+          releaseGate: qualification,
+          changedPaths: [".github/workflows/ci.yml"],
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const workflow = readCiWorkflow();
+        for (const [jobName, runner] of [
+          ["checks-baseline-ratchets", "blacksmith-16vcpu-ubuntu-2404"],
+          ["ci-gate", "blacksmith-4vcpu-ubuntu-2404"],
+        ] as const) {
+          const context = {
+            ...options,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: manifest.outputs,
+          };
+          const expression = workflow.jobs[jobName]["runs-on"];
+          expect(evaluateWorkflowExpression(expression, context), jobName).toBe(runner);
+          // Failed-job reruns reuse the successful first preflight's outputs.
+          expect
+            .soft(
+              evaluateWorkflowExpression(expression, { ...context, runAttempt: 2 }),
+              `${jobName}: retry with retained admission`,
+            )
+            .toBe("ubuntu-24.04");
+          if (qualification) {
+            expect(
+              evaluateWorkflowExpression(expression, {
+                ...context,
+                dispatchId: "full-release-validation-fixture",
+                releaseRunnerGroup: "release-fixture",
+              }),
+              jobName,
+            ).toEqual({ group: "release-fixture", labels: runner });
+            expect
+              .soft(
+                evaluateWorkflowExpression(expression, {
+                  ...context,
+                  runAttempt: 2,
+                  dispatchId: "full-release-validation-fixture",
+                  releaseRunnerGroup: "release-fixture",
+                }),
+                `${jobName}: release-group retry with retained admission`,
+              )
+              .toEqual({ group: "release-fixture", labels: "ubuntu-24.04" });
+          }
+          for (const result of ["failure", "cancelled", "skipped"]) {
+            expect(
+              evaluateWorkflowExpression(expression, {
+                ...context,
+                jobResults: { preflight: result },
+              }),
+              `${jobName}: ${result}`,
+            ).toBe("ubuntu-24.04");
+          }
+          expect(
+            evaluateWorkflowExpression(expression, {
+              ...context,
+              preflightOutputs: {},
+            }),
+            `${jobName}: no decision`,
+          ).toBe("ubuntu-24.04");
+        }
+        expect(
+          evaluateWorkflowExpression(workflow.jobs.preflight.outputs.hybrid_paid_controls, {
+            ...options,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            steps: { manifest: { outputs: manifest.outputs } },
+          }),
+        ).toBe("true");
+        expect(manifest.outputs.hybrid_hosted_reserved_rows).toBe("2");
+      },
+    );
+
+    it("reserves only the final control gate when baseline ratchets are unselected", () => {
+      const manifest = manifestWithHostedNodeRows(0, { runNode: false });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_baseline_ratchets).toBe("false");
+      expect(manifest.outputs.hybrid_paid_controls).toBe("true");
+      expect(manifest.outputs.hybrid_hosted_reserved_rows).toBe("1");
+      expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
+        emittedHostedRows(manifest.outputs).length,
+      );
     });
   });
 
@@ -3654,7 +3764,18 @@ describe("ci workflow guards", () => {
         { name: "returning-contributor fork", expected: "github", headRepository: "fork/openclaw" },
         { name: "untrusted author", expected: "github", authorAssociation: "NONE" },
         { name: "noncanonical repository", expected: "github", repository: "fork/openclaw" },
-        { name: "push", expected: "hybrid", eventName: "push" as const },
+        {
+          name: "main push",
+          expected: "hybrid",
+          expectedNode: "runson",
+          eventName: "push" as const,
+        },
+        {
+          name: "branch push",
+          expected: "hybrid",
+          eventName: "push" as const,
+          ref: "refs/heads/feature",
+        },
         { name: "ordinary dispatch", expected: "github", eventName: "workflow_dispatch" as const },
         { name: "target without RunsOn contract", expected: "hybrid", targetSupportsRunson: false },
         {
@@ -3836,7 +3957,7 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
+  it("resolves admitted main qualification profiles and configured RunsOn main routing", () => {
     for (const [configuredProfile, backend] of (
       ["", "github", "blacksmith", "hybrid"] as const
     ).flatMap((configured) =>
@@ -3993,7 +4114,7 @@ describe("ci workflow guards", () => {
     expect(ordinaryMain.status, ordinaryMain.output).toBe(0);
     expect(ordinaryMain.outputs).toMatchObject({
       runner_profile: "hybrid",
-      node_runner_backend: "hybrid",
+      node_runner_backend: "runson",
       ci_qualification: "false",
       ci_shape: "default",
       qualification_runner_backend: "",
@@ -4156,6 +4277,187 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it("schedules the retained UI inventory once without expanding hosted placement", () => {
+    const fixture = {
+      bundledPlanner: true,
+      eventName: "push" as const,
+      runnerBackend: "hybrid" as const,
+      nodeRunnerBackend: "runson" as const,
+      uiRetainedE2e: true,
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+    };
+    const manifest = runCiManifestFixture(fixture);
+    const baseline = runCiManifestFixture({ ...fixture, uiRetainedE2e: false });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(baseline.status, baseline.output).toBe(0);
+    const rows = JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, "UI rows")).include;
+    const baselineRows = JSON.parse(
+      expectDefined(baseline.outputs.ui_e2e_matrix, "baseline UI rows"),
+    ).include;
+    expect(rows.filter((row: { retained?: boolean }) => !row.retained)).toEqual(baselineRows);
+    expect(rows.filter((row: { retained?: boolean }) => row.retained)).toEqual([
+      {
+        shard: baselineRows.length + 1,
+        shard_count: baselineRows.length + 1,
+        task: "control-ui",
+        retained: true,
+        vitest_shard_count: 1,
+        vitest_max_workers: 2,
+      },
+    ]);
+    expect(
+      decodeNodeTestGroups(
+        expectDefined(
+          manifest.outputs.ui_e2e_blacksmith_test_groups_gzip_base64,
+          "retained UI groups",
+        ),
+      ),
+    ).toEqual([
+      {
+        configs: ["test/vitest/vitest.ui-e2e.config.ts"],
+        shard_name: "e2e-blacksmith",
+        includePatterns: ["ui/src/e2e/new-session-page.github-projects.e2e.test.ts"],
+      },
+    ]);
+    expect(manifest.outputs.hybrid_hosted_base_rows).toBe(baseline.outputs.hybrid_hosted_base_rows);
+  });
+
+  it("adds a matched native UI counterpart only to main qualifications", () => {
+    const fixture = {
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "workflow_dispatch" as const,
+      releaseGate: true,
+      runnerBackend: "hybrid" as const,
+      nodeRunnerBackend: "runson" as const,
+      uiRetainedE2e: true,
+      changedPaths: [".github/workflows/ci.yml"],
+    };
+    const manifests = ["main", "default"].map((shape) =>
+      runCiManifestFixture({
+        ...fixture,
+        scopeEnv: {
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+          OPENCLAW_CI_QUALIFICATION: "true",
+          OPENCLAW_CI_SHAPE: shape,
+        },
+      }),
+    );
+    for (const manifest of manifests) {
+      expect(manifest.status, manifest.output).toBe(0);
+    }
+    const [main, pr] = manifests.map(
+      (manifest) =>
+        JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, "UI matrix")).include as Record<
+          string,
+          unknown
+        >[],
+    );
+    const controls = main!.filter((row) => row.runson_probe);
+    expect(controls).toHaveLength(1);
+    const retained = expectDefined(
+      main!.find((row) => row.retained && !row.runson_probe),
+      "retained UI row",
+    );
+    expect(controls[0]).toEqual({
+      ...retained,
+      shard: Number(retained.shard) + 1,
+      shard_count: Number(retained.shard_count) + 1,
+      runson_probe: true,
+    });
+    expect(controls[0]).toMatchObject({
+      retained: true,
+      task: "control-ui",
+      vitest_shard_count: 1,
+      vitest_max_workers: 2,
+    });
+    expect(pr!.some((row) => row.runson_probe)).toBe(false);
+    expect(pr!.filter((row) => row.retained)).toHaveLength(1);
+  });
+
+  it.each(["runson-general-16", "runson-memory-32"])(
+    "keeps memory32 on-demand and preserves the Spot timing reserve for %s",
+    (runner) => {
+      const forecasts = [undefined, 0, -1, 46, 160, 161, 308, 310, 314, 315, 900];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        runnerBackend: "hybrid",
+        nodeRunnerBackend: "runson",
+        nodeTestShards: forecasts.map((predictedSeconds, index) => ({
+          checkName: `market-${index}`,
+          shardName: `market-${index}`,
+          configs: ["test/vitest/fixture.config.ts"],
+          runner,
+          requiresDist: false,
+          predictedSeconds,
+        })),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "market Node rows"),
+      ).include as { check_name: string; runson_spot: boolean }[];
+      expect(rows).toHaveLength(forecasts.length);
+      const expected =
+        runner === "runson-memory-32"
+          ? [false, false, false, false, false, false, false, false, false, false, false]
+          : [false, false, false, true, true, false, false, false, false, false, false];
+      for (const [index, runson_spot] of expected.entries()) {
+        expect(rows.find((row) => row.check_name === `market-${index}`)).toMatchObject({
+          runson_spot,
+        });
+      }
+    },
+  );
+
+  it.each(["runson-cron", "changed-runson-cron"])(
+    "admits both %s qualification providers before ordinary Node work",
+    (shardName) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "workflow_dispatch",
+        historicalCompatibility: false,
+        releaseGate: true,
+        runnerBackend: "hybrid",
+        runnerProfile: "hybrid",
+        nodeRunnerBackend: "runson",
+        changedPaths: [".github/workflows/ci.yml"],
+        nodeTestShards: [
+          {
+            checkName: "ordinary-short",
+            shardName: "ordinary-short",
+            configs: ["test/vitest/vitest.unit-src.config.ts"],
+            runner: "blacksmith-8vcpu-ubuntu-2404",
+            predictedSeconds: 120,
+          },
+          {
+            checkName: "cron-candidate",
+            shardName,
+            configs: ["test/vitest/vitest.cron.config.ts"],
+            runner: "runson-general-16",
+          },
+          {
+            checkName: "ordinary-long",
+            shardName: "ordinary-long",
+            configs: ["test/vitest/vitest.unit-src.config.ts"],
+            runner: "blacksmith-8vcpu-ubuntu-2404",
+            predictedSeconds: 600,
+          },
+        ],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "qualification Node rows"),
+      ).include as { check_name: string }[];
+      expect(rows.map((row) => row.check_name)).toEqual([
+        "cron-candidate",
+        "checks-node-runson-cron-blacksmith-control",
+        "ordinary-long",
+        "ordinary-short",
+      ]);
+    },
+  );
+
   it("passes RunsOn only to the Node planner and keeps default qualification dispatches PR-shaped", () => {
     const fixture = {
       bundledPlanner: true,
@@ -4188,23 +4490,21 @@ describe("ci workflow guards", () => {
       expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "qualification Node rows"),
     ).include as Record<string, unknown>[];
     const cron = expectDefined(
-      rows.find((row) => row.runner === "runson-c8i-8xlarge"),
+      rows.find((row) => row.runner === "runson-general-16"),
       "RunsOn cron row",
     );
     expect(cron.env).toMatchObject({ OPENCLAW_VITEST_MAX_WORKERS: "2" });
-    for (const [provider, runner] of [
-      ["blacksmith", "blacksmith-32vcpu-ubuntu-2404"],
-      ["github", "ubuntu-24.04"],
-    ] as const) {
-      expect(
-        rows.find((row) => row.check_name === `checks-node-runson-cron-${provider}-control`),
-      ).toEqual({
-        ...cron,
-        check_name: `checks-node-runson-cron-${provider}-control`,
-        shard_name: `runson-cron-${provider}-control`,
-        runner,
-      });
-    }
+    expect(cron.runson_spot).toBe(false);
+    const control: Record<string, unknown> = {
+      ...cron,
+      check_name: "checks-node-runson-cron-blacksmith-control",
+      shard_name: "runson-cron-blacksmith-control",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
+    };
+    delete control.runson_spot;
+    expect(
+      rows.find((row) => row.check_name === "checks-node-runson-cron-blacksmith-control"),
+    ).toEqual(control);
     const ordinaryPr = runCiManifestFixture({
       ...fixture,
       eventName: "pull_request",
@@ -4214,8 +4514,8 @@ describe("ci workflow guards", () => {
     const ordinaryRows = JSON.parse(
       expectDefined(ordinaryPr.outputs.checks_node_core_nondist_matrix, "ordinary PR Node rows"),
     ).include as Record<string, unknown>[];
-    expect(rows).toHaveLength(ordinaryRows.length + 2);
-    expect(ordinaryRows.some((row) => row.runner === "runson-c8i-8xlarge")).toBe(true);
+    expect(rows).toHaveLength(ordinaryRows.length + 1);
+    expect(ordinaryRows.some((row) => row.runner === "runson-general-16")).toBe(true);
     expect(ordinaryRows.some((row) => String(row.check_name).endsWith("-control"))).toBe(false);
     const fastRows = JSON.parse(
       expectDefined(manifest.outputs.checks_fast_core_matrix, "qualification fast checks"),
@@ -7795,6 +8095,8 @@ describe("ci workflow guards", () => {
     } as const;
     const expectedUiE2eSetup = {
       ...expectedSharedUiE2eSetup,
+      "node-version":
+        "${{ needs.preflight.outputs.node_runner_backend == 'runson' && matrix.task == 'control-ui' && env.NODE_VERSION || '24.x' }}",
       "restore-test-caches":
         "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}",
     } as const;
@@ -8011,11 +8313,11 @@ describe("ci workflow guards", () => {
     expect(scenario.env).toEqual({
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
-      VITEST_SHARD_INDEX: "${{ matrix.shard }}",
+      VITEST_SHARD_INDEX: "${{ matrix.retained && 1 || matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
       OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
-        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
+        "${{ matrix.retained && needs.preflight.outputs.ui_e2e_blacksmith_test_groups_gzip_base64 || needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
     expect(scenario.run).not.toContain("--project");
     const timeoutDiagnostics = expectDefined(

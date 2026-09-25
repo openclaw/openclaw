@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  measuredSerialGroupSeconds,
+  measuredSerialJobKeys,
+} from "./ci-measured-serial-timings.mts";
 import type { CompactNodeTestShard, NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import { mergeVitestPretestBuildModes } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
@@ -170,6 +174,121 @@ function isNumberedToolingGroup(group: NodeTestShardGroup): boolean {
       ([key, value]) => key === "OPENCLAW_VITEST_MAX_WORKERS" && value === "2",
     )
   );
+}
+
+function executedCompactGroupFingerprint(
+  job: CompactNodeTestShard,
+  group: NodeTestShardGroup,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        runner: job.runner,
+        env: Object.fromEntries(
+          Object.entries(job.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+        ),
+        group: {
+          fingerprint: executedGroupFingerprint(group),
+          fallbackMaxWorkers: group.fallbackMaxWorkers,
+          minTotalMemoryBytes: group.minTotalMemoryBytes,
+        },
+      }),
+    )
+    .digest("hex");
+}
+
+function readMeasuredSerialJobPricing(
+  job: CompactNodeTestShard,
+  compactMode: "push" | "pull-request",
+) {
+  if (!serialTwoWorkerJob(job, job.runner)) {
+    return undefined;
+  }
+  const keys = job.groups.map((group) => executedCompactGroupFingerprint(job, group));
+  const observations = keys.map((key) => measuredSerialGroupSeconds[compactMode][key]);
+  if (observations.every((seconds) => seconds === undefined)) {
+    return undefined;
+  }
+  return {
+    observations,
+    predictedSeconds: Math.max(
+      job.predictedSeconds ?? 0,
+      observations.reduce<number>((sum, seconds) => sum + (seconds ?? 0), 0) + FIXED_JOB_SECONDS,
+    ),
+    complete:
+      observations.every((seconds) => seconds !== undefined) &&
+      measuredSerialJobKeys[compactMode].includes(
+        createHash("sha256").update(JSON.stringify(keys)).digest("hex"),
+      ),
+  };
+}
+
+/** The observed source provider can inform routing without running placement again. */
+export function getMeasuredSerialJobSeconds(
+  job: CompactNodeTestShard,
+  compactMode: "push" | "pull-request",
+): number | undefined {
+  const pricing = readMeasuredSerialJobPricing(job, compactMode);
+  return pricing?.complete ? pricing.predictedSeconds : undefined;
+}
+
+/** Price native serial children after their execution runner is known. */
+export function repriceMeasuredSerialJobs(
+  jobs: CompactNodeTestShard[],
+  compactMode: "push" | "pull-request",
+  packedWorkSeconds: number,
+): CompactNodeTestShard[] {
+  return jobs.flatMap((job) => {
+    const pricing = readMeasuredSerialJobPricing(job, compactMode);
+    if (!pricing) {
+      return [job];
+    }
+    const { observations, predictedSeconds, complete } = pricing;
+    const standalone = job.groups.filter(
+      (_group, index) => (observations[index] ?? 0) > packedWorkSeconds,
+    );
+    if (job.groups.length === 1 || (!complete && standalone.length === 0)) {
+      return [{ ...job, predictedSeconds }];
+    }
+    const remainder = job.groups.filter((group) => !standalone.includes(group));
+    const bins: NodeTestShardGroup[][] = complete
+      ? []
+      : [...standalone.map((group) => [group]), ...(remainder.length ? [remainder] : [])];
+    if (complete) {
+      let seconds = 0;
+      // Only a complete ordered native cohort can price every serial boundary.
+      // Keep that order and split whole children within the existing allowance.
+      for (const [index, group] of job.groups.entries()) {
+        const cost = observations[index]!;
+        if (bins.length === 0 || seconds + cost > packedWorkSeconds) {
+          bins.push([]);
+          seconds = 0;
+        }
+        bins[bins.length - 1]!.push(group);
+        seconds += cost;
+      }
+    }
+    return bins.map((groups, index) =>
+      Object.assign({}, job, {
+        checkName: index === 0 ? job.checkName : `${job.checkName}-tail-${index}`,
+        shardName: index === 0 ? job.shardName : `${job.shardName}-tail-${index}`,
+        groups,
+        // Unknown siblings retain the original envelope forecast. Subtraction
+        // would pretend a whole-child observation priced their cold imports.
+        predictedSeconds: groups.some(
+          (group) => observations[job.groups.indexOf(group)] !== undefined,
+        )
+          ? Math.max(
+              job.predictedSeconds ?? 0,
+              groups.reduce(
+                (sum, group) => sum + (observations[job.groups.indexOf(group)] ?? 0),
+                FIXED_JOB_SECONDS,
+              ),
+            )
+          : job.predictedSeconds,
+      }),
+    );
+  });
 }
 
 /** Reuse measured serial placement without replacing the general capacity-pricing owner. */

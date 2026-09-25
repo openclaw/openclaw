@@ -1,5 +1,6 @@
 // Resolves extension Vitest configs, costs, and batch shards for plugin test runs.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
@@ -97,6 +98,18 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   "test/vitest/vitest.extension-zalo.config.ts": 0.523,
   "test/vitest/vitest.extensions.config.ts": 0.642,
 };
+// Successful children in failed PR-shaped run 36038423993, job 107766132924,
+// used Blacksmith8 (two actual CPUs), serial processes and two workers.
+// Hash complete ordered selectors; prices include 10% headroom plus two seconds.
+const EXTENSION_TEST_NATIVE_SELECTION_FLOORS: Readonly<
+  Record<string, Readonly<Record<string, number>>>
+> = {
+  "test/vitest/vitest.extension-database-workers.config.ts": {
+    "6964245a774bf102ef945edf2e511b7d4996258323f3075c0c83dd8aefcb86db": 319,
+    "220a1aa62f91c7af15e04d4b7e4babfab9dff1061c7c946925e3c15fb48acf13": 232,
+  },
+};
+
 // Retain the pre-parallel PR rates as serial references. Future parallel samples
 // belong in EXTENSION_TEST_COST_MULTIPLIERS and must not be discounted again.
 const EXTENSION_TEST_SERIAL_REFERENCE_COST_MULTIPLIERS: Record<string, number> = {
@@ -438,7 +451,16 @@ export function estimateExtensionTestCost(
     config === DATABASE_WORKER_CONFIG
       ? files.filter((file) => file.startsWith("extensions/codex/src/app-server/")).length
       : 0;
-  return Math.max(1, Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)));
+  const measuredSelections = EXTENSION_TEST_NATIVE_SELECTION_FLOORS[config];
+  const measuredSeconds =
+    measuredSelections && files.length === testFileCount
+      ? measuredSelections[createHash("sha256").update(JSON.stringify(files)).digest("hex")]
+      : undefined;
+  return Math.max(
+    1,
+    Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)),
+    measuredSeconds ?? 0,
+  );
 }
 
 /** Resolve the dedicated Vitest config for an extension root or test file. */

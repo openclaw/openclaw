@@ -56,7 +56,11 @@ import {
   isParallelCommandsGroup,
   estimateCommandWorkerSeconds,
 } from "./ci-command-test-plan.mts";
-import { rebalanceMeasuredHybridJobs } from "./ci-measured-compact-packing.mts";
+import {
+  getMeasuredSerialJobSeconds,
+  rebalanceMeasuredHybridJobs,
+  repriceMeasuredSerialJobs,
+} from "./ci-measured-compact-packing.mts";
 import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
   canSplitWholeConfigGroup,
@@ -1491,10 +1495,20 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
 ]);
+// Retain Blacksmith placement while the AWS RPC wait remains unexplained.
+const RUNSON_RETAINED_BLACKSMITH_UI_E2E_TEST_FILES = new Set([
+  "ui/src/e2e/new-session-page.github-projects.e2e.test.ts",
+]);
+
+type UiTestShardGroup = Pick<NodeTestShardGroup, "configs" | "shard_name" | "includePatterns">;
 
 export function createUiTestShardGroups(
-  options: { includeReleaseOnlyTests?: boolean; changedPaths?: readonly string[] } = {},
-) {
+  options: {
+    includeReleaseOnlyTests?: boolean;
+    changedPaths?: readonly string[];
+    runnerBackend?: string;
+  } = {},
+): { ui: UiTestShardGroup[]; e2e: UiTestShardGroup[]; e2eBlacksmith?: UiTestShardGroup[] } {
   const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
   const changedPaths = new Set(options.changedPaths ?? []);
   const files = includeReleaseOnlyTests
@@ -1502,21 +1516,36 @@ export function createUiTestShardGroups(
     : listTrackedTestFiles(".").filter(
         (file) => !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file),
       );
-  const group = (config: string, ownsFile: (file: string) => boolean) => [
-    {
-      configs: [config],
-      shard_name: config,
-      ...(files ? { includePatterns: files.filter(ownsFile) } : {}),
-    },
-  ];
+  const group = (config: string, ownsFile: (file: string) => boolean, selectedFiles = files) => ({
+    configs: [config],
+    shard_name: config,
+    ...(selectedFiles ? { includePatterns: selectedFiles.filter(ownsFile) } : {}),
+  });
+  const ui = [group("ui/vitest.config.ts", isUiTestTarget)];
+  const e2e = group(
+    "test/vitest/vitest.ui-e2e.config.ts",
+    (file) =>
+      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
+      uiE2eRealGatewayTestFiles.includes(file),
+    options.runnerBackend === "runson" ? (files ?? listTrackedTestFiles(".")) : files,
+  );
+  if (options.runnerBackend !== "runson") {
+    return { ui, e2e: [e2e] };
+  }
+  const retained = e2e.includePatterns!.filter((file) =>
+    RUNSON_RETAINED_BLACKSMITH_UI_E2E_TEST_FILES.has(file),
+  );
   return {
-    ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: group(
-      "test/vitest/vitest.ui-e2e.config.ts",
-      (file) =>
-        controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
-        uiE2eRealGatewayTestFiles.includes(file),
-    ),
+    ui,
+    e2e: [
+      {
+        ...e2e,
+        includePatterns: e2e.includePatterns!.filter(
+          (file) => !RUNSON_RETAINED_BLACKSMITH_UI_E2E_TEST_FILES.has(file),
+        ),
+      },
+    ],
+    ...(retained.length ? { e2eBlacksmith: [{ ...e2e, includePatterns: retained }] } : {}),
   };
 }
 
@@ -3635,7 +3664,33 @@ function splitOversizedCompactGroup(
         isCliProcess || isTooling ? batchWeight : undefined,
       );
     }
-    const partitioned = runtimePartition ? [runtimePartition.runtimeFiles, ...stripes] : stripes;
+    // Share a runtime build only while its serial CLI consumers fit the same
+    // runtime admission budget. A growing update corpus must not become an
+    // indivisible child merely because every file needs the prepared runtime.
+    const runtimeStripes =
+      runtimePartition && isCliProcess
+        ? packNodeTestGroups(
+            runtimePartition.runtimeFiles.toSorted(
+              (a, b) =>
+                weightForFile(b) - weightForFile(a) ||
+                includePatterns.indexOf(a) - includePatterns.indexOf(b),
+            ),
+            (batch, file) =>
+              (seconds * [...batch, file].reduce((sum, entry) => sum + weightForFile(entry), 0)) /
+                totalWeight +
+                VITEST_PRETEST_BUILD_SECONDS.runtime *
+                  (runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1) <=
+              COMPACT_HYBRID_RUNTIME_JOB_SECONDS,
+          ).map((batch) =>
+            batch.toSorted((a, b) => includePatterns.indexOf(a) - includePatterns.indexOf(b)),
+          )
+        : runtimePartition
+          ? [runtimePartition.runtimeFiles]
+          : [];
+    // Preserve unchanged ordinary child identities and their native-wall samples.
+    const partitioned = runtimeStripes.length
+      ? [runtimeStripes[0]!, ...stripes, ...runtimeStripes.slice(1)]
+      : stripes;
     // Preserve prerequisite ownership and the existing weighted stripes. The
     // family guard prevents cost packing from joining these serial chunks again.
     return storageStateFileLimit === undefined
@@ -4075,9 +4130,89 @@ export function createSelectedNodeTestShardBundles(
   ];
 }
 
+// Keep the measured storage envelopes together; matching either owner alone
+// would transfer a provider observation to different work after repartitioning.
+const RUNSON_RETAINED_INFRA_TEST_PAIRS = [
+  [
+    "src/agents/worktrees/service.acceleration.test.ts",
+    "src/agents/worktrees/service.retire-snapshot.test.ts",
+  ],
+  [
+    "test/canonical-descendant.integration.test.ts",
+    "src/agents/tools/transcripts-tool.session-id.test.ts",
+  ],
+  [
+    "src/cli/update-cli/update-repair-history.test.ts",
+    "src/infra/session-cost-usage.archive-identity.test.ts",
+  ],
+  [
+    "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
+    "src/system-agent/setup-inference-activate.test.ts",
+  ],
+];
+
+function resolveRunsOnRetainedBlacksmithRunner(job: CompactNodeTestShard): string | undefined {
+  const hasOnlyTwoWorkerEnv = (env: Record<string, string> | undefined) =>
+    Object.entries(env ?? {}).every(
+      ([key, value]) => key === "OPENCLAW_VITEST_MAX_WORKERS" && value === "2",
+    );
+  if (
+    job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER ||
+    job.planConcurrency !== 1 ||
+    job.requiresDist ||
+    job.pretestBuildMode ||
+    !hasOnlyTwoWorkerEnv(job.env) ||
+    !job.groups.every(
+      (group) =>
+        group.configs.length === 1 &&
+        !group.requiresDist &&
+        !group.pretestBuildMode &&
+        group.fallbackMaxWorkers === undefined &&
+        group.minTotalMemoryBytes === undefined &&
+        hasOnlyTwoWorkerEnv(group.env) &&
+        (group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? job.env?.OPENCLAW_VITEST_MAX_WORKERS) === "2",
+    )
+  ) {
+    return undefined;
+  }
+  const [group] = job.groups;
+  if (job.groups.length === 1 && group) {
+    if (
+      group.configs[0] === "test/vitest/vitest.infra.config.ts" &&
+      RUNSON_RETAINED_INFRA_TEST_PAIRS.some((files) =>
+        files.every((file) => group.includePatterns?.includes(file)),
+      )
+    ) {
+      return DEFAULT_NODE_TEST_RUNNER;
+    }
+    if (
+      group.configs[0] === TOOLING_CONFIG &&
+      group.includePatterns?.includes(TOOLING_UNIFIED_DECLARATIONS_TEST_FILE)
+    ) {
+      // Repacked compiler companions have no matching small-host fit.
+      return EXTRA_LARGE_NODE_TEST_RUNNER;
+    }
+  }
+  // The compiler/planner pair needs more headroom than the 8-GiB fit probe.
+  const sdkDeclarations = job.groups.find((entry) =>
+    entry.includePatterns?.includes("test/scripts/write-plugin-sdk-entry-dts.test.ts"),
+  );
+  return job.groups.length === 2 &&
+    job.groups.every((entry) => entry.configs[0] === TOOLING_CONFIG) &&
+    sdkDeclarations &&
+    job.groups.some(
+      (entry) =>
+        entry !== sdkDeclarations &&
+        entry.includePatterns?.includes("test/scripts/ci-changed-node-test-plan.test.ts"),
+    )
+    ? "blacksmith-16vcpu-ubuntu-2404"
+    : undefined;
+}
+
 function routeRunsOnJobs(
   jobs: CompactNodeTestShard[],
   compactNodeJobCap: number,
+  compactMode: CompactNodeTestPlanMode,
 ): CompactNodeTestShard[] {
   const cronGroups: NodeTestShardGroup[] = [];
   const cronTimeouts: number[] = [];
@@ -4126,7 +4261,7 @@ function routeRunsOnJobs(
     routed.push({
       checkName: "checks-node-runson-cron",
       shardName: "runson-cron",
-      runner: "runson-c8i-8xlarge",
+      runner: "runson-general-16",
       groups: cronGroups,
       requiresDist: false,
       planConcurrency: 1,
@@ -4140,12 +4275,72 @@ function routeRunsOnJobs(
     COMPACT_NODE_TEST_JOB_CAP,
     compactNodeJobCap + routed.filter((job) => job.requiresDist).length,
   );
-  if (routed.length > jobCap) {
+  const placed = routed.map((job) => {
+    // Match the native source allocation before choosing a different provider.
+    // The inherited forecast is admission evidence, not an AWS timing sample.
+    const predictedSeconds =
+      job.runner === DEFAULT_NODE_TEST_RUNNER
+        ? (getMeasuredSerialJobSeconds(job, compactMode) ?? job.predictedSeconds)
+        : job.predictedSeconds;
+    // The long tooling tail ran on two CPUs with a two-worker ceiling.
+    // Keep its execution contract; the complete forecast selects on-demand.
+    if (
+      job.runner === DEFAULT_NODE_TEST_RUNNER &&
+      predictedSeconds !== undefined &&
+      Number.isFinite(predictedSeconds) &&
+      predictedSeconds >= 480 &&
+      job.planConcurrency === 1 &&
+      !job.requiresDist &&
+      !job.pretestBuildMode &&
+      (job.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined ||
+        job.env.OPENCLAW_VITEST_MAX_WORKERS === "2") &&
+      job.groups.length > 0 &&
+      job.groups.every(
+        (group) =>
+          group.configs.length === 1 &&
+          group.configs[0] === TOOLING_CONFIG &&
+          group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
+          !group.requiresDist &&
+          !group.pretestBuildMode,
+      )
+    ) {
+      return Object.assign({}, job, { runner: "runson-general-16", predictedSeconds });
+    }
+    const retainedRunner = resolveRunsOnRetainedBlacksmithRunner(job);
+    if (retainedRunner) {
+      return Object.assign({}, job, { runner: retainedRunner });
+    }
+    // The 32-class supplies eight CPUs and 31 GiB. Preserve its memory floor
+    // for overlapping children and the eight-worker isolated Gateway cohort.
+    // Runtime preparation retains Blacksmith until its complete flow qualifies.
+    // The update CLI envelope regressed by 40% on AWS without more CPU work.
+    // Keep its measured Blacksmith worker and memory allocation.
+    if (
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER ||
+      job.requiresDist ||
+      job.pretestBuildMode ||
+      job.groups.some(
+        (group) =>
+          group.requiresDist ||
+          group.pretestBuildMode ||
+          group.includePatterns?.includes("src/cli/update-cli.test.ts"),
+      )
+    ) {
+      return job;
+    }
+    return Object.assign({}, job, { runner: "runson-memory-32" });
+  });
+  const measured = repriceMeasuredSerialJobs(
+    placed,
+    compactMode,
+    COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS,
+  );
+  if (measured.length > jobCap) {
     throw new Error(
-      `compact runson node test plan exceeds ${jobCap} jobs (${routed.length} planned)`,
+      `compact runson node test plan exceeds ${jobCap} jobs (${measured.length} planned)`,
     );
   }
-  return routed.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
+  return measured.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
 
 function createCompactNodeTestShardBundles(
@@ -4158,7 +4353,7 @@ function createCompactNodeTestShardBundles(
   hostedToolingTailDonation?: HostedToolingTailDonation,
 ): CompactNodeTestShard[] {
   if (options.runnerBackend === "runson") {
-    // Hybrid owns placement and measured serial packing; RunsOn only extracts cron.
+    // Hybrid owns placement and workers; RunsOn changes only execution capacity.
     return routeRunsOnJobs(
       createCompactNodeTestShardBundles(
         sourceShards,
@@ -4170,6 +4365,7 @@ function createCompactNodeTestShardBundles(
         hostedToolingTailDonation,
       ),
       options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP,
+      compactMode,
     );
   }
   const compactNodeJobCap = options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP;

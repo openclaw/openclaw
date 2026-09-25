@@ -177,9 +177,17 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
   ["src/agents/cli-runner.reliability.test.ts", 8],
   ["src/agents/cli-runner.spawn.test.ts", 45],
+  // Run 35863745223, job 107190696500: serial file boundaries include
+  // import/setup; the whole seven-file runtime child took 720.47s.
+  ["src/cli/acp-cli-exit.process.test.ts", 23],
+  ["src/cli/update-dry-run-state.process.test.ts", 87],
+  ["src/cli/update-cli/update-command-migrated.test.ts", 106],
+  ["src/cli/update-cli/update-command-rollback.test.ts", 209],
+  ["src/cli/update-cli/update-command-post-update-recovery.test.ts", 29],
+  ["src/cli/update-cli/update-command-post-update-repair.test.ts", 17],
+  ["src/cli/update-cli/update-command-service.integration.test.ts", 250],
   // Median serial file-boundary walls from main runs 33441176559/33441320436;
   // case sums overcount the help file's concurrent cases.
-  ["src/cli/acp-cli-exit.process.test.ts", 6],
   ["src/cli/cli-process-child.test-helpers.test.ts", 2],
   ["src/cli/cron-output.process.test.ts", 23],
   // The cold source proof in run 33492093127 took 198.88s; keep it alone.

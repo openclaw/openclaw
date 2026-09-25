@@ -1728,9 +1728,12 @@ describe("CI changed Node test plan", () => {
       changedPath: "scripts/lib/ci-measured-compact-packing.mts",
       runnerBackend,
     })),
-    ...["scripts/lib/ci-test-timings.mts", "scripts/lib/vitest-shard-metadata.mts"].flatMap(
-      (changedPath) =>
-        ["blacksmith", "hybrid", "runson"].map((runnerBackend) => ({ changedPath, runnerBackend })),
+    ...[
+      "scripts/lib/ci-test-timings.mts",
+      "scripts/lib/ci-measured-serial-timings.mts",
+      "scripts/lib/vitest-shard-metadata.mts",
+    ].flatMap((changedPath) =>
+      ["blacksmith", "hybrid", "runson"].map((runnerBackend) => ({ changedPath, runnerBackend })),
     ),
   ])(
     "keeps $changedPath under the $runnerBackend full-plan policy",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -39,6 +40,11 @@ export function createClaudeCliTransport(params: {
   // A child can fail before its caller reaches initialize().
   void ready.catch(() => {});
   let closed = false;
+  let explicitlyClosed = false;
+  let closeError: Error | undefined;
+  let failure: Promise<unknown> | undefined;
+  let retiring = false;
+  let rootTerminationRequested = false;
   let hasExited = false;
   let exitError: Error | undefined;
   let terminateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -57,6 +63,7 @@ export function createClaudeCliTransport(params: {
       });
     });
   const terminate = () => {
+    rootTerminationRequested = true;
     treeExit = signalTree("SIGTERM");
     killTimer = setTimeout(() => {
       treeExit = signalTree("SIGKILL");
@@ -64,41 +71,78 @@ export function createClaudeCliTransport(params: {
     killTimer.unref();
   };
 
-  const close = () => {
-    if (closed) {
+  const retire = () => {
+    if (retiring) {
       return;
     }
-    closed = true;
-    rejectReady(new Error("Claude CLI closed before initialization completed."));
+    retiring = true;
     for (const controller of requests.values()) {
       controller.abort();
     }
     requests.clear();
-    owner[Symbol.dispose]();
-    if (process.platform === "win32" && !hasExited) {
+    // Node can publish exitCode before dispatching the exit event.
+    const running = !hasExited && child.exitCode === null && child.signalCode === null;
+    if (process.platform === "win32" && running) {
       // /T without /F can fail, and EOF would then erase the root before escalation.
-      // Force the owned tree while its root exists and await taskkill's completion.
+      rootTerminationRequested = true;
       treeExit = signalTree("SIGKILL");
       void treeExit.then(() => child.stdin.end());
     } else {
-      // On POSIX the private process group survives root exit. Let native flush on EOF first.
       child.stdin.end();
     }
-    if (process.platform !== "win32" && !hasExited) {
+    if (process.platform !== "win32" && running) {
       terminateTimer = setTimeout(terminate, CLOSE_GRACE_MS);
       terminateTimer.unref();
     }
   };
-  const fail = async (error: unknown) => {
-    if (closed) {
+  const close = (error?: unknown) => {
+    if (explicitlyClosed) {
       return;
     }
-    const diagnostic = await owner.withDiagnostics(error);
-    if (!closed) {
+    explicitlyClosed = true;
+    closed = true;
+    closeError = toErrorObject(error, "Claude CLI closed before initialization completed.");
+    rejectReady(closeError);
+    // Explicit cancellation must erase credentials even during failure reconciliation.
+    owner[Symbol.dispose]();
+    retire();
+  };
+  const fail = (error: unknown): Promise<unknown> => {
+    if (failure) {
+      return failure;
+    }
+    if (explicitlyClosed) {
+      return Promise.resolve(closeError ?? error);
+    }
+    // Publish one error to pending writes, initialization, and the admitted turn.
+    failure = Promise.resolve().then(async () => {
+      if (explicitlyClosed) {
+        return closeError ?? error;
+      }
+      let primary = error;
+      if (error instanceof Error && "code" in error && error.code === "EPIPE") {
+        closed = true;
+        retire();
+        await exited;
+        await treeExit;
+        // A failed startup owns its broken pipe; our cleanup must not invent that failure.
+        if (exitError && !rootTerminationRequested) {
+          primary = exitError;
+        }
+      }
+      if (explicitlyClosed) {
+        return closeError ?? primary;
+      }
+      const diagnostic = await owner.withDiagnostics(primary);
+      if (explicitlyClosed) {
+        return closeError ?? diagnostic;
+      }
       rejectReady(diagnostic);
       params.onError(diagnostic);
-      close();
-    }
+      close(diagnostic);
+      return diagnostic;
+    });
+    return failure;
   };
   const didExit = () => {
     if (hasExited) {
@@ -135,13 +179,18 @@ export function createClaudeCliTransport(params: {
   });
 
   const send = (message: Record<string, unknown>): Promise<void> => {
+    if (failure) {
+      return failure.then((error) => {
+        throw error;
+      });
+    }
     if (closed) {
-      return Promise.reject(new Error("Claude CLI control channel is closed."));
+      return Promise.reject(closeError ?? new Error("Claude CLI control channel is closed."));
     }
     return new Promise((resolve, reject) => {
       child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) {
-          reject(error);
+          void fail(error).then(reject, reject);
         } else {
           resolve();
         }
@@ -181,7 +230,7 @@ export function createClaudeCliTransport(params: {
     }
   };
   const acceptLine = async (line: string) => {
-    if (!line.trim()) {
+    if (closed || !line.trim()) {
       return;
     }
     let message: unknown;

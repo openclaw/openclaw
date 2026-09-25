@@ -10584,7 +10584,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
-  it("routes admitted RunsOn rows with unique Spot labels and portable cache readers", () => {
+  it("routes admitted RunsOn rows across bounded instance pools with portable caches", () => {
     const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
     const context = {
       eventName: "pull_request",
@@ -10597,11 +10597,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       runnerProfile: "hybrid",
       runnerEnvironment: "self-hosted",
       preflightOutputs: { node_runner_backend: "runson" },
-      matrix: { runner: "runson-c8i-8xlarge", check_name: "cron-1" },
+      matrix: {
+        runner: "runson-general-16",
+        check_name: "cron-1",
+        shard_name: "runson-cron",
+        runson_spot: true,
+      },
     } as const;
     const label = evaluateWorkflowExpression(job["runs-on"], context);
     expect(label).toBe(
-      "runs-on=123-cron-1/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb",
+      "runs-on=123-cron-1/family=m8azn.xlarge+m8a.xlarge+c8a.2xlarge+m7a.xlarge+c7a.2xlarge/cpu=4+8/ram=16/spot=cop/retry=false/image=ubuntu24-full-x64/volume=80gb/region=us-east-1",
     );
     expect(
       evaluateWorkflowExpression(job["runs-on"], {
@@ -10609,14 +10614,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         matrix: { ...context.matrix, check_name: "cron-2" },
       }),
     ).not.toBe(label);
-    for (const overrides of [
+    const fallbacks: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>[] = [
       { runAttempt: 2 },
+      { preflightOutputs: { node_runner_backend: "runson", frozen_target: "true" } },
+      { matrix: { runner: "runson-c8i-8xlarge", check_name: "legacy-cron" } },
       { preflightOutputs: { node_runner_backend: "hybrid" } },
       {
         headRepository: "fork/openclaw",
         preflightOutputs: { node_runner_backend: "github" },
       },
-    ]) {
+    ];
+    for (const overrides of fallbacks) {
       expect(evaluateWorkflowExpression(job["runs-on"], { ...context, ...overrides })).toBe(
         "ubuntu-24.04",
       );
@@ -10632,7 +10640,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const [name, matrix, expected, hosted] of [
       ["build-artifacts", {}, "blacksmith-16vcpu-ubuntu-2404", "ubuntu-24.04"],
       ["checks-ui", {}, "blacksmith-8vcpu-ubuntu-2404", "ubuntu-24.04"],
-      ["checks-ui-e2e", { task: "control-ui" }, "blacksmith-16vcpu-ubuntu-2404", "ubuntu-24.04"],
+      [
+        "checks-ui-e2e",
+        { task: "control-ui", shard: 1 },
+        "runs-on=123-ui-e2e-1/family=m8a.xlarge+m8azn.xlarge+c8a.2xlarge+m7a.xlarge+c7a.2xlarge/cpu=4+8/ram=16/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/region=us-east-1",
+        "ubuntu-24.04",
+      ],
+      [
+        "checks-ui-e2e",
+        { task: "browser-extension" },
+        "blacksmith-8vcpu-ubuntu-2404",
+        "ubuntu-24.04",
+      ],
       ["checks-windows", {}, "blacksmith-16vcpu-windows-2025", "windows-2025"],
       [
         "check-shard",
@@ -10689,6 +10708,79 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }),
       ).toBe(expected);
     }
+    const uiJob = readCiWorkflow().jobs["checks-ui-e2e"];
+    const uiSetup = expectDefined(
+      uiJob.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "UI setup",
+    );
+    expect(
+      evaluateWorkflowExpression(uiSetup.with["dependency-cache"], {
+        ...context,
+        matrix: { task: "control-ui" },
+      }),
+    ).toBe("false");
+    expect(
+      evaluateWorkflowExpression(uiJob["runs-on"], {
+        ...context,
+        matrix: { task: "control-ui" },
+        preflightOutputs: { node_runner_backend: "runson", frozen_target: "true" },
+      }),
+    ).toBe("ubuntu-24.04");
+    const retainedUi = {
+      ...context,
+      matrix: { task: "control-ui", shard: 10, retained: true, vitest_shard_count: 1 },
+      preflightOutputs: {
+        node_runner_backend: "runson",
+        ui_e2e_test_groups_gzip_base64: "ordinary-groups",
+        ui_e2e_blacksmith_test_groups_gzip_base64: "retained-groups",
+      },
+    };
+    expect(evaluateWorkflowExpression(uiJob["runs-on"], retainedUi)).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(evaluateWorkflowExpression(uiSetup.with["dependency-cache"], retainedUi)).toBe("true");
+    const uiTest = expectDefined(
+      uiJob.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
+      "UI test",
+    );
+    expect(
+      evaluateWorkflowExpression(uiTest.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, retainedUi),
+    ).toBe("retained-groups");
+    expect(evaluateWorkflowExpression(uiTest.env.VITEST_SHARD_INDEX, retainedUi)).toBe(1);
+    expect(evaluateWorkflowExpression(uiTest.env.VITEST_SHARD_COUNT, retainedUi)).toBe(1);
+    const uiInitialize = expectDefined(
+      uiJob.steps.find((step: WorkflowStep) => step.name === "Initialize RunsOn"),
+      "UI initialization",
+    );
+    expect(evaluateWorkflowExpression(`\${{ ${uiInitialize.if} }}`, retainedUi)).toBe(false);
+    const uiProbe = {
+      ...retainedUi,
+      matrix: { ...retainedUi.matrix, runson_probe: true, shard: 11 },
+    };
+    expect(String(evaluateWorkflowExpression(uiJob["runs-on"], uiProbe))).toMatch(
+      /^runs-on=123-ui-e2e-11\/family=m8a\.xlarge\+m8azn\.xlarge\+c8a\.2xlarge\+m7a\.xlarge\+c7a\.2xlarge\/cpu=4\+8\/ram=16\/spot=false\/retry=false\//u,
+    );
+    expect(evaluateWorkflowExpression(`\${{ ${uiInitialize.if} }}`, uiProbe)).toBe(true);
+    expect(evaluateWorkflowExpression(uiSetup.with["dependency-cache"], uiProbe)).toBe("false");
+    expect(
+      evaluateWorkflowExpression(uiTest.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, uiProbe),
+    ).toBe("retained-groups");
+    expect(evaluateWorkflowExpression(uiTest.env.VITEST_SHARD_INDEX, uiProbe)).toBe(1);
+    expect(evaluateWorkflowExpression(uiTest.env.VITEST_SHARD_COUNT, uiProbe)).toBe(1);
+    const bounded = {
+      ...context,
+      matrix: { runner: "runson-memory-32", check_name: "bounded-node", runson_spot: true },
+    };
+    expect(evaluateWorkflowExpression(job["runs-on"], bounded)).toBe(
+      "runs-on=123-bounded-node/family=m8azn.3xlarge+m8a.2xlarge+c8a.4xlarge+m7a.2xlarge+c7a.4xlarge/cpu=8+16/ram=32+48/spot=cop/retry=false/image=ubuntu24-full-x64/volume=80gb/region=us-east-1",
+    );
+    expect(evaluateWorkflowExpression(setup.with["dependency-cache"], bounded)).toBe("false");
+    expect(
+      evaluateWorkflowExpression(setup.with["node-version"], {
+        ...bounded,
+        env: { NODE_VERSION: "24.19.0" },
+      }),
+    ).toBe("24.19.0");
     expect(setup.with).toMatchObject({ "vitest-fs-cache": "true", "node-compile-cache": "true" });
     const resources = expectDefined(
       job.steps.find((step: WorkflowStep) => step.name === "Configure Node test resources"),
@@ -10696,6 +10788,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     for (const matrix of [
       context.matrix,
+      { ...context.matrix, shard_name: "changed-runson-cron" },
       {
         runner: "blacksmith-32vcpu-ubuntu-2404",
         check_name: "checks-node-runson-cron-blacksmith-control",
@@ -10709,6 +10802,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(evaluateWorkflowExpression(setup.with["node-version"], comparison)).toBe("24.19.0");
       expect(evaluateWorkflowExpression(resources.env.RUNSON_JOB, comparison)).toBe("true");
     }
+    expect(evaluateWorkflowExpression(resources.env.RUNSON_MAX_WORKERS, bounded)).toBe("8");
+    expect(evaluateWorkflowExpression(resources.env.RUNSON_MAX_WORKERS, context)).toBe("2");
+    const resourceFallbacks: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>[] = [
+      { runnerEnvironment: "github-hosted" },
+      { runAttempt: 2 },
+      { preflightOutputs: { node_runner_backend: "runson", frozen_target: "true" } },
+    ];
+    for (const overrides of resourceFallbacks) {
+      expect(
+        evaluateWorkflowExpression(resources.env.RUNSON_MAX_WORKERS, { ...bounded, ...overrides }),
+      ).toBe("2");
+    }
+    const allocation = expectDefined(
+      job.steps.find((step: WorkflowStep) => step.name === "Record RunsOn allocation"),
+      "RunsOn allocation",
+    );
+    expect(evaluateWorkflowExpression(allocation.env.EXPECTED_RUNSON_INSTANCE_TYPES, bounded)).toBe(
+      "m8azn.3xlarge+m8a.2xlarge+c8a.4xlarge+m7a.2xlarge+c7a.4xlarge",
+    );
+    expect(evaluateWorkflowExpression(allocation.env.EXPECTED_RUNSON_INSTANCE_TYPES, context)).toBe(
+      "m8azn.xlarge+m8a.xlarge+c8a.2xlarge+m7a.xlarge+c7a.2xlarge",
+    );
+    for (const candidate of [context, bounded]) {
+      const onDemand = { ...candidate, matrix: { ...candidate.matrix, runson_spot: false } };
+      const onDemandLabel = String(evaluateWorkflowExpression(job["runs-on"], onDemand));
+      expect(onDemandLabel).toContain("/spot=false/retry=false/");
+      expect(onDemandLabel).toMatch(/\/family=m8a\.(?:xlarge|2xlarge)\+m8azn\./u);
+      expect(onDemandLabel.length).toBeLessThanOrEqual(255);
+      expect(evaluateWorkflowExpression(allocation.env.EXPECTED_RUNSON_MARKET, onDemand)).toBe(
+        "on-demand",
+      );
+      expect(evaluateWorkflowExpression(allocation.env.EXPECTED_RUNSON_MARKET, candidate)).toBe(
+        "spot-or-on-demand",
+      );
+    }
+    expect(
+      evaluateWorkflowExpression(uiSetup.with["node-version"], {
+        ...context,
+        matrix: { task: "control-ui" },
+        env: { NODE_VERSION: "24.19.0" },
+      }),
+    ).toBe("24.19.0");
     const initialize = expectDefined(
       job.steps.find((step: WorkflowStep) => step.name === "Initialize RunsOn"),
       "RunsOn initialization",
@@ -10734,9 +10869,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     mkdirSync(bin);
     writeExecutable(path.join(bin, "nproc"), ["#!/bin/sh", 'printf "%s\\n" "$FIXTURE_CORES"']);
     writeExecutable(path.join(bin, "node"), ["#!/bin/sh", "exit 64"]);
-    for (const [cores, workers] of [
-      [32, 2],
-      [1, 1],
+    for (const [cores, ceiling, concurrency, workers] of [
+      [16, 8, 1, 8],
+      [16, 8, 2, 2],
+      [4, 8, 1, 4],
+      [8, 2, 1, 2],
+      [1, 2, 1, 1],
     ]) {
       const output = path.join(root, "github-env");
       writeFileSync(output, "");
@@ -10748,9 +10886,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           GITHUB_ENV: output,
           FIXTURE_CORES: String(cores),
           RUNSON_JOB: "true",
+          RUNSON_MAX_WORKERS: String(ceiling),
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
-          SHARD_PLAN_CONCURRENCY: "1",
+          SHARD_PLAN_CONCURRENCY: String(concurrency),
         },
       });
       expect(result.status, result.stderr).toBe(0);

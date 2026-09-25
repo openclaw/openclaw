@@ -2659,9 +2659,11 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "src/gateway/boot.test.ts",
     "src/gateway/health/collector.queue-health.test.ts",
     "src/gateway/server-methods/server-methods.test.ts",
-  ])("routes health SQLite consumer %s exactly once to its broker owner", (testFile) => {
+    "src/gateway/talk/relay/index.test.ts",
+  ])("routes host-owned SQLite consumer %s exactly once to its broker owner", (testFile) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
       config: "test/vitest/vitest.gateway-database-workers.config.ts",
       includePatterns: [testFile],

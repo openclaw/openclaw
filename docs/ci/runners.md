@@ -194,82 +194,116 @@ The `macos-swift` lane builds Swift tests once and runs each test once per job. 
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
-| Value                 | Light lanes                                                                 | Heavy lanes                                                                      | Rerun behavior                                                                        |
-| --------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks      | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                        |
-| `github`              | GitHub-hosted                                                               | GitHub-hosted                                                                    | Every configurable job remains hosted                                                 |
-| `hybrid`              | Eligible preflight and other critical-path jobs use Blacksmith on attempt 1 | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`               | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity  |
-| `runson`              | Hybrid baseline                                                             | Hybrid baseline, with pure cron child rows on RunsOn for eligible first attempts | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback |
+| Value                 | Light lanes                                                                 | Heavy lanes                                                                   | Rerun behavior                                                                        |
+| --------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks      | Blacksmith-first, with the existing manual-dispatch and fork fallbacks        | Existing behavior is unchanged                                                        |
+| `github`              | GitHub-hosted                                                               | GitHub-hosted                                                                 | Every configurable job remains hosted                                                 |
+| `hybrid`              | Eligible preflight and other critical-path jobs use Blacksmith on attempt 1 | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`            | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity  |
+| `runson`              | Hybrid baseline                                                             | Non-build 32-class Node rows, cron and Control UI E2E on diversified capacity | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback |
 
-Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift, iOS build, and screenshot jobs always use GitHub-hosted `xcode-27` with Xcode 27. The focused `macos-node` lane uses the existing GitHub-hosted `macos-15` image in hybrid mode, with the same test inventory and two-worker limit. `openclaw/ci-gate` always uses `ubuntu-24.04`: its Bash-only result aggregation needs no checkout or dependency setup. This removes one Blacksmith registration from previously eligible runs without adding jobs or changing the required check. Hosted runner assignment can still delay completion. Trusted automatic hybrid first-attempt `preflight` requests the existing 16-class after three nearby hosted preflights remained unassigned while their Blacksmith security jobs completed. Hybrid retries, manual dispatches, untrusted and noncanonical contexts, and the `github` override stay hosted. Unset or `blacksmith` keeps the existing 4-class route. Logical planner profile, cache trust, steps and the 20-minute deadline remain unchanged; actual assignment and completion still require CI proof. `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. Budget two control-job registrations per eligible hybrid first attempt when optional hosted admission is closed, one when admitted, and one per normal Blacksmith run; both jobs are already reserved in the conservative registration ceiling. The `github` override remains unchanged. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on canonical automatic runs (six rows for manual dispatches), the two-part Windows matrix, `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, `checks-ui` and only the browser-extension E2E row move to hosted Ubuntu when preflight admits at most five optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the core-lint jobs, the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
+Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift, iOS build, and screenshot jobs always use GitHub-hosted `xcode-27` with Xcode 27. The focused `macos-node` lane uses the existing GitHub-hosted `macos-15` image in hybrid mode, with the same test inventory and two-worker limit. Successful preflight admits paid control gates only for canonical, trusted, first-attempt `hybrid`/`runson` runs and authenticated qualification dispatches. Selected baseline ratchets request `blacksmith-16vcpu-ubuntu-2404`, matching the four CPUs observed on their hosted route; the Bash-only `openclaw/ci-gate` requests `blacksmith-4vcpu-ubuntu-2404`. Run `36064878896` measured 568 seconds of hosted assignment wait before the 187-second baseline job and 300 seconds before the four-second final gate. Paid routing removes those two hosted queue dependencies; it does not establish a post-change wall-time saving until native qualification. The same preflight decision owns routing and [hosted accounting](/ci/capacity#bounded-hybrid-hosted-offload). Missing or failed preflight decisions keep the hosted fallback; retries, untrusted contexts, ordinary manual and historical targets, and GitHub mode retain their routes. The existing pure-Blacksmith baseline 4-class fallback and release runner-group wrappers remain unchanged. Trusted automatic hybrid first-attempt `preflight` requests the existing 16-class after three nearby hosted preflights remained unassigned while their Blacksmith security jobs completed. Hybrid retries, manual dispatches, untrusted and noncanonical contexts, and the `github` override stay hosted. Unset or `blacksmith` keeps the existing 4-class route. Logical planner profile, cache trust, steps and the 20-minute deadline remain unchanged; actual assignment and completion still require CI proof. `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. When baseline ratchets are selected, budget four control-job registrations per eligible hybrid first attempt when optional hosted admission is closed, three when admitted, and retain the normal Blacksmith routes. Conservatively reserve two additional registrations per run above the full-tier Windows envelope: `4 × 155 + 21 × 215 = 5,135`, leaving 865 below the 6,000 reference operating target. This reservation may double-count an already-budgeted baseline job; it is a planning allowance, not an actual inventory or proof of physical capacity. The `github` override remains unchanged. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on canonical automatic runs (six rows for manual dispatches), the two-part Windows matrix, `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, `checks-ui` and only the browser-extension E2E row move to hosted Ubuntu when preflight admits at most five optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the core-lint jobs, the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
 
 ### RunsOn qualification
 
-The opt-in `runson` profile derives its plan from `hybrid`. It extracts the three
-`core-runtime-cron-parallel-*` children into one serial job on `c8i.8xlarge`
-with 32 vCPUs, 64 GiB RAM, `ubuntu24-full-x64`, and an 80 GB gp3 root. The
-current 258-file cron inventory retains its two-worker job and group ceilings.
-The three source Blacksmith jobs retain their other children. Hybrid owns the
-shared serial-tail splits and measured nine-to-four tooling packing, preserving
-child contracts, workers and deadlines. Broad-PR Node /compact counts are
-98 /60 on hybrid and 99 /61 on RunsOn, within unchanged caps. No NVMe,
-sticky disk, warm pool, or test-inventory change is enabled.
-The exact-head comparison passed cron on Spot, Blacksmith, and GitHub in
-396, 432, and 672 seconds, respectively. Both native workflows still failed
-and exceeded fifteen minutes; see the
-[measured routing costs and remaining qualification gaps](/ci/routing-costs#runson-remains-unqualified).
+The opt-in `runson` profile consumes hybrid's file selection, packing and worker
+policies. Eligible non-build 32-class Node rows request 8–16 actual CPUs and
+32–48 GiB, preserving the 24-GiB overlapping-child and 28-GiB isolated-Gateway
+admission floors. Blacksmith's requested 32/16 classes delivered eight/four CPUs
+in the native probes; advertised labels are not worker counts. Runtime builds,
+dist rows and the measured update-CLI storage envelope retain Blacksmith.
 
-The repository backend value `runson` admits this route only on the first
-attempt of a canonical, trusted same-repository PR. The repository variable
-remains unchanged during qualification. A maintainer can instead dispatch
-`ci.yml` with `runner_backend=runson`, `release_gate=true`,
-`pull_request_number`, and `target_ref` set to the full current PR head SHA.
-The workflow branch must be that PR's canonical branch and head, and the
-existing maintainer admission must pass. The qualification adds two identical
-cron controls, on Blacksmith and GitHub, with the same pinned Node version and
-two-worker ceiling. They count against the final Node cap (101/130 for this
-inventory) and are absent from normal PR plans. A qualification must select cron
-tests; otherwise preflight fails before allocating comparison runners. Qualification uses the profile’s
-normal downstream placement, read-only cache admission, and lint partitions.
-Its preflight remains hosted until authorization succeeds and is counted in
-the hosted budget. Release-only lint and minimum-Node compatibility jobs stay
-with ordinary manual validation. Ordinary manual dispatches and
-untrusted or unrelated targets cannot use this override.
+Ordinary tooling envelopes with a finite prediction of at least 480 seconds
+also move from Blacksmith's 8-class to the 4–8-CPU, 16-GiB pool. Eligibility
+requires serial execution, the existing two-worker cap in every child, and no
+runtime preparation or dist requirement. A complete ordered native cohort can
+raise its source-provider forecast before this existing routing decision. The
+134-file tooling cohort from runs `36038423993` and `36050763810` supplies a
+634-second forecast, including the unchanged 60-second setup reserve; it moves
+as one intact job. This is inherited Blacksmith evidence, not a measured AWS
+duration. The unchanged prediction threshold ensures these rows use on-demand. This changes capacity without adding shards or
+changing the selected files, packing, workers, or deadlines.
 
-For a main-shaped measurement, set `ci_shape=main` with the same exact-head
-PR admission and choose `runner_backend=hybrid` or `runson`. This uses push
-coverage, the 70-row Node cap, Node runtime, and ordinary main proof/native
-selection. It omits PR extension fallback and the two cron comparison controls;
-it does not add full-manual release-only work. Raw GitHub event/ref still own
-trust, concurrency, cache publication and provenance. The initial preflight is
-hosted and included in the measured wall. Ordinary dispatches retain
-`ci_shape=default` and their existing behavior. Explicit hybrid qualification
-with the default shape uses PR coverage.
+Each request admits five exact instance types. Where Spot remains enabled,
+fast-family preference is best effort: RunsOn's capacity-optimized-prioritized
+policy (`spot=cop`) chooses capacity first. Older AMD alternatives require native workload qualification;
+the family list does not establish equal single-thread performance.
 
-RunsOn uses one opaque label per row, with a unique run/row identifier:
+| Pool                              | CPU / GiB bounds | Eligible exact types                                                        |
+| --------------------------------- | ---------------- | --------------------------------------------------------------------------- |
+| Node                              | 8–16 / 32–48     | `m8azn.3xlarge`, `m8a.2xlarge`, `c8a.4xlarge`, `m7a.2xlarge`, `c7a.4xlarge` |
+| Cron, Control UI and long tooling | 4–8 / 16         | `m8azn.xlarge`, `m8a.xlarge`, `c8a.2xlarge`, `m7a.xlarge`, `c7a.2xlarge`    |
+
+The `m8azn` family has no 2xlarge size; its 3xlarge supplies 12 CPUs and 48 GiB.
+Resource ranges keep that alternative eligible. Direct on-demand requests put
+`m8a` first, matching the measured CPU need at a lower reference price. All rows
+use `ubuntu24-full-x64`, an 80 GB gp3 root and the pinned workflow Node version.
+Blacksmith dependency archives remain disabled on AWS; portable caches remain.
+
+The memory32 class uses on-demand. Failed qualification run `36050763810`
+recorded four explicit interruptions among 17 diversified Spot allocations,
+plus two shutdown cancellations without an interruption receipt. The same
+five-family request concentrated all 17 allocations on `m8a.2xlarge`; eligibility
+does not guarantee distribution. The existing general16 Spot admission still
+requires a known positive planner prediction plus a 320-second native timing
+reserve to fit within 480 seconds. In the first diversified run,
+Spot allocation wall exceeded the planner prediction by up to 307 seconds, including
+launch, setup and underestimated test work. The reserve only selects the market:
+it does not change execution deadlines, packing estimates or worker limits.
+Some existing predictions already include setup; their conservative double
+counting is retained. Longer and unknown rows
+use on-demand. UI lacks a complete per-row forecast and therefore uses
+on-demand. Cron retains its two-worker ceiling; Control UI retains existing
+project and job worker policies.
+
+The GitHub-projects E2E spec remains on a separate Blacksmith row while its
+previous AWS RPC timeout is unresolved. The UI inventory owner partitions the
+selected file list into disjoint ordinary and retained groups; no test is
+removed or tied to a numbered shard. Hybrid keeps its existing inventory.
+
+Main-shaped qualification adds one isolated RunsOn counterpart with the same
+selector, Node/browser toolchain and two-worker ceiling. Both jobs record the
+actual toolchain and capacity. The comparison is absent from production and PR
+qualification; its work remains included in the raw qualification wall and cost.
+
+Requests leave AZ selection unrestricted within the existing stack and specify
+`region=us-east-1`. The installed v3.3.1 release's built-in topology provisions two subnet AZs;
+native receipts show allocations in `us-east-1a` and `us-east-1b`. Live stack
+parameters were not reread. The request permits every configured subnet,
+without claiming that every possible regional AZ is configured. There is no
+per-job AZ label and qualification does not provision another subnet or stack.
+Allocation logs record the selected type, market, region, AZ, AZ ID, CPU count,
+memory and launch time. Cost reports price those actual allocations.
 
 ```yaml
-runs-on: runs-on=${{ github.run_id }}-${{ matrix.check_name }}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb
+runs-on: runs-on=${{ github.run_id }}-${{ matrix.check_name }}/family=m8a.2xlarge+m8azn.3xlarge+c8a.4xlarge+m7a.2xlarge+c7a.4xlarge/cpu=8+16/ram=32+48/spot=false/retry=false/image=ubuntu24-full-x64/volume=80gb/region=us-east-1
 ```
 
-The existing GitHub App handles this label route. It does not require a new AWS
-login from the operator, though the expired operator SSO session prevents current
-administrative, selected-AZ price, and teardown verification. The public AWS feed
-supplies a regional Spot reference without authentication: $0.6586/hour for this
-type in `us-east-1`, fetched September 22, 2026, at 06:02:13 UTC. See the
-[price source, timestamp, and measured allocation estimate](/ci/routing-costs#runson-remains-unqualified).
-No interactive login is part of qualification.
+The GitHub App owns allocation. `spot=cop` retains native on-demand capacity
+fallback; `spot=false` requests on-demand directly. `retry=false` disables
+interruption reruns. An interrupted job fails rather than repeating side
+effects. See the [provider label contract](https://runs-on.com/docs/runners/labels/)
+and [measured costs and interruption limits](/ci/routing-costs#runson-remains-unqualified).
 
-`spot=true` retains the provider's automatic on-demand fallback when Spot
-capacity is unavailable. `retry=false` explicitly disables automatic
-interruption reruns: native `retry=when-interrupted` can rerun failed jobs and
-their dependents twice, after the entire failed workflow attempt completes.
-That recovery has not been measured inside the original 900-second wall, so
-an interrupted qualification can fail. Manual reruns retain the hybrid hosted
-fallback and do not establish Spot-recovery performance. See the
-[provider's retry contract](https://runs-on.com/docs/runners/labels/#retry) and
-[routing costs and qualification gaps](/ci/routing-costs#runson-remains-unqualified).
-This opt-in route makes no interruption-safe fifteen-minute claim.
+These routes require the first attempt of a canonical main push or trusted
+same-repository PR. Frozen targets and subsequent attempts retain hosted
+fallback. Qualification never changes `OPENCLAW_CI_RUNNER_BACKEND`.
+
+For exact-head qualification, dispatch `ci.yml` from the PR's canonical branch
+with `runner_backend=runson`, `release_gate=true`, `pull_request_number` and
+`target_ref` equal to its full head SHA. Workflow source and checkout must both
+match that head and existing maintainer admission must pass. Default shape uses
+PR coverage and adds one identical Blacksmith cron comparator with pinned Node
+and two workers. The comparator counts against the existing Node cap; ordinary
+PRs omit it. Cron must be selected or preflight fails before comparison allocation.
+
+Set `ci_shape=main` for push coverage and its 70-row Node cap; this omits PR
+extension fallback and the cron comparator. Neither shape expands to full-manual
+release-only work. Raw GitHub event/ref still own trust, concurrency, cache
+publication and provenance. Qualification preflight remains hosted and counts
+in raw workflow wall and hosted budgets. Untrusted, unrelated and ordinary
+manual targets cannot use the override. Final acceptance requires two green
+main-shaped and two green PR-shaped workflows at the same head, each within
+900 seconds; failed or interrupted attempts remain in the report.
 
 ### Hybrid hosted assignment guard
 

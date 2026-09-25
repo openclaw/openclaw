@@ -1,5 +1,4 @@
 // Host hook contract tests cover plugin host hook registration and runtime behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -34,11 +33,8 @@ import {
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
-import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import type {
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
@@ -57,6 +53,7 @@ import {
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
+import { withHostHookState } from "../host-hook-state.test-helpers.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
@@ -156,35 +153,6 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
     expect(actual[key]).toEqual(value);
   }
   return actual;
-}
-
-type HostHookStateFixture = {
-  stateDir: string;
-  storePath: string;
-  tempConfig: { session: { store: string } } & Record<string, unknown>;
-};
-
-async function withHostHookState(
-  prefix: string,
-  run: (fixture: HostHookStateFixture) => Promise<void>,
-  createTempConfig: (storePath: string) => HostHookStateFixture["tempConfig"] = (storePath) => ({
-    agents: { entries: { main: { default: true } } },
-    session: { store: storePath },
-  }),
-): Promise<void> {
-  const stateDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-  const storePath = path.join(stateDir, "sessions.json");
-  const tempConfig = createTempConfig(storePath);
-  try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => await run({ stateDir, storePath, tempConfig }),
-      });
-    });
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 describe("host-hook fixture plugin contract", () => {

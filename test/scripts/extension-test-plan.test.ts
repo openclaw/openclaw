@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import { createChangedExtensionFallbackShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
@@ -20,6 +21,52 @@ const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
+  it("separates measured extension children in the final fallback plan", () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL("./fixtures/ci-measured-compact-jobs.json", import.meta.url), "utf8"),
+    ) as { extensionTailGroups: Array<{ configs: string[]; includePatterns: string[] }> };
+    const files = fixture.extensionTailGroups.flatMap((group) => group.includePatterns);
+    const inventory = vi
+      .spyOn(extensionTestPlan, "listExtensionTestFilesForRoots")
+      .mockReturnValue(files);
+    try {
+      const jobs = createChangedExtensionFallbackShards([files[0]!]);
+      expect(jobs).toHaveLength(2);
+      expect(
+        jobs.flatMap(
+          (job) =>
+            job.groups?.flatMap((group) => group.includePatterns ?? []) ??
+            job.includePatterns ??
+            [],
+        ),
+      ).toEqual(files);
+      expect(jobs.map((job) => job.predictedSeconds)).toEqual([319, 232]);
+      expect(
+        jobs.every(
+          (job) => job.runner === "blacksmith-8vcpu-ubuntu-2404" && job.planConcurrency === 1,
+        ),
+      ).toBe(true);
+      for (const group of fixture.extensionTailGroups) {
+        expect(
+          extensionTestPlan.estimateExtensionTestCost(
+            group.configs[0]!,
+            10,
+            group.includePatterns.toReversed(),
+          ),
+        ).toBe(76);
+        expect(
+          extensionTestPlan.estimateExtensionTestCost(
+            group.configs[0]!,
+            9,
+            group.includePatterns.slice(1),
+          ),
+        ).toBe(69);
+      }
+    } finally {
+      inventory.mockRestore();
+    }
+  });
+
   it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {

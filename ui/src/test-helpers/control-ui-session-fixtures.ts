@@ -320,12 +320,63 @@ export function createControlUiSessionFixtures(
     }
     return { ...response, aborted, runIds };
   };
-  const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
+  const materialize = (params: unknown, response: unknown): void => {
+    if (!isRecord(response)) {
+      return;
+    }
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
+    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
     const value = record(key);
-    value.row = { ...value.row, ...fields, key: canonicalKey(key) };
+    const entry = isRecord(response.entry) ? response.entry : {};
+    const sessionId =
+      typeof response.sessionId === "string"
+        ? response.sessionId
+        : typeof entry.sessionId === "string"
+          ? entry.sessionId
+          : value.row.sessionId;
+    const sameSession = sessionId === value.row.sessionId;
+    const startedRunId =
+      response.runStarted === true && typeof response.runId === "string" ? response.runId : null;
+    const next: ControlUiSessionFixture = {
+      ...(sameSession ? value.row : {}),
+      ...entry,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(label ? { displayName: label, label } : {}),
+      hasActiveRun: response.runStarted === true,
+      status: response.runStarted === true ? "running" : "done",
+      key: canonicalKey(key),
+    };
+    if (sameSession) {
+      // Replayed creation ACKs cannot replace edits or a run's terminal outcome.
+      for (const field of value.changed) {
+        next[field] = value.row[field];
+      }
+    } else {
+      const incomingRun =
+        startedRunId === null ? undefined : trackedRuns.get(canonicalKey(key))?.get(startedRunId);
+      value.changed.clear();
+      trackedRuns.delete(canonicalKey(key));
+      // Only the returned run's receipt follows identity adoption, including an early abort.
+      if (startedRunId !== null && incomingRun) {
+        runsFor(canonicalKey(key)).set(startedRunId, { ...incomingRun, acknowledged: false });
+      }
+      delete value.lastRunEventSequence;
+    }
+    value.row = next;
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
     materializedSequence += 1;
+    if (startedRunId !== null) {
+      trackRun(key, startedRunId, "running");
+    }
   };
   const list = (wireRows?: unknown[]) => {
     const rows = wireRows ?? [...listed].map(read);

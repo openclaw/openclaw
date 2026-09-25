@@ -1690,7 +1690,7 @@ function installControlUiMockGateway(
       return recordSessionsPatchMany(params, response);
     }
     if (method === "sessions.create" || method === "sessions.catalog.continue") {
-      recordMaterializedSession(params, response);
+      sessions.materialize(params, response);
     }
     return response;
   }
@@ -1737,29 +1737,6 @@ function installControlUiMockGateway(
       pendingApprovals.set(method, queue);
     }
     socket?.deliver({ event, payload, seq: ++seq, type: "event" });
-  }
-
-  function recordMaterializedSession(params: unknown, response: unknown): void {
-    if (!isRecord(response)) {
-      return;
-    }
-    const key =
-      typeof response.key === "string"
-        ? response.key
-        : typeof response.sessionKey === "string"
-          ? response.sessionKey
-          : "";
-    if (!key.trim()) {
-      return;
-    }
-    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
-    sessions.materialize(key, {
-      ...(isRecord(response.entry) ? response.entry : {}),
-      ...(typeof response.sessionId === "string" ? { sessionId: response.sessionId } : {}),
-      ...(label ? { displayName: label, label } : {}),
-      hasActiveRun: response.runStarted === true,
-      status: response.runStarted === true ? "running" : "done",
-    });
   }
 
   function stopRepeatingSessionEvents(): void {
