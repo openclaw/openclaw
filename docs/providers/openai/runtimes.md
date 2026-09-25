@@ -184,6 +184,14 @@ outbound media and attached to the final reply. Limits are 5 MiB per file,
 10 MiB total, and 50 files per turn in each direction. Model text cannot select a
 Gateway file path for transfer.
 
+File transfer in this MVP supports the hosted Linux VM with a Linux Gateway
+using native Linux state storage or a Docker-managed state volume. macOS host
+bind-mounted Gateway state and Windows Gateways are outside this support scope.
+If a returned attachment is missing, check the Gateway logs and storage setup;
+on macOS, use a Docker-managed state volume. Completed assistant text is retained
+when output transfer fails, but it may still claim that a file was attached.
+Confirm that the attachment is present before treating the transfer as complete.
+
 Apps, connectors, image generation, custom context engines, and self-hosted
 executors are outside this prototype's scope. Admitted turns are marked unsafe
 for replay because hosted commands or Gateway functions may already have run.
