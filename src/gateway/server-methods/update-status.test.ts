@@ -8,7 +8,11 @@ import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
-import { resetUpdateStatusState, setUpdateScheduleCache } from "../../infra/update-status-state.js";
+import {
+  getUpdateSchedule,
+  resetUpdateStatusState,
+  setUpdateScheduleCache,
+} from "../../infra/update-status-state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -31,6 +35,10 @@ import { updateStatusHandlers } from "./update-status.js";
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateSchedule(),
   refreshGatewayUpdateStatus: async () => {},
 }));
 
