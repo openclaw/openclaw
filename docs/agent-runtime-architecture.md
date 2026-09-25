@@ -70,6 +70,8 @@ including previews. The file-tool caller keeps the mutation queue, filesystem
 access, persisted-byte verification, and authority checks; it revalidates authority
 and cancellation after planning before changing files. Write receipts retain their
 existing size and edit-distance limits.
+The shared runtime-process registry resolves the planning worker in both the
+installed package and the sealed portable-worker bundle.
 
 Admission includes queued, preparing, and running tasks. Each pool defaults to
 128 pending tasks and 256 MiB of producer-reported retained input; compute pools

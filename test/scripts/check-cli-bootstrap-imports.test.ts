@@ -31,6 +31,7 @@ const {
 
 const tempRoots: string[] = [];
 const workerDeployArtifactNames = [
+  "file-tool-planning.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",
   "service-child-group-anchor.mjs",
@@ -625,6 +626,7 @@ describe("check-cli-bootstrap-imports", () => {
     ["two", undefined],
     ["three", undefined],
     ["three", "github-exec-launcher.mjs"],
+    ["default", "file-tool-planning.worker.mjs"],
     ["default", "github-exec-launcher.mjs"],
     ["default", "service-child-group-anchor.mjs"],
     ["default", "service-child-relay.mjs"],

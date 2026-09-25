@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import { resolveRuntimeWorkerUrl } from "../../../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../../infra/worker-task-pool.js";
 import type { Edit, EditDiffError, EditDiffResult } from "./edit-diff.js";
 import type {
@@ -11,11 +11,7 @@ import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 const pool = new WorkerTaskPool<FileToolPlanningRequest, FileToolPlanningResult>({
   sharedCompute: true,
-  workerUrl: resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "file-tool-planning.worker",
-    distWorkerPath: "agents/file-tool-planning.worker.js",
-  }),
+  workerUrl: resolveRuntimeProcessEntrypointUrl("fileToolPlanning"),
 });
 
 function plan(input: FileToolPlanningRequest, signal?: AbortSignal) {

@@ -131,6 +131,8 @@ export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-comma
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
+export { createEditTool } from "../agents/sessions/tools/edit.js";
+export { createWriteTool } from "../agents/sessions/tools/write.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
 export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -377,7 +379,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
         ).toEqual([]);
       }));
 
-    it("delivers resized computer observations and image operations from a relocated archive", async () => {
+    it("delivers image operations and file edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
       const relocated = path.join(root, "bundle");
       fs.mkdirSync(relocated);
@@ -397,13 +399,26 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 const [entry, imagePath] = process.argv.slice(1);
-for (const dependency of ["rastermill", "@silvia-odwyer/photon-node"]) {
+for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker } = await import(pathToFileURL(entry).href);
+const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
+const filePath = imagePath + ".txt";
+const written = await createWriteTool(process.cwd()).execute("portable-write", {
+  path: filePath, content: "const label = “hello”; // keep — unchanged\\n",
+});
+assert.equal(written.details.created, true);
+assert.match(written.details.patch, /\\+const label = “hello”/);
+const edited = await createEditTool(process.cwd()).execute("portable-edit", {
+  path: filePath,
+  edits: [{ oldText: 'const label = "hello";', newText: 'const label = "hi";' }],
+});
+assert.equal(edited.details.changed, true);
+assert.match(edited.details.diff, /\\+1 const label = "hi"; \\/\\/ keep — unchanged/);
+assert.equal(fs.readFileSync(filePath, "utf8"), 'const label = "hi"; // keep — unchanged\\n');
 for (let index = 0; index < 3; index++) {
   const projected = await projectComputerActResult({
     action: "get_window_state",
@@ -430,7 +445,7 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated computer observations and image operations passed");
+console.log("relocated computer observations, image operations, and file edits passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
@@ -455,7 +470,7 @@ console.log("relocated computer observations and image operations passed");
         },
       );
       expect(result.stdout).toContain(
-        "relocated computer observations and image operations passed",
+        "relocated computer observations, image operations, and file edits passed",
       );
     });
 

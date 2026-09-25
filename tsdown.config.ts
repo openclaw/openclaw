@@ -461,7 +461,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
-    "agents/file-tool-planning.worker": "src/agents/sessions/tools/file-tool-planning.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
@@ -966,6 +965,9 @@ const configs: UserConfig[] = [
     false,
   ),
   workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig({
+    "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
+  }),
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
