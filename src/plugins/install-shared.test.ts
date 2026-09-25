@@ -7,23 +7,15 @@ import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 describe("installPluginDirectoryIntoExtensions", () => {
   const tempRoots = createSyncSuiteTempRootTracker("openclaw-install-shared");
-
   afterAll(() => tempRoots.cleanup());
 
-  it("preserves structured warnings returned by a staged dependency scan", async () => {
+  function fixture(contents = "export default {};\n") {
     const fixtureRoot = tempRoots.makeTempDir();
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(fixtureRoot, "extensions", "demo");
     fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "index.js"), "export default {};\n");
-    const installPolicyWarning = {
-      targetName: "demo",
-      targetType: "plugin" as const,
-      requestMode: "install" as const,
-      reason: "Review the installed dependency tree",
-    };
-
-    const result = await installPluginDirectoryIntoExtensions({
+    fs.writeFileSync(path.join(sourceDir, "index.js"), contents);
+    return {
       sourceDir,
       targetDir,
       pluginId: "demo",
@@ -35,6 +27,20 @@ describe("installPluginDirectoryIntoExtensions", () => {
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: false,
       depsLogMessage: "Installing dependencies…",
+    } satisfies Parameters<typeof installPluginDirectoryIntoExtensions>[0];
+  }
+
+  it("preserves structured warnings returned by a staged dependency scan", async () => {
+    const options = fixture();
+    const installPolicyWarning = {
+      targetName: "demo",
+      targetType: "plugin" as const,
+      requestMode: "install" as const,
+      reason: "Review the installed dependency tree",
+    };
+
+    const result = await installPluginDirectoryIntoExtensions({
+      ...options,
       afterInstall: async () => ({
         ok: false,
         error: installPolicyWarning.reason,
@@ -49,30 +55,16 @@ describe("installPluginDirectoryIntoExtensions", () => {
       code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
       installPolicyWarning,
     });
-    expect(fs.existsSync(targetDir)).toBe(false);
+    expect(fs.existsSync(options.targetDir)).toBe(false);
   });
 
   it("reviews the final staged artifact after source-copy mutations", async () => {
-    const fixtureRoot = tempRoots.makeTempDir();
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "extensions", "demo");
-    fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "index.js"), "original capabilities");
+    const options = fixture("original capabilities");
     let reviewedArtifactDir: string | undefined;
     let reviewedArtifactContents: string | undefined;
 
     const result = await installPluginDirectoryIntoExtensions({
-      sourceDir,
-      targetDir,
-      pluginId: "demo",
-      extensions: ["index.js"],
-      logger: {},
-      timeoutMs: 1_000,
-      mode: "install",
-      dryRun: false,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing dependencies…",
+      ...options,
       afterCopy: async (installedDir) => {
         await fs.promises.writeFile(path.join(installedDir, "index.js"), "final capabilities");
       },
@@ -86,39 +78,29 @@ describe("installPluginDirectoryIntoExtensions", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(reviewedArtifactDir).not.toBe(sourceDir);
+    expect(reviewedArtifactDir).not.toBe(options.sourceDir);
     expect(reviewedArtifactContents).toBe("final capabilities");
-    expect(fs.readFileSync(path.join(targetDir, "index.js"), "utf8")).toBe("final capabilities");
-    expect(fs.readFileSync(path.join(sourceDir, "index.js"), "utf8")).toBe("original capabilities");
+    expect(fs.readFileSync(path.join(options.targetDir, "index.js"), "utf8")).toBe(
+      "final capabilities",
+    );
+    expect(fs.readFileSync(path.join(options.sourceDir, "index.js"), "utf8")).toBe(
+      "original capabilities",
+    );
   });
 
   it("preserves the original consent rejection while rolling back the staged artifact", async () => {
-    const fixtureRoot = tempRoots.makeTempDir();
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "extensions", "demo");
-    fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "index.js"), "export default {};\n");
+    const options = fixture();
     const consentRejection = new Error("plugin capabilities require review");
 
     await expect(
       installPluginDirectoryIntoExtensions({
-        sourceDir,
-        targetDir,
-        pluginId: "demo",
-        extensions: ["index.js"],
-        logger: {},
-        timeoutMs: 1_000,
-        mode: "install",
-        dryRun: false,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
-        depsLogMessage: "Installing dependencies…",
+        ...options,
         onBeforePluginArtifactCommit: async ({ stagedArtifactDir }) => {
-          expect(stagedArtifactDir).not.toBe(sourceDir);
+          expect(stagedArtifactDir).not.toBe(options.sourceDir);
           throw consentRejection;
         },
       }),
     ).rejects.toBe(consentRejection);
-    expect(fs.existsSync(targetDir)).toBe(false);
+    expect(fs.existsSync(options.targetDir)).toBe(false);
   });
 });
