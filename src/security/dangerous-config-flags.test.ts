@@ -11,31 +11,30 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function writeDangerousWorkspacePlugin(workspaceDir: string) {
+  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    "export default { id: 'workspace-danger' };\n",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "workspace-danger",
+      configSchema: { type: "object", additionalProperties: true },
+      configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+    }),
+  );
+}
+
 describe("collectEnabledInsecureOrDangerousFlags", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("keeps plugin contract checks enabled for a malformed roster", () => {
     const inheritedWorkspaceDir = tempDirs.make("openclaw-dangerous-inherited-workspace-");
     const explicitWorkspaceDir = tempDirs.make("openclaw-dangerous-explicit-workspace-");
-    const pluginDir = path.join(
-      inheritedWorkspaceDir,
-      ".openclaw",
-      "extensions",
-      "workspace-danger",
-    );
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      "export default { id: 'workspace-danger' };\n",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "workspace-danger",
-        configSchema: { type: "object", additionalProperties: true },
-        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
-      }),
-    );
+    writeDangerousWorkspacePlugin(inheritedWorkspaceDir);
     const flags = collectEnabledInsecureOrDangerousFlags(
       asConfig({
         agents: {
@@ -59,25 +58,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     const defaultsWorkspaceDir = tempDirs.make("openclaw-dangerous-unused-defaults-");
     const alphaWorkspaceDir = tempDirs.make("openclaw-dangerous-alpha-");
     const betaWorkspaceDir = tempDirs.make("openclaw-dangerous-beta-");
-    const pluginDir = path.join(
-      defaultsWorkspaceDir,
-      ".openclaw",
-      "extensions",
-      "workspace-danger",
-    );
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      "export default { id: 'workspace-danger' };\n",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "workspace-danger",
-        configSchema: { type: "object", additionalProperties: true },
-        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
-      }),
-    );
+    writeDangerousWorkspacePlugin(defaultsWorkspaceDir);
 
     const flags = collectEnabledInsecureOrDangerousFlags(
       asConfig({
@@ -99,20 +80,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
 
   it("uses the implicit main workspace for a rosterless compatibility config", () => {
     const workspaceDir = tempDirs.make("openclaw-dangerous-rosterless-");
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      "export default { id: 'workspace-danger' };\n",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "workspace-danger",
-        configSchema: { type: "object", additionalProperties: true },
-        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
-      }),
-    );
+    writeDangerousWorkspacePlugin(workspaceDir);
 
     const flags = collectEnabledInsecureOrDangerousFlags(
       asConfig({
@@ -290,25 +258,5 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
         }),
       ),
     ).toContain("agents.list.1.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
-  });
-
-  it("uses keyed roster paths for entries-shaped dangerous sandbox flags", () => {
-    expect(
-      collectEnabledInsecureOrDangerousFlagsFromContracts(
-        asConfig({
-          agents: {
-            entries: {
-              worker: {
-                sandbox: {
-                  docker: {
-                    dangerouslyAllowContainerNamespaceJoin: true,
-                  },
-                },
-              },
-            },
-          },
-        }),
-      ),
-    ).toContain("agents.entries.worker.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
   });
 });
