@@ -154,7 +154,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
   const preflight = await inspectPaths();
   const acceptReconciled = async (
     reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
-    finalPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
+    preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
   ) => {
     const actual = await readActualWorkspaceManifest({
       root,
@@ -162,7 +162,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
       preserveDirectories,
       includePaths,
     });
-    finalPreflight ??= await inspectPaths();
+    const finalPreflight = preparedPreflight ?? (await inspectPaths());
     await assertActualWorkspaceManifest({
       root,
       expectedRef: actual.manifestRef,

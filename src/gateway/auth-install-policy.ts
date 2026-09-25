@@ -16,6 +16,8 @@ export function shouldRequireGatewayTokenForInstall(
     case "none":
     case "trusted-proxy":
       return false;
+    case undefined:
+      break;
   }
 
   if (hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults)) {

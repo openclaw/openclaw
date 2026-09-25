@@ -214,7 +214,7 @@ function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown>
 }
 
 function transcriptMessageTarget(
-  event: TranscriptEvent | undefined,
+  event: TranscriptEvent,
 ): { messageId: string; message: Record<string, unknown> } | null {
   const message = event ? transcriptEventMessage(event) : undefined;
   const messageId = event ? transcriptEventId(event) : undefined;

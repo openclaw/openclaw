@@ -78,12 +78,16 @@ export function resolveAbortSessionKey(params: {
   if (params.activeRunSessionKey) {
     return params.activeRunSessionKey;
   }
-  const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
+  const candidates = new Set([
+    params.canonicalKey,
+    params.requestedKey,
+    ...(params.aliasKeys ?? []),
+  ]);
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.controlUiVisible === false) {
       continue;
     }
-    if (candidates.includes(active.sessionKey)) {
+    if (candidates.has(active.sessionKey)) {
       const owner = resolveChatRunOwnerAgentId({
         agentId: active.agentId,
         sessionKey: active.sessionKey,

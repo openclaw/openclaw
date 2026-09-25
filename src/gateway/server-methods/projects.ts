@@ -449,12 +449,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(
           true,
           {
-            projects: projects.map((project) => ({
-              id: project.id,
-              displayName: project.displayName,
-              source: project.source,
-              ...(project.agentId ? { agentId: project.agentId } : {}),
-            })),
+            projects: projects.map(({ id, displayName, source, agentId }) =>
+              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
+            ),
             ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },
           undefined,
