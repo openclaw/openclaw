@@ -898,7 +898,14 @@ describe("SMS inbound MMS materialization", () => {
       expect.objectContaining({
         maxBytes: 5 * 1024 * 1024,
         requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+        ssrfPolicy: {
+          hostnameAllowlist: [
+            "api.twilio.com",
+            "mms.twiliocdn.com",
+            "media.twiliocdn.com",
+            "s3-external-1.amazonaws.com",
+          ],
+        },
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
@@ -1058,5 +1065,120 @@ describe("SMS inbound MMS materialization", () => {
     await expect(pending).rejects.toBe(timeoutReason);
     expect(timeoutSpy).toHaveBeenCalledWith(4 * 60_000);
     timeoutSpy.mockRestore();
+  });
+
+  it("allows Twilio's media CDN redirect targets so the download survives the 307 hop", async () => {
+    const saveRemoteMedia = vi.fn(async () => ({
+      path: "/tmp/mms-1.jpg",
+      size: 1024,
+      contentType: "image/jpeg",
+    }));
+
+    await materializeSmsInboundMedia({
+      account: createAccount(),
+      msg: {
+        accountSid: ACCOUNT_SID,
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "photo",
+        messageSid: MESSAGE_SID,
+        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+      },
+      mediaRuntime: { media: { saveRemoteMedia } } as never,
+    });
+
+    const allowlist = saveRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy?.hostnameAllowlist ?? [];
+    // Twilio redirects the media instance URL off api.twilio.com to the host
+    // that stores the bytes; the guard re-checks the allowlist on that hop.
+    expect(allowlist).toContain("api.twilio.com");
+    expect(allowlist).toContain("mms.twiliocdn.com");
+    expect(allowlist).toContain("media.twiliocdn.com");
+    expect(allowlist).toContain("s3-external-1.amazonaws.com");
+  });
+
+  it("logs why a declared attachment never produced a download attempt", async () => {
+    const saveRemoteMedia = vi.fn();
+    const warn = vi.fn();
+
+    const result = await materializeSmsInboundMedia({
+      account: createAccount(),
+      msg: {
+        accountSid: ACCOUNT_SID,
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "photo",
+        messageSid: MESSAGE_SID,
+        media: [],
+        unavailableMediaCount: 1,
+      },
+      mediaRuntime: { media: { saveRemoteMedia } } as never,
+      log: { warn },
+    });
+
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expect(result.body).toContain("[1 Twilio MMS attachment unavailable]");
+    // Without this warn the transcript notice is the only trace of the failure.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("declared 1 attachment(s) with no usable media URL"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(MESSAGE_SID));
+  });
+
+  it("reports the underlying fetch failure instead of only the unavailable notice", async () => {
+    const saveRemoteMedia = vi.fn(async () => {
+      throw new MediaFetchError("http_error", "Twilio rejected the media request", {
+        status: 401,
+      });
+    });
+    const warn = vi.fn();
+
+    const result = await materializeSmsInboundMedia({
+      account: createAccount(),
+      msg: {
+        accountSid: ACCOUNT_SID,
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "photo",
+        messageSid: MESSAGE_SID,
+        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+      },
+      mediaRuntime: { media: { saveRemoteMedia } } as never,
+      log: { warn },
+    });
+
+    expect(result.body).toContain("[1 Twilio MMS attachment unavailable]");
+    const message = warn.mock.calls.map(([entry]) => entry).join("\n");
+    expect(message).toContain("code=http_error");
+    expect(message).toContain("status=401");
+    expect(message).toContain("Twilio rejected the media request");
+  });
+
+  it("reports a blocked redirect target rather than a bare unavailable notice", async () => {
+    const saveRemoteMedia = vi.fn(async () => {
+      throw new MediaFetchError("fetch_failed", "Failed to fetch media", {
+        cause: new SsrFBlockedError(
+          "Domain policy: Blocked hostname (not in allowlist): mms.twiliocdn.com",
+        ),
+      });
+    });
+    const warn = vi.fn();
+
+    await materializeSmsInboundMedia({
+      account: createAccount(),
+      msg: {
+        accountSid: ACCOUNT_SID,
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "photo",
+        messageSid: MESSAGE_SID,
+        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+      },
+      mediaRuntime: { media: { saveRemoteMedia } } as never,
+      log: { warn },
+    });
+
+    const message = warn.mock.calls.map(([entry]) => entry).join("\n");
+    expect(message).toContain("code=fetch_failed");
+    expect(message).toContain("Failed to fetch media");
   });
 });
