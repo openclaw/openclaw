@@ -20,7 +20,11 @@ import {
 } from "./plugin-command-registry.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import type { PluginCommandContext, PluginCommandResult } from "./types.js";
+import type {
+  PluginCommandContext,
+  PluginCommandConversationForkHost,
+  PluginCommandResult,
+} from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
 export type { PluginCommandReplyOptions };
@@ -49,6 +53,8 @@ export type PluginCommandDispatchContext = Readonly<{
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
+  messageId?: string;
+  replyToId?: string;
   diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
   diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
@@ -60,6 +66,7 @@ export type PluginCommandDispatchContext = Readonly<{
     ) => ReturnType<
       NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
     >;
+    conversationFork?: PluginCommandConversationForkHost;
   };
 }>;
 

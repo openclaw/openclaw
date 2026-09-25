@@ -52,6 +52,7 @@ function touchCurrentConversationBindingInDatabase(
     const maxAgeExpiresAt = maxAgeMs > 0 ? current.boundAt + maxAgeMs : undefined;
     return {
       bindingId: `${conversation.accountId}:${conversation.conversationId}`,
+      generation: current.generation,
       targetSessionKey: current.targetSessionKey,
       targetKind: input.accountPolicy.targetKinds[current.targetKind],
       conversation,

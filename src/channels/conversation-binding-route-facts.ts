@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { matchesSessionBindingIdentity } from "../infra/outbound/session-binding-identity.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -50,7 +51,10 @@ export function resolveConversationBindingAgentId(
 }
 
 type BindingIdentity = Readonly<
-  Pick<SessionBindingRecord, "bindingId" | "boundAt" | "targetSessionKey" | "targetKind"> & {
+  Pick<
+    SessionBindingRecord,
+    "bindingId" | "generation" | "boundAt" | "targetSessionKey" | "targetKind"
+  > & {
     bindingConversation: Readonly<ConversationRef>;
   }
 >;
@@ -111,6 +115,7 @@ export function withConversationBindingRouteFacts<
     const identity = {
       ...scope,
       bindingId: binding.bindingId,
+      generation: binding.generation,
       boundAt: binding.boundAt,
       targetSessionKey: binding.targetSessionKey,
       targetKind: binding.targetKind,
@@ -163,14 +168,10 @@ export function matchesConversationBindingRouteFacts(
   }
   const binding = selection.binding;
   if (
-    binding.bindingId !== expected.bindingId ||
-    binding.boundAt !== expected.boundAt ||
-    binding.targetSessionKey !== expected.targetSessionKey ||
-    binding.targetKind !== expected.targetKind ||
-    binding.conversation.channel !== expected.bindingConversation.channel ||
-    binding.conversation.accountId !== expected.bindingConversation.accountId ||
-    binding.conversation.conversationId !== expected.bindingConversation.conversationId ||
-    binding.conversation.parentConversationId !== expected.bindingConversation.parentConversationId
+    !matchesSessionBindingIdentity(
+      { ...expected, conversation: expected.bindingConversation },
+      binding,
+    )
   ) {
     return false;
   }

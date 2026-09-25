@@ -108,12 +108,25 @@ export type PluginCommandContext = {
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
+    /** Canonical invocation metadata only; not permission to fork, bind, or restore. */
+    getCurrentConversation?: () => Readonly<{
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+    }> | null;
     compactCurrent?: () => Promise<{
       compacted: boolean;
       reason?: string;
       tokensBefore?: number;
       tokensAfter?: number;
     }>;
+    /**
+     * Invocation-bound conversation branching capability. The host owns every
+     * session, placement, replay, and restore effect; plugins receive only
+     * opaque tickets and bounded receipts.
+     */
+    conversationFork?: PluginCommandConversationForkHost;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
@@ -126,6 +139,33 @@ export type PluginCommandContext = {
   ) => Promise<PluginConversationBindingRequestResult>;
   detachConversationBinding: () => Promise<{ removed: boolean }>;
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
+type PluginCommandConversationForkPrepareResult =
+  | {
+      status: "ready";
+      ticket: string;
+      child: boolean;
+      current: boolean;
+      shared: boolean;
+      source: "tip" | "reply";
+    }
+  | { status: "blocked"; reason: string }
+  | { status: "pending" };
+
+type PluginCommandConversationForkResult = Readonly<Record<string, unknown>> & {
+  status: string;
+};
+
+export type PluginCommandConversationForkHost = {
+  version: 1;
+  prepare: (params?: { title?: string }) => Promise<PluginCommandConversationForkPrepareResult>;
+  execute: (params: {
+    ticket: string;
+    placement: "child" | "current";
+  }) => Promise<PluginCommandConversationForkResult>;
+  back: () => Promise<PluginCommandConversationForkResult>;
+  status: () => Promise<PluginCommandConversationForkResult>;
 };
 
 /**

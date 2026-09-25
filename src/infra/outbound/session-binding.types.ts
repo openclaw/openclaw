@@ -39,6 +39,8 @@ export type SessionBindingScope = Pick<ConversationRef, "channel" | "accountId">
  */
 export type SessionBindingRecord = {
   bindingId: string;
+  /** Non-reusable owner generation for mutation-safe comparisons. */
+  generation?: string;
   targetSessionKey: string;
   targetKind: BindingTargetKind;
   conversation: ConversationRef;

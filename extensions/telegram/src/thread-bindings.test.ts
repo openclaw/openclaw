@@ -190,6 +190,36 @@ describe("telegram thread bindings", () => {
     },
   );
 
+  it("allows Bot API child-topic creation in a direct-message chat", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    createForumTopicMock.mockResolvedValueOnce({
+      chatId: "6566057320",
+      topicId: 91,
+      name: "DM fork",
+    });
+
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:main:dm-fork",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "6566057320",
+        },
+        placement: "child",
+        metadata: { threadName: "DM fork" },
+      }),
+    ).resolves.toMatchObject({
+      conversation: { conversationId: "6566057320:topic:91" },
+    });
+    expect(createForumTopicMock).toHaveBeenCalledWith("6566057320", "DM fork", expect.any(Object));
+  });
+
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
     const stopped = createTelegramThreadBindingManager({
       accountId: "manager-lifecycle",

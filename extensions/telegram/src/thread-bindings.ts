@@ -503,12 +503,10 @@ export function createTelegramThreadBindingManager(params: {
           );
           return null;
         }
-        if (!chatId.startsWith("-")) {
-          logVerbose(
-            `telegram: child bind failed: conversationId "${chatId}" looks like a bare topic ID, not a group chat ID (expected to start with "-"). Provide a full chatId:topic:topicId conversationId or set parentConversationId to the group chat ID.`,
-          );
-          return null;
-        }
+        // Telegram Bot API 10.3 supports forum topics in bot direct-message
+        // chats as well as supergroups. The API remains the authority: an
+        // ordinary DM without topic support fails cleanly and callers may use
+        // current-conversation fallback.
         const threadName =
           (normalizeOptionalString(metadata.threadName) ?? "") ||
           (normalizeOptionalString(metadata.label) ?? "") ||

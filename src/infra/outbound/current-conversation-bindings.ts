@@ -1,5 +1,6 @@
 // Generic current-conversation bindings persist lightweight conversation ->
 // session links for plugin channels without a custom binding adapter.
+import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -301,6 +302,7 @@ export async function bindGenericCurrentConversation(
     assertCurrent?.();
     return {
       bindingId: buildBindingId(conversation),
+      generation: randomUUID(),
       targetSessionKey,
       targetKind: input.targetKind,
       conversation,

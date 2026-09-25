@@ -96,6 +96,12 @@ export const handlePluginCommand: CommandHandler = async (
         ? params.ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
+    messageId:
+      normalizeOptionalString(params.ctx.MessageSidFull) ??
+      normalizeOptionalString(params.ctx.MessageSid),
+    replyToId:
+      normalizeOptionalString(params.ctx.ReplyToIdFull) ??
+      normalizeOptionalString(params.ctx.ReplyToId),
     ...(sessionTarget
       ? {
           runtimeContext: {

@@ -18,8 +18,11 @@ import {
   getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
+import { createPluginCommandConversationForkHost } from "./plugin-command-conversation-fork.js";
+import { createCommandConversationReader } from "./plugin-command-conversation.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
@@ -96,6 +99,7 @@ function buildRuntimeContext(
     sessionKey,
   });
   const compactCurrent = params.runtimeContext?.compactCurrent;
+  const conversationFork = params.runtimeContext?.conversationFork;
   if (!sessionKey && !agentId) {
     return undefined;
   }
@@ -134,6 +138,7 @@ function buildRuntimeContext(
           },
         }
       : {}),
+    ...(conversationFork ? { conversationFork } : {}),
   };
 }
 
@@ -208,6 +213,18 @@ export async function executeRegisteredPluginCommand(
           assertAdmittedOwner?.();
         }
       : undefined;
+  const conversationFork =
+    isAuthorizedSender && bindingConversation && params.agentId && params.sessionKey
+      ? createPluginCommandConversationForkHost({
+          config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          conversation: bindingConversation,
+          replyToId: params.replyToId,
+          signal: commandInvocationAbort.signal,
+          assertOwnerCurrent,
+        })
+      : undefined;
   const ctx: PluginCommandContext = {
     senderId,
     channel,
@@ -230,12 +247,16 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext(
-      command,
-      params,
-      commandInvocationAbort.signal,
-      assertOwnerCurrent,
-    ),
+    runtimeContext: {
+      ...buildRuntimeContext(command, params, commandInvocationAbort.signal, assertOwnerCurrent),
+      ...(conversationFork ? { conversationFork } : {}),
+      getCurrentConversation: createCommandConversationReader({
+        conversation: bindingConversation,
+        isAuthorizedSender,
+        signal: commandInvocationAbort.signal,
+        isRegistryCurrent: () => !isPluginRegistryRetired(registry),
+      }),
+    },
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),
