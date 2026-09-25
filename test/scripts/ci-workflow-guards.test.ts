@@ -1248,16 +1248,31 @@ AFTER_CD
     expect(workflow.jobs.preflight.outputs.run_ios_screenshots).toBe(
       "${{ steps.changed_scope.outputs.run_ios_screenshots }}",
     );
-    const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(workflowSource).toContain(
-      "OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
-    );
-    expect(workflowSource).toContain(
-      "OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
-    );
     const manifestEnv = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
     ).env;
+    for (const [environmentKey, scopeKey] of [
+      ["OPENCLAW_CI_RUN_MACOS", "run_macos"],
+      ["OPENCLAW_CI_RUN_IOS_BUILD", "run_ios_build"],
+    ] as const) {
+      for (const [eventName, releaseGate, selected, expected] of [
+        ["schedule", false, false, true],
+        ["workflow_dispatch", false, false, true],
+        ["workflow_dispatch", true, false, false],
+        ["workflow_dispatch", true, true, true],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(manifestEnv[environmentKey], {
+            eventName,
+            releaseGate,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            steps: { changed_scope: { outputs: { [scopeKey]: String(selected) } } },
+          }),
+          `${environmentKey}/${eventName}/${releaseGate}/${selected}`,
+        ).toBe(String(expected));
+      }
+    }
     for (const [
       requestedRunnerBackend,
       isReleaseGate,
@@ -10047,7 +10062,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_native_i18n }}",
     );
     expect(manifestStep.env.OPENCLAW_CI_RUN_NATIVE_I18N).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
+      "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
     );
     expect(sourceStep.run).toContain("pnpm native:i18n:verify");
     expect(sourceStep.run).toContain("Historical release targets");
