@@ -242,6 +242,10 @@ active snapshot entries, deduplicating in endpoint order;
 catalog consumers. Keep seed lifecycle policy and model-specific decoration
 in the owning plugin. Derive static fallback eligibility after refreshing
 metadata so the first failed or fully filtered discovery uses current status.
+When an accepted upstream row omits `status`, the selected seed retains its
+`preview` or `deprecated` lifecycle; an explicit upstream lifecycle overrides
+the seed. This is the compatibility contract for callers that use the default
+seed, while `upstreamSeed` lets an owner opt into a different policy.
 Public metadata never establishes account entitlement or expands the
 credential scope of discovery.
 

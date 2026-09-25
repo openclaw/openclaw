@@ -4,12 +4,22 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
-import type { ModelDefinitionConfig } from "./provider-model-shared.js";
+import {
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
+  type ProviderCatalogSnapshot,
+} from "./provider-catalog-snapshot.internal.js";
+import type {
+  ProjectedUpstreamProviderCatalogModel,
+} from "./provider-catalog-live-normalize.internal.js";
 
-function buildModel(id: string): ModelDefinitionConfig {
+function buildModel(id: string): ProjectedUpstreamProviderCatalogModel {
   return {
     id,
     name: id,
+    provider: "opencode-go",
+    api: "openai-completions",
+    baseUrl: "https://opencode.ai/zen/go/v1",
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -20,6 +30,84 @@ function buildModel(id: string): ModelDefinitionConfig {
 
 describe("live provider catalog projection", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
+
+  it("preserves preview lifecycle when projecting OpenCode metadata", () => {
+    const model = buildModel("preview-model");
+    const seed: ProviderCatalogSnapshot = new Map([[model.id, { model, status: "preview" }]]);
+    const snapshot = projectUpstreamProviderCatalogSnapshot({
+      providerId: "opencode-go",
+      provider: {
+        id: "opencode-go",
+        api: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: {
+          [model.id]: {
+            id: model.id,
+            limit: { context: 128_000, output: model.maxTokens },
+          },
+        },
+      },
+      seed,
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+      defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    });
+
+    expect(snapshot.get(model.id)).toMatchObject({ status: "preview" });
+    expect(
+      projectProviderCatalogSnapshotRows([{ id: model.id, object: "model" }], snapshot),
+    ).toEqual([expect.objectContaining({ id: model.id })]);
+
+    const explicitPreview = projectUpstreamProviderCatalogSnapshot({
+      providerId: "opencode-go",
+      provider: {
+        id: "opencode-go",
+        api: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: {
+          [model.id]: {
+            id: model.id,
+            status: "preview",
+            limit: { context: 128_000, output: model.maxTokens },
+          },
+        },
+      },
+      seed,
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+      defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    });
+    expect(
+      projectProviderCatalogSnapshotRows([{ id: model.id, object: "model" }], explicitPreview),
+    ).toEqual([]);
+
+    const deprecatedModel = buildModel("deprecated-model");
+    const deprecatedSeed: ProviderCatalogSnapshot = new Map([
+      [deprecatedModel.id, { model: deprecatedModel, status: "deprecated" }],
+    ]);
+    const omittedStatus = projectUpstreamProviderCatalogSnapshot({
+      providerId: "opencode-go",
+      provider: {
+        id: "opencode-go",
+        api: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: {
+          [deprecatedModel.id]: {
+            id: deprecatedModel.id,
+            limit: { context: 128_000, output: deprecatedModel.maxTokens },
+          },
+        },
+      },
+      seed: deprecatedSeed,
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+      defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    });
+    expect(omittedStatus.get(deprecatedModel.id)).toMatchObject({ status: "deprecated" });
+    expect(
+      projectProviderCatalogSnapshotRows(
+        [{ id: deprecatedModel.id, object: "model" }],
+        omittedStatus,
+      ),
+    ).toEqual([]);
+  });
 
   it("keeps cache admission and fallback shared", async () => {
     const release = vi.fn(async () => undefined);
