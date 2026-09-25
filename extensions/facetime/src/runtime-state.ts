@@ -127,6 +127,7 @@ export type FaceTimeRuntimeStatus = {
     maxLocalMeterLevel?: number;
     maxRemoteMeterLevel?: number;
     realtimeActive: boolean;
+    video?: ReturnType<FaceTimeTalkDriver["videoStatus"]>;
     audioReady: boolean;
     audioTransport?: ActiveFaceTimeCall["audioTransport"];
     lastHelperAction?: HelperActionResult;

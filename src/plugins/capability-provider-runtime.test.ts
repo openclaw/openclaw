@@ -17,10 +17,8 @@ import {
 import { createEmptyPluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-// Real machine state instead of a module mock: the plugins project runs every
-// file in one shared worker (isolate=false), so a mocked bundled-discovery
-// module here and the real module in sibling suites would shadow each other
-// depending on file order.
+// Real machine state avoids a shared-worker module mock shadowing the real
+// bundled-discovery module in sibling suites depending on file order.
 let discoveryCompatRoot: string | undefined;
 let discoveryEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 function setBundledDiscoveryCompat(): void {
@@ -46,10 +44,6 @@ function restoreBundledDiscoveryState(): void {
   clearBundledDiscoveryModeMemo();
 }
 
-function createEmptyMockManifestRegistry(): PluginManifestRegistry {
-  return { plugins: [], diagnostics: [] };
-}
-
 const mocks = vi.hoisted(() => ({
   createMockRegistry: () => ({
     plugins: [],
@@ -59,6 +53,7 @@ const mocks = vi.hoisted(() => ({
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
+    liveVisualProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],
@@ -69,7 +64,7 @@ const mocks = vi.hoisted(() => ({
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   loadPluginManifestRegistryCore: vi.fn<
     (params?: Record<string, unknown>) => PluginManifestRegistry
-  >(() => createEmptyMockManifestRegistry()),
+  >(() => ({ plugins: [], diagnostics: [] })),
   resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
   loadBundledCapabilityRuntimeRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn<

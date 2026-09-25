@@ -54,6 +54,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { LiveVisualProvider } from "./live-visual-provider.types.js";
 import type { PluginLogger } from "./logger-types.js";
 import type {
   MigrationProviderPlugin,
@@ -316,6 +317,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register a transcripts source provider (live or imported meeting transcript capability). */
   registerTranscriptSourceProvider: (provider: TranscriptSourceProvider) => void;
+  /** Register a realtime visual surface driven by caller-owned timed media. */
+  registerLiveVisualProvider: (provider: LiveVisualProvider) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */

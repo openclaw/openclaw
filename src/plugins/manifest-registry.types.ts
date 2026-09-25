@@ -25,6 +25,7 @@ export type PluginManifestContractListKey =
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
   | "transcriptSourceProviders"
+  | "liveVisualProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"

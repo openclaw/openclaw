@@ -59,6 +59,7 @@ export function buildFaceTimeRuntimeStatus(params: {
       maxLocalMeterLevel: call.maxLocalMeterLevel,
       maxRemoteMeterLevel: call.maxRemoteMeterLevel,
       realtimeActive: call.talk?.realtimeActive() === true,
+      video: call.talk?.videoStatus(),
       audioReady: call.audioReady,
       audioTransport: call.audioTransport
         ? {

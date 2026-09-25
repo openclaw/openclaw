@@ -114,5 +114,11 @@ describe("FaceTime plugin manifest", () => {
       "owner",
       "none",
     ]);
+    expect(pluginManifest.configSchema.properties.video.properties.enabled.default).toBe(false);
+    expect(pluginManifest.configContracts.secretInputs.paths).toContainEqual({
+      path: "video.obs.password",
+      expected: "string",
+    });
+    expect(packageManifest.dependencies["obs-websocket-js"]).toBe("5.0.8");
   });
 });

@@ -19,6 +19,7 @@ export const pluginArrays = [
   "realtimeVoiceProviders",
   "mediaUnderstandingProviders",
   "transcriptSourceProviders",
+  "liveVisualProviders",
   "imageGenerationProviders",
   "videoGenerationProviders",
   "musicGenerationProviders",

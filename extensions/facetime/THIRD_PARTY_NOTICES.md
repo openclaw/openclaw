@@ -16,3 +16,8 @@ BlackHole is GPL-3.0 licensed. Its name, logo, and branding are reserved for
 official binaries. OpenClaw renames the locally built driver and does not
 distribute BlackHole source, generated driver bundles, or BlackHole-branded
 binaries in the plugin or native helper archive.
+
+## obs-websocket-js
+
+The optional video bridge uses `obs-websocket-js` 5.0.8, distributed under the
+MIT License: <https://github.com/obs-websocket-community-projects/obs-websocket-js>.

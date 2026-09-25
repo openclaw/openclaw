@@ -52,6 +52,33 @@ invalid explicit values fail validation.
 session overrides. Registered realtime providers own auto-selection,
 authentication, and their model and voice defaults.
 
+### Optional video bridge
+
+FaceTime video is opt-in. The plugin resolves a generic live-visual provider,
+drives it with the exact 24 kHz PCM response clock, attaches its authenticated
+browser surface to a plugin-owned OBS scene, and starts OBS Virtual Camera.
+Video startup or backpressure failures degrade to the existing audio-only call.
+
+```json5
+{
+  video: {
+    enabled: true,
+    provider: "lobster",
+    obs: {
+      password: { source: "env", provider: "default", id: "OBS_WEBSOCKET_PASSWORD" },
+    },
+  },
+}
+```
+
+OBS Studio and its macOS Camera Extension are host prerequisites. Enable the
+OBS WebSocket server, set Virtual Camera output to **Program**, select
+**OBS Virtual Camera** once in FaceTime, and install or enable a plugin that
+provides the configured live-visual provider ID. OBS does not expose that output
+mode over WebSocket, so the bridge cannot change or verify it. The bridge creates
+and removes a uniquely named browser input per call, restores the previous OBS
+program scene when safe, and stops only a virtual camera it started itself.
+
 The helper endpoint is not configurable. Node and the native helper consume
 `helper-endpoint.json`, bind loopback only, and derive the port from the user ID.
 The helper creates each connection epoch and authenticates the Gateway before

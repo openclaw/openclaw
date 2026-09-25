@@ -24,6 +24,46 @@
         "items": { "type": "string" },
         "default": []
       },
+      "video": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "provider": { "type": "string", "default": "lobster" },
+          "width": { "type": "integer", "minimum": 320, "maximum": 3840, "default": 1280 },
+          "height": { "type": "integer", "minimum": 240, "maximum": 2160, "default": 720 },
+          "frameRate": { "type": "integer", "minimum": 1, "maximum": 60, "default": 30 },
+          "obs": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "pattern": "^ws://(?:127\\.0\\.0\\.1|localhost|\\[::1\\])(?::[0-9]+)?(?:/.*)?$",
+                "default": "ws://127.0.0.1:4455"
+              },
+              "password": {
+                "anyOf": [
+                  { "type": "string" },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["source", "provider", "id"],
+                    "properties": {
+                      "source": { "type": "string", "enum": ["env", "file", "exec", "store"] },
+                      "provider": { "type": "string" },
+                      "id": { "type": "string" }
+                    }
+                  }
+                ]
+              },
+              "sceneName": { "type": "string", "default": "OpenClaw FaceTime Video" },
+              "sourceName": { "type": "string", "default": "OpenClaw Live Visual" },
+              "autoStartVirtualCamera": { "type": "boolean", "default": true }
+            }
+          }
+        }
+      },
       "realtime": {
         "type": "object",
         "additionalProperties": false,
@@ -55,6 +95,13 @@
       "label": "Owner FaceTime Handles",
       "help": "Only these handles may place or receive bridged calls. Every listed handle receives authenticated owner privileges."
     },
+    "video.enabled": {
+      "label": "Enable FaceTime Video",
+      "help": "Render the selected live-visual provider through OBS Virtual Camera in Program mode. Video failure does not end the audio call."
+    },
+    "video.provider": { "label": "Live Visual Provider", "advanced": true },
+    "video.obs.url": { "label": "OBS WebSocket URL", "advanced": true },
+    "video.obs.password": { "label": "OBS WebSocket Password", "sensitive": true, "advanced": true },
     "realtime.provider": { "label": "Realtime Provider", "advanced": true },
     "realtime.model": { "label": "Realtime Model", "advanced": true },
     "realtime.voice": { "label": "Realtime Voice", "advanced": true },
@@ -63,7 +110,10 @@
   },
   "configContracts": {
     "secretInputs": {
-      "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
+      "paths": [
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "video.obs.password", "expected": "string" }
+      ]
     }
   }
 }

@@ -188,6 +188,78 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.suspendMedia).not.toHaveBeenCalled();
   });
 
+  it("feeds and retires the optional video bridge without owning audio-call health", async () => {
+    mocks.startVideoBridge.mockResolvedValueOnce(mocks.video);
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+    await vi.waitFor(() => expect(mocks.startVideoBridge).toHaveBeenCalledOnce());
+
+    const pcm = Buffer.alloc(480);
+    mocks.sessionParams?.audioSink.sendAudio(pcm);
+    expect(mocks.video.sendAudio).toHaveBeenCalledWith(pcm);
+    expect(driver.videoStatus()).toMatchObject({ active: true, provider: "lobster" });
+
+    mocks.sessionParams?.audioSink.clearAudio();
+    expect(mocks.video.clear).toHaveBeenCalledWith("barge-in");
+
+    await driver.suspendMedia("carrier-ended");
+    expect(mocks.video.stop).toHaveBeenCalledWith("carrier-ended");
+    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
+    expect(driver.videoStatus()).toMatchObject({ active: false, health: { status: "closed" } });
+  });
+
+  it("reports enabled video startup failure in call status without failing audio", async () => {
+    mocks.startVideoBridge.mockRejectedValueOnce(new Error("OBS unavailable"));
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(driver.videoStatus()).toMatchObject({
+        active: false,
+        provider: "lobster",
+        error: "OBS unavailable",
+        health: { status: "degraded" },
+      }),
+    );
+    expect(driver.realtimeActive()).toBe(true);
+  });
+
+  it("does not let hung optional video startup delay native media suspension", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.startVideoBridge.mockImplementationOnce(
+      (params: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          signal = params.signal;
+          void resolve;
+        }),
+    );
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+
+    await driver.suspendMedia("carrier-ended");
+    expect(signal?.aborted).toBe(true);
+    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
+    expect(driver.videoStatus()).toMatchObject({ active: false, health: { status: "closed" } });
+  });
+
   it("ignores a stale response terminal and drains only the current response", async () => {
     await startReadyFaceTimeTalkDriver();
     mocks.pump.queuedAudioFrames.mockReturnValue(240);

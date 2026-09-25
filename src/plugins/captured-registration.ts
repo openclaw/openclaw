@@ -39,6 +39,7 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  LiveVisualProvider,
   TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
@@ -78,6 +79,7 @@ export type CapturedPluginRegistration = {
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   transcriptSourceProviders: TranscriptSourceProvider[];
+  liveVisualProviders: LiveVisualProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   musicGenerationProviders: MusicGenerationProviderPlugin[];
@@ -119,6 +121,7 @@ export function createCapturedPluginRegistration(params?: {
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const transcriptSourceProviders: TranscriptSourceProvider[] = [];
+  const liveVisualProviders: LiveVisualProvider[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
@@ -163,6 +166,7 @@ export function createCapturedPluginRegistration(params?: {
     realtimeVoiceProviders,
     mediaUnderstandingProviders,
     transcriptSourceProviders,
+    liveVisualProviders,
     imageGenerationProviders,
     videoGenerationProviders,
     musicGenerationProviders,
@@ -314,6 +318,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerTranscriptSourceProvider(provider: TranscriptSourceProvider) {
           transcriptSourceProviders.push(provider);
+        },
+        registerLiveVisualProvider(provider: LiveVisualProvider) {
+          liveVisualProviders.push(provider);
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);

@@ -563,6 +563,7 @@ export type PluginManifestContracts = {
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   transcriptSourceProviders?: string[];
+  liveVisualProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];

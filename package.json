@@ -1329,6 +1329,10 @@
     "./plugin-sdk/transcripts": {
       "default": "./dist/plugin-sdk/transcripts.js"
     },
+    "./plugin-sdk/live-visual": {
+      "types": "./dist/plugin-sdk/live-visual.d.ts",
+      "default": "./dist/plugin-sdk/live-visual.js"
+    },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
       "default": "./dist/plugin-sdk/media-understanding.js"

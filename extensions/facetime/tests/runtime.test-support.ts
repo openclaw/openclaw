@@ -275,6 +275,7 @@ export function createTalkDriver(params: {
     }),
     processOutputSuppressed: vi.fn(() => true),
     realtimeActive: vi.fn(() => realtimeActive),
+    videoStatus: vi.fn(() => undefined),
     activate: vi.fn(() => {
       params.order?.push("activate");
     }),

@@ -29,6 +29,19 @@ const mocks = vi.hoisted(() => ({
   resolveProvider: vi.fn(() => ({ provider: { id: "openai" }, providerConfig: {} })),
   hangupRequested: vi.fn(async () => {}),
   senderAuthVersion: 1 as number | undefined,
+  startVideoBridge: vi.fn(),
+  video: {
+    sendAudio: vi.fn(() => true),
+    setState: vi.fn(),
+    clear: vi.fn(),
+    status: vi.fn(() => ({
+      enabled: true as const,
+      active: true,
+      provider: "lobster",
+      health: { status: "ready" as const, droppedMediaBytes: 0 },
+    })),
+    stop: vi.fn(async () => {}),
+  },
   pump: {
     suppressionReady: vi.fn(async () => {}),
     routeReady: vi.fn(async () => {}),
@@ -148,6 +161,10 @@ vi.mock("../src/audio-pump.js", () => ({
   }),
 }));
 
+vi.mock("../src/video-bridge.js", () => ({
+  startFaceTimeVideoBridge: mocks.startVideoBridge,
+}));
+
 import { resolveFaceTimeConfig } from "../src/config.js";
 import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
@@ -192,6 +209,8 @@ export function resetTalkDriverMocks() {
   mocks.pump.routeReady.mockResolvedValue();
   mocks.pump.suspendMedia.mockResolvedValue();
   mocks.pump.stop.mockResolvedValue();
+  mocks.video.stop.mockResolvedValue();
+  mocks.startVideoBridge.mockResolvedValue(undefined);
   mocks.pumpParams = undefined;
   mocks.sessionParams = undefined;
   mocks.bridge.bridge.supportsToolResultContinuation = false;

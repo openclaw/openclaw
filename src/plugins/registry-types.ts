@@ -67,6 +67,7 @@ type CliBackendPlugin = import("./types.js").CliBackendPlugin;
 type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
+type LiveVisualProvider = import("./types.js").LiveVisualProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
 type OpenClawPluginCliRootCommandDescriptor =
   import("./types.js").OpenClawPluginCliRootCommandDescriptor;
@@ -370,6 +371,7 @@ export type PluginRecord = {
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   transcriptSourceProviderIds: string[];
+  liveVisualProviderIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
   musicGenerationProviderIds: string[];
@@ -414,6 +416,7 @@ export type PluginRegistry = {
   realtimeVoiceProviders: PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>[];
   mediaUnderstandingProviders: PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>[];
   transcriptSourceProviders: PluginOwnedProviderRegistration<TranscriptSourceProvider>[];
+  liveVisualProviders: PluginOwnedProviderRegistration<LiveVisualProvider>[];
   imageGenerationProviders: PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>[];
   videoGenerationProviders: PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>[];
   musicGenerationProviders: PluginOwnedProviderRegistration<MusicGenerationProviderPlugin>[];
