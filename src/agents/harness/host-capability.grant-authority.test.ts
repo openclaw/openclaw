@@ -26,7 +26,7 @@ const TOOL_A = "alpha_optional_tool";
 const TOOL_B = "beta_optional_tool";
 
 let tempDir: string;
-let admissions: PreparedAgentRunAdmission[] = [];
+const admissions: PreparedAgentRunAdmission[] = [];
 
 async function writeFixturePlugin(
   pluginDir: string,
