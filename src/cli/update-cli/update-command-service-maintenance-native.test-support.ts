@@ -134,6 +134,7 @@ export async function runNativeMaintenanceUpdate(
     updateInstallKind: "package",
     refuseUpdate: async () => {},
     configSnapshot: snapshot,
+    configReadFailure: undefined,
     legacyConfigPlan: undefined,
     storedChannel: null,
     requestedChannel: null,
@@ -165,5 +166,5 @@ export async function runNativeMaintenanceUpdate(
     return result;
   });
   const { updateCommand } = await import("./update-command.js");
-  await updateCommand({ yes: true, json: true });
+  await updateCommand({ yes: true, json: true, admission: "installed" });
 }

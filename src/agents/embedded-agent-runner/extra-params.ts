@@ -37,6 +37,7 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { ProviderPrepareExtraParamsContext } from "../../plugins/provider-runtime.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import {
   getModelProviderRequestRouteFacts,
@@ -148,6 +149,7 @@ export function resolvePreparedExtraParams(params: {
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
+  auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -195,6 +197,7 @@ export function resolvePreparedExtraParams(params: {
     modelId: params.modelId,
     model: params.model,
     thinkingLevel: params.thinkingLevel,
+    auth: params.auth,
   };
   const prepared = plugin?.prepareExtraParams?.({ ...context, extraParams: merged }) ?? merged;
   const transportPatch = plugin?.extraParamsForTransport?.({
@@ -926,6 +929,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: SupportedTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ) {
@@ -958,6 +962,7 @@ export function applyExtraParamsToAgent(
       model,
       resolvedTransport,
       providerRuntimeHandle,
+      auth: options?.auth,
     });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
@@ -989,6 +994,7 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
+      auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,

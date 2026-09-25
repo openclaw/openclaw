@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape, SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
@@ -19,13 +20,39 @@ import type {
   UserModelAccountSelection,
 } from "./model-account-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
   agentRuntime: string;
   pluginOwnerId: string;
 };
+
+export type GatewaySessionTitleModelSelection = Pick<
+  InternalSessionEntry,
+  "agentRuntimeOverride" | "authProfileOverride" | "modelOverride" | "providerOverride"
+>;
+
+export type PreparedGatewaySessionLifecycle = {
+  spawnedCwd?: string;
+  sessionRoot?: string;
+  worktree?: NonNullable<InternalSessionEntry["worktree"]>;
+  repositoryWorkspaceId?: string;
+  pendingWorktree?: InternalSessionEntry["pendingWorktree"];
+  /** Reacquire source custody only around the final persistence operation. */
+  withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
+  rollback?: () => Promise<void>;
+};
+
+export type PrepareGatewaySessionLifecycle = (target: {
+  agentId: string;
+  entry?: InternalSessionEntry;
+  key: string;
+  storePath: string;
+  titleModelSelection?: GatewaySessionTitleModelSelection | null;
+  projectId?: string;
+  /** Inherited or existing policy, resolved while the creation owner holds lifecycle custody. */
+  sandboxRequired?: boolean;
+}) => Promise<Result<PreparedGatewaySessionLifecycle, ErrorShape>>;
 
 export type CreatedGatewaySession = {
   key: string;
@@ -67,7 +94,13 @@ export type CreateGatewaySessionResult =
 
 export type CreateGatewaySessionParams = {
   cfg: OpenClawConfig;
-  operatorAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+  operatorAuthority?: Promise<
+    | {
+        authority: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+      }
+    | undefined
+  >;
+  getCurrentConfig?: () => OpenClawConfig;
   key?: string;
   agentId?: string;
   label?: string;

@@ -41,6 +41,7 @@ import {
   transferRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { isPermanentAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -637,9 +638,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       if (settleRevokedBatch()) {
         return false;
       }
+      const lastError = error instanceof Error ? error.message : String(error);
+      if (isPermanentAnnounceDeliveryError(error)) {
+        completeBatch(settledBatch, state, {
+          delivered: false,
+          path: "none",
+          disposition: "permanent_failure",
+          error: lastError,
+        });
+        return false;
+      }
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
-      const lastError = error instanceof Error ? error.message : String(error);
       const replayCount = (state.replayCount ?? 0) + 1;
       const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
       if (

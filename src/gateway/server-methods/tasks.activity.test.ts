@@ -38,7 +38,7 @@ describe("registered subagent execution", () => {
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: `${runId}-revision`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: mainSessionTaskScope.requesterSessionKey,

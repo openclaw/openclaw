@@ -2,9 +2,10 @@
 import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { walkDirectory } from "../infra/fs-safe.js";
 import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
@@ -333,8 +334,8 @@ export function sealBackupResourceInventory(
   const ownersByPath = new Map<string, BackupCoreDatabase>();
   const ownersByRealpath = new Map<string, BackupCoreDatabase>();
   for (const database of coreDatabases) {
-    const sourcePath = path.resolve(database.sourcePath);
-    const realPath = database.identity ? realpathSync(database.sourcePath) : sourcePath;
+    const sourcePath = path.resolve(normalizeWindowsNamespaceAlias(database.sourcePath));
+    const realPath = database.identity ? realpathSync(sourcePath) : sourcePath;
     const previous =
       ownersByRealpath.get(realPath) ??
       owners.find(
@@ -353,7 +354,8 @@ export function sealBackupResourceInventory(
       throw new Error(`SQLite path aliases multiple core database owners: ${sourcePath}`);
     }
     // Registry rows can spell the same owner's path differently. Keep one owner
-    // and retain every archive name so aliases reuse its verified snapshot.
+    // and retain every distinct archive name so aliases reuse its verified snapshot.
+    // `\\?\` and `\\.\` prefixes encode as that drive or UNC path, so they share its key.
     const owner = previous ?? Object.freeze({ ...database, sourcePath });
     const archiveOwner = ownersByPath.get(sourcePath);
     if (archiveOwner && archiveOwner !== owner) {
@@ -372,7 +374,7 @@ export function sealBackupResourceInventory(
     sourcePath,
     identity,
   ) => {
-    const candidate = path.resolve(sourcePath);
+    const candidate = path.resolve(normalizeWindowsNamespaceAlias(sourcePath));
     const exact = ownersByPath.get(candidate);
     let current = identity;
     let unresolvableLink = false;

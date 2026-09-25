@@ -73,7 +73,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       checkout_revision: ${{ steps.resolve.outputs.sha }}
@@ -105,7 +105,7 @@ jobs:
   preflight:
     name: Build plugin prerelease plan
     needs: [resolve_target]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
@@ -171,7 +171,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Checkout target
@@ -466,13 +466,13 @@ jobs:
     name: Plan plugin npm security artifacts
     needs: [resolve_target]
     if: inputs.phase != 'candidate'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       packages_json: ${{ steps.plan.outputs.packages_json }}
     steps:
       - name: Checkout trusted scanner tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -495,7 +495,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Checkout candidate as inert data
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate
@@ -517,11 +517,11 @@ jobs:
     name: plugin-npm-security-scan
     needs: [resolve_target, plugin-npm-security-plan]
     if: ${{ !cancelled() && always() && needs.resolve_target.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 45
     steps:
       - name: Checkout trusted scanner tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -544,7 +544,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Checkout candidate as inert package input
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate
@@ -613,7 +613,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -650,7 +650,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -736,7 +736,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -814,7 +814,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -998,6 +998,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.checkout_revision }}
       include_repo_e2e: false
       include_release_path_suites: false
@@ -1046,7 +1047,7 @@ jobs:
       - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify plugin prerelease suite
@@ -1086,3 +1087,25 @@ jobs:
           check_required "plugin-prerelease-docker" "$RUN_DOCKER" "$DOCKER_RESULT"
           echo "plugin-prerelease-inspector advisory result: ${INSPECTOR_RESULT}"
           exit "$failed"
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs:
+      - resolve_target
+      - preflight
+      - plugin-npm-security-plan
+      - plugin-npm-security-scan
+      - plugin-prerelease-static-shard
+      - plugin-prerelease-node-shard
+      - plugin-prerelease-extension-shard
+      - plugin-prerelease-inspector
+      - plugin-prerelease-docker-suite
+      - plugin-prerelease-suite
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: ${{ inputs.phase == 'candidate' && 'pluginPrereleaseCandidate' || 'pluginPrereleaseIndependent' }}
+      target_sha: ${{ needs.resolve_target.outputs.checkout_revision }}

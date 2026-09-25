@@ -105,13 +105,13 @@ the job's uploaded artifacts.
 | `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                 |
 | `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)                |
-| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI                                                                                                                | Native i18n-relevant changes                          |
+| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI, with warnings for proven obsolete native IDs and Android rows                                                 | Native i18n-relevant changes                          |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                         |
 | `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                              |
 | `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                |
 | `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                                |
-| `ios-build`                      | Debug build and Swift lint smoke; full manual CI adds separate Release device and native test phases                                                                                                                                                                                                     | iOS/capture changes and full manual CI                |
-| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Full manual CI only                                   |
+| `ios-build`                      | Debug build and Swift lint smoke; hourly main runs native tests; full manual CI also adds a Release device phase                                                                                                                                                                                         | iOS/capture changes and full manual CI                |
+| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-input changes and full manual CI           |
 | `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the canonical release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                     | After both screenshot shards                          |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                              |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                |
@@ -127,6 +127,9 @@ Bun. Those Node files still execute; they are not excluded from CI.
 TypeScript compiler analysis suites also stay on Node because the synchronous
 native compiler API requires Node child-process pipe handles. This includes
 compiler assertions in mixed runtime suites; their cases remain enabled.
+The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
+requires diagnostics-channel delivery to preserve sibling subscribers when a
+callback unsubscribes during publication. Bun can skip the next subscriber.
 The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
 files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
@@ -134,6 +137,12 @@ Other families retain Node until they pass on the pinned fork within their
 existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. Mixed or ambiguous selections retain
 Node, and no tests are removed from the selected inventory.
+
+Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
+also supports Bun when it is the entire exact selection in `agents-support`.
+Mixed and broad PR selections retain their original Node invocation. Dual-runtime
+validation keeps that complete Node selection and adds only the qualified recovery
+file when the original include patterns select it.
 
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
@@ -147,29 +156,49 @@ Current-runner targets use three native shards and three workers per row,
 including exact-target Full Release Validation dispatches. Historical
 compatibility targets retain their unsharded package command.
 The UI runtime partition is applied after Vitest selects each native shard, so
-files keep their original shard ownership. A shard with no Node-only files
-finishes that partition without running other UI files. Dual validation runs
+files keep their original shard ownership. Compatible PR selections run Bun
+first and record Vitest's original shard inventory. After successful, joined
+completion, a shard with no Node-only files omits that Node process. Missing or
+invalid inventory evidence retains the Node run. Dual validation runs
 the complete UI selection on Node, then excludes only those two files from Bun;
 their assertions remain required on Node, with no added skips.
+Partitions without browser files retain browser discovery for native sharding
+but omit Chromium version probing and Playwright's speculative browser startup.
 
-The nonbrowser Control UI projects load `bun-css-tokenizer.setup.ts`. On Bun,
-this setup resolves jsdom's native CSS tokenizer and prevents inlining only its
-`endOfFile` predicate. The pinned fork can otherwise
-enter an unbounded CSS-tokenizer loop after an ordered sequence of UI files.
-Baseline, DFG, and FTL JIT remain enabled; Node and Chromium are unaffected.
+On both runtimes, non-isolated UI projects without cached test results group
+files by environment and options after native sharding. The sequencer targets
+96-file batches and spreads smaller environments across the same rounds to
+reduce restarts without keeping every compatible file in one long worker run.
+Native ordering within each environment, project order, coverage, isolation, and
+worker budgets remain unchanged. The batch target is a scheduling heuristic,
+not a worker-lifetime or memory limit; the native pool still decides reuse.
+Cached projects retain Vitest's failure/duration ordering, and explicit file
+shuffling retains its native seeded order.
+
 The UI runtime owner delays FTL compilation with warmup/soon thresholds of
 512000/8000. These short-lived workers benefit from less compilation work;
 the protected cache publisher uses the same policy when collecting its seven
 canonical UI seed files on Bun. PR jobs restore that Bun seed alongside the
 Node seed, with separate transform-cache leaves.
-The setup leaves tokenizer exports and CSS behavior unchanged. Remove it
-only after a corrected pinned runtime passes the original ordered reproduction,
-the complete UI config, and all three native shards within their existing memory
-budgets.
+The same owner sets `MIMALLOC_PURGE_HOLES_MIN_INTERVAL=1000` to reduce allocator
+scavenger work between short UI updates; normal reclamation and default heaps remain enabled.
 
 The test-runtime setup action installs a checksum-pinned build of the Bun fork
 only for jobs that need it. The source commit, archive checksum, and executable
 checksum live together in `.github/actions/setup-test-bun/action.yml`.
+The fork owns the backing storage of `node:vm` cached bytecode, so compiled
+functions remain valid after the original cache buffer is garbage-collected.
+It also keeps allocator ownership during zero-time event-loop polls, while
+retaining the idle handoff for polls that can block.
+
+The pinned build pairs Bun `ddfce5d01f6a436203a8f41fc8bff074f9b09614` with WebKit
+`4429d11361a5f1680a9e57884ebc1941c2cc7e48`, containing the
+`caa5d805b646edc59ca0d12b49a7a574f942dedb` FTL backport.
+The backport preserves string bounds checks through FTL dead-code elimination,
+fixing the CSS tokenizer's end-of-input loop.
+Its prerelease tag includes both source revisions because `Bun.revision` alone
+does not distinguish builds linked against different WebKit revisions.
+
 Node continues to own orchestration, builds, compiler preparation, and cleanup;
 Vitest and its workers use the selected runtime. Bun and Node have separate
 transform-cache directories and timing identities. Either runtime failing fails
@@ -190,7 +219,7 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.19.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
@@ -323,12 +352,12 @@ the published driver must update and replace the running managed Gateway.
 Schema refusal or rollback fails the gate. Operator state, plugin convergence,
 cron ownership, agent turns, no-op updates, and backup rollback assertions remain.
 
-Main prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
+Main, including hourly `validation_tier=main` dispatches, prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
 `scripts/package-openclaw-for-docker.mjs --skip-build`. This retains all runtime
 JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
 the canonical packer still runs its complete tarball integrity check. The
 scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
-rebuilding it. Manual and release CI retain the declaration-complete full
+rebuilding it. Full-tier manual and release CI retain the declaration-complete full
 package build.
 
 Ordinary canonical manual CI retains the survivor and adds
@@ -417,11 +446,12 @@ old decision. This recovery applies only to commit-status publication; other
 uncertain writes, cancellation, and write request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
-and `504` responses and recognized transient connection failures before a
-response arrives. They share one retry budget of one, two, and four seconds,
-within the original 30-second request timeout. These retries exclude writes,
-caller cancellation, certificate errors, and unrecognized errors. HTTP and
-connection errors identify the request method and endpoint.
+and `504` responses and recognized transient connection failures before headers
+arrive or while reading a successful response body. They share one retry budget
+of one, two, and four seconds, within the original 30-second request timeout.
+These retries exclude writes, caller cancellation, certificate errors, invalid
+JSON, oversized responses, and unrecognized errors. HTTP, connection, and
+response-body errors identify the request method and endpoint.
 
 If a read-only request reaches its 30-second deadline, including while reading
 its response body, the script restarts the complete evaluation with fresh PR,

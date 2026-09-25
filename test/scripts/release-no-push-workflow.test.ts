@@ -390,6 +390,22 @@ function executeParentFilterValidation(
   }
 }
 
+// Minimal GitHub expression sandbox for runner selectors; reserved runner groups stay unset.
+function runnerSandbox(context: Record<string, unknown>) {
+  return {
+    fromJSON: JSON.parse,
+    toJSON: JSON.stringify,
+    format: (template: string, ...args: unknown[]) =>
+      template
+        .replaceAll(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)]))
+        .replaceAll("{{", "{")
+        .replaceAll("}}", "}"),
+    ...context,
+    vars: { OPENCLAW_RELEASE_RUNNER_GROUP: "", ...(context.vars as object | undefined) },
+    inputs: { runner_group: "", ...(context.inputs as object | undefined) },
+  };
+}
+
 describe("release validation no-push transport", () => {
   it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
     const live = readWorkflow(LIVE_E2E);
@@ -436,9 +452,10 @@ describe("release validation no-push transport", () => {
         for (const phase of ["build", "test"]) {
           const runner = job(repo, phase)["runs-on"]!;
           expect(
-            runInNewContext(runner.slice(3, -2), {
-              inputs: { use_github_hosted_runners: resolved },
-            }),
+            runInNewContext(
+              runner.slice(3, -2),
+              runnerSandbox({ inputs: { use_github_hosted_runners: resolved } }),
+            ),
           ).toBe(expected ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404");
         }
       }
@@ -469,11 +486,14 @@ describe("release validation no-push transport", () => {
         }
         const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
         const actual = expression.startsWith("${{")
-          ? runInNewContext(expression.slice(3, -2), {
-              github: { repository },
-              inputs: { use_github_hosted_runners: hosted },
-              vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
-            })
+          ? runInNewContext(
+              expression.slice(3, -2),
+              runnerSandbox({
+                github: { repository },
+                inputs: { use_github_hosted_runners: hosted },
+                vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
+              }),
+            )
           : expression;
         expect(actual, `${workflowPath}:${name}`).toBe(runner);
       }
@@ -1043,14 +1063,13 @@ describe("release validation no-push transport", () => {
   });
 
   it.each([
-    "ubuntu",
-    "ubuntu,macos",
-    "ubuntu,windows",
     "windows,macos",
+    "ubuntu,macos",
     "packaged-fresh",
     "ubuntu/packaged-upgrade",
+    "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade",
   ])(
-    "rejects all-group selection %s that omits required OS suites at either entry point",
+    "rejects all-group selection %s that omits an OS Gateway suite at either entry point",
     (filter) => {
       for (const { result } of [
         executeParentFilterValidation("all", "", filter),
@@ -2044,6 +2063,7 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.if).toContain("inputs.publish_docker_only");
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
+      runner_group: "${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}",
       tag: "${{ inputs.tag }}",
       release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
       prepared_run_id: "${{ needs.resolve_release_target.outputs.prepared_docker_run_id }}",

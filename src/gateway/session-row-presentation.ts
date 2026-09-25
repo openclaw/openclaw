@@ -59,12 +59,12 @@ export function prepareProjectedSessionPresentation(
     client: client ?? null,
     isMember: (value, identityId) =>
       projection
-        .describe({
+        .readMembership({
           agentId: value.agentId,
           key: value.storeKey,
           storePath: value.storePath,
         })
-        ?.membership.has(identityId) ?? false,
+        ?.has(identityId) ?? false,
   });
   const profile = gatewayClientSessionCreator(client ?? null);
   const profiles = rowContext.userProfileIdentityById;

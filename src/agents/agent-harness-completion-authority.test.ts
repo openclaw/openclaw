@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
@@ -19,11 +19,13 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { runWithAgentHarnessCompletionCustody } from "../tasks/agent-harness-completion-custody.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
@@ -35,6 +37,90 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 afterEach(() => resetGatewayWorkAdmission());
 
 describe("harness completion caller lifetime", () => {
+  it.each(["current", "requester-replaced", "preparation-failed"] as const)(
+    "settles retained root work when pending custody preparation is %s",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const context = createContext();
+        const resolver = () => context;
+        context.resolveGatewayContext = resolver;
+        const client = createOperatorClient({
+          profileName: "preparing-completion-owner",
+          scopes: ["operator.write"],
+        });
+        const target = {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        };
+        await replaceSessionEntry(target, { sessionId: "original", updatedAt: Date.now() });
+        const scope = createAgentHarnessTaskRuntimeScope({
+          requesterSessionKey: target.sessionKey,
+          gatewayContextResolver: resolver,
+        });
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const prepare = profileReader.prepareUserProfileIdentity;
+        const preparation = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementationOnce(async (...args) => {
+            const prepared = await prepare(...args);
+            entered.resolve();
+            await resume.promise;
+            if (outcome === "preparation-failed") {
+              throw new Error("profile preparation failed");
+            }
+            return prepared;
+          });
+        const root = tryBeginGatewayRootWorkAdmission("test:preparing-completion")!;
+        let custody: AgentHarnessCompletionCustody | undefined;
+        const pending = root.run(async () =>
+          withPluginRuntimeGatewayRequestScope(
+            { client, context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
+            () => captureAgentHarnessCompletionCustody(scope),
+          ),
+        );
+        const checked = pending.then(
+          (value) => ({ custody: value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await Promise.race([entered.promise, checked]);
+          expect(preparation).toHaveBeenCalledOnce();
+          root.release();
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          if (outcome === "requester-replaced") {
+            await replaceSessionEntry(target, { sessionId: "replacement", updatedAt: Date.now() });
+          }
+          resume.resolve();
+          const result = await checked;
+          if (outcome === "current") {
+            expect(result).not.toHaveProperty("error");
+            custody = "custody" in result ? result.custody : undefined;
+            expect(custody?.isCurrent()).toBe(true);
+            custody?.release();
+          } else {
+            expect(result).toHaveProperty("error");
+            expect("error" in result && String(result.error)).toContain(
+              outcome === "requester-replaced"
+                ? "requester lifecycle was replaced"
+                : "profile preparation failed",
+            );
+          }
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        } finally {
+          resume.resolve();
+          const result = await checked;
+          if ("custody" in result) {
+            result.custody?.release();
+          }
+          root.release();
+          preparation.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each(["release", "revoke", "gateway-close"] as const)(
     "retains the original operator ceiling until %s",
     async (ending) => {
@@ -43,27 +129,27 @@ describe("harness completion caller lifetime", () => {
         const resolver = () => context;
         context.resolveGatewayContext = resolver;
         const client = createOperatorClient({
-          profileId: "completion-owner",
+          profileName: "completion-owner",
           scopes: ["operator.write"],
         });
         const revoked = new AbortController();
-        const source = captureGatewayOperatorRunAuthority({
+        const source = (await captureGatewayOperatorRunAuthority({
           client,
           context,
           sourceAuthority: {
             signal: revoked.signal,
             assertCurrent: () => revoked.signal.throwIfAborted(),
           },
-        })!;
+        }))!;
         client.internal = { operatorRunAuthority: source.authority };
         const scope = createAgentHarnessTaskRuntimeScope({
           requesterSessionKey: "agent:main:main",
           gatewayContextResolver: resolver,
         });
-        const custody = withPluginRuntimeGatewayRequestScope(
+        const custody = (await withPluginRuntimeGatewayRequestScope(
           { client, context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
           () => captureAgentHarnessCompletionCustody(scope),
-        )!;
+        ))!;
         try {
           source.release();
           expect(source.authority.assertCurrent).not.toThrow();
@@ -159,8 +245,8 @@ describe("harness completion caller lifetime", () => {
               receiptAuthority: () => !retired,
               gatewayContextResolver: resolveGatewayContext,
             },
-            () => {
-              const parentCustody = captureAgentHarnessCompletionCustody(scope);
+            async () => {
+              const parentCustody = await captureAgentHarnessCompletionCustody(scope);
               custody = parentCustody?.retain();
               parentCustody?.release();
               const runtime = createAgentHarnessTaskRuntime({

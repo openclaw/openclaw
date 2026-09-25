@@ -9,19 +9,6 @@ export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntim
   return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
 }
 
-type ServiceRuntimeLike = {
-  status?: string;
-  state?: string;
-  subState?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-  lastRunResult?: string;
-  lastRunTime?: string;
-  detail?: string;
-  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
-};
-
 // Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
   [129, "SIGHUP"],
@@ -38,7 +25,7 @@ function formatLastExitStatus(status: number): string {
   return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
 }
 
-export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
+export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | null {
   if (!runtime) {
     return null;
   }

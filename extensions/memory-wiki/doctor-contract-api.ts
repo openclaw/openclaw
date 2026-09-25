@@ -151,10 +151,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Memory Wiki compiled cache files",
     async detectLegacyState(params) {
       const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const root = await openExistingVaultRoot(vaultRoot);
         if (!root) {
           continue;
@@ -176,10 +173,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const root = await openExistingVaultRoot(vaultRoot);
         if (!root) {
           continue;
@@ -213,10 +207,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Memory Wiki source sync state",
     async detectLegacyState(params) {
       const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
         const state = await readLegacyMemoryWikiSourceSyncState(vaultRoot);
         const count = Object.keys(state.entries).length;
@@ -233,10 +224,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const filePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
         if (!(await legacyStateFileExists(filePath))) {
           continue;
@@ -283,10 +271,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Memory Wiki import run records",
     async detectLegacyState(params) {
       const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
         if (records.length === 0) {
           continue;
@@ -301,10 +286,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
+      for (const vaultRoot of resolveConfiguredVaultRoots(params)) {
         const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
         if (records.length === 0) {
           continue;

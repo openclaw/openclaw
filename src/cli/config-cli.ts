@@ -262,15 +262,17 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           issues,
         });
       } else {
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
+        runtime.error(`Config needs correction: ${shortPath}`);
+        for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
         runtime.error(
           formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
         );
-        runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
+        runtime.error(
+          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
+        );
       }
       exitCliAfterOutput(runtime, 1);
     }

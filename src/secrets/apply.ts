@@ -29,10 +29,7 @@ import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secr
 import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
-import {
-  listAuthProfileStoreTargets as listDiscoveredAuthProfileStoreTargets,
-  type AuthProfileStoreTarget,
-} from "./auth-store-paths.js";
+import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
 import { createSecretsConfigIO, writeTextFileAtomic } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
@@ -392,61 +389,30 @@ function applyConfigTargetMutations(params: {
 
   for (const { target, resolved } of resolvedTargets) {
     if (resolved.entry.configFile === "auth-profile-store") {
-      const authStoreChanged = applyAuthProfileTargetMutation({
+      const { path, store } = resolveAuthStoreForTarget({
         target,
-        resolved,
         nextConfig: params.nextConfig,
         stateDir: params.stateDir,
         env: params.env,
         authStoreByPath: params.authStoreByPath,
         authStoreTargetByPath: params.authStoreTargetByPath,
-        scrubbedValues,
       });
-      if (authStoreChanged) {
-        const agentId = (target.agentId ?? "").trim();
-        if (!agentId) {
-          throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
-        }
-        params.changedFiles.add(
-          resolveAuthStoreTargetForAgent({
-            nextConfig: params.nextConfig,
-            stateDir: params.stateDir,
-            env: params.env,
-            agentId,
-          }).path,
-        );
+      const containerChanged = ensureAuthProfileContainer({ target, resolved, store });
+      const refChanged = applySecretRefTargetMutation(store, target, resolved, scrubbedValues);
+      if (containerChanged || refChanged) {
+        params.changedFiles.add(path);
       }
       continue;
     }
 
-    const targetPathSegments = resolved.pathSegments;
-    const usesSiblingRef = resolved.entry.secretShape === "sibling_ref"; // pragma: allowlist secret
-    if (usesSiblingRef) {
-      const previous = getPath(params.nextConfig, targetPathSegments);
-      if (isNonEmptyString(previous)) {
-        scrubbedValues.add(previous.trim());
-      }
-      const refPathTokens = resolved.refPathTokens;
-      if (!refPathTokens) {
-        throw new Error(`Missing sibling ref path for target ${target.type}.`);
-      }
-      const wroteRef = setPathCreateStrict(params.nextConfig, refPathTokens, target.ref);
-      const deletedLegacy = deletePathStrict(params.nextConfig, targetPathSegments);
-      if (wroteRef || deletedLegacy) {
-        configChanged = true;
-      }
-      continue;
-    }
-
-    const previous = getPath(params.nextConfig, targetPathSegments);
-    if (isNonEmptyString(previous)) {
-      scrubbedValues.add(previous.trim());
-    }
-    const wroteRef = setPathCreateStrict(params.nextConfig, resolved.pathTokens, target.ref);
-    if (wroteRef) {
+    if (applySecretRefTargetMutation(params.nextConfig, target, resolved, scrubbedValues)) {
       configChanged = true;
     }
-    if (resolved.entry.trackProviderShadowing && resolved.providerId) {
+    if (
+      resolved.entry.secretShape !== "sibling_ref" &&
+      resolved.entry.trackProviderShadowing &&
+      resolved.providerId
+    ) {
       providerTargets.add(normalizeProviderId(resolved.providerId));
     }
   }
@@ -592,20 +558,11 @@ function resolveAuthStoreTargetForAgent(params: {
   return { kind: "agent", agentDir, path: resolveAuthProfileDatabasePath(agentDir) };
 }
 
-function listAuthProfileStoreTargets(
-  config: OpenClawConfig,
-  stateDir: string,
-  env: NodeJS.ProcessEnv,
-): AuthProfileStoreTarget[] {
-  return listDiscoveredAuthProfileStoreTargets(config, stateDir, env);
-}
-
 function ensureAuthProfileContainer(params: {
   target: SecretsPlanTarget;
   resolved: ResolvedPlanTargetEntry["resolved"];
   store: MutableAuthProfileStore;
 }): boolean {
-  let changed = false;
   const profilePathSegments = params.resolved.pathSegments.slice(0, 2);
   const profileId = profilePathSegments[1];
   if (!profileId) {
@@ -623,14 +580,13 @@ function ensureAuthProfileContainer(params: {
       !isNonEmptyString(current.provider) &&
       isNonEmptyString(params.target.authProfileProvider)
     ) {
-      const wroteProvider = setPathCreateStrict(
+      return setPathCreateStrict(
         params.store,
         [...profilePathSegments, "provider"],
         params.target.authProfileProvider,
       );
-      changed = changed || wroteProvider;
     }
-    return changed;
+    return false;
   }
   if (!expectedType) {
     throw new Error(
@@ -643,63 +599,36 @@ function ensureAuthProfileContainer(params: {
       `Cannot create auth profile "${profileId}" for ${params.target.path} without authProfileProvider.`,
     );
   }
-  const wroteProfile = setPathCreateStrict(params.store, profilePathSegments, {
+  return setPathCreateStrict(params.store, profilePathSegments, {
     type: expectedType,
     provider,
   });
-  changed = changed || wroteProfile;
-  return changed;
 }
 
-function applyAuthProfileTargetMutation(params: {
-  target: SecretsPlanTarget;
-  resolved: ResolvedPlanTargetEntry["resolved"];
-  nextConfig: OpenClawConfig;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
-  scrubbedValues: Set<string>;
-}): boolean {
-  if (params.resolved.entry.configFile !== "auth-profile-store") {
-    return false;
-  }
-  const { store } = resolveAuthStoreForTarget({
-    target: params.target,
-    nextConfig: params.nextConfig,
-    stateDir: params.stateDir,
-    env: params.env,
-    authStoreByPath: params.authStoreByPath,
-    authStoreTargetByPath: params.authStoreTargetByPath,
-  });
-  let changed = ensureAuthProfileContainer({
-    target: params.target,
-    resolved: params.resolved,
-    store,
-  });
-  const targetPathSegments = params.resolved.pathSegments;
-  const usesSiblingRef = params.resolved.entry.secretShape === "sibling_ref"; // pragma: allowlist secret
-  if (usesSiblingRef) {
-    const previous = getPath(store, targetPathSegments);
-    if (isNonEmptyString(previous)) {
-      params.scrubbedValues.add(previous.trim());
-    }
-    const refPathTokens = params.resolved.refPathTokens;
-    if (!refPathTokens) {
-      throw new Error(`Missing sibling ref path for auth-profiles target ${params.target.path}.`);
-    }
-    const wroteRef = setPathCreateStrict(store, refPathTokens, params.target.ref);
-    const deletedPlaintext = deletePathStrict(store, targetPathSegments);
-    changed = changed || wroteRef || deletedPlaintext;
-    return changed;
-  }
-  const previous = getPath(store, targetPathSegments);
+function applySecretRefTargetMutation(
+  root: Record<string, unknown>,
+  target: SecretsPlanTarget,
+  resolved: ResolvedPlanTargetEntry["resolved"],
+  scrubbedValues: Set<string>,
+): boolean {
+  const previous = getPath(root, resolved.pathSegments);
   if (isNonEmptyString(previous)) {
-    params.scrubbedValues.add(previous.trim());
+    scrubbedValues.add(previous.trim());
   }
-  const wroteRef = setPathCreateStrict(store, params.resolved.pathTokens, params.target.ref);
-  changed = changed || wroteRef;
-  return changed;
+  if (resolved.entry.secretShape === "sibling_ref") {
+    const refPathTokens = resolved.refPathTokens;
+    if (!refPathTokens) {
+      throw new Error(
+        resolved.entry.configFile === "auth-profile-store"
+          ? `Missing sibling ref path for auth-profiles target ${target.path}.`
+          : `Missing sibling ref path for target ${target.type}.`,
+      );
+    }
+    const wroteRef = setPathCreateStrict(root, refPathTokens, target.ref);
+    const deletedPlaintext = deletePathStrict(root, resolved.pathSegments);
+    return wroteRef || deletedPlaintext;
+  }
+  return setPathCreateStrict(root, resolved.pathTokens, target.ref);
 }
 
 function scrubEnvFiles(params: {
@@ -854,35 +783,21 @@ export async function runSecretsApply(params: {
     allowExecInDryRun,
   });
   const changedFiles = [...projected.changedFiles].toSorted();
-  if (!write) {
-    return {
-      mode: "dry-run",
-      changed: changedFiles.length > 0,
-      changedFiles,
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: projected.resolvabilityComplete,
-      },
-      refsChecked: projected.refsChecked,
-      skippedExecRefs: projected.skippedExecRefs,
-      warningCount: projected.warnings.length,
-      warnings: projected.warnings,
-    };
-  }
-  if (changedFiles.length === 0) {
-    return {
-      mode: "write",
-      changed: false,
-      changedFiles: [],
-      checks: {
-        resolvability: true,
-        resolvabilityComplete: true,
-      },
-      refsChecked: projected.refsChecked,
-      skippedExecRefs: 0,
-      warningCount: projected.warnings.length,
-      warnings: projected.warnings,
-    };
+  const result: SecretsApplyResult = {
+    mode: write ? "write" : "dry-run",
+    changed: changedFiles.length > 0,
+    changedFiles,
+    checks: {
+      resolvability: true,
+      resolvabilityComplete: projected.resolvabilityComplete,
+    },
+    refsChecked: projected.refsChecked,
+    skippedExecRefs: projected.skippedExecRefs,
+    warningCount: projected.warnings.length,
+    warnings: projected.warnings,
+  };
+  if (!write || changedFiles.length === 0) {
+    return result;
   }
 
   const io = createSecretsConfigIO({ env });
@@ -982,19 +897,7 @@ export async function runSecretsApply(params: {
     throw new Error(`Secrets apply failed: ${String(err)}`, { cause: err });
   }
 
-  return {
-    mode: "write",
-    changed: changedFiles.length > 0,
-    changedFiles,
-    checks: {
-      resolvability: true,
-      resolvabilityComplete: true,
-    },
-    refsChecked: projected.refsChecked,
-    skippedExecRefs: 0,
-    warningCount: projected.warnings.length,
-    warnings: projected.warnings,
-  };
+  return result;
 }
 
 export const testing = {

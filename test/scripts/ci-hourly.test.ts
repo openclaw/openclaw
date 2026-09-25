@@ -16,7 +16,7 @@ const auxiliaryNames = [
 ];
 const hourly = readWorkflow(".github/workflows/ci-hourly.yml");
 const ci = readCiWorkflow();
-const base = { repository: "openclaw/openclaw", runAttempt: 1 } as const;
+const base = { repository: "openclaw/openclaw", runAttempt: 1, releasePriorityRun: "123" } as const;
 type Context = Parameters<typeof evaluateWorkflowExpression>[1];
 
 function evaluate(expression: string, context: Context) {
@@ -71,15 +71,13 @@ describe("hourly main CI admission", () => {
     },
   );
 
-  it("admits hourly work only in the canonical repo and preserves release priority", () => {
+  it("admits hourly work only in the canonical repo even during release validation", () => {
     const context = { ...base, eventName: "schedule" } as const;
     expect(evaluate(hourly.jobs.dispatch.if, context)).toBe(true);
     expect(evaluate(hourly.jobs.dispatch.if, { ...context, repository: "fork/openclaw" })).toBe(
       false,
     );
-    expect(evaluate(hourly.jobs.dispatch.if, { ...context, releasePriorityRun: "123" })).toBe(
-      false,
-    );
+    expect(evaluate(hourly.jobs.dispatch.if, { ...context, releasePriorityRun: "123" })).toBe(true);
     expect(
       evaluate(hourly.jobs.dispatch.if, {
         ...context,
@@ -141,7 +139,7 @@ describe("hourly main CI admission", () => {
     }
   });
 
-  it("dispatches full CI without freezing an obsolete scheduler SHA", async () => {
+  it("dispatches the complete main tier without freezing an obsolete scheduler SHA", async () => {
     const dispatch = vi.fn().mockResolvedValue(undefined);
     const summary = {
       addHeading: vi.fn().mockReturnThis(),
@@ -163,6 +161,7 @@ describe("hourly main CI admission", () => {
       ref: "main",
       inputs: {
         include_android: "true",
+        validation_tier: "main",
         release_gate: "false",
         release_scope: "full",
         dispatch_id: "hourly-main-123-1",
@@ -173,6 +172,7 @@ describe("hourly main CI admission", () => {
       ...base,
       eventName: "workflow_dispatch",
       includeAndroid: true,
+      validationTier: "main",
       sha: childSha,
       workflowSha: childSha,
     } as const;
@@ -195,6 +195,7 @@ describe("hourly main CI admission", () => {
     }
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_ONLY, context)).toBe("false");
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_CHANGED, context)).toBe("true");
+    expect(evaluate(manifest.env.OPENCLAW_CI_VALIDATION_TIER, context)).toBe("main");
     for (const id of ["docs_scope", "changed_scope"]) {
       expect(
         evaluate(

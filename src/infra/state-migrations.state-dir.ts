@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
 import {
   migrateLegacyInstalledPluginIndex,
   preflightLegacyInstalledPluginIndexMigration,

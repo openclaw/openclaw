@@ -398,3 +398,40 @@ export function restoreTrailingNewlines(
   const renderedTrailingNewlines = text.match(/\n*$/u)?.[0].length ?? 0;
   return `${text}${"\n".repeat(Math.max(0, trailingNewlines - renderedTrailingNewlines))}`;
 }
+
+export function sliceTextStyles(
+  styles: Style[] | undefined,
+  start: number,
+  end: number,
+): Style[] | undefined {
+  if (!styles || styles.length === 0) {
+    return undefined;
+  }
+
+  const chunkStyles = styles
+    .map((style) => {
+      const overlapStart = Math.max(style.start, start);
+      const overlapEnd = Math.min(style.start + style.len, end);
+      if (overlapEnd <= overlapStart) {
+        return null;
+      }
+
+      if (style.st === TextStyle.Indent) {
+        return {
+          start: overlapStart - start,
+          len: overlapEnd - overlapStart,
+          st: style.st,
+          indentSize: style.indentSize,
+        };
+      }
+
+      return {
+        start: overlapStart - start,
+        len: overlapEnd - overlapStart,
+        st: style.st,
+      };
+    })
+    .filter((style): style is NonNullable<typeof style> => style !== null);
+
+  return chunkStyles.length > 0 ? chunkStyles : undefined;
+}

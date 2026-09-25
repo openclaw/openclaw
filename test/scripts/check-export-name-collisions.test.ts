@@ -243,6 +243,40 @@ describe("export name collision guard", () => {
   });
 
   it.each([
+    [
+      "untyped named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask = runTaskInner;",
+    ],
+    [
+      "typed named alias",
+      'import { runTask as runTaskInner } from "./inner.js";',
+      "export const runTask: () => string = runTaskInner;",
+    ],
+    [
+      "namespace property alias",
+      'import * as runtime from "./inner.js";',
+      "export const runTask = runtime.runTask;",
+    ],
+    [
+      "type-asserted namespace element alias",
+      'import * as runtime from "./inner.js";',
+      'export const runTask = (runtime["runTask"] as () => string);',
+    ],
+  ])("records %s as a re-export instead of a value definition", (_name, imported, declaration) => {
+    const result = collectModuleExportNames(
+      ...parseFixture(`${imported}\n${declaration}`, "src/facade.ts"),
+    );
+
+    expect([...result.exportedNames]).toEqual(["runTask"]);
+    expect([...result.definitions]).toEqual([]);
+    expect([...result.valueDefinitions]).toEqual([]);
+    expect(result.namedReExports).toEqual([
+      { exportedName: "runTask", importedName: "runTask", moduleSpecifier: "./inner.js" },
+    ]);
+  });
+
+  it.each([
     ["different member", "runtime => runtime.otherThing"],
     ["selector call", "runtime => runtime.runThing()"],
     ["different receiver", "runtime => other.runThing"],

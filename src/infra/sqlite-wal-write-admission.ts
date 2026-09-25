@@ -17,8 +17,9 @@ const admissions = resolveGlobalSingleton(
 export function registerSqliteWalWriteAdmission(
   database: DatabaseSync,
   admit: MaintenanceAdmission["admit"],
+  cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  admissions.set(database, { admit });
+  admissions.set(database, { admit, cancel });
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void {

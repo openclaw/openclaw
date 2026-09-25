@@ -61,7 +61,7 @@ function runIosScreenshotsCommand(
   writeExecutable(
     "bundle",
     '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-      '[[ "${1:-}" == "_2.6.9_" ]] || exit 92\n' +
+      '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
       `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
       'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
       `exit ${options.bundleExit ?? 0}`,
@@ -156,8 +156,8 @@ describe("iOS Fastlane release upload gates", () => {
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
     expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
     expect(iosJob).not.toContain("BUNDLE_GEMFILE");
     expect(iosJob).not.toContain("ruby/setup-ruby@");
@@ -166,12 +166,12 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
     expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
-    expect(shardJob).toContain('bundler: "2.6.9"');
+    expect(shardJob).toContain('bundler: "4.0.21"');
     expect(shardJob).toContain("bundler-cache: false");
     expect(shardJob).toContain("working-directory: apps/ios");
-    expect(shardJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-    expect(shardJob).toContain("bundle _2.6.9_ check");
-    expect(shardJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(shardJob).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _4.0.21_ check");
+    expect(shardJob).toContain("bundle _4.0.21_ exec fastlane --version");
     expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
     expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
@@ -186,7 +186,7 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(documentedCommands).toHaveLength(7);
     for (const command of documentedCommands) {
-      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
+      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane');
     }
   });
 
@@ -221,7 +221,7 @@ describe("iOS Fastlane release upload gates", () => {
     try {
       const result = spawnSync(
         "bash",
-        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check'],
+        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check'],
         {
           cwd: path.join(process.cwd(), "apps", "ios"),
           encoding: "utf8",
@@ -245,14 +245,14 @@ describe("iOS Fastlane release upload gates", () => {
     const { result, trace } = runIosScreenshotsCommand();
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository bundle fails", () => {
     const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
 
     expect(result.status).toBe(42);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("prints the pinned setup command when the repository bundle is unavailable", () => {
@@ -261,15 +261,15 @@ describe("iOS Fastlane release upload gates", () => {
     expect(result.status).toBe(1);
     expect(trace).toBe("");
     expect(result.stderr).toContain("Install Ruby 3.4.10");
-    expect(result.stderr).toContain("gem install bundler -v 2.6.9");
-    expect(result.stderr).toContain("bundle _2.6.9_ install");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
+    expect(result.stderr).toContain("bundle _4.0.21_ install");
   });
 
   it("ignores a conflicting inherited Gemfile on the pinned path", () => {
     const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository Gemfile is absent", () => {
@@ -309,7 +309,7 @@ describe("iOS Fastlane release upload gates", () => {
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _2.6.9_ install");
+      expect(result.stderr).toContain("bundle _4.0.21_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }
@@ -1068,6 +1068,10 @@ def sh(*arguments, **options)
   raise "rebooted simulator" if command.include?("simctl")
   raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
+  parts = Shellwords.split(command)
+  log_path = parts.fetch(parts.index("run_apple_command_logged") + 1)
+  FileUtils.mkdir_p(File.dirname(log_path))
+  File.write(log_path, "native capture log")
   FileUtils.mkdir_p(@result_path)
   File.write(File.join(@result_path, "result"), "capture #{@calls}")
   raise "synthetic capture failure" if @scenario == "capture" && @calls == 1
@@ -1082,6 +1086,7 @@ rows = %w[capture result success].map do |scenario|
     @scenario, @calls, @checks, @uninstalls = scenario, 0, 0, 0
     @result_path = File.join(root, "current.xcresult")
     archive = File.join(root, "archive")
+    logs = File.join(root, "logs")
     FileUtils.mkdir_p(archive)
     FileUtils.mkdir_p(File.join(root, "en-US"))
     FileUtils.mkdir_p(File.join(root, "screenshots"))
@@ -1094,6 +1099,7 @@ rows = %w[capture result success].map do |scenario|
         screenshot: { test: "fixture-test", name: "fixture-screen" },
         output_directory: root, result_bundle_path: @result_path,
         result_bundle_archive_directory: archive, capture_attempts: [],
+        log_directory: logs,
         capture_attempts_path: ledger, derived_data_path: root,
         device_udid: "fixture-udid", snapshot_cache_directory: root
       )
@@ -1102,6 +1108,8 @@ rows = %w[capture result success].map do |scenario|
     end
     { scenario: scenario, calls: @calls, checks: @checks, uninstalls: @uninstalls, error: error,
       attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
+      evidenceEntries: Dir.children(archive).sort,
+      log: File.read(File.join(logs, "fixture-device-fixture-screen.log")),
       archived: File.read(File.join(archive, "fixture-device-fixture-screen-attempt-1.xcresult", "result")) }
   end
 end
@@ -1117,6 +1125,8 @@ puts JSON.generate(rows)
       error: string | null;
       attempts: { attempt: number; captureOutcome: string }[];
       archived: string;
+      evidenceEntries: string[];
+      log: string;
     }[];
     expect(
       rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
@@ -1134,6 +1144,11 @@ puts JSON.generate(rows)
         }),
       ]);
       expect(row.archived).toBe("capture 1");
+      expect(row.evidenceEntries).toEqual([
+        "capture-attempts.json",
+        "fixture-device-fixture-screen-attempt-1.xcresult",
+      ]);
+      expect(row.log).toBe("native capture log");
     }
   });
 
@@ -1260,6 +1275,8 @@ module Open3
 end
 def run_screenshot_xcodebuild!(arguments, log_path:)
   raise "not building test products" unless arguments.last == "build-for-testing"
+  FileUtils.mkdir_p(File.dirname(log_path))
+  File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
   make_product(arguments.fetch(arguments.index("-derivedDataPath") + 1))
@@ -1296,6 +1313,9 @@ results = %w[combined iphone standalone standalone-build-failure missing invalid
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     ENV["HOME"] = root
+    logs = File.join(ios_root, "build", "SnapshotLogs")
+    FileUtils.mkdir_p(logs)
+    File.write(File.join(logs, "stale.log"), "previous invocation")
     %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
       app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       FileUtils.mkdir_p(app)
@@ -1319,6 +1339,8 @@ results = %w[combined iphone standalone standalone-build-failure missing invalid
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
       attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
+      evidenceEntries: Dir.glob(File.join(ios_root, "build", "SnapshotTestResults", "*")).map { |entry| File.basename(entry) }.sort,
+      logs: Dir.children(logs).sort,
       versions: @commands.select { |args| args.any? { |arg| arg.end_with?("/ios-write-version-xcconfig.sh") } }
         .map { |args| args.drop(2) }
     }
@@ -1336,6 +1358,8 @@ puts JSON.generate(results)
       pngs: number;
       xcresults: number;
       attempts: boolean;
+      evidenceEntries: string[];
+      logs: string[];
       versions: string[][];
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
@@ -1348,6 +1372,14 @@ puts JSON.generate(results)
       pngs: 5,
       xcresults: 4,
       attempts: true,
+      evidenceEntries: [
+        "01-control-connected.xcresult",
+        "02-chat-connected.xcresult",
+        "03-agent-connected.xcresult",
+        "04-settings-connected.xcresult",
+        "capture-attempts.json",
+      ],
+      logs: ["build.log"],
       versions: [versionArgs],
     });
     expect(row("iphone")).toMatchObject({

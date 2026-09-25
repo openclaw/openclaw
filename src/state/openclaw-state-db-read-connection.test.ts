@@ -25,6 +25,10 @@ vi.mock("../infra/sqlite-worker-identity.js", () => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: mocks.openPrivate,
 }));
+vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-schema-facts.js")>()),
+  admitSqliteSchema: vi.fn(),
+}));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabaseResult: () => ({ status: "available", database: mocks.openTracked() }),
 }));
