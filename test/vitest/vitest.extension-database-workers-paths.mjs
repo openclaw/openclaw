@@ -173,6 +173,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/facetime/tests/runtime-reconciliation.test.ts",
   "extensions/facetime/tests/runtime.test.ts",
   "extensions/feishu/src/bot.broadcast.test.ts",
+  "extensions/feishu/src/bot.post-files.test.ts",
   "extensions/feishu/src/bot.test.ts",
   "extensions/feishu/src/dedup.test.ts",
   "extensions/feishu/src/feishu-ingress.test.ts",

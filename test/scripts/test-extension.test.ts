@@ -212,6 +212,7 @@ describe("scripts/test-extension.mts", () => {
       extensionId: "feishu",
       workerFiles: [
         "bot.broadcast.test.ts",
+        "bot.post-files.test.ts",
         "bot.test.ts",
         "dedup.test.ts",
         "feishu-ingress.test.ts",

@@ -12,7 +12,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
-import { claimUnprocessedFeishuMessage } from "./dedup.js";
+import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -436,6 +436,46 @@ describe("Feishu durable ingress", () => {
       ).resolves.toEqual({ kind: "duplicate" });
       expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
       expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("suppresses a captioned post redelivery after upgrade when the pre-upgrade record exists", async () => {
+    await withQueue(async () => {
+      const preUpgradeKey = "om_post";
+      await expect(
+        finalizeFeishuMessageProcessing({
+          messageId: preUpgradeKey,
+          namespace: "default",
+        }),
+      ).resolves.toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      feishuDedupeState.reset();
+
+      const redelivery: FeishuMessageEvent = {
+        sender: { sender_id: { open_id: "ou-user" } },
+        message: {
+          message_id: preUpgradeKey,
+          chat_id: "oc-chat",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            title: "",
+            content: [[{ tag: "text", text: "这是账本" }]],
+            files: [
+              {
+                file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+                file_name: "amount-2026-08-01_2026-08-31.csv",
+                is_folder: false,
+              },
+            ],
+          }),
+        },
+      };
+      const currentKey = resolveFeishuMessageDedupeKey(redelivery);
+      expect(currentKey).toBe(preUpgradeKey);
+      await expect(
+        claimUnprocessedFeishuMessage({ messageId: currentKey, namespace: "default" }),
+      ).resolves.toEqual({ kind: "duplicate" });
     });
   });
 

@@ -24,8 +24,10 @@ function buildMediaDedupeKey(messageId: string, mediaParts: string[]): string {
 }
 
 function resolvePostMediaParts(content: string): string[] {
-  const { attachments } = parsePostContent(content);
-  // Replay keys live for 24 hours across restarts; keep their shipped grouped order and duplicates.
+  const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
+  // Replay keys live for 24 hours across restarts; keep their shipped grouped
+  // order and duplicates. Top-level post files[] belong to download only;
+  // including them here would invalidate pre-upgrade captioned-post records.
   return (["image", "file"] as const).flatMap((kind) =>
     attachments
       .filter((attachment) => attachment.kind === kind)
