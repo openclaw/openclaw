@@ -38,6 +38,8 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
       env: {
         HTTPS_PROXY: mocks.proxyUrl,
         HTTP_PROXY: mocks.proxyUrl,
+        https_proxy: mocks.proxyUrl,
+        http_proxy: mocks.proxyUrl,
         NODE_USE_ENV_PROXY: "1",
         NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
         SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -132,6 +134,8 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  https_proxy: mocks.proxyUrl,
+  http_proxy: mocks.proxyUrl,
   NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -464,6 +468,35 @@ describe("exec store environment", () => {
     },
   );
 
+  it("replaces inherited proxy aliases without changing bypass rules", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("HTTP_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("https_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("http_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("NO_PROXY", "metadata.example");
+    vi.stubEnv("no_proxy", "localhost");
+    mocks.egressActive = true;
+
+    await withTeamStoreEntries([], async () => {
+      const env = await captureStoreExecEnvironment({
+        host: "gateway",
+        callId: "call-egress-proxy-precedence",
+        config: { secrets: { egressProxy: { enabled: true } } },
+      });
+
+      expect(env).toMatchObject({
+        ...EGRESS_ENV,
+        NO_PROXY: "metadata.example",
+        no_proxy: "localhost",
+      });
+      expect(mocks.spawnInputs.at(-1)?.env).toMatchObject({
+        ...EGRESS_ENV,
+        NO_PROXY: "metadata.example",
+        no_proxy: "localhost",
+      });
+    });
+  });
+
   it.each(
     (["gateway", "sandbox", "node"] as const).flatMap((host) =>
       [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
@@ -483,6 +516,14 @@ describe("exec store environment", () => {
           },
         ],
         async () => {
+          const baseline =
+            host === "gateway"
+              ? undefined
+              : await captureStoreExecEnvironment({
+                  host,
+                  callId: `call-egress-baseline-${host}`,
+                  config: { secrets: { egressProxy: { enabled: false } } },
+                });
           mocks.egressActive = true;
           const env = await captureStoreExecEnvironment({
             host,
@@ -512,10 +553,8 @@ describe("exec store environment", () => {
 
           expect(env).not.toHaveProperty("AWS_REGION");
           expect(env).not.toHaveProperty("SERVICE_API_KEY");
-          expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
-          for (const [key, value] of Object.entries(EGRESS_ENV)) {
-            expect(env[key]).not.toBe(value);
-          }
+          // Remote hosts retain inherited routing; enabled mode must add nothing.
+          expect(env).toEqual(baseline);
           expect(mocks.proxyBindings).toEqual([]);
         },
       );
