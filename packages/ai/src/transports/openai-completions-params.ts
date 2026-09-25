@@ -470,6 +470,26 @@ export function buildOpenAICompletionsRequest(
       params.tool_choice = toolChoice;
     }
   }
+  const isOpenRouter = compat.thinkingFormat === "openrouter";
+  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
+  const usesBinaryOpenRouterThinking =
+    isOpenRouter &&
+    (model.compat?.supportsReasoningEffort === false ||
+      model.compat?.supportedReasoningEfforts?.length === 0);
+  const simpleReasoning = options?.reasoning;
+  const requestedEffort =
+    policy.mode === "direct"
+      ? options?.reasoningEffort
+      : (options?.reasoningEffort ??
+        (simpleReasoning === "none"
+          ? "none"
+          : resolveOpenAISimpleReasoningEffort(
+              { ...model, compat: model.compat ?? undefined },
+              simpleReasoning,
+            )) ??
+        (usesBinaryOpenRouterThinking ? undefined : "high"));
+  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
       policy.mode === "direct"
@@ -512,7 +532,9 @@ export function buildOpenAICompletionsRequest(
         );
         if (
           remainingBudget <= 0 ||
-          (model.reasoning && remainingBudget < MIN_USEFUL_OUTPUT_TOKENS)
+          (model.reasoning &&
+            thinkingEnabled !== false &&
+            remainingBudget < MIN_USEFUL_OUTPUT_TOKENS)
         ) {
           throw Object.assign(
             new Error(
@@ -532,26 +554,6 @@ export function buildOpenAICompletionsRequest(
       }
     }
   }
-  const isOpenRouter = compat.thinkingFormat === "openrouter";
-  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
-  const usesBinaryOpenRouterThinking =
-    isOpenRouter &&
-    (model.compat?.supportsReasoningEffort === false ||
-      model.compat?.supportedReasoningEfforts?.length === 0);
-  const simpleReasoning = options?.reasoning;
-  const requestedEffort =
-    policy.mode === "direct"
-      ? options?.reasoningEffort
-      : (options?.reasoningEffort ??
-        (simpleReasoning === "none"
-          ? "none"
-          : resolveOpenAISimpleReasoningEffort(
-              { ...model, compat: model.compat ?? undefined },
-              simpleReasoning,
-            )) ??
-        (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
-  const { effort, thinkingEnabled } = reasoning;
   if (isOpenRouter && model.reasoning) {
     if (usesBinaryOpenRouterThinking && thinkingEnabled !== undefined) {
       params.reasoning = { enabled: thinkingEnabled };
