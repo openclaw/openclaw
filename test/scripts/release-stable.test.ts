@@ -31,6 +31,15 @@ const fixture = () => {
   mkdirSync(scratch, { recursive: true });
   return releaseFixture(directories.make(".release-stable-test-", scratch));
 };
+// Shape written by probeCapabilities before strict publication removed waiver support.
+const legacyCapabilities = (closeoutResolvesWaivers: boolean) => ({
+  parentSyncsBetaDistTag: false,
+  parentSweepsStaleChildren: false,
+  parentApprovalReceipt: false,
+  closeoutResolvesWaivers,
+  probedAt: "2026-09-24T00:00:00.000Z",
+  toolingSha: TOOLING_SHA,
+});
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
 
@@ -53,17 +62,18 @@ function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
   ];
 }
 
-function validateSetup(fresh = true): FakeStep[] {
+function validateSetup(fresh = true, retainedCapabilities = false): FakeStep[] {
   return [
     ...(fresh ? [step("git", ["rev-parse", "origin/main"], TOOLING_SHA)] : []),
     step("git", ["merge-base", "--is-ancestor", TOOLING_SHA, "origin/main"]),
-    ...(fresh
+    ...(fresh && !retainedCapabilities
       ? [
           step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`]),
           step("git", ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`]),
-          step("git", ["tag", "*", TOOLING_SHA]),
-          step("git", ["push", "origin", "*"]),
         ]
+      : []),
+    ...(fresh
+      ? [step("git", ["tag", "*", TOOLING_SHA]), step("git", ["push", "origin", "*"])]
       : []),
     step("gh", ["api", "*", "--jq", ".object.sha"], TOOLING_SHA),
   ];
@@ -227,11 +237,20 @@ describe("release:stable CLI", () => {
   it("stops on the first failed stable validation and resumes only after operator recovery", () => {
     const release = fixture();
     const legacy = phaseState("validate");
-    const legacyState = { ...legacy, validate: { ...legacy.validate, continues: 2 } };
+    const legacyState = {
+      ...legacy,
+      capabilities: legacyCapabilities(true),
+      validate: { ...legacy.validate, continues: 2 },
+    };
     release.seed(legacyState);
-    const failed = release.run([...validateSetup(), request(), validationRun("failure", 1)]);
+    const failed = release.run([
+      ...validateSetup(true, true),
+      request(),
+      validationRun("failure", 1),
+    ]);
     expect(failed.status).toBe(2);
     expect(release.readState().validate).not.toHaveProperty("continues");
+    expect(release.readState().capabilities).not.toHaveProperty("closeoutResolvesWaivers");
     expect(failed.stderr).toContain(
       "Full Release Validation 101 failed; diagnose before operator recovery.",
     );
@@ -287,7 +306,11 @@ describe("release:stable CLI", () => {
       const release = fixture();
       const state = phaseState("macos");
       state.macos = { validateRunId: "201", preflightRunId: "202" };
-      const legacyState = { ...state, validate: { ...state.validate, continues } };
+      const legacyState = {
+        ...state,
+        capabilities: legacyCapabilities(continues > 0),
+        validate: { ...state.validate, continues },
+      };
       release.seed(legacyState);
       const before = readFileSync(release.stateFile, "utf8");
       const result = release.run([], ["--status"]);
@@ -308,6 +331,7 @@ describe("release:stable CLI", () => {
       release.seed(state);
       const invalid = JSON.stringify({
         ...state,
+        capabilities: legacyCapabilities(true),
         validate: { ...state.validate, continues: 2, [field]: "retained legacy value" },
       });
       writeFileSync(release.stateFile, invalid);

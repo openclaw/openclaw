@@ -98,9 +98,16 @@ const releaseStateSchema = z.strictObject({
     z.strictObject({ at: timestamp, phase: phaseSchema, event: z.string(), detail: z.string() }),
   ),
 });
-// Older writers recorded retry bookkeeping even for waiver-free releases. Read
-// and discard that counter only; retired waiver fields still fail strict parsing.
+// Older writers recorded retry and tooling-capability metadata even for waiver-free
+// releases. Discard only that bookkeeping; actual waiver fields still fail parsing.
 const releaseStateReadSchema = releaseStateSchema.extend({
+  capabilities: releaseStateSchema.shape.capabilities
+    .unwrap()
+    .extend({ closeoutResolvesWaivers: z.boolean().optional() })
+    .transform(
+      ({ closeoutResolvesWaivers: _closeoutResolvesWaivers, ...capabilities }) => capabilities,
+    )
+    .optional(),
   validate: releaseStateSchema.shape.validate
     .extend({ continues: z.number().int().min(0).optional() })
     .transform(({ continues: _continues, ...validation }) => validation),
