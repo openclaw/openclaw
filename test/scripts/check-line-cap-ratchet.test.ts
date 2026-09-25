@@ -260,14 +260,26 @@ describe("line-cap growth ratchet", () => {
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
-  it("uses the reachable parent when an explicit base has no merge base", () => {
+  it("preserves line-cap growth detection across earlier branch commits", () => {
     const root = fixture(3);
     const target = path.join(root, "src/file.ts");
 
-    fs.writeFileSync(target, source(4));
+    git(root, "branch", "upstream");
+    git(root, "branch", "-m", "release");
+    fs.writeFileSync(target, source(6));
     git(root, "add", ".");
-    git(root, "commit", "-m", "local parent");
+    git(root, "commit", "-m", "grow release file");
+    fs.writeFileSync(path.join(root, "src/branch-change.ts"), "export const branchChange = true;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "later release commit");
 
+    git(root, "checkout", "upstream");
+    fs.writeFileSync(path.join(root, "src/upstream-change.ts"), "export const upstreamChange = true;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "upstream update");
+
+    git(root, "checkout", "release");
+    git(root, "merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main");
     git(root, "checkout", "--orphan", "unrelated");
     fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
     fs.rmSync(path.join(root, ".oxlintrc.json"), { force: true });
@@ -275,16 +287,15 @@ describe("line-cap growth ratchet", () => {
     git(root, "add", ".");
     git(root, "commit", "-m", "disconnected base");
     const disconnectedBase = git(root, "rev-parse", "HEAD");
-    git(root, "checkout", "-");
+    git(root, "checkout", "release");
 
-    fs.writeFileSync(target, source(5));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
     expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining("src/file.ts: 4 -> 5 counted lines (cap 3)"),
+      expect.stringContaining("src/file.ts: 3 -> 6 counted lines (cap 3)"),
     );
   });
+
 
 });
