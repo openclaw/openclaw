@@ -6,6 +6,7 @@ import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
@@ -19,6 +20,7 @@ import {
 import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { acquireSystemAgentInferenceOwner } from "./inference-owner.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -133,7 +135,8 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  const binding = params.verifiedInference;
+  const route = await requireVerifiedPlannerRoute(binding, params.deps);
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -160,6 +163,7 @@ async function runConfiguredSystemAgentText(params: {
       runId,
       route.agentId,
       "system-agent.assistant",
+      captureGatewayToolCallerAssertion(),
     );
     const shared = {
       sessionId: `${runId}-session`,
@@ -187,6 +191,18 @@ async function runConfiguredSystemAgentText(params: {
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
+    // CLI owns its runtime; embedded helpers retain the verified configured owner
+    // rather than inheriting the caller's exact generation into a temporary workspace.
+    await using inferenceOwner =
+      route.runner === "embedded"
+        ? await acquireSystemAgentInferenceOwner({
+            binding: params.verifiedInference,
+            deps: params.deps ?? {},
+            timeoutMs,
+            stage: "planner",
+            isBindingCurrent: () => params.verifiedInference === binding,
+          })
+        : undefined;
     const result =
       route.runner === "cli"
         ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
@@ -202,6 +218,8 @@ async function runConfiguredSystemAgentText(params: {
             (await import("../agents/embedded-agent.js")).runEmbeddedAgent
           )({
             ...shared,
+            pluginGeneration: inferenceOwner?.pluginGeneration,
+            abortSignal: inferenceOwner?.signal,
             lane: CommandLane.SystemAgentInference,
             preparedRunAdmission,
             toolsAllow: [],
