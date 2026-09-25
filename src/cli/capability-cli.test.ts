@@ -7,6 +7,8 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+// Prepare the fixed subprocess graph during collection, before command deadlines.
+import "../infra/runtime-process-entrypoints.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
