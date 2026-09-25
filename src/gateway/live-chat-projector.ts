@@ -199,7 +199,8 @@ export function createLiveAssistantTextProjection(options?: {
     get source() {
       return projection.source;
     },
-    append: (delta: string) => present(projection.append(delta)),
+    append: (delta: string, preparedSource?: string) =>
+      present(projection.append(delta, preparedSource)),
     replace: (text: string) => present(projection.replace(text), true),
   };
 }

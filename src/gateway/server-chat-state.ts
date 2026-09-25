@@ -379,7 +379,9 @@ export function createChatRunState(): ChatRunState {
             : null
           : pendingRawDelta;
       display.current =
-        delta == null ? display.projector.replace(rawText) : display.projector.append(delta);
+        delta == null
+          ? display.projector.replace(rawText)
+          : display.projector.append(delta, rawText);
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null
           ? display.unsentDelta + display.current.delta

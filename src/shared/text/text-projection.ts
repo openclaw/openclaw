@@ -87,8 +87,10 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     get text() {
       return text;
     },
-    append(delta: string): TextProjection {
-      source += delta;
+    append(delta: string, preparedSource?: string): TextProjection {
+      // A validated cumulative snapshot already owns these bytes; rebuilding its
+      // rope would copy the growing reply again when a consumer reads it.
+      source = preparedSource ?? source + delta;
       const next = project({ text: source, delta });
       // A downstream filter can cancel an intermediate replacement without changing the final prefix.
       if (next.delta === null && next.text.startsWith(text)) {
