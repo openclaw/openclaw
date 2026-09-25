@@ -1,5 +1,6 @@
 {
   "id": "workboard",
+  "uiCapabilities": ["page", "navigation", "accessory", "widget"],
   "categories": [
     "productivity"
   ],

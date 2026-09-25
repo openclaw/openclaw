@@ -188,3 +188,34 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   readOnlyInput.click();
   expect(onPatch).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "shows selected capabilities without a catalog while enabled=%s",
+  (enabled) => {
+    const inspection = createInspectResult();
+    inspection.declared = {
+      ...inspection.declared,
+      providers: ["local-model", "sibling-model"],
+      channels: ["local-channel", "sibling-channel"],
+      contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
+    };
+    inspection.overview = {
+      capabilities: {
+        providers: ["local-model"],
+        channels: ["local-channel"],
+        contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
+        ui: ["page"],
+      },
+    };
+    const container = mount({ inspection, result: createResult(createPlugin({ enabled })) });
+    const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
+      (heading) => heading.textContent,
+    );
+    expect(titles).toEqual(expect.arrayContaining(["Capabilities2"]));
+    expect(container.textContent).toContain("Text to speech");
+    expect(container.textContent).toContain("Pages");
+    expect(container.textContent).not.toContain("speechProviders:");
+    expect(container.textContent).not.toContain("sibling-");
+    expect(container.textContent).not.toContain("Video generation");
+  },
+);

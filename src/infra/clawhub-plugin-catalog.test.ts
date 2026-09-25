@@ -446,6 +446,7 @@ describe("ClawHub plugin catalog client", () => {
             contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
             providers: ["memory-model"],
             channels: ["memory-chat"],
+            uiCapabilities: ["widget", "page", "widget"],
             bundledSkills: [
               {
                 name: "Recall",
@@ -521,6 +522,7 @@ describe("ClawHub plugin catalog client", () => {
       contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
       providers: ["memory-model"],
       channels: ["memory-chat"],
+      uiCapabilities: ["page", "widget"],
       skills: [{ name: "Recall", description: "Recall saved knowledge" }],
       versions: [
         { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
@@ -549,6 +551,7 @@ describe("ClawHub plugin catalog client", () => {
       contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
       providers: ["memory-model"],
       channels: ["memory-chat"],
+      uiCapabilities: ["page", "widget"],
     });
     expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });

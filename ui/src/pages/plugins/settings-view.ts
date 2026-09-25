@@ -23,6 +23,7 @@ import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
@@ -262,7 +263,8 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
           </label>
           <div class="settings-group oc-settings-group">${renderInstalledInventory(props)}</div>
         `
-      : html`<div id="plugin-settings-advanced">
+      : html`<div id="plugin-settings-advanced" class="settings-stack">
+          <openclaw-plugin-manager></openclaw-plugin-manager>
           ${renderSettingsSection(
             {
               title: t("pluginsPage.advanced"),
@@ -462,7 +464,8 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         })),
         icons.wrench,
       )}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}`,
+      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}
+      ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

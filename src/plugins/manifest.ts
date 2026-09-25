@@ -1,6 +1,7 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
@@ -321,6 +322,14 @@ export function loadPluginManifest(
       manifestPath,
     });
   }
+  const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
+  if (!uiCapabilities.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`,
+      manifestPath,
+    });
+  }
   const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
   if (!controlUiResult.ok) {
     return cacheResult({
@@ -345,6 +354,9 @@ export function loadPluginManifest(
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
       controlUi: controlUiResult.value,
+      ...(uiCapabilities.capabilities !== undefined
+        ? { uiCapabilities: uiCapabilities.capabilities }
+        : {}),
       themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),

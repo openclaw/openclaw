@@ -71,7 +71,7 @@ async function selectView(page: Page, label: string, value: string) {
 const customizationOrigins = new WeakMap<Page, string>();
 
 async function openCustomizeUi(page: Page) {
-  const pluginsUrl = new URL("plugins", suite.server.baseUrl).href;
+  const pluginsUrl = new URL("settings/plugins?tab=advanced", suite.server.baseUrl).href;
   if (page.url() !== pluginsUrl) {
     customizationOrigins.set(page, page.url());
     await page.evaluate((url) => {

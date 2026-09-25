@@ -13,7 +13,7 @@ import { loadPluginManifest } from "./manifest.js";
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-function fixture(controlUi: unknown) {
+function fixture(controlUi: unknown, uiCapabilities?: unknown) {
   const plugin = writePlugin({
     id: "native-ui",
     body: 'module.exports = { id: "native-ui", register() {} };',
@@ -24,6 +24,7 @@ function fixture(controlUi: unknown) {
       id: plugin.id,
       configSchema: { type: "object", additionalProperties: false },
       controlUi,
+      uiCapabilities,
     }),
   );
   return plugin;
@@ -32,10 +33,13 @@ function fixture(controlUi: unknown) {
 describe("native Control UI manifest", () => {
   it("carries normalized built entrypoints through discovery into runtime ownership", () => {
     useNoBundledPlugins();
-    const plugin = fixture({
-      entry: "./dist/control-ui/index.js",
-      styles: ["./dist/control-ui/theme.css", "dist/control-ui/theme.css"],
-    });
+    const plugin = fixture(
+      {
+        entry: "./dist/control-ui/index.js",
+        styles: ["./dist/control-ui/theme.css", "dist/control-ui/theme.css"],
+      },
+      ["widget", "page", "widget"],
+    );
     const registry = loadOpenClawPlugins({
       cache: false,
       workspaceDir: plugin.dir,
@@ -44,9 +48,36 @@ describe("native Control UI manifest", () => {
     });
     expect(registry.plugins.find((record) => record.id === plugin.id)).toMatchObject({
       status: "loaded",
+      uiCapabilities: ["page", "widget"],
       controlUi: { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] },
     });
   });
+
+  it.each([
+    { declaration: undefined, expected: undefined },
+    { declaration: [], expected: [] },
+    { declaration: ["link-reader", "page", "link-reader"], expected: ["page", "link-reader"] },
+  ])(
+    "reads static UI capabilities without a browser module: $declaration",
+    ({ declaration, expected }) => {
+      const result = loadPluginManifest(fixture(undefined, declaration).dir);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.manifest.uiCapabilities).toEqual(expected);
+        expect(result.manifest.controlUi).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([null, "page", ["pages"], ["page", 1]])(
+    "rejects an invalid UI capability declaration %j",
+    (declaration) => {
+      expect(loadPluginManifest(fixture(undefined, declaration).dir)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("uiCapabilities"),
+      });
+    },
+  );
 
   it.each([
     { entry: "src/index.ts" },

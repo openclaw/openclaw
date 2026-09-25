@@ -15,6 +15,7 @@ import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
@@ -107,7 +108,8 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
       t("pluginsPage.detailMcpServers"),
       detail.mcpServers.map((name) => ({ name })),
       icons.plug,
-    )}`,
+    )}
+    ${renderPluginDeclaredCapabilities(detail.contracts, detail.uiCapabilities)}`,
     readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }

@@ -10,7 +10,7 @@ const suite = createControlUiE2eSuite({ name: "Native plugin navigation" });
 
 suite.define(() => {
   it.each([true, false])(
-    "updates native page selection and keeps reload on Plugins (admin: %s)",
+    "updates native page selection and keeps reload in Plugins Advanced (admin: %s)",
     async (admin) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
@@ -74,6 +74,11 @@ suite.define(() => {
           await page.getByRole("link", { name: "Plugins", exact: true }).click();
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
+          expect(
+            await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
+          ).toBe(0);
+          await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
+          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           if (!admin) {
             expect(
               await page.getByRole("button", { name: "Customize UI", exact: true }).count(),

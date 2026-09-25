@@ -8,6 +8,7 @@ import {
   type OptionalCustomElement,
 } from "../app/lazy-custom-element.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderSettingsRow, renderSettingsSection } from "../components/settings-ui.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -62,16 +63,23 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
     const showDialog = this.available && this.open && !this.dialogLoader.visibleState;
     return html`${
       this.available
-        ? html`<button
-              class="btn btn--sm"
-              type="button"
-              @click=${() => {
-                this.open = true;
-              }}
-            >
-              ${t("pluginUi.customize")}
-            </button>
-            ${renderLazyElementModal(this.dialogLoader)}`
+        ? html`${renderSettingsSection(
+            { title: t("pluginUi.customize"), carapace: true },
+            renderSettingsRow({
+              title: t("pluginUi.selectionScope"),
+              carapace: true,
+              control: html`<button
+                class="btn btn--sm oc-action oc-action-secondary"
+                type="button"
+                @click=${() => {
+                  this.open = true;
+                }}
+              >
+                ${t("pluginUi.customize")}
+              </button>`,
+            }),
+          )}
+          ${renderLazyElementModal(this.dialogLoader)}`
         : nothing
     }
     ${
