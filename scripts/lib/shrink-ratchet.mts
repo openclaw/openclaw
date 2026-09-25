@@ -75,7 +75,14 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
     // first-parent merge: a branch-sync merge preserves the complete local change
     // range, unlike HEAD^1 which can already contain an earlier baseline expansion.
     try {
-      const merge = readGitText(root, ["rev-list", "--first-parent", "--merges", "-n", "1", "HEAD"]).trim();
+      const merge = readGitText(root, [
+        "rev-list",
+        "--first-parent",
+        "--merges",
+        "-n",
+        "1",
+        "HEAD",
+      ]).trim();
       if (merge) {
         return readGitText(root, ["rev-parse", merge + "^2"]).trim();
       }
@@ -83,7 +90,6 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
       // No usable merge parent means there is no trustworthy disconnected-history base.
     }
     return null;
-  }
   }
 }
 
