@@ -823,21 +823,24 @@ img.chat-avatar {
     pointer-events: inherit;
   }
 
-  /* Controls in message content win hit-testing over that upward extension.
-     Zero specificity keeps any position or stacking they already declare. */
-  :where(.chat-group-messages :is(.chat-text, .chat-image-frame):not(.chat-tool-card *))
+  /* Every control in message content, including openable attachment cards,
+     wins hit-testing over that upward extension; plain text keeps the tap
+     area. Zero specificity keeps any position or stacking they already
+     declare. Tool cards and the action row keep their own stacking. */
+  :where(.chat-group-messages)
     :where(
       a,
       button,
       summary,
       [role="button"],
+      [data-openable],
       input:not(.oc-sensitive-input > input),
       select,
       textarea,
       label,
       video,
       audio
-    ) {
+    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)) {
     position: relative;
     z-index: 1;
   }
