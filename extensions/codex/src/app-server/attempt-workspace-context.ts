@@ -115,6 +115,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
       memoryToolRouted: memoryToolsAvailable,
+      onMemoryPreparationError: (error) =>
+        embeddedAgentLog.warn("failed to prepare codex memory recall instructions", { error }),
       memoryTools: injectOpenClawContext
         ? {
             toolNames: params.memoryToolNames,

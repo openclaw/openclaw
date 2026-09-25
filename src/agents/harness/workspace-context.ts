@@ -25,6 +25,7 @@ export type AgentWorkspaceContextParams = Parameters<typeof resolveBootstrapFile
   nativeProjectDocBasenames?: ReadonlySet<string>;
   contextFileOrder?: ReadonlyMap<string, number>;
   promptMemoryWorkspaceDir?: string;
+  onMemoryPreparationError?: (error: unknown) => void;
 };
 
 export type AgentWorkspaceContext = {
@@ -56,7 +57,7 @@ export async function prepareAgentWorkspaceContext(
               (file.content ?? "").trim().length > 0,
           )
           .map((file) => ({ ...toContextFile(file), bootstrapFile: file })),
-        { order: params.contextFileOrder, caseInsensitivePathOrder: true },
+        { order: params.contextFileOrder, caseInsensitivePathOrder: true, trimBasename: false },
       ).map(({ file }) => file.bootstrapFile)
     : [];
   const budgetFiles = instructionsOnly
@@ -123,7 +124,11 @@ export async function prepareAgentWorkspaceContext(
           agentSessionKey: params.sessionKey,
           sandboxed: params.memoryTools.sandboxed,
         }).catch((error: unknown) => {
-          params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
+          if (params.onMemoryPreparationError) {
+            params.onMemoryPreparationError(error);
+          } else {
+            params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
+          }
           return undefined;
         })
       : undefined;
@@ -163,7 +168,7 @@ function sortContextFiles(
   files: readonly EmbeddedContextFile[],
   order?: ReadonlyMap<string, number>,
 ): EmbeddedContextFile[] {
-  return prepareContextFilesForPrompt(files, { order, caseInsensitivePathOrder: true }).map(
+  return prepareContextFilesForPrompt(files, { order, caseInsensitivePathOrder: true, trimBasename: false }).map(
     ({ file }) => file,
   );
 }

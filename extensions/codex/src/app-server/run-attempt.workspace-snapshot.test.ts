@@ -58,8 +58,10 @@ describe("Codex workspace instruction snapshots", () => {
       registration.registry.plugins.push(record);
       const api = registration.createApi(record, { config: params.config ?? {} });
       const memoryContribution = vi.fn((_context: unknown): string[] => []);
+      const memoryFailure = new Error("optional memory contribution unavailable");
+      const warn = vi.spyOn(agentHarnessRuntime.embeddedAgentLog, "warn");
       memoryContribution.mockImplementationOnce(() => {
-        throw new Error("optional memory contribution unavailable");
+        throw memoryFailure;
       });
       if (contributionKind === "async preparation") {
         api.registerMemoryPromptPreparation(async (context) => memoryContribution(context));
@@ -73,6 +75,9 @@ describe("Codex workspace instruction snapshots", () => {
           await Promise.race([run, harness.waitForMethod("turn/start")]);
           await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
           expect(readAttemptTerminal(await run).promptError).toBeNull();
+          expect(warn).toHaveBeenCalledWith("failed to prepare codex memory recall instructions", {
+            error: memoryFailure,
+          });
           expect(memoryContribution).toHaveBeenCalledWith(
             expect.objectContaining({ availableTools: new Set(["memory_get"]) }),
           );

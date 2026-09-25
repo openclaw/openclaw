@@ -35,12 +35,16 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
   options: {
     order?: ReadonlyMap<string, number>;
     caseInsensitivePathOrder?: boolean;
+    trimBasename?: boolean;
   } = {},
 ) {
   return contextFiles
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
-      const basename = normalizeLowercaseStringOrEmpty(path.slice(path.lastIndexOf("/") + 1));
+      const rawBasename = path.slice(path.lastIndexOf("/") + 1);
+      const basename = options.trimBasename === false
+        ? rawBasename.toLowerCase()
+        : normalizeLowercaseStringOrEmpty(rawBasename);
       return {
         file,
         path,
