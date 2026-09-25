@@ -2,10 +2,11 @@ import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 
 /** Registration publications invalidate indexes retained within a synchronous fan-out. */
 export class ChatAbortControllerRegistry extends Map<string, ChatAbortControllerEntry> {
-  #revision = 0;
+  #revision: number;
 
   constructor() {
     super();
+    this.#revision = 0;
   }
 
   get revision(): number {
