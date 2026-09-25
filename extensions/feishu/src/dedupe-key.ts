@@ -24,7 +24,9 @@ function buildMediaDedupeKey(messageId: string, mediaParts: string[]): string {
 }
 
 function resolvePostMediaParts(content: string): string[] {
-  const { attachments } = parsePostContent(content);
+  // Newly downloaded post files must not change identities already persisted by
+  // an older host, or a redelivery after upgrade can dispatch the same turn twice.
+  const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
   // Replay keys live for 24 hours across restarts; keep their shipped grouped order and duplicates.
   return (["image", "file"] as const).flatMap((kind) =>
     attachments

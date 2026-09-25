@@ -10,7 +10,8 @@ const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 type PostParseResult = {
   textContent: string;
   attachments: Array<
-    { kind: "image"; key: string } | { kind: "file"; key: string; fileName?: string }
+    | { kind: "image"; key: string }
+    | { kind: "file"; key: string; fileName?: string; mediaKind?: "document" }
   >;
   mentionedOpenIds: string[];
 };
@@ -18,6 +19,7 @@ type PostParseResult = {
 type PostPayload = {
   title: string;
   content: unknown[];
+  files?: unknown;
 };
 
 function toStringOrEmpty(value: unknown): string {
@@ -174,6 +176,7 @@ function toPostPayload(candidate: unknown): PostPayload | null {
   return {
     title: toStringOrEmpty(candidate.title),
     content: candidate.content,
+    files: candidate.files,
   };
 }
 
@@ -215,7 +218,40 @@ function resolvePostPayload(parsed: unknown): PostPayload | null {
 type PostParseOptions = {
   renderMediaPlaceholders?: boolean;
   emptyTextFallback?: string;
+  /** Durable replay keys retain the shipped inline-only attachment projection. */
+  includeTopLevelFiles?: boolean;
 };
+
+function appendPostFiles(attachments: PostParseResult["attachments"], sources: unknown[]): void {
+  const seen = new Set(
+    attachments
+      .filter((attachment) => attachment.kind === "file")
+      .map((attachment) => attachment.key),
+  );
+  for (const files of sources) {
+    if (!Array.isArray(files)) {
+      continue;
+    }
+    for (const file of files) {
+      if (!isRecord(file) || file.is_folder === true) {
+        continue;
+      }
+      const key = normalizeFeishuExternalKey(toStringOrEmpty(file.file_key));
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const fileName = toStringOrEmpty(file.file_name) || undefined;
+      // Top-level files follow standalone file semantics, not inline video tags.
+      attachments.push({
+        kind: "file",
+        key,
+        mediaKind: "document",
+        ...(fileName ? { fileName } : {}),
+      });
+    }
+  }
+}
 
 export function parsePostContent(content: string, options: PostParseOptions = {}): PostParseResult {
   try {
@@ -257,6 +293,10 @@ export function renderPostContent(
         );
       }
       paragraphs.push(renderedParagraph);
+    }
+
+    if (options.includeTopLevelFiles !== false) {
+      appendPostFiles(attachments, [payload.files, isRecord(parsed) ? parsed.files : undefined]);
     }
 
     const title = escapeMarkdownText(payload.title.trim());

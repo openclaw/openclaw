@@ -12,7 +12,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
-import { claimUnprocessedFeishuMessage } from "./dedup.js";
+import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -54,7 +54,7 @@ function messageEnvelope(params: {
         content: JSON.stringify({ text: params.text ?? "hello" }),
         create_time: params.createTime ?? "1710000000000",
       },
-    },
+    } satisfies FeishuMessageEvent,
   };
 }
 
@@ -218,6 +218,67 @@ afterEach(async () => {
 });
 
 describe("Feishu durable ingress", () => {
+  it.each([
+    { nodes: [{ tag: "text", text: "caption" }], legacyKey: "om-post-upgrade" },
+    {
+      nodes: [
+        { tag: "media", file_key: "file_inline" },
+        { tag: "img", image_key: "img_inline" },
+      ],
+      legacyKey: JSON.stringify([
+        "om-post-upgrade",
+        "image_key:img_inline",
+        "file_key:file_inline",
+      ]),
+    },
+  ])(
+    "suppresses a new delivery event for the persisted post identity $legacyKey",
+    async ({ nodes, legacyKey }) => {
+      await withQueue(async (queue, startIngress) => {
+        await expect(
+          finalizeFeishuMessageProcessing({ messageId: legacyKey, namespace: "default" }),
+        ).resolves.toBe(true);
+        feishuDedupeState.reset();
+        const adoptedTurns: string[] = [];
+        const ingress = startIngress({
+          queue,
+          dispatcher: createDispatcher(async (data) => {
+            const key = resolveFeishuMessageDedupeKey(data.event);
+            const claim = await claimUnprocessedFeishuMessage({
+              messageId: key,
+              namespace: "default",
+            });
+            if (claim.kind === "claimed") {
+              adoptedTurns.push(data.event.message.message_id);
+              await claim.handle.commit();
+            }
+            await ingress.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
+          }),
+        });
+        ingress.start();
+        const retry = messageEnvelope({
+          eventId: "evt-post-after-upgrade",
+          messageId: "om-post-upgrade",
+        });
+        retry.event.message.message_type = "post";
+        retry.event.message.content = JSON.stringify({
+          content: [nodes],
+          files: [{ file_key: "file_report", file_name: "report.csv" }],
+        });
+        await ingress.invoke(retry, { needCheck: false });
+        await ingress.waitForIdle();
+        expect(adoptedTurns).toEqual([]);
+
+        const fresh = structuredClone(retry);
+        fresh.header.event_id = "evt-post-new-message";
+        fresh.event.message.message_id = "om-post-new-message";
+        await ingress.invoke(fresh, { needCheck: false });
+        await ingress.waitForIdle();
+        expect(adoptedTurns).toEqual(["om-post-new-message"]);
+      });
+    },
+  );
+
   it("waits for durable append before acknowledging the webhook", async () => {
     await withQueue(async (queue, startIngress) => {
       let releaseAppend!: () => void;

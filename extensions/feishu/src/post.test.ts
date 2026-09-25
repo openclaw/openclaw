@@ -4,6 +4,75 @@ import { parseFeishuMarkdown } from "./markdown.js";
 import { parsePostContent } from "./post.js";
 
 describe("parsePostContent", () => {
+  it.each([false, true])(
+    "collects post files while preserving the caption: wrapped=%s",
+    (wrapped) => {
+      const payload = {
+        title: "Report",
+        content: [[{ tag: "text", text: "Please compare these files" }]],
+        files: [
+          { file_key: "file_report", file_name: "report.csv", is_folder: false },
+          { file_key: "file_notes", file_name: "notes.txt", is_folder: false },
+          { file_key: "file_report", file_name: "duplicate.csv" },
+          { file_key: "file_folder", is_folder: true },
+          { file_key: "invalid/key" },
+          { file_key: 123 },
+          null,
+        ],
+      };
+      const result = parsePostContent(
+        JSON.stringify(wrapped ? { post: { en_us: payload } } : payload),
+      );
+      expect(result.textContent).toBe("Report\n\nPlease compare these files");
+      expect(result.attachments).toEqual([
+        { kind: "file", key: "file_report", fileName: "report.csv", mediaKind: "document" },
+        { kind: "file", key: "file_notes", fileName: "notes.txt", mediaKind: "document" },
+      ]);
+    },
+  );
+
+  it("collects a files-only post without inventing text or losing unnamed documents", () => {
+    const result = parsePostContent(
+      JSON.stringify({ content: [[]], files: [{ file_key: "file_unnamed" }] }),
+      { renderMediaPlaceholders: false, emptyTextFallback: "" },
+    );
+    expect(result.textContent).toBe("");
+    expect(result.attachments).toEqual([
+      { kind: "file", key: "file_unnamed", mediaKind: "document" },
+    ]);
+  });
+
+  it("appends envelope files without changing inline attachment occurrences", () => {
+    const result = parsePostContent(
+      JSON.stringify({
+        post: {
+          en_us: {
+            content: [
+              [
+                { tag: "media", file_key: "file_clip", file_name: "clip.mp4" },
+                { tag: "img", image_key: "img_inline" },
+                { tag: "img", image_key: "img_inline" },
+              ],
+            ],
+            files: [{ file_key: "file_report", file_name: "report.csv" }],
+          },
+        },
+        files: [
+          { file_key: "file_clip", file_name: "clip.mp4" },
+          { file_key: "file_report", file_name: "report.csv" },
+          { file_key: "file_other", file_name: "other.txt" },
+        ],
+      }),
+    );
+    expect(result.attachments).toEqual([
+      { kind: "file", key: "file_clip", fileName: "clip.mp4" },
+      { kind: "image", key: "img_inline" },
+      { kind: "image", key: "img_inline" },
+      { kind: "file", key: "file_report", fileName: "report.csv", mediaKind: "document" },
+      { kind: "file", key: "file_other", fileName: "other.txt", mediaKind: "document" },
+    ]);
+  });
+
   it("renders title and styled text as markdown", () => {
     const content = JSON.stringify({
       title: "Daily *Plan*",

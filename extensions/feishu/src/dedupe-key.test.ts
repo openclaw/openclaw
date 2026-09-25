@@ -23,6 +23,41 @@ function textEvent(overrides: {
 }
 
 describe("resolveFeishuMessageDedupeKey", () => {
+  it.each([
+    { nodes: [{ tag: "text", text: "caption" }], expected: "om_post_files" },
+    {
+      nodes: [
+        { tag: "media", file_key: "file_inline" },
+        { tag: "img", image_key: "img_inline" },
+        { tag: "img", image_key: "img_inline" },
+      ],
+      expected: JSON.stringify([
+        "om_post_files",
+        "image_key:img_inline",
+        "image_key:img_inline",
+        "file_key:file_inline",
+      ]),
+    },
+  ])(
+    "keeps the shipped post replay identity $expected after adding file downloads",
+    ({ nodes, expected }) => {
+      const event: FeishuMessageEvent = {
+        sender: { sender_id: { open_id: "ou-user" } },
+        message: {
+          message_id: "om_post_files",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            content: [nodes],
+            files: [{ file_key: "file_report", file_name: "report.csv" }],
+          }),
+        },
+      };
+      expect(resolveFeishuMessageDedupeKey(event)).toBe(expected);
+    },
+  );
+
   it("collapses redelivered text with a fresh message_id but identical sender/chat/create_time/content (#46778)", () => {
     const first = resolveFeishuMessageDedupeKey(
       textEvent({ messageId: "om_first", createTime: "1710000000000" }),

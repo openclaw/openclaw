@@ -302,7 +302,7 @@ export async function resolveFeishuMediaList(params: {
       }
       seenAttachments.add(identity);
       const fileName = attachment.kind === "file" ? attachment.fileName : undefined;
-      const mediaKind = attachment.kind === "image" ? "image" : "video";
+      const mediaKind = attachment.kind === "image" ? "image" : (attachment.mediaKind ?? "video");
       try {
         const { saved } = await saveMessageResourceFeishu({
           cfg,

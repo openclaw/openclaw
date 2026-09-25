@@ -225,6 +225,7 @@ describe("scripts/test-extension.mts", () => {
         "monitor.webhook-security.test.ts",
         "outbound-delivery.test.ts",
         "outbound.send-authority.test.ts",
+        "post-files-loopback.test.ts",
       ].map((file) => `extensions/feishu/src/${file}`),
     },
   ])(
