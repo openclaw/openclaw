@@ -1,6 +1,7 @@
 // Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -19,7 +20,6 @@ import {
   parseRegistryNpmSpec,
   resolveNpmJsonEntries,
 } from "./npm-registry-spec.js";
-import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 export function formatNpmCommandFailureOutput(result: SpawnResult): string {

@@ -37,6 +37,8 @@ function createClient() {
       return structuredClone(direct);
     }),
     getJoinedRooms: vi.fn(async () => []),
+    getJoinedRoomMembers: vi.fn(async (_roomId: string): Promise<string[]> => []),
+    getRoomStateEvent: vi.fn(async () => ({ is_direct: true })),
     createDirectRoom: vi.fn(async (_userId: string, _options: { encrypted: boolean }) => {
       events.push("create");
       return roomId;
@@ -44,6 +46,9 @@ function createClient() {
     setAccountData: vi.fn(async (_type: string, content: Record<string, string[]>) => {
       events.push("write");
       direct = structuredClone(content);
+    }),
+    prepareForOneOff: vi.fn(async () => {
+      events.push("prepare");
     }),
     start: vi.fn(async () => {
       events.push("start");
@@ -205,12 +210,22 @@ describe.each([true, false])(
         );
         const total = counters.counts();
         const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
-        expect(result).toMatchObject({
+        expect(result).toEqual({
           accountId: "ops",
-          encrypted,
+          remoteUserId: "@owner:example.org",
+          selfUserId: "@ops:example.org",
+          mappedRoomIds: [],
+          mappedRooms: [],
+          discoveredStrictRoomIds: [],
           activeRoomId: roomId,
+          encrypted,
           createdRoomId: roomId,
           changed: true,
+          directContentBefore: { "@other:example.org": ["!other:example.org"] },
+          directContentAfter: {
+            "@other:example.org": ["!other:example.org"],
+            "@owner:example.org": ["!created:example.org"],
+          },
         });
         expectRepair(client, encrypted);
         expect(client.events[0]).toBe("start");
@@ -234,3 +249,55 @@ describe.each([true, false])(
     });
   },
 );
+
+it("runs Commander inspect with strict and unavailable mapped rooms without starting or writing", async () => {
+  await seed(config(true));
+  const client = createClient();
+  client.getAccountData.mockResolvedValue({
+    "@owner:example.org": ["!strict:example.org", "!unavailable:example.org"],
+  });
+  client.getJoinedRoomMembers.mockImplementation(async (mappedRoomId) => {
+    if (mappedRoomId === "!unavailable:example.org") {
+      throw new Error("member read unavailable");
+    }
+    return ["@ops:example.org", "@owner:example.org"];
+  });
+  createMatrixClient.mockResolvedValue(client);
+  const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const program = new Command();
+  registerMatrixCli({ program });
+
+  await program.parseAsync(
+    ["matrix", "direct", "inspect", "--account", "ops", "--user-id", peer, "--json"],
+    { from: "user" },
+  );
+
+  expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
+    accountId: "ops",
+    remoteUserId: "@owner:example.org",
+    selfUserId: "@ops:example.org",
+    mappedRoomIds: ["!strict:example.org", "!unavailable:example.org"],
+    mappedRooms: [
+      {
+        roomId: "!strict:example.org",
+        source: "account-data",
+        strict: true,
+        joinedMembers: ["@ops:example.org", "@owner:example.org"],
+      },
+      {
+        roomId: "!unavailable:example.org",
+        source: "account-data",
+        strict: false,
+        joinedMembers: null,
+      },
+    ],
+    discoveredStrictRoomIds: [],
+    activeRoomId: "!strict:example.org",
+  });
+  expect(client.prepareForOneOff).toHaveBeenCalledTimes(1);
+  expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
+  expect(client.events).toEqual(["prepare", "persist"]);
+  expect(client.start).not.toHaveBeenCalled();
+  expect(client.createDirectRoom).not.toHaveBeenCalled();
+  expect(client.setAccountData).not.toHaveBeenCalled();
+});

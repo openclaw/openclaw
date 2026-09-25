@@ -394,22 +394,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         if (history.length === 0) {
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
-          if (isGroup) {
-            const parsed = parseChannelNest(groupChannel);
-            if (parsed) {
-              await sendGroupMessage({
-                api,
-                fromShip: botShipName,
-                hostShip: parsed.hostShip,
-                channelName: parsed.channelName,
-                text: noHistoryMsg,
-              });
-            }
-          } else {
-            await sendDm({
+          const parsed = parseChannelNest(groupChannel);
+          if (parsed) {
+            await sendGroupMessage({
               api,
               fromShip: botShipName,
-              toShip: senderShip,
+              hostShip: parsed.hostShip,
+              channelName: parsed.channelName,
               text: noHistoryMsg,
             });
           }
@@ -427,19 +418,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           "4. Notable participants";
       } catch (error: unknown) {
         const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${formatErrorMessage(error)}`;
-        if (isGroup && groupChannel) {
-          const parsed = parseChannelNest(groupChannel);
-          if (parsed) {
-            await sendGroupMessage({
-              api,
-              fromShip: botShipName,
-              hostShip: parsed.hostShip,
-              channelName: parsed.channelName,
-              text: errorMsg,
-            });
-          }
-        } else {
-          await sendDm({ api, fromShip: botShipName, toShip: senderShip, text: errorMsg });
+        const parsed = parseChannelNest(groupChannel);
+        if (parsed) {
+          await sendGroupMessage({
+            api,
+            fromShip: botShipName,
+            hostShip: parsed.hostShip,
+            channelName: parsed.channelName,
+            text: errorMsg,
+          });
         }
         return;
       }

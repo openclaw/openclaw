@@ -2,11 +2,11 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
-import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
-import { FsSafeError, openLocalFileSafely } from "../../infra/fs-safe.js";
+import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
@@ -65,7 +65,7 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
-const DIR_ENTRY_CACHE_MAX = 5000;
+const MAX_SCAN_DIRECTORY_ENTRIES = 100_000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
 const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test|test-helper|test-support)\.[^.]+$/i;
 
@@ -79,19 +79,10 @@ type FileScanCacheEntry = {
 };
 
 const FILE_SCAN_CACHE = new Map<string, FileScanCacheEntry>();
-type CachedDirEntry = {
-  name: string;
-  kind: "file" | "dir";
-};
 type CollectedScannableFiles = {
   files: string[];
   truncated: boolean;
 };
-type DirEntryCacheEntry = {
-  mtimeMs: number;
-  entries: CachedDirEntry[];
-};
-const DIR_ENTRY_CACHE = new Map<string, DirEntryCacheEntry>();
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
@@ -133,11 +124,6 @@ function sameFileScanIdentity(left: FileScanIdentity, right: FileScanIdentity): 
 function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
   pruneMapToMaxSize(FILE_SCAN_CACHE, FILE_SCAN_CACHE_MAX - 1);
   FILE_SCAN_CACHE.set(filePath, entry);
-}
-
-function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
-  pruneMapToMaxSize(DIR_ENTRY_CACHE, DIR_ENTRY_CACHE_MAX - 1);
-  DIR_ENTRY_CACHE.set(dirPath, entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -740,108 +726,6 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   };
 }
 
-function isExcludedTestDirectoryName(name: string): boolean {
-  return TEST_DIRECTORY_NAMES.has(name);
-}
-
-function isExcludedTestFileName(name: string): boolean {
-  return TEST_FILE_NAME_PATTERN.test(name);
-}
-
-function pathContainsNodeModulesSegment(relativePath: string): boolean {
-  return relativePath.split(/[\\/]+/u).includes("node_modules");
-}
-
-async function walkDirWithLimit(
-  rootDir: string,
-  dirPath: string,
-  candidateLimit: number,
-  excludeTestFiles: boolean,
-  includeHiddenDirectories: boolean,
-  includeNestedNodeModulesTestFiles: boolean,
-  includeNodeModules: boolean,
-): Promise<CollectedScannableFiles> {
-  const files: string[] = [];
-  const stack: string[] = [dirPath];
-
-  while (stack.length > 0 && files.length < candidateLimit) {
-    const currentDir = stack.pop();
-    if (!currentDir) {
-      break;
-    }
-
-    const entries = await readDirEntriesWithCache(currentDir);
-    for (const entry of entries) {
-      if (files.length >= candidateLimit) {
-        break;
-      }
-      if (
-        (!includeHiddenDirectories && entry.name.startsWith(".")) ||
-        (!includeNodeModules && entry.name === "node_modules")
-      ) {
-        continue;
-      }
-      const fullPath = path.join(currentDir, entry.name);
-      const isExcludedTestPath =
-        entry.kind === "dir"
-          ? isExcludedTestDirectoryName(entry.name)
-          : isExcludedTestFileName(entry.name);
-      if (
-        excludeTestFiles &&
-        isExcludedTestPath &&
-        !(
-          includeNestedNodeModulesTestFiles &&
-          pathContainsNodeModulesSegment(path.relative(rootDir, fullPath))
-        )
-      ) {
-        continue;
-      }
-      if (entry.kind === "dir") {
-        stack.push(fullPath);
-      } else if (entry.kind === "file" && isScannable(entry.name)) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  return { files, truncated: files.length >= candidateLimit };
-}
-
-async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
-  let st: Awaited<ReturnType<typeof fs.stat>> | null;
-  try {
-    st = await fs.stat(dirPath);
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      return [];
-    }
-    throw err;
-  }
-  if (!st?.isDirectory()) {
-    return [];
-  }
-
-  const cached = DIR_ENTRY_CACHE.get(dirPath);
-  if (cached && cached.mtimeMs === st.mtimeMs) {
-    return cached.entries;
-  }
-
-  const dirents = await fs.readdir(dirPath, { withFileTypes: true });
-  const entries: CachedDirEntry[] = [];
-  for (const entry of dirents) {
-    if (entry.isDirectory()) {
-      entries.push({ name: entry.name, kind: "dir" });
-    } else if (entry.isFile()) {
-      entries.push({ name: entry.name, kind: "file" });
-    }
-  }
-  setCachedDirEntries(dirPath, {
-    mtimeMs: st.mtimeMs,
-    entries,
-  });
-  return entries;
-}
-
 async function resolveForcedFiles(params: {
   rootDir: string;
   includeFiles: string[];
@@ -903,29 +787,47 @@ async function collectScannableFiles(
     return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }
 
-  const walked = await walkDirWithLimit(
-    dirPath,
-    dirPath,
-    opts.maxFiles + 1,
-    opts.excludeTestFiles,
-    opts.includeHiddenDirectories,
-    opts.includeNestedNodeModulesTestFiles,
-    opts.includeNodeModules,
-  );
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
-  const out = [...forcedFiles];
-  for (const walkedFile of walked.files) {
-    const resolved = path.resolve(walkedFile);
-    if (seen.has(resolved)) {
-      continue;
+  const files = [...forcedFiles];
+  const include = ({ name, kind, relativePath }: WalkDirectoryEntry) =>
+    (opts.includeHiddenDirectories || !name.startsWith(".")) &&
+    (opts.includeNodeModules || name !== "node_modules") &&
+    (!opts.excludeTestFiles ||
+      !(kind === "directory"
+        ? TEST_DIRECTORY_NAMES.has(name)
+        : TEST_FILE_NAME_PATTERN.test(name)) ||
+      (opts.includeNestedNodeModulesTestFiles &&
+        relativePath.split(/[\\/]+/u).includes("node_modules")));
+  const walked = await walkDirectory(dirPath, {
+    maxEntries: Math.max(
+      MAX_SCAN_DIRECTORY_ENTRIES,
+      Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(opts.maxFiles) * 100),
+    ),
+    symlinks: "skip",
+    include: (entry) => {
+      if (
+        files.length <= opts.maxFiles &&
+        entry.kind === "file" &&
+        isScannable(entry.name) &&
+        include(entry) &&
+        !seen.has(entry.path)
+      ) {
+        seen.add(entry.path);
+        files.push(entry.path);
+      }
+      return false;
+    },
+    descend: (entry) => files.length <= opts.maxFiles && include(entry),
+  });
+  for (const { error } of walked.failedDirs) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
     }
-    if (out.length >= opts.maxFiles) {
-      return { files: out.slice(0, opts.maxFiles), truncated: true };
-    }
-    out.push(walkedFile);
-    seen.add(resolved);
   }
-  return { files: out, truncated: false };
+  return {
+    files: files.slice(0, opts.maxFiles),
+    truncated: walked.truncated || files.length > opts.maxFiles,
+  };
 }
 
 async function scanFileWithCache(params: {
@@ -970,24 +872,18 @@ async function scanFileWithCache(params: {
 
   try {
     // Explicitly included entrypoints may be symlinked outside the scan directory.
-    const opened = await openLocalFileSafely({ filePath: await fs.realpath(filePath) });
-    try {
-      const content = await readFileHandleBounded(opened.handle, maxFileBytes);
-      const after = await opened.handle.stat();
-      if (!sameFileScanIdentity(opened.stat, after) || content.byteLength !== after.size) {
-        throw new Error(`File changed while scanning: ${filePath}`);
-      }
-      const findings = scanSource(content.toString("utf8"), filePath);
-      setCachedFileScanResult(filePath, {
-        identity: fileScanIdentity(after),
-        maxFileBytes,
-        scanned: true,
-        findings,
-      });
-      return { scanned: true, findings };
-    } finally {
-      await opened.handle.close();
-    }
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: await fs.realpath(filePath),
+      maxBytes: maxFileBytes,
+    });
+    const findings = scanSource(buffer.toString("utf8"), filePath);
+    setCachedFileScanResult(filePath, {
+      identity: fileScanIdentity(stat),
+      maxFileBytes,
+      scanned: true,
+      findings,
+    });
+    return { scanned: true, findings };
   } catch (err) {
     if (
       hasErrnoCode(err, "ENOENT") ||

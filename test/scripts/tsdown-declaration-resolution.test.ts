@@ -2,17 +2,18 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
+import type { CommandFixture } from "../helpers/command-fixture.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
-import { createScriptTestHarness } from "./test-helpers.js";
 import {
-  createFixture,
+  createDeclarationFixture as createFixture,
+  createDeclarationTest,
   declarationCacheRecords,
   expectStagingClean,
   runFixtureModule,
@@ -21,14 +22,19 @@ import {
   treeHashes,
 } from "./tsdown-declaration-fixture.js";
 
-const { createTempDir } = createScriptTestHarness();
+const it = createDeclarationTest();
 const coreText = (origin: string) =>
   `export interface Marker { origin: "${origin}" }\ndeclare global { const declarationOrigin: "${origin}"; }\n`;
 
-function containedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
-  const ancestor = fs.realpathSync.native(createTempDir("openclaw-declaration-resolution-"));
+function containedFixture(
+  command: CommandFixture,
+  groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+) {
+  const ancestor = fs.realpathSync.native(
+    command.createTempDir("openclaw-declaration-resolution-"),
+  );
   const root = path.join(ancestor, ".claude/worktrees/validation");
-  const fixture = createFixture(groups, root);
+  const fixture = createFixture(command, groups, root);
   const ancestorPackage = path.join(ancestor, "node_modules/@types/synthetic-core");
   const ancestorInput = path.join(ancestorPackage, "index.d.ts");
   const wrapper = "node_modules/.pnpm/wrapper/node_modules/@types/synthetic-wrapper";
@@ -75,8 +81,11 @@ function containedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONF
   return { ...fixture, ancestorInput, localInput: `${local}/index.d.ts` };
 }
 
-function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
-  const fixture = containedFixture(groups);
+function nestedFixture(
+  command: CommandFixture,
+  groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+) {
+  const fixture = containedFixture(command, groups);
   const ancestorPackage = path.dirname(fixture.ancestorInput);
   fs.mkdirSync(ancestorPackage, { recursive: true });
   fs.writeFileSync(
@@ -88,36 +97,153 @@ function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_
 }
 
 describe("tsdown checkout declaration resolution", () => {
-  it.runIf(process.platform === "win32")(
+  it.concurrent("bounds standalone package builds while preserving public declarations and sibling outputs", ({
+    command,
+  }) =>
+    command.lifetime.run(async () => {
+      const { root, write } = containedFixture(command);
+      fs.symlinkSync(
+        fs.realpathSync("node_modules/semver"),
+        path.join(root, "node_modules/semver"),
+        "junction",
+      );
+      write(
+        "scripts/build-workspace-package.mts",
+        fs.readFileSync("scripts/build-workspace-package.mts", "utf8"),
+      );
+      const manifest = JSON.parse(
+        fs.readFileSync("packages/gateway-client/package.json", "utf8"),
+      ) as {
+        exports: Record<string, { import: string; types: string }>;
+        dependencies?: Record<string, string>;
+      };
+      manifest.dependencies = { ...manifest.dependencies, "standalone-dependency": "1.0.0" };
+      write("packages/gateway-client/package.json", JSON.stringify(manifest));
+      write(
+        "node_modules/standalone-dependency/package.json",
+        JSON.stringify({
+          name: "standalone-dependency",
+          version: "1.0.0",
+          type: "module",
+          exports: { "./value": { types: "./value.d.ts", import: "./value.js" } },
+        }),
+      );
+      write(
+        "node_modules/standalone-dependency/value.d.ts",
+        "export declare const externalValue: string;",
+      );
+      write(
+        "node_modules/standalone-dependency/value.js",
+        'export const externalValue = "package-owned";',
+      );
+      for (const entry of Object.values(manifest.exports)) {
+        write(
+          entry.import.replace("./dist/", "packages/gateway-client/src/").replace(/\.mjs$/u, ".ts"),
+          'export const marker = "bounded";\n',
+        );
+      }
+      write(
+        "packages/gateway-client/src/index.ts",
+        `
+      export const marker = "bounded";
+      export { externalValue } from "standalone-dependency/value";
+      declare const process: { env: { NODE_ENV?: string } };
+      export function runtimeMode(env: { NODE_ENV?: string }) {
+        return env.NODE_ENV ?? process.env.NODE_ENV;
+      }
+    `,
+      );
+      write("packages/sdk/src/index.ts", 'export const sdkMarker = "sdk";\n');
+      // Upstream whole-project declaration emit rejects this unselected test helper (TS4094).
+      write(
+        "src/unrelated.test-support.ts",
+        "export const hidden = new (class { private value = 1; })();\n",
+      );
+      write("packages/gateway-client/dist/obsolete.d.mts", "export declare const retired: 1;");
+      write("dist/keep.txt", "root output");
+      write("packages/gateway-protocol/dist/keep.txt", "sibling output");
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { buildWorkspacePackage } from "./scripts/build-workspace-package.mts";
+import configs from "./tsdown.config.ts";
+const root = process.cwd();
+for (const [name, target] of [["sdk", undefined], ["gateway-client", ["node22.19.0"]]]) {
+  const config = configs.find(config => config.outDir === "packages/" + name + "/dist");
+  const original = config.hooks;
+  config.hooks = async hooks => {
+    await original(hooks);
+    hooks.hook("build:prepare", ({ options }) => assert.deepEqual(options.target, target));
+  };
+}
+await buildWorkspacePackage("sdk");
+assert.match(fs.readFileSync("packages/sdk/dist/index.d.mts", "utf8"), /sdkMarker.*"sdk"/);
+process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+const packageDir = path.join(root, "packages/gateway-client");
+process.chdir(packageDir);
+await buildWorkspacePackage("gateway-client");
+assert.equal(process.cwd(), packageDir);
+assert.equal(fs.existsSync("dist/obsolete.d.mts"), false);
+fs.writeFileSync(path.join(root, "node_modules/standalone-dependency/value.js"), 'export const externalValue = "installed-update";');
+process.env.NODE_ENV = "runtime-mode";
+const output = await import(pathToFileURL(path.join(packageDir, "dist/index.mjs")).href);
+assert.deepEqual(
+  { mode: output.runtimeMode({}), external: output.externalValue },
+  { mode: "runtime-mode", external: "installed-update" },
+);
+const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+for (const entry of Object.values(manifest.exports)) {
+  assert.ok(fs.existsSync(entry.import), entry.import);
+  assert.match(fs.readFileSync(entry.types, "utf8"), /marker.*"bounded"/);
+}
+assert.equal(fs.readFileSync(path.join(root, "dist/keep.txt"), "utf8"), "root output");
+assert.equal(fs.readFileSync(path.join(root, "packages/gateway-protocol/dist/keep.txt"), "utf8"), "sibling output");
+fs.writeFileSync("src/index.ts", 'export const invalid: number = "selected";');
+await assert.rejects(buildWorkspacePackage("gateway-client"), /Native declaration emit failed/);
+assert.equal(process.cwd(), packageDir);
+console.log("standalone package boundary verified");
+`,
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("standalone package boundary verified");
+    }));
+
+  it.runIf(process.platform === "win32").concurrent(
     "starts the checkout compiler when its Windows executable uses an extended-length path",
-    () => {
-      const root = path.join(
-        fs.realpathSync.native(createTempDir("openclaw-native-long-path-")),
-        "nested-checkout-".repeat(5),
-        "nested-install-".repeat(5),
-      );
-      fs.mkdirSync(root, { recursive: true });
-      const native = materializeNativeCompiler(root);
-      expect(native.length).toBeGreaterThanOrEqual(248);
-      const require = createRequire(path.join(root, "package.json"));
-      const getExePath: { default: () => string } = require(
-        path.join(root, "node_modules/typescript/lib/getExePath.js"),
-      );
-      expect(getExePath.default()).toBe(path.toNamespacedPath(native));
-      const command = prepareTsgoCommand(["--version"], process.env, root);
-      expect(command?.bin).toBe(getExePath.default());
-      const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      const manifest: { version: string } = JSON.parse(
-        fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
-    },
+    ({ command }) =>
+      command.lifetime.run(async () => {
+        const root = path.join(
+          fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-")),
+          "nested-checkout-".repeat(5),
+          "nested-install-".repeat(5),
+        );
+        fs.mkdirSync(root, { recursive: true });
+        const native = materializeNativeCompiler(root);
+        expect(native.length).toBeGreaterThanOrEqual(248);
+        const require = createRequire(path.join(root, "package.json"));
+        const getExePath: { default: () => string } = require(
+          path.join(root, "node_modules/typescript/lib/getExePath.js"),
+        );
+        expect(getExePath.default()).toBe(path.toNamespacedPath(native));
+        const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
+        expect(compilerCommand?.bin).toBe(getExePath.default());
+        const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        const manifest: { version: string } = JSON.parse(
+          fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
+      }),
   );
 
   for (const kind of [
@@ -126,49 +252,51 @@ describe("tsdown checkout declaration resolution", () => {
     "directory alias targeting Windows 8.3",
     "directory alias targeting a case alias",
   ]) {
-    it.skipIf(kind.includes("Windows") && process.platform !== "win32")(
+    it.skipIf(kind.includes("Windows") && process.platform !== "win32").concurrent(
       `compiles and receipts every local input through a ${kind}`,
-      (context) => {
-        const { root, localInput } = nestedFixture();
-        let target = root;
-        if (kind.includes("Windows")) {
-          const short = spawnSync(
-            "cmd.exe",
-            ["/d", "/c", 'for %I in ("%DECLARATION_ALIAS_ROOT%") do @echo %~sI'],
-            {
-              encoding: "utf8",
-              // cmd.exe owns this command's quotes; libuv must not backslash-escape them.
-              windowsVerbatimArguments: true,
-              env: { ...process.env, DECLARATION_ALIAS_ROOT: root },
-            },
-          );
-          expect(short.status, short.stderr).toBe(0);
-          target = short.stdout.trim();
-          expect(fs.realpathSync.native(target)).toBe(root);
-          if (fs.realpathSync(target).toLowerCase() === root.toLowerCase()) {
-            context.skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
+      ({ command, skip }) =>
+        command.lifetime.run(async () => {
+          const { root, localInput } = nestedFixture(command);
+          let target = root;
+          if (kind.includes("Windows")) {
+            const short = spawnSync(
+              "cmd.exe",
+              ["/d", "/c", 'for %I in ("%DECLARATION_ALIAS_ROOT%") do @echo %~sI'],
+              {
+                encoding: "utf8",
+                // cmd.exe owns this command's quotes; libuv must not backslash-escape them.
+                windowsVerbatimArguments: true,
+                env: { ...process.env, DECLARATION_ALIAS_ROOT: root },
+              },
+            );
+            expect(short.status, short.stderr).toBe(0);
+            target = short.stdout.trim();
+            expect(fs.realpathSync.native(target)).toBe(root);
+            if (fs.realpathSync(target).toLowerCase() === root.toLowerCase()) {
+              skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
+            }
+          } else if (kind.endsWith("case alias")) {
+            target = path.join(path.dirname(root), path.basename(root).toUpperCase());
+            if (!fs.existsSync(target)) {
+              skip("Filesystem does not expose a case-insensitive checkout alias");
+            }
+            expect(fs.realpathSync.native(target)).toBe(root);
           }
-        } else if (kind.endsWith("case alias")) {
-          target = path.join(path.dirname(root), path.basename(root).toUpperCase());
-          if (!fs.existsSync(target)) {
-            context.skip("Filesystem does not expose a case-insensitive checkout alias");
+          let alias = target;
+          if (kind.startsWith("directory alias")) {
+            alias = `${root}-alias`;
+            fs.symlinkSync(target, alias, "junction");
           }
-          expect(fs.realpathSync.native(target)).toBe(root);
-        }
-        let alias = target;
-        if (kind.startsWith("directory alias")) {
-          alias = `${root}-alias`;
-          fs.symlinkSync(target, alias, "junction");
-        }
-        if (kind.startsWith("directory alias targeting")) {
-          // Keep all three inputs distinct even when the runtime canonicalizes the
-          // case-only target before realpath returns it.
-          expect(alias).not.toBe(target);
-          expect(target).not.toBe(root);
-        }
-        const result = runFixtureModule(
-          root,
-          `
+          if (kind.startsWith("directory alias targeting")) {
+            // Keep all three inputs distinct even when the runtime canonicalizes the
+            // case-only target before realpath returns it.
+            expect(alias).not.toBe(target);
+            expect(target).not.toBe(root);
+          }
+          const result = await runFixtureModule(
+            command,
+            root,
+            `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -202,39 +330,43 @@ try {
   fs.rmSync(stage, { recursive: true, force: true });
 }
 `,
-        );
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        if (!kind.includes("Windows")) {
-          return;
-        }
-        const dist = path.join(root, "dist");
-        fs.mkdirSync(dist, { recursive: true });
-        // An installed alias exposes live output to topology scanning. Its physical
-        // owner must still be excluded when the writer starts through a short cwd.
-        fs.symlinkSync(dist, path.join(root, "node_modules/fixture-published"), "junction");
-        const cold = runWriter(alias);
-        expect(cold.status, cold.stdout + cold.stderr).toBe(0);
-        expect(declarationCacheRecords(root).flatMap((record) => record.inputs ?? [])).toContain(
-          localInput,
-        );
-        const published = treeHashes(dist);
-        const cache = path.join(root, ".artifacts/build-all-cache");
-        const cached = treeHashes(cache);
-        const warm = runWriter(alias);
-        expect(warm.status, warm.stdout + warm.stderr).toBe(0);
-        expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
-        expect(treeHashes(dist)).toEqual(published);
-        expect(treeHashes(cache)).toEqual(cached);
-        expectStagingClean(root);
-      },
+          );
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          if (!kind.includes("Windows")) {
+            return;
+          }
+          const dist = path.join(root, "dist");
+          fs.mkdirSync(dist, { recursive: true });
+          // An installed alias exposes live output to topology scanning. Its physical
+          // owner must still be excluded when the writer starts through a short cwd.
+          fs.symlinkSync(dist, path.join(root, "node_modules/fixture-published"), "junction");
+          const cold = await runWriter(command, alias);
+          expect(cold.status, cold.stdout + cold.stderr).toBe(0);
+          expect(declarationCacheRecords(root).flatMap((record) => record.inputs ?? [])).toContain(
+            localInput,
+          );
+          const published = treeHashes(dist);
+          const cache = path.join(root, ".artifacts/build-all-cache");
+          const cached = treeHashes(cache);
+          const warm = await runWriter(command, alias);
+          expect(warm.status, warm.stdout + warm.stderr).toBe(0);
+          expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
+          expect(treeHashes(dist)).toEqual(published);
+          expect(treeHashes(cache)).toEqual(cached);
+          expectStagingClean(root);
+        }),
     );
   }
 
-  it("preserves object and registration hooks while enforcing the declaration boundary", () => {
-    const { root } = containedFixture();
-    const result = runFixtureModule(
-      root,
-      `
+  it.concurrent("preserves object and registration hooks while enforcing the declaration boundary", ({
+    command,
+  }) =>
+    command.lifetime.run(async () => {
+      const { root } = containedFixture(command);
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { build } from "tsdown";
@@ -258,43 +390,47 @@ for (const registration of [false, true]) {
   }
 }
 `,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  });
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }));
 
-  it("preserves inherited ambient declarations without admitting unrelated source roots", () => {
-    const { root, write } = createFixture();
-    write(
-      "config/ambient.json",
-      JSON.stringify({
-        compilerOptions: {
-          target: "ES2023",
-          module: "NodeNext",
-          strict: true,
-          skipLibCheck: true,
-          types: [],
-        },
-        include: ["../src/ambient/**/*.ts"],
-      }),
-    );
-    write("tsconfig.json", '{"extends":"./config/ambient.json"}');
-    write(
-      "src/ambient/types/qrcode.d.ts",
-      'declare module "synthetic-qrcode" { export function encode(value: string): { data: string }; }\n',
-    );
-    write(
-      "src/ambient/consumer.ts",
-      'import { encode } from "synthetic-qrcode";\nexport function render(value: string) { return encode(value); }\n',
-    );
-    write("src/ambient/unrelated.ts", 'export const unrelated: number = "invalid";\n');
-    write("node_modules/synthetic-qrcode/package.json", '{"type":"module","main":"./index.js"}');
-    write(
-      "node_modules/synthetic-qrcode/index.js",
-      "export function encode(value) { return { data: value }; }\n",
-    );
-    const result = runFixtureModule(
-      root,
-      `
+  it.concurrent("preserves inherited ambient declarations without admitting unrelated source roots", ({
+    command,
+  }) =>
+    command.lifetime.run(async () => {
+      const { root, write } = createFixture(command);
+      write(
+        "config/ambient.json",
+        JSON.stringify({
+          compilerOptions: {
+            target: "ES2023",
+            module: "NodeNext",
+            strict: true,
+            skipLibCheck: true,
+            types: [],
+          },
+          include: ["../src/ambient/**/*.ts"],
+        }),
+      );
+      write("tsconfig.json", '{"extends":"./config/ambient.json"}');
+      write(
+        "src/ambient/types/qrcode.d.ts",
+        'declare module "synthetic-qrcode" { export function encode(value: string): { data: string }; }\n',
+      );
+      write(
+        "src/ambient/consumer.ts",
+        'import { encode } from "synthetic-qrcode";\nexport function render(value: string) { return encode(value); }\n',
+      );
+      write("src/ambient/unrelated.ts", 'export const unrelated: number = "invalid";\n');
+      write("node_modules/synthetic-qrcode/package.json", '{"type":"module","main":"./index.js"}');
+      write(
+        "node_modules/synthetic-qrcode/index.js",
+        "export function encode(value) { return { data: value }; }\n",
+      );
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -328,30 +464,31 @@ try {
 }
 console.log("inherited ambient roots retained; unrelated roots excluded; selected errors rejected");
 `,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("TS2322");
-    expect(result.stdout).toContain(
-      "inherited ambient roots retained; unrelated roots excluded; selected errors rejected",
-    );
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "admits cold sibling workspace outputs through installed aliases only in their build session",
-    () => {
-      const { root, write } = createFixture();
-      write("src/consumer.ts", "export const consumer = 1;\n");
-      write("packages/output-producer/package.json", '{"type":"module"}');
-      write("packages/output-producer/index.ts", "export const produced = 2;\n");
-      const alias = path.join(
-        root,
-        "node_modules/.pnpm/node_modules/synthetic-host/node_modules/synthetic-producer",
       );
-      fs.mkdirSync(path.dirname(alias), { recursive: true });
-      fs.symlinkSync(path.join(root, "packages/output-producer"), alias, "junction");
-      write(
-        "tsdown.sibling.config.mts",
-        `
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("TS2322");
+      expect(result.stdout).toContain(
+        "inherited ambient roots retained; unrelated roots excluded; selected errors rejected",
+      );
+    }));
+
+  it.skipIf(process.platform === "win32").concurrent(
+    "admits cold sibling workspace outputs through installed aliases only in their build session",
+    ({ command }) =>
+      command.lifetime.run(async () => {
+        const { root, write } = createFixture(command);
+        write("src/consumer.ts", "export const consumer = 1;\n");
+        write("packages/output-producer/package.json", '{"type":"module"}');
+        write("packages/output-producer/index.ts", "export const produced = 2;\n");
+        const alias = path.join(
+          root,
+          "node_modules/.pnpm/node_modules/synthetic-host/node_modules/synthetic-producer",
+        );
+        fs.mkdirSync(path.dirname(alias), { recursive: true });
+        fs.symlinkSync(path.join(root, "packages/output-producer"), alias, "junction");
+        write(
+          "tsdown.sibling.config.mts",
+          `
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 export default [
   { entry: "src/consumer.ts", outDir: ".artifacts/consumer-output", dts: true,
@@ -366,10 +503,11 @@ export default [
     }] },
 ];
 `,
-      );
-      const result = runFixtureModule(
-        root,
-        `
+        );
+        const result = await runFixtureModule(
+          command,
+          root,
+          `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -440,22 +578,26 @@ try {
 }
 console.log("cold sibling ownership and fresh build isolation verified");
 `,
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain("cold sibling ownership and fresh build isolation verified");
-    },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          "cold sibling ownership and fresh build isolation verified",
+        );
+      }),
   );
 
-  it.each(
+  it.concurrent.for(
     ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
-  )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }) => {
-    const { root, write } = containedFixture();
-    write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
-    const outside = path.join(path.dirname(root), "runtime.ts");
-    fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
-    const result = runFixtureModule(
-      root,
-      `
+  )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
+    command.lifetime.run(async () => {
+      const { root, write } = containedFixture(command);
+      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      const outside = path.join(path.dirname(root), "runtime.ts");
+      fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -528,21 +670,26 @@ try {
 }
 console.log("resolved declaration override honored");
 `,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("resolved declaration override honored");
-  });
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("resolved declaration override honored");
+    }),
+  );
 
-  it("isolates native compilation across overlapping workspace and AI builds, including failures", () => {
-    const { root, write } = containedFixture();
-    write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
-    write(
-      "src/second.ts",
-      'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',
-    );
-    const result = runFixtureModule(
-      root,
-      `
+  it.concurrent("isolates native compilation across overlapping workspace and AI builds, including failures", ({
+    command,
+  }) =>
+    command.lifetime.run(async () => {
+      const { root, write } = containedFixture(command);
+      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      write(
+        "src/second.ts",
+        'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',
+      );
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -590,26 +737,30 @@ for (const failure of [false, true]) {
 }
 console.log("workspace/AI native compilation settled after success and failure");
 `,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      "workspace/AI native compilation settled after success and failure",
-    );
-  });
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "workspace/AI native compilation settled after success and failure",
+      );
+    }));
 
-  it.each([
+  it.concurrent.for([
     {
       name: "SDK",
       groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-      run: (root: string, env = {}) => runWriter(root, false, env),
+      run: async (command: CommandFixture, root: string, env = {}) =>
+        await runWriter(command, root, false, env),
     },
     { name: "unified", groups: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
-  ])("uses local explicit references and seals real inputs for $name", ({ groups, run }) => {
-    const { root, write, localInput } = containedFixture(groups);
-    const unconsumedInput = path.join(root, "test/unrelated.test.ts");
-    write(
-      "tsdown.config.ts",
-      `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
+  ])(
+    "uses local explicit references and seals real inputs for $name",
+    ({ groups, run }, { command }) =>
+      command.lifetime.run(async () => {
+        const { root, write, localInput } = containedFixture(command, groups);
+        const unconsumedInput = path.join(root, "test/unrelated.test.ts");
+        write(
+          "tsdown.config.ts",
+          `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 for (const config of configs) {
   if (!config.dts?.emitDtsOnly) continue;
   const register = config.hooks;
@@ -625,50 +776,53 @@ for (const config of configs) {
   };
 }
 `,
-    );
-    const initial = run(root);
-    expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-    const published = treeHashes(path.join(root, "dist"));
-    const declarations = Object.keys(published)
-      .filter((file) => file.endsWith(".d.ts"))
-      .map((file) => fs.readFileSync(path.join(root, "dist", file), "utf8"))
-      .join("\n");
-    expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
-      'declare const inferredOrigin: "local";',
-    );
-    const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
-    expect(inputs).toContain(localInput);
-    for (const input of inputs) {
-      const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
-      expect(
-        relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
-        input,
-      ).toBe(false);
-    }
-    expectStagingClean(root);
-    // Both writers seal through the same owner. Replay its mutation cycle once;
-    // the unified suite separately covers failed and mixed-cache publication.
-    if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
-      return;
-    }
-    const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
-    write(".artifacts/replace-input", "unconsumed");
-    const unconsumedChanged = run(root, { OPENCLAW_BUILD_CACHE: "0" });
-    expect(unconsumedChanged.status, unconsumedChanged.stdout + unconsumedChanged.stderr).toBe(0);
-    expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-    const restored = run(root);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
-    write(".artifacts/replace-input", "local");
-    const localChanged = run(root, { OPENCLAW_BUILD_CACHE: "0" });
-    expect(localChanged.status, localChanged.stdout + localChanged.stderr).toBeGreaterThan(0);
-    expect(localChanged.stdout + localChanged.stderr).toContain("changed during compilation");
-    expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-    expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
-    expectStagingClean(root);
-  });
+        );
+        const initial = await run(command, root);
+        expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+        const published = treeHashes(path.join(root, "dist"));
+        const declarations = Object.keys(published)
+          .filter((file) => file.endsWith(".d.ts"))
+          .map((file) => fs.readFileSync(path.join(root, "dist", file), "utf8"))
+          .join("\n");
+        expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
+          'declare const inferredOrigin: "local";',
+        );
+        const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
+        expect(inputs).toContain(localInput);
+        for (const input of inputs) {
+          const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
+          expect(
+            relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
+            input,
+          ).toBe(false);
+        }
+        expectStagingClean(root);
+        // Both writers seal through the same owner. Replay its mutation cycle once;
+        // the unified suite separately covers failed and mixed-cache publication.
+        if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+          return;
+        }
+        const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
+        write(".artifacts/replace-input", "unconsumed");
+        const unconsumedChanged = await run(command, root, { OPENCLAW_BUILD_CACHE: "0" });
+        expect(unconsumedChanged.status, unconsumedChanged.stdout + unconsumedChanged.stderr).toBe(
+          0,
+        );
+        expect(treeHashes(path.join(root, "dist"))).toEqual(published);
+        const restored = await run(command, root);
+        expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+        expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
+        write(".artifacts/replace-input", "local");
+        const localChanged = await run(command, root, { OPENCLAW_BUILD_CACHE: "0" });
+        expect(localChanged.status, localChanged.stdout + localChanged.stderr).toBeGreaterThan(0);
+        expect(localChanged.stdout + localChanged.stderr).toContain("changed during compilation");
+        expect(treeHashes(path.join(root, "dist"))).toEqual(published);
+        expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
+        expectStagingClean(root);
+      }),
+  );
 
-  it.each([
+  it.concurrent.for([
     "ancestor module",
     "ancestor package alias",
     "ancestor ambient types",
@@ -676,88 +830,93 @@ for (const config of configs) {
     "source symlink",
     "source reference",
     "ancestor symlink reference",
-  ])("refuses an escaped %s before publication", (kind) => {
-    const ancestorLookup = [
-      "ancestor module",
-      "ancestor package alias",
-      "ancestor ambient types",
-    ].includes(kind);
-    const { root, write, ancestorInput, localInput } = ancestorLookup
-      ? nestedFixture()
-      : containedFixture();
-    let rejectedPath = ancestorLookup ? path.dirname(ancestorInput) : `${root}-outside`;
-    const outside = `${root}-outside`;
-    fs.mkdirSync(outside);
-    fs.writeFileSync(path.join(outside, "index.d.ts"), "export interface Marker { escaped: true }");
-    if (kind === "ancestor module" || kind === "ancestor package alias") {
-      if (kind === "ancestor package alias") {
-        fs.rmSync(path.dirname(ancestorInput), { recursive: true });
-        fs.symlinkSync(
-          path.join(root, path.dirname(localInput)),
-          path.dirname(ancestorInput),
-          "junction",
+  ])("refuses an escaped %s before publication", (kind, { command }) =>
+    command.lifetime.run(async () => {
+      const ancestorLookup = [
+        "ancestor module",
+        "ancestor package alias",
+        "ancestor ambient types",
+      ].includes(kind);
+      const { root, write, ancestorInput, localInput } = ancestorLookup
+        ? nestedFixture(command)
+        : containedFixture(command);
+      let rejectedPath = ancestorLookup ? path.dirname(ancestorInput) : `${root}-outside`;
+      const outside = `${root}-outside`;
+      fs.mkdirSync(outside);
+      fs.writeFileSync(
+        path.join(outside, "index.d.ts"),
+        "export interface Marker { escaped: true }",
+      );
+      if (kind === "ancestor module" || kind === "ancestor package alias") {
+        if (kind === "ancestor package alias") {
+          fs.rmSync(path.dirname(ancestorInput), { recursive: true });
+          fs.symlinkSync(
+            path.join(root, path.dirname(localInput)),
+            path.dirname(ancestorInput),
+            "junction",
+          );
+        }
+        write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
+      } else if (kind === "ancestor ambient types") {
+        const ambient = path.join(path.dirname(path.dirname(ancestorInput)), "synthetic-ambient");
+        fs.mkdirSync(ambient);
+        fs.writeFileSync(
+          path.join(ambient, "index.d.ts"),
+          'declare module "*" { export const marker: "ancestor"; }\n',
+        );
+        write(
+          "src/shared.ts",
+          `/// <reference path="${path.join(ambient, "index.d.ts").replaceAll(path.sep, "/")}" />\nimport { marker } from "otherwise-unresolved";\nexport class Shared {}\nexport const adopted = marker;\n`,
+        );
+        const positiveConfig = path.join(root, ".artifacts/ambient-positive.json");
+        fs.writeFileSync(
+          positiveConfig,
+          JSON.stringify({
+            extends: path.join(root, "tsconfig.json"),
+            compilerOptions: { noEmit: true },
+            files: [path.join(root, "src/shared.ts")],
+            include: [],
+          }),
+        );
+        const positive = spawnSync(
+          resolveRepoToolBinPath("tsgo", { cwd: root }),
+          ["-p", positiveConfig, "--pretty", "false"],
+          { cwd: root, encoding: "utf8" },
+        );
+        expect(positive.status, positive.stdout + positive.stderr).toBe(0);
+        rejectedPath = ambient;
+      } else if (kind === "package symlink") {
+        fs.writeFileSync(
+          path.join(outside, "package.json"),
+          '{"name":"escaped","types":"index.d.ts"}',
+        );
+        fs.symlinkSync(outside, path.join(root, "node_modules/escaped"), "junction");
+        write("src/shared.ts", 'export type { Marker as Shared } from "escaped";');
+      } else if (kind === "source symlink") {
+        fs.symlinkSync(path.join(outside, "index.d.ts"), path.join(root, "src/escaped.d.ts"));
+        write("src/shared.ts", 'export type { Marker as Shared } from "./escaped.js";');
+      } else {
+        if (kind === "ancestor symlink reference") {
+          fs.rmSync(path.join(outside, "index.d.ts"));
+          fs.symlinkSync(path.join(root, "src/contract.d.ts"), path.join(outside, "index.d.ts"));
+        }
+        write(
+          "src/shared.ts",
+          `/// <reference path="${path.join(outside, "index.d.ts").replaceAll(path.sep, "/")}" />\nexport class Shared {}\n`,
         );
       }
-      write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
-    } else if (kind === "ancestor ambient types") {
-      const ambient = path.join(path.dirname(path.dirname(ancestorInput)), "synthetic-ambient");
-      fs.mkdirSync(ambient);
-      fs.writeFileSync(
-        path.join(ambient, "index.d.ts"),
-        'declare module "*" { export const marker: "ancestor"; }\n',
+      fs.appendFileSync(
+        path.join(root, "src/shared.ts"),
+        '\nexport const inferredOrigin = "unused";\n',
       );
-      write(
-        "src/shared.ts",
-        `/// <reference path="${path.join(ambient, "index.d.ts").replaceAll(path.sep, "/")}" />\nimport { marker } from "otherwise-unresolved";\nexport class Shared {}\nexport const adopted = marker;\n`,
-      );
-      const positiveConfig = path.join(root, ".artifacts/ambient-positive.json");
-      fs.writeFileSync(
-        positiveConfig,
-        JSON.stringify({
-          extends: path.join(root, "tsconfig.json"),
-          compilerOptions: { noEmit: true },
-          files: [path.join(root, "src/shared.ts")],
-          include: [],
-        }),
-      );
-      const positive = spawnSync(
-        resolveRepoToolBinPath("tsgo", { cwd: root }),
-        ["-p", positiveConfig, "--pretty", "false"],
-        { cwd: root, encoding: "utf8" },
-      );
-      expect(positive.status, positive.stdout + positive.stderr).toBe(0);
-      rejectedPath = ambient;
-    } else if (kind === "package symlink") {
-      fs.writeFileSync(
-        path.join(outside, "package.json"),
-        '{"name":"escaped","types":"index.d.ts"}',
-      );
-      fs.symlinkSync(outside, path.join(root, "node_modules/escaped"), "junction");
-      write("src/shared.ts", 'export type { Marker as Shared } from "escaped";');
-    } else if (kind === "source symlink") {
-      fs.symlinkSync(path.join(outside, "index.d.ts"), path.join(root, "src/escaped.d.ts"));
-      write("src/shared.ts", 'export type { Marker as Shared } from "./escaped.js";');
-    } else {
-      if (kind === "ancestor symlink reference") {
-        fs.rmSync(path.join(outside, "index.d.ts"));
-        fs.symlinkSync(path.join(root, "src/contract.d.ts"), path.join(outside, "index.d.ts"));
-      }
-      write(
-        "src/shared.ts",
-        `/// <reference path="${path.join(outside, "index.d.ts").replaceAll(path.sep, "/")}" />\nexport class Shared {}\n`,
-      );
-    }
-    fs.appendFileSync(
-      path.join(root, "src/shared.ts"),
-      '\nexport const inferredOrigin = "unused";\n',
-    );
-    write("dist/plugin-sdk/core.d.ts", "previous declaration");
-    const before = treeHashes(path.join(root, "dist"));
-    const failed = runWriter(root);
-    expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-    expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
-    expect(failed.stdout + failed.stderr).toContain(rejectedPath);
-    expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-    expectStagingClean(root);
-  });
+      write("dist/plugin-sdk/core.d.ts", "previous declaration");
+      const before = treeHashes(path.join(root, "dist"));
+      const failed = await runWriter(command, root);
+      expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
+      expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
+      expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      expectStagingClean(root);
+    }),
+  );
 });

@@ -192,6 +192,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
+  },
+  {
     "source": "xAI provider",
     "target": "xAI provider"
   },

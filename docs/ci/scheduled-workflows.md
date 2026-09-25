@@ -11,20 +11,28 @@ read_when:
 Full `main` CI runs hourly instead of on every push. `Main CI Hourly`
 (`ci-hourly.yml`) requests a full `CI` run at minute 23 of each hour. GitHub pins
 the child workflow and its checkout to the same main SHA at dispatch, even if
-main advanced after the scheduler event. It reuses ordinary manual CI with
+main advanced after the scheduler event. It requests `validation_tier=main`,
 `release_gate=false`, `release_scope=full`, and `include_android=true`. It does
 not diff only the last commit: Node, native platforms, docs, QA Smoke, browser
-process proofs, and all six Docker seed lanes retain full manual coverage.
-This also includes the existing manual-only native/screenshot and minimum-Node
-checks, so it is broader than a path-selected main push.
+process proofs, and the published-updater survivor all run against that revision.
+Node tests use the existing compact main inventory and runtime policy.
+
+Full Release Validation and ordinary manual CI retain `validation_tier=full`
+by default. They additionally run the release-only tooling/runtime/UI tests,
+minimum-Node compatibility, iOS screenshots, native Release builds, Android
+packaging, and all six Docker seed scenarios. Hourly iOS keeps its full
+`ios-build (tests)` simulator phase and Swift lint; Android keeps phone/Wear
+tests and lint. The hourly Docker survivor uses the existing main smoke package, retaining runtime, assets, public
+SDK declarations, and tarball integrity checks without the release-only
+declaration build. Runner routing, timeouts, and concurrency limits are unchanged.
 
 The dispatcher summary names the child `CI hourly-main-<run>-<attempt>` run.
 **A successful dispatcher is not a passing CI result**; inspect the child CI
 run and its `openclaw/ci-gate` job. Hourly CI children share one non-canceling
 concurrency slot with a coalesced pending tip. Ordinary manual/release CI stays
 independent, and subsequent security-only pushes cannot cancel hourly work.
-The hourly dispatcher defers during `OPENCLAW_RELEASE_PRIORITY_RUN`; its
-manual action remains available, like ordinary manual CI.
+The hourly dispatcher and manual CI remain available during release validation;
+`OPENCLAW_RELEASE_PRIORITY_RUN` does not control their admission.
 
 The standalone Docs, Node Runtime Conformance, Plugin Init Scaffold Validation,
 and Sandbox Common Smoke workflows also run hourly at minute 23, retaining
@@ -55,6 +63,10 @@ gh workflow run ci-hourly.yml --ref main
 The individual standalone workflows can also be run manually. Direct `CI`
 dispatches and release-validation children retain their existing inputs and
 behavior; set `include_android=true` when requesting complete platform coverage.
+To measure hourly coverage on a development branch, dispatch `ci.yml` on that
+branch with `validation_tier=main` and `include_android=true`. The main tier
+requires the workflow and checkout to share one revision; it cannot qualify a
+frozen release target or replace an exact-head PR release gate.
 
 ### What stays on pushes
 
@@ -66,7 +78,7 @@ protocol-method metadata guards there against the exact push `before` SHA,
 so hourly manual CI's main-against-itself comparison cannot lose these checks;
 Workflow Sanity retains its existing push scope. The full CI aggregate job is
 skipped on default main pushes, **not** on runnable PRs or full manual runs.
-Existing release-priority deferral still applies to CodeQL and Workflow Sanity.
+CodeQL and Workflow Sanity also remain available during release validation.
 PR required-check names and security-review enforcement are unchanged.
 
 Publishing and its prerequisite checks stay event-driven: docs mirror and

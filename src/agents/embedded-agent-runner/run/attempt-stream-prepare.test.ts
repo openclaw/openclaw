@@ -29,7 +29,6 @@ import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../../admitted-run-context.js";
-import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import {
@@ -44,7 +43,6 @@ import {
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { isToolResultError } from "../../tool-result-error.js";
 import { ACTIVE_EMBEDDED_RUNS, ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../run-state.js";
 
 type QuestionDispatcher = Extract<
@@ -81,6 +79,8 @@ import {
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import {
   createBeforeFinalizeEvent,
+  createCatalogSubscription,
+  observeTerminalRunActivity,
   createHeldSettlementSession,
   createTurnHandoffSession,
   prepareCatalogExecutor,
@@ -101,31 +101,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
     mocks.setActiveRun.mockImplementation(runs.setActiveEmbeddedRun);
     mocks.clearActiveRun.mockImplementation(runs.clearActiveEmbeddedRun);
-    mocks.subscribe.mockReturnValue({
-      unsubscribe: vi.fn(),
-      toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
-        try {
-          const result = await execute(() => undefined);
-          await onTerminal?.({
-            result,
-            isError: isToolResultError(result),
-            executedArguments: structuredClone(args),
-            effectReceipt: { state: "uncertain" },
-          });
-          return result;
-        } catch (error) {
-          await onTerminal?.({
-            result: buildToolLifecycleErrorResult(error),
-            isError: true,
-            executedArguments: structuredClone(args),
-            effectReceipt: { state: "uncertain" },
-          });
-          throw error;
-        }
-      }),
-      isCompacting: vi.fn(() => false),
-    });
+    mocks.subscribe.mockReturnValue(createCatalogSubscription());
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
@@ -559,14 +535,21 @@ describe("prepareEmbeddedAttemptStream", () => {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
 
-    await expect(
-      subscriptionInput.onBeforeTerminalDelivery?.(createBeforeFinalizeEvent()),
-    ).resolves.toBeUndefined();
+    try {
+      await expect(
+        subscriptionInput.onBeforeTerminalDelivery?.(createBeforeFinalizeEvent()),
+      ).resolves.toBeUndefined();
 
-    expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
-    expect(prepared.queueHandle.isStopped?.()).toBe(false);
-    resolveSteer?.();
-    await queued;
+      expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
+      expect(prepared.queueHandle.isStopped?.()).toBe(false);
+    } finally {
+      resolveSteer?.();
+      try {
+        await queued;
+      } finally {
+        prepared.subscription.unsubscribe();
+      }
+    }
   });
 
   it("routes live events to the transcript session instead of the sandbox authority session", () => {
@@ -833,6 +816,22 @@ describe("prepareEmbeddedAttemptStream", () => {
       prepared.subscription.unsubscribe();
     }
   });
+
+  it.each(["ordinary", "cancelled", "deferred cancellation", "pending task"] as const)(
+    "publishes terminal activity under %s ownership",
+    async (scenario) => {
+      const result = await observeTerminalRunActivity(scenario, (subscribe) =>
+        mocks.subscribe.mockImplementation(subscribe),
+      );
+      const deferred = scenario === "deferred cancellation";
+      const active = deferred || scenario === "pending task";
+      expect(result).toEqual({
+        activeBefore: true,
+        terminalEvents: [{ phase: deferred ? "finishing" : "end", active }],
+        activeAfter: active,
+      });
+    },
+  );
 
   it.each(["subscription", "registration", "deferred lifecycle adoption"] as const)(
     "releases acquired stream subscriptions when %s fails",

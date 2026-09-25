@@ -214,7 +214,7 @@ export function createRuntime() {
   return {
     ...taskRuntime,
     captureAgentHarnessCompletionCustody: vi.fn<typeof captureAgentHarnessCompletionCustody>(
-      () => undefined,
+      async () => undefined,
     ),
     createAgentHarnessTaskEventSink: vi.fn<typeof createAgentHarnessTaskEventSink>(() => vi.fn()),
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
@@ -336,7 +336,7 @@ export async function registerDetachedChild(
   client: ReturnType<typeof createClient>,
   monitor: CodexNativeSubagentMonitorInstance,
 ): Promise<void> {
-  const owner = registerParent(monitor);
+  const owner = await registerParent(monitor);
   await notifyChildStarted(client);
   await owner.unregister();
 }

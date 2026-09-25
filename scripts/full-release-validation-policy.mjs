@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
@@ -130,7 +131,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
         },
         controls: {
           stableSoakRequired: ["stable", "full"].includes(context.releaseProfile),
-          performanceBlocking: false,
+          performanceBlocking: context.releaseProfile !== "beta",
           performanceReportPublication: "artifact-only",
         },
         childRuns: {
@@ -143,7 +144,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           productPerformance: {
             runId: runs.productPerformance ?? "",
             conclusion: drain?.children?.productPerformance?.conclusion ?? "",
-            blocking: false,
+            blocking: context.releaseProfile !== "beta",
           },
         },
       };
@@ -1394,7 +1395,7 @@ function validatePlanSourceAdmission(plan, expected) {
 }
 
 function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
-  const request = validateFullReleaseCandidateRequest(plan.candidateRequest);
+  const request = validateRecordedFullReleaseCandidateRequest(plan.candidateRequest);
   if (plan.coveragePolicy !== undefined && plan.attemptEvidenceVersion !== 3) {
     throw new Error("release coverage policy requires a phase-three execution plan");
   }
@@ -1415,7 +1416,7 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   if (
     expectedCandidateRequest !== undefined &&
     JSON.stringify(request) !==
-      JSON.stringify(validateFullReleaseCandidateRequest(expectedCandidateRequest))
+      JSON.stringify(validateRecordedFullReleaseCandidateRequest(expectedCandidateRequest))
   ) {
     throw new Error("release candidate request differs from the expected plan inputs");
   }
@@ -1515,7 +1516,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
       ? {
           attemptEvidenceVersion: payload.attemptEvidenceVersion,
           repository: String(payload.repository),
-          candidateRequest: validateFullReleaseCandidateRequest(payload.candidateRequest),
+          candidateRequest: validateRecordedFullReleaseCandidateRequest(payload.candidateRequest),
           candidate:
             payload.candidate === null
               ? null

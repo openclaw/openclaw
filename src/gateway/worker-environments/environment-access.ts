@@ -1,3 +1,4 @@
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
@@ -151,8 +152,27 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       inState(record, "ready", "idle", "attached") &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
+    const preparedProject = record.preparation
+      ? readWorkerProjectSnapshot(record.profileSnapshot.project)
+      : undefined;
+    const projectLabel = preparedProject
+      ? "source" in preparedProject
+        ? normalizeCloudRepo(preparedProject.source.url)
+        : preparedProject.label
+      : undefined;
     return {
       ...record,
+      ...(record.preparation && preparedProject
+        ? {
+            preparation: {
+              ...record.preparation,
+              project: {
+                ...(projectLabel ? { label: projectLabel } : {}),
+                baseCommit: preparedProject.baseCommit,
+              },
+            },
+          }
+        : {}),
       ...((record.state === "failed" || record.state === "orphaned") && record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),

@@ -504,6 +504,14 @@ openclaw-model-account-usage,
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
+.model-provider-login {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.model-provider-login .model-setup-wizard__body > p {
+  margin: 0;
+}
+
 .model-provider-login .model-setup-wizard__footer {
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -549,6 +557,32 @@ openclaw-model-account-usage,
   gap: var(--space-3);
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.model-provider-login__accounts h3,
+.model-provider-login__methods h3 {
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
+.model-provider-login__methods,
+.model-provider-login [data-models-login-choice] {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.model-provider-login__account {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.model-provider-login__methods .learn-more-link {
+  justify-self: start;
+  margin-top: var(--space-2);
 }
 
 .model-provider-login__secondary {

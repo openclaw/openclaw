@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 

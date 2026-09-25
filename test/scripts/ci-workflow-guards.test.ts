@@ -24,7 +24,11 @@ import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import {
+  buildChildEnv,
+  resolveShardPlans,
+  runShardPlans,
+} from "../../scripts/ci-run-node-test-shard.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createUiRealGatewayTestShards,
@@ -2752,7 +2756,8 @@ AFTER_CD
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+          "${{ needs.preflight.outputs.frozen_target == 'true' && 'base' || 'legacy-operator-state' }}",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
@@ -2762,9 +2767,15 @@ AFTER_CD
     const prepare = job.steps.find(
       (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
     ) as WorkflowStep;
-    expect(prepare.if).toBe(
-      "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')",
-    );
+    for (const eventName of ["push", "pull_request"] as const) {
+      expect(
+        evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(eventName === "push");
+    }
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepare.run).not.toContain("--skip-check");
@@ -3717,7 +3728,6 @@ setImmediate(() => {
 
   it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
     const workflow = readCiWorkflow();
-    expect(evaluateWorkflowRunner(workflow.jobs["ci-gate"]["runs-on"])).toBe("ubuntu-24.04");
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -3725,7 +3735,7 @@ setImmediate(() => {
       runnerBackend: "hybrid",
     } as const;
 
-    for (const jobName of ["preflight", "security-fast"]) {
+    for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
@@ -3752,7 +3762,7 @@ setImmediate(() => {
           expect(
             evaluateWorkflowExpression(expression, { ...context, eventName, runnerBackend }),
             jobName,
-          ).toBe(jobName === "security-fast" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04");
         }
       }
     }
@@ -3961,6 +3971,7 @@ setImmediate(() => {
       android: "ubuntu-24.04",
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
+      "check-lint-hosted-core-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
       "checks-baseline-ratchets": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
@@ -3971,6 +3982,7 @@ setImmediate(() => {
       "checks-ui": "ubuntu-24.04",
       "checks-ui-e2e": "ubuntu-24.04",
       "checks-ui-e2e-real-gateway": "ubuntu-24.04",
+      "ci-gate": "ubuntu-24.04",
       "control-ui-i18n": "ubuntu-24.04",
       "control-ui-performance": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
@@ -3995,6 +4007,8 @@ setImmediate(() => {
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
+      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-16vcpu-windows-2025",
     } as const;
@@ -4018,9 +4032,6 @@ setImmediate(() => {
       runAttempt: 1,
     } as const;
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
-    expect(evaluateWorkflowRunner(jobs["check-lint-hosted-core-shard"]?.["runs-on"])).toBe(
-      "ubuntu-24.04",
-    );
     expect(evaluateWorkflowRunner(jobs["check-lint-hosted-extension-shard"]?.["runs-on"])).toBe(
       "ubuntu-24.04",
     );
@@ -4084,6 +4095,73 @@ setImmediate(() => {
           }),
           `${jobName}: returning-contributor fork retry (${runnerBackend || "unset"})`,
         ).toBe(hostedRunner);
+      }
+    }
+
+    for (const jobName of ["check-lint-hosted-core-shard", "ci-gate"] as const) {
+      const expression = jobs[jobName]?.["runs-on"];
+      const runner = expectedHybridFirstAttemptRunners[jobName];
+      for (const [label, overrides, expected] of [
+        ["main", { eventName: "push" }, runner],
+        [
+          "heavy packed core stripe",
+          { runnerProfile: "hybrid", matrix: { stripe: 1 } },
+          jobName === "ci-gate" ? runner : "blacksmith-16vcpu-ubuntu-2404",
+        ],
+        ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
+        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
+        ["noncanonical", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
+        ["manual", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
+        [
+          "trusted fork with hosted profile",
+          { headRepository: "contributor/openclaw", runnerProfile: "github" },
+          runner,
+        ],
+        ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
+        [
+          "admitted qualification overrides configured backend",
+          {
+            eventName: "workflow_dispatch",
+            runnerBackend: "github",
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+            },
+          },
+          runner,
+        ],
+        [
+          "qualification hosted override",
+          {
+            eventName: "workflow_dispatch",
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "github",
+            },
+          },
+          "ubuntu-24.04",
+        ],
+        [
+          "qualification retry",
+          {
+            eventName: "workflow_dispatch",
+            runAttempt: 2,
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+            },
+          },
+          "ubuntu-24.04",
+        ],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, {
+            ...canonicalPullRequest,
+            runnerBackend: "hybrid",
+            ...overrides,
+          }),
+          `${jobName}: ${label}`,
+        ).toBe(expected);
       }
     }
 
@@ -7040,7 +7118,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(steps[5]).toEqual({
       name: "Run Codex docs agent",
       if: "steps.gate.outputs.run_agent == 'true'",
-      uses: "openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56",
+      uses: "openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e",
       env: {
         DOCS_AGENT_BASE_SHA: "${{ steps.gate.outputs.review_base_sha }}",
         DOCS_AGENT_HEAD_SHA: "${{ steps.gate.outputs.review_head_sha }}",
@@ -7053,7 +7131,6 @@ server.listen(0, "127.0.0.1", () => {
         effort: "medium",
         sandbox: "workspace-write",
         "safety-strategy": "drop-sudo",
-        "codex-args": '["--full-auto"]',
       },
     });
     const gate = expectDefined(steps[2]?.run, "gate policy");
@@ -8949,7 +9026,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ).toBe(expected);
       }
     }
-    expect(evaluateWorkflowRunner(hostedCoreLint["runs-on"])).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy["fail-fast"]).toBe(false);
     expect(hostedCoreLint.strategy["max-parallel"]).toBe(5);
     const coreLintStep = hostedCoreLint.steps.find(
@@ -9374,7 +9450,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-compatible",
-      runtimes: ["node", "bun"],
+      runtimes: ["bun", "node"],
       shards: [1, 2, 3],
     },
     {
@@ -10270,6 +10346,67 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it.each([
+    {
+      fullNames: [
+        "native host registration launches with the exact custom installation context when Chrome has no selectors",
+      ],
+      expected: 0,
+    },
+    {
+      fullNames: [
+        "does not inspect or migrate configuration before rejecting a malformed native request",
+        "rejects an unauthorized bootstrap caller before config, keys or database creation",
+        "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+        'preserves invalid-config diagnostics for ordinary extension command "status"',
+        'preserves invalid-config diagnostics for ordinary extension command "setup"',
+        'preserves invalid-config diagnostics for ordinary extension command "pair"',
+        "launches launcher with the exact custom installation context when Chrome has no selectors",
+        "launches cli with the exact custom installation context when Chrome has no selectors",
+      ].map((name) => `native host registration ${name}`),
+      expected: 0,
+    },
+    { fullNames: ["historical native-host proof"], expected: 1 },
+  ])(
+    "validates a complete known frozen native-host test inventory: $fullNames",
+    ({ fullNames, expected }) => {
+      const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+      );
+      const root = tempDirs.make("openclaw-frozen-browser-proof-report-");
+      const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+      const report = {
+        success: true,
+        numFailedTestSuites: 0,
+        numPendingTestSuites: 0,
+        numTotalTests: fullNames.length,
+        numPassedTests: fullNames.length,
+        numFailedTests: 0,
+        numPendingTests: 0,
+        numTodoTests: 0,
+        testResults: [
+          {
+            name: path.join(root, file),
+            status: "passed",
+            assertionResults: fullNames.map((fullName) => ({ fullName, status: "passed" })),
+          },
+        ],
+      };
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `import fs from "node:fs";
+       const args = process.argv.slice(2);
+       fs.writeFileSync(args[args.indexOf("--outputFile.json") + 1], ${JSON.stringify(JSON.stringify(report))});`,
+      );
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: { ...process.env, ...step.env, FROZEN_TARGET: "true", RUNNER_TEMP: root },
+      });
+      expect(result.status, result.stderr).toBe(expected);
+    },
+  );
+
   it("restores dist in PR CI and saves it only from the trusted warmer", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -10394,6 +10531,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     // Startup memory, artifact writers, and TUI retain explicit barriers;
     // hosted runners also serialize the remaining verifiers inside run_verifier.
     expect(run.match(/wait_checks$/gmu)).toHaveLength(8);
+  });
+
+  it.each([
+    { mode: "private-qa", outcome: "success", expected: "1" },
+    { mode: "runtime", outcome: "success", expected: "" },
+    { mode: "private-qa", outcome: "failure", expected: "" },
+    { mode: "private-qa", outcome: "skipped", expected: "" },
+    { mode: undefined, outcome: "skipped", expected: "" },
+  ] as const)("hands prepared E2E runtime to children only after $mode $outcome", (scenario) => {
+    const steps = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps;
+    const build = steps.find((step: WorkflowStep) => step.name === "Build Node test runtime");
+    const run = steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
+    const prebuilt = evaluateWorkflowExpression(run.env.OPENCLAW_E2E_USE_PREBUILT_DIST, {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      matrix: { pretest_build_mode: scenario.mode },
+      steps: { [build.id]: { outputs: {}, outcome: scenario.outcome } },
+    });
+    const target = "test/example.e2e.test.ts";
+    const env = {
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([target]),
+      OPENCLAW_E2E_USE_PREBUILT_DIST: prebuilt,
+    };
+    const plans = resolveShardPlans(env);
+    expect(plans).toHaveLength(1);
+    const childEnv = buildChildEnv(
+      expectDefined(plans[0], "changed target plan"),
+      env,
+      tempDirs.make("openclaw-ci-prebuilt-env-"),
+      0,
+    );
+    expect(childEnv.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe(scenario.expected);
+    expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(run));
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
@@ -10535,6 +10706,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "ubuntu-24.04",
       ],
       ["check-test-types-hosted-core-shard", {}, "blacksmith-16vcpu-ubuntu-2404", "ubuntu-24.04"],
+      ["check-lint-hosted-core-shard", {}, "blacksmith-8vcpu-ubuntu-2404", "ubuntu-24.04"],
+      ["ci-gate", {}, "blacksmith-4vcpu-ubuntu-2404", "ubuntu-24.04"],
       [
         "check-additional-shard",
         { group: "extension-package-boundary", runner: "blacksmith-16vcpu-ubuntu-2404" },

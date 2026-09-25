@@ -21,22 +21,6 @@ const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, str
   rem: "## REM Sleep",
 };
 
-const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
-  light: "light",
-  rem: "rem",
-};
-
-function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
-  start: string;
-  end: string;
-} {
-  const label = DAILY_PHASE_LABELS[phase];
-  return {
-    start: `<!-- openclaw:dreaming:${label}:start -->`,
-    end: `<!-- openclaw:dreaming:${label}:end -->`,
-  };
-}
-
 function resolveDailyMemoryPath(workspaceDir: string, epochMs: number, timezone?: string): string {
   const isoDay = formatMemoryDreamingDay(epochMs, timezone);
   return path.join(workspaceDir, "memory", `${isoDay}.md`);
@@ -112,12 +96,11 @@ export async function writeDailyDreamingPhaseBlock(params: {
     // An existing empty file still owns its managed block; absence does not.
     if (params.hasContent || original !== undefined) {
       inlinePath = candidatePath;
-      const markers = resolvePhaseMarkers(params.phase);
       const updated = replaceManagedMarkdownBlock({
         original: original ?? "",
         heading: DAILY_PHASE_HEADINGS[params.phase],
-        startMarker: markers.start,
-        endMarker: markers.end,
+        startMarker: `<!-- openclaw:dreaming:${params.phase}:start -->`,
+        endMarker: `<!-- openclaw:dreaming:${params.phase}:end -->`,
         body,
       });
       await replaceDreamingMarkdownFile(

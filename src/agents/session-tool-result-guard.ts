@@ -90,12 +90,29 @@ function extractPendingAssistantToolCalls(message: AgentMessage) {
     : [];
 }
 
+/**
+ * Identities of one streamed assistant response. The runtime turnId is carried by every
+ * fragment; the provider responseId can first appear on a later fragment.
+ */
+function assistantResponseIds(message: AgentMessage): string[] {
+  if (message.role !== "assistant") {
+    return [];
+  }
+  return [message.responseId, message.turnId].flatMap((id) => normalizeOptionalString(id) ?? []);
+}
+
 function clearsPendingToolCalls(
   message: AgentMessage,
   toolCalls: ReturnType<typeof extractPendingAssistantToolCalls>,
   allowSyntheticToolResults: boolean,
+  pendingResponseIds: readonly string[],
 ): boolean {
   if (message.role === "toolResult") {
+    return false;
+  }
+  // Async tool execution commits each call as a fragment of one provider response while the
+  // response keeps streaming. A later fragment of that response is not a turn boundary.
+  if (assistantResponseIds(message).some((id) => pendingResponseIds.includes(id))) {
     return false;
   }
   const transcriptOnly =
@@ -178,6 +195,8 @@ export function installSessionToolResultGuard(
     sessionManager.appendMessageWithTranscriptAnchorAsync.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pending = new Map<string, string | undefined>();
+  // Response that most recently added pending tool calls; see clearsPendingToolCalls.
+  let pendingResponseIds: readonly string[] = [];
   const persistMessage = (message: AgentMessage, sourceAppend?: CodeModeSourceAppend) => {
     const transformer = opts?.transformMessageForPersistence;
     const persisted = transformer ? transformer(message) : message;
@@ -255,6 +274,9 @@ export function installSessionToolResultGuard(
     for (const call of calls) {
       pending.set(call.id, call.name);
     }
+    if (calls.length > 0) {
+      pendingResponseIds = assistantResponseIds(message);
+    }
   };
   const recordPendingReceipt = (
     entryId: string,
@@ -277,7 +299,9 @@ export function installSessionToolResultGuard(
         continue;
       }
       const calls = extractPendingAssistantToolCalls(entry.message);
-      if (clearsPendingToolCalls(entry.message, calls, allowSyntheticToolResults)) {
+      if (
+        clearsPendingToolCalls(entry.message, calls, allowSyntheticToolResults, pendingResponseIds)
+      ) {
         pending.clear();
       }
       updatePending(entry.message, calls);
@@ -521,7 +545,7 @@ export function installSessionToolResultGuard(
     // back into strict provider order before the next replay.
     if (
       pending.size > 0 &&
-      clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults)
+      clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults, pendingResponseIds)
     ) {
       yield* flushPendingToolResultsOperation();
     }

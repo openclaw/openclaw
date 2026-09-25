@@ -450,6 +450,8 @@ suite.define(() => {
           });
           await gateway.waitForRequest("plugins.controlUi.list");
           await expectLoading();
+          // The sidebar owns manager registration and loads independently of the plugin page.
+          await page.getByRole("link", { name: "Plugins", exact: true }).waitFor();
           expect(
             await page.evaluate(() => ({
               contributions: Boolean(customElements.get("openclaw-plugin-contributions")),

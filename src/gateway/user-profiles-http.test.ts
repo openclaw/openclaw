@@ -90,7 +90,11 @@ describe("profile avatar HTTP endpoint", () => {
     });
   });
 
-  it("answers allowed credentialed cross-origin preflights without avatar auth", async () => {
+  it.each([
+    { controlUi: { allowedOrigins: ["https://control.example"] } },
+    { publicOrigin: "https://control.example" },
+  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
+    getRuntimeConfig.mockReturnValue({ gateway });
     const res = response();
     const req = {
       method: "OPTIONS",

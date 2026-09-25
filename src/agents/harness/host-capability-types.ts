@@ -14,6 +14,10 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localIdentityEnv: Readonly<Record<string, string>>;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
+  /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
+  localToolEnv?: Readonly<Record<string, string>>;
+  /** Prefix intent for runtimes with an explicitly authored native shell PATH. */
+  localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
 }>;

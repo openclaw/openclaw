@@ -17,6 +17,22 @@ export type SqliteWorkerStateContext = {
   existingSchemaPath?: string;
 };
 
+export function captureSqliteWorkerStateContext(
+  context: SqliteWorkerStateContext,
+): SqliteWorkerStateContext {
+  return {
+    environment: { ...context.environment },
+    ...(context.initializationEnvironment
+      ? { initializationEnvironment: { ...context.initializationEnvironment } }
+      : {}),
+    ...(context.initializationAgentPaths
+      ? { initializationAgentPaths: [...context.initializationAgentPaths] }
+      : {}),
+    coordinatorRuntime: { ...context.coordinatorRuntime },
+    existingSchemaPath: context.existingSchemaPath,
+  };
+}
+
 /** Charge captured initialization facts together with the request bytes retained by admission. */
 export function sqliteWorkerRequestBytes(
   input: Uint8Array,

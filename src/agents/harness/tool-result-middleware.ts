@@ -428,7 +428,6 @@ export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
@@ -436,20 +435,13 @@ export function createAgentToolResultMiddlewareRunner(
       runtime: ctx.runtime,
     });
   });
-  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
-    if (resolvedHandlers) {
-      return resolvedHandlers;
-    }
-    resolvedHandlers = await resolvedHandlersLoader.load();
-    return resolvedHandlers;
-  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
       // Drop removed plugins' handlers before choosing a path, so a run whose
       // only middleware was removed keeps the untouched no-middleware result.
-      const handlersForRun = (await resolveHandlers()).filter(
+      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).filter(
         (handler) => !isRemovedPluginMiddleware(handler),
       );
       // Fast path: with no middleware registered the result is delivered
