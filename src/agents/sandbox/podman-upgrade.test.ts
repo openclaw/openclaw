@@ -103,7 +103,7 @@ it.each([false, true])(
       if (args[0] === "--url") {
         uri = expectDefined(args[1], "Podman --url value");
         args.splice(0, 2);
-        if (args[0] === "--identity") {
+        if (args.at(0) === "--identity") {
           args.splice(0, 2);
         }
       }
