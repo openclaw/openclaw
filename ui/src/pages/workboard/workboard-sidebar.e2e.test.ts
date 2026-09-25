@@ -21,17 +21,17 @@ suite.define(() => {
     });
     const page = await context.newPage();
     try {
-      const sessions = ["infra", "infra", "fixes", ""].map<GatewaySessionRow>(
-        (category, index) => ({
-          key: "agent:main:sidebar-layout-" + index,
-          kind: "direct",
-          label: "Sidebar layout session " + index,
-          category: category || undefined,
-          updatedAt: Date.now(),
-          status: "done",
-          hasActiveRun: false,
-        }),
-      );
+      const sessions = ["infra", "infra", "fixes", ""].map<
+        GatewaySessionRow & { updatedAt: number }
+      >((category, index) => ({
+        key: "agent:main:sidebar-layout-" + index,
+        kind: "direct",
+        label: "Sidebar layout session " + index,
+        category: category || undefined,
+        updatedAt: Date.now(),
+        status: "done",
+        hasActiveRun: false,
+      }));
       sessions.push(
         {
           key: "agent:main:sidebar-running",
