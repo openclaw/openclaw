@@ -113,7 +113,7 @@ describe("update-cli", () => {
       const maintenance = vi
         .mocked(runExec)
         .mock.calls.filter(([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT);
-      expect(maintenance.map(([runner, args]) => [runner, ...args.slice(1)])).toEqual([
+      expect(maintenance.map(([runner, args]) => [runner].concat(args.slice(1)))).toEqual([
         [expectedRunner, "doctor", "--repair", "--non-interactive", "--yes"],
         [
           expectedRunner,
