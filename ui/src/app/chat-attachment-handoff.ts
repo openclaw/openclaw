@@ -3,6 +3,7 @@ import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   HumanMention,
 } from "../lib/chat/chat-types.ts";
 import { showToast } from "../lib/toast.ts";
@@ -28,6 +29,7 @@ type PendingChatAttachmentHandoff = {
   message: string;
   draftRevision?: number;
   goalMode?: ChatGoalDraftMode | null;
+  replyTarget?: ChatReplyTarget | null;
   mentions?: readonly HumanMention[];
   newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
@@ -39,8 +41,18 @@ type PendingChatAttachmentHandoff = {
 };
 
 const hasInput = (
-  draft: Pick<PendingChatAttachmentHandoff, "message" | "attachments" | "goalMode" | "mentions">,
-) => Boolean(draft.message || draft.attachments.length || draft.goalMode || draft.mentions?.length);
+  draft: Pick<
+    PendingChatAttachmentHandoff,
+    "message" | "attachments" | "goalMode" | "mentions" | "replyTarget"
+  >,
+) =>
+  Boolean(
+    draft.message ||
+    draft.attachments.length ||
+    draft.goalMode ||
+    draft.replyTarget ||
+    draft.mentions?.length,
+  );
 
 export function createChatAttachmentHandoff(
   gateway: ApplicationGateway,
@@ -152,12 +164,14 @@ export function createChatAttachmentHandoff(
         entry.message = "";
         entry.attachments = [];
         entry.goalMode = null;
+        entry.replyTarget = null;
         entry.mentions = [];
       }
       if (
         !entry.message &&
         !entry.attachments.length &&
         !entry.goalMode &&
+        !entry.replyTarget &&
         !Object.keys(entry.fallbacks).length
       ) {
         take(key);
@@ -195,6 +209,7 @@ export function createChatAttachmentHandoff(
       message = "",
       draftRevision,
       goalMode,
+      replyTarget,
       mentions,
       newSessionDraft,
       incognito,
@@ -203,7 +218,13 @@ export function createChatAttachmentHandoff(
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (!message && !goalMode && attachments.length === 0 && fallbackEntries.length === 0) {
+      if (
+        !message &&
+        !goalMode &&
+        !replyTarget &&
+        attachments.length === 0 &&
+        fallbackEntries.length === 0
+      ) {
         releaseHandoff(previous);
         return;
       }
@@ -237,6 +258,7 @@ export function createChatAttachmentHandoff(
         message,
         ...(draftRevision !== undefined ? { draftRevision } : {}),
         ...(goalMode ? { goalMode } : {}),
+        ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
         ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
@@ -266,6 +288,7 @@ export function createChatAttachmentHandoff(
           ...(match.message ? { message: match.message } : {}),
           ...(match.draftRevision !== undefined ? { draftRevision: match.draftRevision } : {}),
           ...(match.goalMode ? { goalMode: match.goalMode } : {}),
+          ...(match.replyTarget ? { replyTarget: match.replyTarget } : {}),
           ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }

@@ -241,6 +241,7 @@ export function restorePaneStagedAttachments(
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;
     state.chatGoalDraftMode = restored.goalMode ?? null;
+    state.chatReplyTarget = restored.replyTarget ?? null;
   }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
@@ -285,6 +286,7 @@ export function preparePaneStagedAttachments(
     message: state.chatMessage,
     mentions: state.chatMentions,
     goalMode: state.chatGoalDraftMode,
+    replyTarget: state.chatReplyTarget,
     draftRevision,
     incognito: isIncognitoComposerScope(
       state,
