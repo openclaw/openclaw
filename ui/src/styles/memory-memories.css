@@ -4,7 +4,7 @@
 }
 
 .memory-memories__search .settings-input {
-  flex: 1;
+  flex: 1 1 auto;
 }
 
 .memory-memories__state,
