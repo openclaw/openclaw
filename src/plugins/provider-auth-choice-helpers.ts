@@ -15,6 +15,7 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
 } from "../config/model-input.js";
 import { normalizeProviderConfigForConfigDefaults } from "../config/provider-policy.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -111,23 +112,15 @@ function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeAgentModelRefForConfig(value);
+  const normalized = normalizeAgentModelSelectionForConfig(value);
+  if (!isPlainRecord(normalized)) {
+    return normalized;
   }
-  if (!isPlainRecord(value)) {
-    return value;
-  }
-
-  const next: Record<string, unknown> = { ...value };
-  if (typeof next.primary === "string") {
-    next.primary = normalizeAgentModelRefForConfig(next.primary);
-  }
-  if (Array.isArray(next.fallbacks)) {
-    next.fallbacks = next.fallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-  }
-  return next;
+  // Provider patches own their model copy even when normalization changes no values.
+  return {
+    ...normalized,
+    ...(Array.isArray(normalized.fallbacks) ? { fallbacks: [...normalized.fallbacks] } : {}),
+  };
 }
 
 function normalizeAgentModelMapForWrite(value: unknown): unknown {

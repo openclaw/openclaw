@@ -1,4 +1,5 @@
 import { isRouteId, type RouteId } from "../app-routes.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
 // localStorage is per-origin: a remote tunnel recreated on a new ephemeral
@@ -13,22 +14,11 @@ type StoredNativeRoute = {
   search: string;
 };
 
-// The `localStorage` getter itself throws on opaque origins or when
-// persistence is blocked, so it must resolve inside a guard, not as a default
-// argument evaluated before the function body.
-function resolveStorage(storage?: Storage): Storage | null {
-  try {
-    return storage ?? localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function readStoredRoute(
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
 ): StoredNativeRoute | null {
-  const store = nativeHost ? resolveStorage(storage) : null;
+  const store = nativeHost ? (storage ?? getSafeLocalStorage()) : null;
   if (!store) {
     return null;
   }
@@ -59,13 +49,9 @@ function readStoredRoute(
 
 // One-shot action params (palette slash-command drafts) must not replay on a
 // later launch; the pathname now owns session identity.
-const TRANSIENT_SEARCH_PARAMS = ["draft"];
-
 function restorableSearch(search: string): string {
   const params = new URLSearchParams(search);
-  for (const name of TRANSIENT_SEARCH_PARAMS) {
-    params.delete(name);
-  }
+  params.delete("draft");
   const filtered = params.toString();
   return filtered ? `?${filtered}` : "";
 }
@@ -77,7 +63,7 @@ export function persistRoute(
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
 ): void {
-  const store = nativeHost ? resolveStorage(storage) : null;
+  const store = nativeHost ? (storage ?? getSafeLocalStorage()) : null;
   if (!store) {
     return;
   }
@@ -91,15 +77,6 @@ export function persistRoute(
   }
 }
 
-function shouldRestore(
-  routeId: RouteId,
-  pathname: string,
-  search: string,
-  nativeHost: boolean,
-): boolean {
-  return nativeHost && routeId === "chat" && pathname.endsWith("/chat") && search === "";
-}
-
 /**
  * Returns the stored route to restore, or null when the boot route is an
  * explicit deep link, matches the stored route, or no valid entry exists.
@@ -111,7 +88,7 @@ export function considerRouteRestore(
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
 ): StoredNativeRoute | null {
-  if (!shouldRestore(routeId, pathname, search, nativeHost)) {
+  if (!nativeHost || routeId !== "chat" || !pathname.endsWith("/chat") || search !== "") {
     return null;
   }
   const stored = readStoredRoute(storage, nativeHost);

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, noChange, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import "../../components/resizable-divider.ts";
@@ -17,7 +18,7 @@ import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { ChatSplitLayout, ChatSplitColumn, ChatSplitPane } from "./split-layout-types.ts";
-import { splitRatio, splitWeight } from "./split-layout.ts";
+import { splitRatio } from "./split-layout.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
@@ -187,14 +188,14 @@ export function renderChatPageSplitLayout(
             style="flex: ${
               options.narrow
                 ? 1
-                : splitWeight(layout.columnWeights, columnIndex, "rendered split column weight")
+                : expectDefined(layout.columnWeights[columnIndex], "rendered split column weight")
             } 1 0"
           >
             ${repeat(
               column.panes,
               (pane) => pane.id,
               (pane, paneIndex) => html`
-                ${options.renderPane(column, pane, splitWeight(column.paneWeights, paneIndex, "rendered split pane weight"))}
+                ${options.renderPane(column, pane, expectDefined(column.paneWeights[paneIndex], "rendered split pane weight"))}
                 ${
                   !options.narrow && paneIndex < column.panes.length - 1
                     ? html`

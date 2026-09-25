@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
@@ -89,10 +88,6 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
       .join(" "),
   );
   return haystack.includes(needle);
-}
-
-function resolveToolNames(entries: readonly ActivityEntry[]): string[] {
-  return sortUniqueStrings(entries.map((entry) => entry.toolName));
 }
 
 function filterEntries(props: ActivityProps): ActivityEntry[] {
@@ -214,10 +209,6 @@ const STATUS_KINDS = {
   error: "danger",
 } as const satisfies Record<ActivityStatus, "warn" | "ok" | "danger">;
 
-function statusKind(status: ActivityStatus): "warn" | "ok" | "danger" {
-  return STATUS_KINDS[status];
-}
-
 function renderEntry(
   props: ActivityProps,
   entry: ActivityEntry,
@@ -236,7 +227,7 @@ function renderEntry(
         <span class="activity-entry__main">
           <span class="activity-entry__title">
             ${renderSettingsStatus({
-              kind: statusKind(entry.status),
+              kind: STATUS_KINDS[entry.status],
               label: statusLabel(entry.status),
             })}
             <span class="activity-entry__tool mono">${entryLabel(entry)}</span>
@@ -293,7 +284,7 @@ export function renderActivity(props: ActivityProps) {
     { hour: "numeric", minute: "2-digit", second: "2-digit" },
     "",
   );
-  const toolNames = resolveToolNames(props.entries);
+  const toolNames = sortUniqueStrings(props.entries.map((entry) => entry.toolName));
   const filtered = filterEntries(props);
   const hasAnyFilters =
     props.filterText.trim() ||

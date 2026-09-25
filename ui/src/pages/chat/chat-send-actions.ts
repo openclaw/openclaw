@@ -23,11 +23,8 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
-  isVolatileQueuedMessage,
   readQueuedMessageById,
   updateQueuedMessage,
-  updateQueuedMessagesForSession,
-  updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
@@ -165,14 +162,14 @@ export function moveQueuedChatMessage(
   if (reordered.some((item, index) => !segmentIds.has(item.id) && scope[index]?.id !== item.id)) {
     return "noop";
   }
-  const applied = updateQueuedMessagesForSession(
+  const applied = chatOutboxOwner(host).update(
     host,
     moves.map((moved) => ({
       id: moved.id,
       update: (entry: ChatQueueItem) => ({ ...entry, orderKey: moved.orderKey }),
     })),
   );
-  if (!applied) {
+  if (applied === null) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return "rejected";
   }
@@ -222,7 +219,7 @@ export async function retryQueuedChatMessage(
     return;
   }
   if (!located.durable) {
-    const wasVolatile = isVolatileQueuedMessage(host, item.id);
+    const wasVolatile = chatOutboxOwner(host).hasVolatile(host, item.id);
     const admission = { scope: located.scope, awaitingDefaults: !hasUiSessionDefaults(host) };
     if (!admitQueuedMessageForSession(host, admission, item)) {
       if (
@@ -234,7 +231,7 @@ export async function retryQueuedChatMessage(
           item.sendState === "held") &&
         canSendVolatileQueueItem(host, item)
       ) {
-        const retry = updateVolatileQueuedMessage(host, id, (entry) =>
+        const retry = chatOutboxOwner(host).change(host, id, (entry) =>
           resetRetryState(entry, undefined),
         );
         if (!retry) {

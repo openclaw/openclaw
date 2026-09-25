@@ -250,7 +250,6 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/loader-load-context.ts|unicorn/no-array-sort|1",
