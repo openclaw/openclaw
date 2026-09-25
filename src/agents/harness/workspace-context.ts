@@ -114,18 +114,19 @@ export async function prepareAgentWorkspaceContext(
     projectContextFile(toContextFile(file), params.projectPath),
   );
   // Optional memory preparation must not discard a successfully captured instruction snapshot.
-  const memoryRecallInstructions = memoryToolRouted && params.memoryTools
-    ? await prepareMemorySystemPromptAddition({
-        availableTools: new Set(params.memoryTools.toolNames),
-        citationsMode: params.memoryTools.citationsMode,
-        agentId: params.agentId,
-        agentSessionKey: params.sessionKey,
-        sandboxed: params.memoryTools.sandboxed,
-      }).catch((error: unknown) => {
-        params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
-        return undefined;
-      })
-    : undefined;
+  const memoryRecallInstructions =
+    memoryToolRouted && params.memoryTools
+      ? await prepareMemorySystemPromptAddition({
+          availableTools: new Set(params.memoryTools.toolNames),
+          citationsMode: params.memoryTools.citationsMode,
+          agentId: params.agentId,
+          agentSessionKey: params.sessionKey,
+          sandboxed: params.memoryTools.sandboxed,
+        }).catch((error: unknown) => {
+          params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
+          return undefined;
+        })
+      : undefined;
   return {
     bootstrapFiles,
     contextFiles,

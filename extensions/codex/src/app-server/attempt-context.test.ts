@@ -6,9 +6,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  clearMemoryPluginState,
-} from "openclaw/plugin-sdk/memory-host-core";
+import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

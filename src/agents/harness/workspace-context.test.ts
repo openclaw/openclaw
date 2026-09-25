@@ -1,9 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-} from "../../plugins/memory-state.js";
+import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
 import * as bootstrapRuntime from "../bootstrap-files.js";
 import { prepareAgentWorkspaceContext } from "./workspace-context.js";
 
@@ -28,26 +25,35 @@ describe("agent workspace context preparation", () => {
       config: { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } },
     });
     expect(context.instructionSnapshot.files).toHaveLength(1);
-    expect(context.instructionSnapshot.files[0]?.content).toContain("Bounded fixture operating rules.");
+    expect(context.instructionSnapshot.files[0]?.content).toContain(
+      "Bounded fixture operating rules.",
+    );
     expect(context.instructionSnapshot.files[0]?.content).toContain("truncated");
     expect(context.instructionSnapshot.files[0]?.content.length).toBeLessThanOrEqual(300);
-    expect(context.instructionSnapshot.instructions).toContain("OpenClaw Agent Workspace Instructions");
+    expect(context.instructionSnapshot.instructions).toContain(
+      "OpenClaw Agent Workspace Instructions",
+    );
   });
 
   it.each(["direct", "inherited", "remapped"] as const)(
     "keeps a root USER.md under users/arbitrary shared in a %s workspace",
     async (workspaceMode) => {
       const nestedWorkspace = path.join(workspaceDir, "users", "arbitrary");
-      const projectedWorkspace = workspaceMode === "remapped"
-        ? path.join(workspaceDir, "sandbox", "users", "arbitrary")
-        : nestedWorkspace;
+      const projectedWorkspace =
+        workspaceMode === "remapped"
+          ? path.join(workspaceDir, "sandbox", "users", "arbitrary")
+          : nestedWorkspace;
       vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
-        { ...bootstrapFile("USER.md", "Shared preferences."), path: path.join(nestedWorkspace, "USER.md") },
+        {
+          ...bootstrapFile("USER.md", "Shared preferences."),
+          path: path.join(nestedWorkspace, "USER.md"),
+        },
       ]);
       const context = await prepareAgentWorkspaceContext({
         workspaceDir: nestedWorkspace,
         scope: "full",
-        projectPath: (filePath) => path.join(projectedWorkspace, path.relative(nestedWorkspace, filePath)),
+        projectPath: (filePath) =>
+          path.join(projectedWorkspace, path.relative(nestedWorkspace, filePath)),
       });
       expect(context.personaFiles).toEqual([
         { path: path.join(projectedWorkspace, "USER.md"), content: "Shared preferences." },
@@ -62,23 +68,36 @@ describe("agent workspace context preparation", () => {
   it.each(["inherited", "remapped"] as const)(
     "prepares ordered personal instructions for the current profile in a %s workspace",
     async (workspaceMode) => {
-      vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
-        bootstrapFile("USER.md", "Shared preferences."),
-        ...(params.bootstrapUserProfileId ? [{
-          ...bootstrapFile("USER.md", params.bootstrapUserProfileId === "alice" ? "Alice preferences." : "Bob preferences."),
-          path: path.join(workspaceDir, "users", params.bootstrapUserProfileId, "USER.md"),
-          personalUser: true as const,
-        }] : []),
-        bootstrapFile("IDENTITY.md", "Agent identity."),
-        bootstrapFile("SOUL.md", "Agent voice."),
-      ]);
-      const projectedWorkspace = workspaceMode === "remapped" ? path.join(workspaceDir, "task") : workspaceDir;
+      vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockImplementation(
+        async (params) => [
+          bootstrapFile("USER.md", "Shared preferences."),
+          ...(params.bootstrapUserProfileId
+            ? [
+                {
+                  ...bootstrapFile(
+                    "USER.md",
+                    params.bootstrapUserProfileId === "alice"
+                      ? "Alice preferences."
+                      : "Bob preferences.",
+                  ),
+                  path: path.join(workspaceDir, "users", params.bootstrapUserProfileId, "USER.md"),
+                  personalUser: true as const,
+                },
+              ]
+            : []),
+          bootstrapFile("IDENTITY.md", "Agent identity."),
+          bootstrapFile("SOUL.md", "Agent voice."),
+        ],
+      );
+      const projectedWorkspace =
+        workspaceMode === "remapped" ? path.join(workspaceDir, "task") : workspaceDir;
       for (const profile of ["alice", "bob", undefined]) {
         const context = await prepareAgentWorkspaceContext({
           workspaceDir,
           scope: "full",
           bootstrapUserProfileId: profile,
-          projectPath: (filePath) => path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
+          projectPath: (filePath) =>
+            path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
         });
         const turn = context.personaInstructions ?? "";
         expect(turn).toContain("<AGENT_SOUL>");
@@ -91,11 +110,15 @@ describe("agent workspace context preparation", () => {
           { path: path.join(projectedWorkspace, "SOUL.md"), content: "Agent voice." },
           { path: path.join(projectedWorkspace, "IDENTITY.md"), content: "Agent identity." },
           { path: path.join(projectedWorkspace, "USER.md"), content: "Shared preferences." },
-          ...(profile ? [{
-            path: path.join(projectedWorkspace, "users", profile, "USER.md"),
-            content: profile === "alice" ? "Alice preferences." : "Bob preferences.",
-            personalUser: true,
-          }] : []),
+          ...(profile
+            ? [
+                {
+                  path: path.join(projectedWorkspace, "users", profile, "USER.md"),
+                  content: profile === "alice" ? "Alice preferences." : "Bob preferences.",
+                  personalUser: true,
+                },
+              ]
+            : []),
         ]);
         if (profile) {
           expect(turn.indexOf("Shared preferences.")).toBeLessThan(
@@ -139,7 +162,11 @@ describe("agent workspace context preparation", () => {
     registerMemoryCapability("memory-core", {
       promptBuilder: (context) => {
         observedContext = context;
-        return ["## Agent Memory", `agent=${context.agentId} session=${context.agentSessionKey}`, ""];
+        return [
+          "## Agent Memory",
+          `agent=${context.agentId} session=${context.agentSessionKey}`,
+          "",
+        ];
       },
     });
     const context = await prepareAgentWorkspaceContext({
@@ -155,7 +182,9 @@ describe("agent workspace context preparation", () => {
       agentSessionKey: "agent:marketing-agent:session-1",
       sandboxed: true,
     });
-    expect(context.memoryRecallInstructions).toContain("agent=marketing-agent session=agent:marketing-agent:session-1");
+    expect(context.memoryRecallInstructions).toContain(
+      "agent=marketing-agent session=agent:marketing-agent:session-1",
+    );
   });
 
   function bootstrapFile(

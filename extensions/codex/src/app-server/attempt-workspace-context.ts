@@ -157,10 +157,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
-        ? (params.agentWorkspaceDeveloperInstructions ??
-          prepared.instructionSnapshot.instructions)
+        ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      turnScopedDeveloperInstructions: injectOpenClawContext
+        ? prepared.personaInstructions
+        : undefined,
       memoryCollaborationInstructions: injectOpenClawContext
         ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
