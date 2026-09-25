@@ -40,6 +40,7 @@ import {
 } from "./process-reaper.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 import { AcpxRuntime } from "./runtime.js";
+import { decodeAcpxSessionRecordId } from "./session-file-names.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -114,7 +115,10 @@ async function createDefaultRuntime(params: AcpxRuntimeFactoryParams): Promise<A
     if (!name.endsWith(".json")) {
       continue;
     }
-    const recordId = decodeURIComponent(name.slice(0, -5));
+    const recordId = decodeAcpxSessionRecordId(name);
+    if (recordId === undefined) {
+      continue;
+    }
     if (
       !recordId.startsWith("agent:") &&
       !recordId.startsWith(".openclaw-owner-") &&

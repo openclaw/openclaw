@@ -13,6 +13,7 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
+import { decodeAcpxSessionRecordId } from "./session-file-names.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type Claim = Awaited<
@@ -44,7 +45,10 @@ async function legacyRecords(input: MigrationInput): Promise<{ directory: string
   });
   const ids = names
     .filter((name) => name.endsWith(".json"))
-    .map((name) => decodeURIComponent(name.slice(0, -5)))
+    .flatMap((name) => {
+      const id = decodeAcpxSessionRecordId(name);
+      return id === undefined ? [] : [id];
+    })
     .filter((id) => !id.startsWith("agent:") && !id.startsWith(".openclaw-owner-"));
   if (ids.length === 0) {
     return { directory, ids };

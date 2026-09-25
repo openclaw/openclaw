@@ -352,6 +352,36 @@ it("keeps oneshot physical IDs and bytes while repairing the canonical locator",
   expect(await acpxSessionOwnerMigration.detectLegacyState(f.input)).toBeNull();
 });
 
+it("ignores malformed persisted session filenames during legacy discovery", async () => {
+  const directory = directories.make("acpx-owner-malformed-name-");
+  const sessionsDirectory = path.join(directory, "state", "sessions");
+  await fs.mkdir(sessionsDirectory, { recursive: true });
+  await fs.writeFile(path.join(sessionsDirectory, "bad%ZZ.json"), "not a session");
+  const context: PluginDoctorStateMigrationContext = {
+    openPluginStateKeyedStore: (options) =>
+      createPluginStateKeyedStoreForTests("acpx", {
+        ...options,
+        env: { ...process.env, OPENCLAW_STATE_DIR: directory },
+      }),
+    inspectAcpSessionClaims: async () => ({ claims: [], incomplete: [] }),
+    updateAcpSessionIdentity() {},
+  };
+  const input = {
+    config: {},
+    env: { ...process.env, OPENCLAW_STATE_DIR: directory },
+    stateDir: directory,
+    oauthDir: path.join(directory, "oauth"),
+    serviceWorkspaceDir: directory,
+    context,
+  };
+
+  await expect(acpxSessionOwnerMigration.detectLegacyState(input)).resolves.toBeNull();
+  await expect(acpxSessionOwnerMigration.migrateLegacyState(input)).resolves.toEqual({
+    changes: [],
+    warnings: [],
+  });
+});
+
 it("requires repair when a bare backend locator belongs to an agent-qualified canonical key", async () => {
   const f = await fixture("persistent", "shared-project");
   f.claims[0]!.sessionKey = "agent:work:shared-project";
