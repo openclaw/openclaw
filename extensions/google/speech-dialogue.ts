@@ -75,11 +75,6 @@ export function splitGoogleTtsDialogue(
       }
       continue;
     }
-    if (labeled && speaker && sawLabel) {
-      throw new Error(
-        `Unknown Google TTS speaker "${speaker}". Use one of the two configured speaker names.`,
-      );
-    }
     if (sawLabel) {
       const previous = turns.at(-1);
       if (previous) {

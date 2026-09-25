@@ -184,6 +184,50 @@ describe("Google speech dialogue", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
+  it("speaks a colon-prefixed continuation after a speaker turn", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: ["Puck: Hello from the gate.", "Time: 10 tomorrow", "Kore: I will be there."].join(
+        "\n",
+      ),
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.8-flash-tts",
+        speakers: [
+          { speaker: "Puck", voice: "Puck" },
+          { speaker: "Kore", voice: "Kore" },
+        ],
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    expect(requireFirstRecordArg(requestMock, "Google 3.8 continuation request")).toMatchObject({
+      body: {
+        input: [
+          {
+            type: "user_input",
+            content: [
+              {
+                type: "text",
+                text: "Hello from the gate. Time: 10 tomorrow",
+                annotations: [{ type: "speech_metadata", speaker: "Puck" }],
+              },
+              {
+                type: "text",
+                text: "I will be there.",
+                annotations: [{ type: "speech_metadata", speaker: "Kore" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("speaks unlabeled text before the first speaker label", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();
