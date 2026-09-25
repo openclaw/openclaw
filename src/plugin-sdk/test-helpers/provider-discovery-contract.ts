@@ -8,16 +8,13 @@ import {
   requireRegisteredProvider as requireProvider,
 } from "../../test-utils/plugin-registration.js";
 import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
+import type { ProviderDiscoveryContractPluginLoader } from "./provider-discovery-contract.types.js";
 
 const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
-
-export type ProviderDiscoveryContractPluginLoader = () => Promise<{
-  default: Parameters<typeof registerProviders>[0];
-}>;
 
 type ProviderHandle = Awaited<ReturnType<typeof registerProviders>>[number];
 

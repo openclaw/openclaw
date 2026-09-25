@@ -5,7 +5,7 @@ import {
   requireRegisteredProvider,
 } from "../../test-utils/plugin-registration.js";
 import type { AuthProfileStore } from "../provider-auth.js";
-import type { ProviderDiscoveryContractPluginLoader } from "./provider-discovery-contract.js";
+import type { ProviderDiscoveryContractPluginLoader } from "./provider-discovery-contract.types.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
