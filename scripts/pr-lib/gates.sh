@@ -151,6 +151,11 @@ resolve_pr_gates_remote_mode() {
       printf 'local\n'
       ;;
     testbox|crabbox-aws|github)
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
+        echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
+        return 2
+      fi
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
@@ -447,11 +452,7 @@ prepare_gates() {
   local pr="$1"
   local remote_record="${2:-}"
   local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return 1
-  if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "OPENCLAW_PR_GATES_REMOTE=$gates_remote_mode conflicts with OPENCLAW_TESTBOX=1; hosted PR gates already own remote proof."
-    exit 2
-  fi
+  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return $?
 
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1

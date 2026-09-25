@@ -441,6 +441,7 @@ describe("Docs Agent full-CI admission", () => {
     { head_repository: { full_name: "fork/openclaw" } },
     { status: "in_progress" },
     { conclusion: "failure" },
+    { conclusion: "cancelled" },
   ])("rejects stale or foreign observed run metadata %j", async (observedRun) => {
     expect((await admit({ observedRun })).allowed).toBe(false);
   });
@@ -514,5 +515,8 @@ describe("Docs Agent full-CI admission", () => {
     }
     expect(evaluate(producer.if, { ...context, eventName: "push" })).toBe(true);
     expect(evaluate(producer.if, { ...context, eventName: "pull_request" })).toBe(true);
+    for (const outcome of [{ failed: true }, { cancelled: true }]) {
+      expect(evaluate(producer.if, { ...context, eventName: "schedule", ...outcome })).toBe(false);
+    }
   });
 });

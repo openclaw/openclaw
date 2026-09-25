@@ -42,12 +42,19 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Once publication binds the Tooling SHA to an exact protected lightweight
   `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping
   remains authoritative when `main` advances. The suffix records tag-creation
-  provenance; it is not the current parent run id.
+  provenance; it is not the current parent run id. The regular release helpers
+  mint or reuse that tag from `--workflow-sha <tooling-sha>`.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. If the required main landing policy is blocked by unrelated
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
+- Land tooling-only fixes on `main` with the `release-fast-lane` label added
+  before the push (RELEASING.md "Release tooling fast lane"): `openclaw/ci-gate`
+  then runs lint, types, guards, dependencies, docs, and the changed Node rows
+  only. Land through the native `scripts/pr` path with its completed ClawSweeper
+  review; findings are advisory for that label, so record any P1 the release
+  owner declines to fix in the PR with its follow-up before landing.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
   and the Release Publish parent plus its publish children to reserved capacity
   with unchanged labels; credentialed publish and approval jobs stay on default

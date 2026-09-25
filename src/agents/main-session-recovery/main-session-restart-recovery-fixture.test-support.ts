@@ -10,7 +10,7 @@ import {
   drainSessionStateForTest,
 } from "../../test-utils/session-state-cleanup.js";
 
-/** Transcript fixture lifecycle for main-session-restart-recovery.test.ts only. */
+/** Default-main fixture lifecycle for main-session-restart-recovery.test.ts only. */
 export function createRestartRecoveryTranscriptFixture(
   readStore: (storePath: string) => Record<string, { sessionId: string }>,
 ) {
@@ -59,7 +59,7 @@ export function createRestartRecoveryTranscriptFixture(
       await applySessionEntryLifecycleMutation({
         agentId: "main",
         storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-        // Transcript-only cases reuse this one identity; remove every owned window.
+        // These cases reuse this one identity; remove every owned window.
         removals: [{ sessionKey: "agent:main:main", deleteOwnedWindows: true }],
         skipMaintenance: true,
       });
