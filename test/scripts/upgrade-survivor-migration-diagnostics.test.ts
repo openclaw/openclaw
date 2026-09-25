@@ -27,6 +27,7 @@ function fixture() {
   const artifacts = path.join(root, "artifacts");
   const state = path.join(root, "state");
   fs.mkdirSync(artifacts);
+  fs.mkdirSync(path.join(root, "openclaw-upgrade-survivor"));
   fs.mkdirSync(path.join(state, "state"), { recursive: true });
   return {
     root,
@@ -41,6 +42,7 @@ function fixture() {
       OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
       OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
       OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.9.4",
     },
   };
 }
@@ -106,6 +108,177 @@ it.each(["failed", "passed"] as const)(
     );
     expect(JSON.parse(report.logs["sibling-refusal-worker.json"]).worker.pid).toBe(123);
     expect(JSON.parse(report.logs["sibling-refusal-cleanup.json"]).survivors).toEqual([]);
+  },
+);
+
+function integrityLog(f: ReturnType<typeof fixture>, telemetry: Record<string, unknown>) {
+  fs.writeFileSync(
+    path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"),
+    JSON.stringify({
+      0: JSON.stringify({ subsystem: "update/package-integrity" }),
+      1: telemetry,
+      2: telemetry.event,
+      message: telemetry.event,
+      _meta: { logLevelName: "DEBUG", path: privateBody },
+      privateBody,
+    }) + "\n",
+  );
+}
+
+it("captures only the actual baseline updater's released integrity envelope and preserves failure", () => {
+  const f = fixture();
+  write(path.join(f.root, "package.json"), {
+    name: "openclaw",
+    version: "2026.9.4",
+    type: "module",
+  });
+  const entry = path.join(f.root, "openclaw.mjs");
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+const facts = {readerId: process.pid + ":1", timeOriginUnixMs: performance.timeOrigin,
+  phase: "retained", budgetMs: 30000, secret: ${JSON.stringify(secret)},
+  path: ${JSON.stringify(privateBody)}};
+const records = [facts,
+  {...facts, readerId: (process.pid + 1) + ":1"},
+  {...facts, timeOriginUnixMs: facts.timeOriginUnixMs - 1}
+].flatMap(identity => [
+  {event: "reader-started"},
+  {event: "reader-settled", outcome: "timed-out", elapsedMs: 30002, pendingIo: 1}
+].map(event => ({0: JSON.stringify({subsystem: "update/package-integrity"}),
+  1: {...identity, ...event}, 2: event.event, message: event.event,
+  _meta: {logLevelName: "DEBUG", path: ${JSON.stringify(privateBody)}}})));
+records.push({0: "{ordinary non-JSON log argument"});
+fs.writeFileSync(${JSON.stringify(path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"))},
+  records.map(record => JSON.stringify(record)).join("\\n") + "\\n");
+process.exit(1);`,
+  );
+  const child = spawnSync(node, ["--import", observer, entry, "update"], {
+    env: f.env,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(child.status, child.stderr).toBe(1);
+  const report = capture(f);
+  const expected = [
+    { readerId: `${child.pid}:1`, event: "reader-started", phase: "retained", budgetMs: 30000 },
+    {
+      readerId: `${child.pid}:1`,
+      event: "reader-settled",
+      phase: "retained",
+      budgetMs: 30000,
+      outcome: "timed-out",
+      elapsedMs: 30002,
+      pendingIo: 1,
+    },
+  ];
+  expect(report).toMatchObject({ phase: "update-candidate", outcome: "failed", exitStatus: 1 });
+  expect(report.packageIntegrity).toEqual({ availability: "captured", observations: expected });
+  const rawPath = path.join(f.artifacts, "diagnostics/raw.json");
+  const raw = JSON.parse(fs.readFileSync(rawPath, "utf8"));
+  expect(fs.readFileSync(rawPath, "utf8")).not.toContain(privateBody);
+  raw.packageIntegrity.observations[0].message = privateBody;
+  raw.packageIntegrity.observations[0].secret = secret;
+  write(rawPath, raw);
+  const reprojected = path.join(f.root, "reprojected");
+  publishDiagnostics(f.artifacts, reprojected, redactSensitiveText);
+  const text = fs.readFileSync(path.join(reprojected, "failure.json"), "utf8");
+  expect(text).not.toContain(privateBody);
+  expect(text).not.toContain(secret);
+  expect(JSON.parse(text).packageIntegrity.observations).toEqual(expected);
+  raw.packageIntegrity.observations[0].budgetMs = "30000";
+  write(rawPath, raw);
+  const invalid = path.join(f.root, "invalid");
+  publishDiagnostics(f.artifacts, invalid, redactSensitiveText);
+  expect(JSON.parse(fs.readFileSync(path.join(invalid, "failure.json"), "utf8"))).toMatchObject({
+    exitStatus: 1,
+    packageIntegrity: { availability: "unavailable" },
+    omissions: { "package integrity": "invalid observation; omitted" },
+  });
+});
+
+it.each([
+  { name: "different PID", identity: { pid: 43 } },
+  { name: "different process origin", identity: { timeOriginUnixMs: 101 } },
+  { name: "Doctor", identity: { role: "doctor" } },
+  { name: "post-core", identity: { role: "post-core" } },
+  { name: "different package", identity: { packageVersion: "2026.9.5" } },
+  { name: "non-numeric budget", telemetry: { budgetMs: "30000" } },
+  { name: "missing settled outcome", telemetry: { outcome: undefined } },
+  { name: "negative pending I/O", telemetry: { pendingIo: -1 } },
+])("omits integrity evidence from $name", ({ identity, telemetry }) => {
+  const f = fixture();
+  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
+    event: "started",
+    role: "update",
+    packageVersion: "2026.9.4",
+    pid: 42,
+    parentPid: 1,
+    timeOriginUnixMs: 100,
+    ...identity,
+  });
+  integrityLog(f, {
+    readerId: "42:1",
+    timeOriginUnixMs: 100,
+    event: "reader-settled",
+    phase: "retained",
+    budgetMs: 30000,
+    elapsedMs: 30002,
+    outcome: "timed-out",
+    pendingIo: 0,
+    ...telemetry,
+  });
+  const report = capture(f);
+  expect(report.exitStatus).toBe(1);
+  expect(report.packageIntegrity).toEqual({ availability: "unavailable" });
+  expect(report.omissions["package integrity"]).toBeTruthy();
+});
+
+it.each(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const)(
+  "omits the whole integrity diagnostic at the %s boundary",
+  (boundary) => {
+    const f = fixture();
+    write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
+      event: "started",
+      role: "update",
+      packageVersion: "2026.9.4",
+      pid: 42,
+      parentPid: 1,
+      timeOriginUnixMs: 100,
+    });
+    integrityLog(f, {
+      readerId: "42:1",
+      timeOriginUnixMs: 100,
+      event: "reader-settled",
+      phase: "transaction",
+      budgetMs: 30000,
+      elapsedMs: 30002,
+      outcome: "timed-out",
+      pendingIo: 1,
+    });
+    const log = path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl");
+    const line = fs.readFileSync(log, "utf8");
+    if (boundary === "symlink") {
+      fs.renameSync(log, path.join(f.root, "outside.jsonl"));
+      fs.symlinkSync(path.join(f.root, "outside.jsonl"), log);
+    } else if (boundary === "directory-symlink") {
+      const directory = path.dirname(log);
+      fs.renameSync(directory, path.join(f.root, "outside-logs"));
+      fs.symlinkSync(path.join(f.root, "outside-logs"), directory, "dir");
+    } else {
+      fs.writeFileSync(
+        log,
+        boundary === "input"
+          ? "x".repeat(256 * 1024 + 1)
+          : boundary === "malformed"
+            ? line + "{"
+            : line.repeat(boundary === "entries" ? 129 : 128),
+      );
+    }
+    const report = capture(f);
+    expect(report.exitStatus).toBe(1);
+    expect(report.packageIntegrity).toEqual({ availability: "unavailable" });
+    expect(report.omissions["package integrity"]).toBeTruthy();
   },
 );
 

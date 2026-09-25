@@ -405,7 +405,6 @@ export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
@@ -413,18 +412,11 @@ export function createAgentToolResultMiddlewareRunner(
       runtime: ctx.runtime,
     });
   });
-  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
-    if (resolvedHandlers) {
-      return resolvedHandlers;
-    }
-    resolvedHandlers = await resolvedHandlersLoader.load();
-    return resolvedHandlers;
-  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      const handlersForRun = await resolveHandlers();
+      const handlersForRun = await (handlers ?? resolvedHandlersLoader.load());
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
       // dependency payloads on `details` (SDK objects with methods, cycles)
