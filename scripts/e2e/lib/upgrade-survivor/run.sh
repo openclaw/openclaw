@@ -1976,10 +1976,8 @@ start_gateway() {
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
-  # Gateway shutdown output must not overwrite an independently appended observation.
-  : >"$GATEWAY_LOG" || return "$?"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_GATEWAY_STARTUP_TRACE=1 \
-    openclaw gateway --port "$port" --bind loopback --allow-unconfigured >>"$GATEWAY_LOG" 2>&1 &
+    openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
   local readiness_mode="strict"
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then

@@ -16,7 +16,7 @@ start_missing_load_path_baseline() {
           --timeout-ms 400 --attempt-timeout-ms 400 --max-body-bytes 16384; then
           cat "$observation"
         fi
-      } >>"$GATEWAY_LOG" 2>&1 || true
+      } >"$ARTIFACT_ROOT/missing-load-path/startup-readiness.log" 2>&1 || true
       rm -f -- "$observation" || true
     fi
     return "$start_status"
