@@ -31,6 +31,16 @@ type TranscriptSessionEntry = {
 };
 type TranscriptSessionMatchEntry = TranscriptSessionEntry & { inputRevision: string };
 
+export function readTranscriptCanonicalSessionRow(database: DatabaseSync, selector: string) {
+  return executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_sessions")
+      .selectAll()
+      .where("selector", "=", selector),
+  );
+}
+
 export function readTranscriptExportOwnership(
   database: DatabaseSync,
   session: TranscriptSessionIdentity,

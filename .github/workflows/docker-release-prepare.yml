@@ -55,7 +55,7 @@ env:
 
 jobs:
   resolve:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -84,7 +84,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Resolve exact preparation identity
@@ -116,7 +116,7 @@ jobs:
   build:
     name: Prepare Docker images (${{ matrix.architecture }})
     needs: resolve
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -166,28 +166,35 @@ jobs:
           for attempt in 1 2 3 4; do
             if docker pull "${BUILDKIT_IMAGE}"; then break; fi
             if [[ "${attempt}" == 4 ]]; then exit 1; fi
+            echo "::warning::BuildKit image acquisition failed; retrying Docker registry transport (${attempt}/4)."
             sleep "$((attempt * 10))"
           done
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # Hosted VMs own local builder teardown; deleting its large volume here
           # delays the dependent seal job after artifact uploads have finished.
           cleanup: false
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
       # Both variants reuse this builder's local cache. Fresh provenance timestamps
       # invalidate application layers across runs; remote transfers cost more than
       # reusing the remaining runtime setup saves.
       # Fast gzip keeps new layers compatible with the Skopeo smoke transport.
       - name: Build default OCI image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/default,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -199,15 +206,31 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Relay default image limit warnings
+        if: ${{ always() && steps.build.outputs.metadata != '' }}
+        continue-on-error: true
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
       - name: Build browser OCI image
         if: ${{ needs.resolve.outputs.include_browser == 'true' }}
         id: build-browser
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/browser,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -220,11 +243,21 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.19.0"
-          package-manager-cache: false
+      - name: Relay browser image limit warnings
+        if: ${{ always() && steps.build-browser.outputs.metadata != '' }}
+        continue-on-error: true
+        env:
+          BUILD_METADATA: ${{ steps.build-browser.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
 
       - name: Verify OCI bytes, attestations, and image smoke
         env:
@@ -255,7 +288,7 @@ jobs:
   seal:
     name: Seal prepared Docker images
     needs: [resolve, build]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     permissions:
       actions: read
       contents: read
@@ -279,7 +312,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Seal exact prepared image identities

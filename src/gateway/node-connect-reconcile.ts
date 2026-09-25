@@ -42,16 +42,6 @@ type NodeConnectPairingReconcileResult = {
   shouldClearPendingPairings?: boolean;
 };
 
-function resolveApprovedReconnectCommands(params: {
-  pairedCommands: readonly string[] | undefined;
-  allowlist: Set<string>;
-}) {
-  return normalizeDeclaredNodeCommands({
-    declaredCommands: Array.isArray(params.pairedCommands) ? params.pairedCommands : [],
-    allowlist: params.allowlist,
-  });
-}
-
 // Permissions are sorted before comparison/results so reconnects are stable
 // even when clients send JSON object keys in different orders.
 function normalizePermissionMap(
@@ -184,8 +174,8 @@ export async function reconcileNodePairingOnConnect(params: {
   // Approved commands reconcile against the pairing allowlist. Dangerous
   // surfaces awaiting persistent enablement must not read as a pairing upgrade
   // on every reconnect; invoke-time policy still applies the runtime allowlist.
-  const approvedCommands = resolveApprovedReconnectCommands({
-    pairedCommands: params.pairedNode.commands,
+  const approvedCommands = normalizeDeclaredNodeCommands({
+    declaredCommands: params.pairedNode.commands,
     allowlist: pairingAllowlist,
   });
   const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);

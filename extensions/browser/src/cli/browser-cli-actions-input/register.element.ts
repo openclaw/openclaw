@@ -3,6 +3,7 @@
  * select, screenshots, and input files.
  */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
@@ -12,8 +13,7 @@ import {
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-import { runBrowserAction, requireRef, resolveBrowserActionContext } from "./shared.js";
+import { runBrowserAction, requireRef } from "./shared.js";
 
 function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
   if (value === "left" || value === "right" || value === "middle") {
@@ -55,11 +55,10 @@ export function registerBrowserElementCommands(
     body: BrowserActRequest;
     successMessage: string | ((result: { url?: string }) => string);
   }): Promise<void> => {
-    const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
+    const parent = parentOpts(params.cmd);
     await runBrowserCliCommand(async () => {
       await runBrowserAction({
         parent,
-        profile,
         body: params.body,
         successMessage: params.successMessage,
       });

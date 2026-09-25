@@ -53,14 +53,6 @@ function parseGeneratedEnvValue(value: string): string {
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
 }
 
-function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes(token));
-}
-
-function includesGeneratedEnvironmentDirToken(value: string | undefined): boolean {
-  return Boolean(value?.replaceAll("\\", "/").includes("/service-env/"));
-}
-
 function resolveSiblingGeneratedEnvFilePath(
   envFilePath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
@@ -104,11 +96,13 @@ function isExpectedGeneratedEnvWrapperPair(
   }
   // Legacy/corrupted plists may preserve the label-derived wrapper name inside
   // a mangled service-env path. Still unwrap it so the next rewrite can repair.
+  const normalizedWrapper = wrapperPath.replaceAll("\\", "/");
+  const normalizedEnvFile = envFilePath.replaceAll("\\", "/");
   return (
-    includesGeneratedEnvironmentDirToken(wrapperPath) &&
-    includesGeneratedEnvironmentDirToken(envFilePath) &&
-    includesGeneratedEnvironmentPathToken(wrapperPath, `${label}-env-wrapper.sh`) &&
-    includesGeneratedEnvironmentPathToken(envFilePath, `${label}.env`)
+    normalizedWrapper.includes("/service-env/") &&
+    normalizedEnvFile.includes("/service-env/") &&
+    normalizedWrapper.includes(`${label}-env-wrapper.sh`) &&
+    normalizedEnvFile.includes(`${label}.env`)
   );
 }
 
@@ -132,14 +126,12 @@ function resolveGeneratedEnvWrapperLayout(
 }
 
 async function readLaunchAgentEnvironmentFile(
-  programArguments: string[],
+  envFilePath: string | undefined,
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<Record<string, string>> {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
+  if (envFilePath === undefined) {
     return {};
   }
-  const envFilePath = layout.envFilePath;
   let content = "";
   const candidateEnvFilePaths = options?.requireEffective
     ? [envFilePath]
@@ -206,17 +198,6 @@ async function readLaunchAgentEnvironmentFile(
     environment[key] = parsedValue;
   }
   return environment;
-}
-
-function unwrapGeneratedEnvWrapperArgs(
-  programArguments: string[],
-  options?: ReadLaunchAgentProgramArgumentsOptions,
-): string[] {
-  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
-  if (!layout) {
-    return programArguments;
-  }
-  return programArguments.slice(layout.commandStartIndex);
 }
 
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
@@ -303,8 +284,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     ) {
       throw new Error("Invalid LaunchAgent command fields");
     }
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(args, options);
-    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
+    const layout = resolveGeneratedEnvWrapperLayout(args, options);
+    const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
+    const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
     if (options?.requireEffective && !effectiveProgramArguments[0]) {
       throw new Error("Missing LaunchAgent command");
     }

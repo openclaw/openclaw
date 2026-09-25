@@ -45,6 +45,45 @@ function requireReadOnlyResolutionFinding(
 }
 
 describe("security audit channel read-only resolution", () => {
+  it("audits the DM policy of an asynchronously prepared account", async () => {
+    const plugin = stubChannelPlugin({
+      id: "zalouser",
+      label: "Zalo Personal",
+      resolveAccount: () => {
+        throw new Error("legacy account resolution");
+      },
+    });
+    const account = { accountId: "default", enabled: true, configured: true };
+    plugin.config.resolveAccountAsync = async () => account;
+    plugin.security = {
+      resolveDmPolicy: (context) => {
+        expect(context.account).toBe(account);
+        return {
+          policy: "open",
+          allowFrom: ["*"],
+          policyPath: "channels.zalouser.dmPolicy",
+          allowFromPath: "channels.zalouser.",
+          approveHint: "approve",
+        };
+      },
+    };
+
+    const findings = await collectChannelSecurityFindingsCore({
+      cfg: {},
+      plugins: [plugin],
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "channels.zalouser.dm.open",
+        severity: "critical",
+      }),
+    );
+    expect(findings.some((finding) => finding.checkId.endsWith("read_only_resolution"))).toBe(
+      false,
+    );
+  });
+
   it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
     const plugin = stubChannelPlugin({
       id: "zalouser",

@@ -493,7 +493,7 @@ export function renderLinkReaderContent(
             : nothing
         }
         ${coAuthorNames.trim() ? html`<span class="lr-coauthors">${t("linkReader.coAuthors", { authors: coAuthorNames.trim() })}</span>` : nothing}
-        ${renderDate(detail.createdAt)}
+        ${renderDate(detail.badge?.timestamp ?? detail.createdAt)}
       </div>
       ${
         detail.metadata?.length

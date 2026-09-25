@@ -159,6 +159,7 @@ function buildForwardParams(
   switch (action) {
     case "setup":
       return approved({ action });
+    case "stop":
     case "status": {
       const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
@@ -272,10 +273,6 @@ function buildForwardParams(
         bridgeId,
         ...(outputGeneration !== undefined ? { outputGeneration } : {}),
       });
-    }
-    case "stop": {
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
       return null;

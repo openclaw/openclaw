@@ -1,12 +1,12 @@
 // Webchat media helpers translate reply payload media into assistant content
 // blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
@@ -111,7 +111,7 @@ async function readLocalAudioContentBlockForEmbedding(
           url: opened.realPath,
           kind: "audio",
           label: path.basename(opened.realPath),
-          mimeType: mimeTypeForPath(opened.realPath),
+          mimeType: mimeTypeFromFilePath(opened.realPath) ?? "audio/mpeg",
           ...(payload.audioAsVoice === true ? { isVoiceNote: true } : {}),
         },
       },
@@ -144,35 +144,8 @@ async function resolveReplyMediaAudioEmbedding(
   return { url, audioBlock: audio.block };
 }
 
-function mimeTypeForPath(filePath: string): string {
-  return mimeTypeFromFilePath(filePath) ?? "audio/mpeg";
-}
-
 function isBase64DataPayload(value: string): boolean {
-  if (value.length === 0) {
-    return false;
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    const isBase64Char =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f ||
-      code === 0x3d;
-    const isWhitespace =
-      code === 0x09 ||
-      code === 0x0a ||
-      code === 0x0b ||
-      code === 0x0c ||
-      code === 0x0d ||
-      code === 0x20;
-    if (!isBase64Char && !isWhitespace) {
-      return false;
-    }
-  }
-  return true;
+  return value.length > 0 && !/[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(value);
 }
 
 function resolveEmbeddableImageUrl(url: string): string | null {
@@ -276,15 +249,11 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
           : "Image reply"
       : undefined;
     const blockText = text ?? syntheticText;
-    if (blockText) {
-      const fullText = replyDirectivePrefix ? `${replyDirectivePrefix}${blockText}` : blockText;
+    const fullText = replyDirectivePrefix + (blockText ?? "");
+    if (fullText) {
       transcriptTextParts.push(fullText);
       payloadTexts[payloadIndex] = fullText;
       content.push({ type: "text", text: fullText });
-    } else if (replyDirectivePrefix) {
-      transcriptTextParts.push(replyDirectivePrefix);
-      payloadTexts[payloadIndex] = replyDirectivePrefix;
-      content.push({ type: "text", text: replyDirectivePrefix });
     }
     content.push(...payloadMediaBlocks);
   }

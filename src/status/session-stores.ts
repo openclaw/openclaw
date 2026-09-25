@@ -77,19 +77,6 @@ export function createStatusSessionStoreReader(
 ) {
   const readSummary = options.readSummary ?? readSessionStoreSummaryReadOnly;
   const stores = new Map<string, SessionStoreSummary>();
-  let projectionReady: Promise<void> | undefined;
-  const ensureProjectionReady = async () => {
-    const projection = options.projection;
-    if (!projection) {
-      return;
-    }
-    projectionReady ??= (async () => {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    })();
-    await projectionReady;
-  };
   let sliceStartedAt = performance.now();
   return {
     stores,
@@ -101,7 +88,12 @@ export function createStatusSessionStoreReader(
       let store = stores.get(path);
       if (!store) {
         try {
-          await ensureProjectionReady();
+          const projection = options.projection;
+          if (projection) {
+            do {
+              await projection.ensureMaterialized();
+            } while (projection.needsMaterialization);
+          }
           store = options.projection
             ? summarizeProjectionRows(options.projection, path, agentIds, recentLimit)
             : readSummary(

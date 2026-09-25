@@ -18,12 +18,9 @@ import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
-import {
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-} from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -40,6 +37,7 @@ import {
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
   observedSystemdManagerUid,
+  readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
@@ -77,13 +75,11 @@ export function createWindowsTaskAutoStartGuard(params: {
 }): () => Promise<void> {
   const before = params.before;
   return async () => {
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: before.serviceEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      timeoutMs: params.timeoutMs,
-    });
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      before.serviceEnv,
+      params.timeoutMs,
+    );
     const verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,
       root: params.root,
@@ -295,13 +291,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     const inspectedService = resolveGatewayService();
     service = inspectedService;
     serviceState = await withCommandProcessScope(() =>
-      readGatewayServiceState(inspectedService, {
-        env: serviceEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
-      }),
+      readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
     );
     if (
       process.platform === "win32" &&
@@ -343,9 +333,12 @@ async function stopManagedServiceBeforeMutableUpdate(
     return unavailableServiceState({
       kind: "unavailable",
       message:
-        err instanceof ServiceInspectionError || err instanceof GatewayServiceUpdateOwnershipError
-          ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
-          : GATEWAY_SERVICE_INSPECTION_WARNING,
+        err instanceof ServiceInspectionError && err.reason === "windows-task-inspection-failed"
+          ? `${err.message} ${GATEWAY_SERVICE_INSPECTION_WARNING}`
+          : err instanceof ServiceInspectionError ||
+              err instanceof GatewayServiceUpdateOwnershipError
+            ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
+            : GATEWAY_SERVICE_INSPECTION_WARNING,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
     });
   }
@@ -403,6 +396,15 @@ async function stopManagedServiceBeforeMutableUpdate(
         "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
+  const operatorRestartWarning =
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"
+      ? await admitSystemdUpdate(
+          params.root,
+          serviceState.env,
+          serviceState.systemdInstallation ?? null,
+        )
+      : undefined;
+  assertCurrent();
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
   if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
@@ -413,6 +415,13 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (await params.handoffFromGateway(serviceState)) {
       throw new UpdateCommandAbort();
     }
+  }
+  if (operatorRestartWarning) {
+    return {
+      ...inspected,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage: operatorRestartWarning,
+    };
   }
   if (params.phase === "inspect") {
     const blockMessage = params.handoffFromGateway
@@ -430,15 +439,10 @@ async function stopManagedServiceBeforeMutableUpdate(
         timeoutMs: params.timeoutMs,
       }),
       assertCurrent: () => {
-        // Recovery reacquires its native lock, but retains the caller's authority.
+        // Recovery can hand off after Doctor migrates canonical state. Retain live
+        // executor authority without reopening that state through the old runtime.
         params.assertCurrent?.();
         assertExecutor();
-        if (
-          updateRun &&
-          getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running"
-        ) {
-          throw new Error("Update run no longer owns Windows task activation.");
-        }
       },
     });
   };
@@ -496,13 +500,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     // Ownership inspection and native preparation await work. Recheck the exact
     // launcher before stopping so a replacement service cannot inherit authority.
     const readCurrentService = async (env: NodeJS.ProcessEnv) => {
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,
@@ -581,6 +579,7 @@ async function stopManagedServiceBeforeMutableUpdate(
           );
         }
       }
+      assertCurrent();
       stoppedAtMs = Date.now();
       if (params.updateRun) {
         recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {

@@ -7,6 +7,7 @@ import {
   SessionGoalOperationError,
 } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadExactSessionEntryCandidates,
   readSessionSubmittedInput,
@@ -36,7 +37,7 @@ import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   assertExpectedLeafActive,
@@ -46,7 +47,7 @@ import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
 } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { LoadedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -115,9 +116,9 @@ export function respondChatSendAdmissionError(
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
 }
 
-type ChatSendPreAdmissionParams = {
+export type ChatSendPreAdmissionParams = {
   request: NormalizedChatSendRequest;
-  session: PreparedChatSendSession;
+  session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -131,7 +132,7 @@ type ChatSendRetryParams = {
     "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
   >;
   session: Pick<
-    PreparedChatSendSession,
+    LoadedChatSendSession,
     | "clientRunId"
     | "pendingChatSendKey"
     | "entry"

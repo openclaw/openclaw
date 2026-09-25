@@ -23,13 +23,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  listOpenClawRegisteredAgentDatabases,
-} from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -41,17 +36,16 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     for (const root of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(root);
-    }
-    for (const database of listOpenClawRegisteredAgentDatabases()) {
-      if ([...tempDirs.dirs].some((root) => isPathInside(root, database.path))) {
-        unregisterOpenClawAgentDatabase(database);
-      }
+      await releaseGatewaySessionStoreFixture(root);
     }
     cleanup();
   }),
@@ -95,7 +89,7 @@ async function arrangeAuthorityProof(name: string) {
   });
   await prepareGatewayReplyRuntimeForTest();
   publishSystemEventStoreConfig(getRuntimeConfig());
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
     controllerSessionKey: parent,
@@ -201,7 +195,6 @@ it("rejects an unrelated visible controller without consuming input or producing
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -230,7 +223,6 @@ it("rejects a child without task-owned completion before input or execution", as
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -293,7 +285,6 @@ it("rejects parent authority revoked while durable input preparation awaits", as
     preparation.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releasePreparation);
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -396,7 +387,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
     execution.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releaseExecution);
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -431,7 +421,7 @@ it.each(["explicit", "automatic"] as const)(
       await prepareGatewayReplyRuntimeForTest();
       publishSystemEventStoreConfig(getRuntimeConfig());
       // Seed paused registry/canonical-task state without polling a nonexistent source execution.
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: previousRunId,
         childSessionKey: child,
         controllerSessionKey: parent,
@@ -477,7 +467,10 @@ it.each(["explicit", "automatic"] as const)(
         {
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
-            operatorRoleActor: { kind: "operator", profileId: "resume-operator" },
+            operatorRoleActor: {
+              kind: "operator",
+              profileId: ensureProfileForEmail("resume-operator@example.test").id,
+            },
           }),
           context: kernel.gatewayRequestContext,
           isWebchatConnect: () => false,
@@ -512,6 +505,7 @@ it.each(["explicit", "automatic"] as const)(
       expect(announce).not.toHaveBeenCalled();
       expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
       release.resolve();
+      await settleGatewaySessionStoreFixture(root);
       await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(announce).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -524,8 +518,11 @@ it.each(["explicit", "automatic"] as const)(
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
-      announce.mockRestore();
-      testState.sessionStorePath = undefined;
+      try {
+        await settleGatewaySessionStoreFixture(root);
+      } finally {
+        announce.mockRestore();
+      }
     }
   },
 );

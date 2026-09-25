@@ -76,10 +76,12 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     const parent = stack.at(-1);
     // Code examples are text, including tag-shaped examples inside a disclosure.
     // Keep them out of matching so they cannot close or create an authored container.
+    // Telegram's `<pre><code class="language-x">` wrapper is the one tag a <pre> opens.
     if (
       literalRanges.some((range) => tag.start >= range.start && tag.start < range.end) ||
       ((parent?.name === "code" || parent?.name === "pre") &&
-        !(tag.closing && tag.name === parent.name))
+        !(tag.closing && tag.name === parent.name) &&
+        !(parent.name === "pre" && !tag.closing && tag.name === "code"))
     ) {
       continue;
     }

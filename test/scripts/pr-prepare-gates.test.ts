@@ -4,58 +4,11 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { runGatesBash } from "./pr-prepare.test-support.js";
 
 const repoRoot = process.cwd();
 
 const tempDirs = createTempDirTracker();
-
-function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.OPENCLAW_PR_GATES_REMOTE;
-  delete env.OPENCLAW_TESTBOX;
-  return { ...env, ...overrides };
-}
-
-function runGatesBash(
-  script: string,
-  options: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    sourcePrepareCore?: boolean;
-    sourcePush?: boolean;
-  } = {},
-) {
-  return spawnSync(
-    "bash",
-    [
-      "-c",
-      [
-        "set -euo pipefail",
-        `script_parent_dir='${repoRoot}/scripts'`,
-        `source '${repoRoot}/scripts/pr-lib/common.sh'`,
-        `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
-        `source '${repoRoot}/scripts/pr-lib/review.sh'`,
-        "mark_pr_operation_side_effects_started() { :; }",
-        "require_prepared_review() { :; }",
-        ...(options.sourcePush
-          ? [
-              `source '${repoRoot}/scripts/pr-lib/worktree.sh'`,
-              `source '${repoRoot}/scripts/pr-lib/push.sh'`,
-            ]
-          : []),
-        ...(options.sourcePrepareCore
-          ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
-          : ["refresh_prep_branch_for_reviewed_head() { :; }"]),
-        script,
-      ].join("\n"),
-    ],
-    {
-      cwd: options.cwd ?? repoRoot,
-      encoding: "utf8",
-      env: sanitizedEnv(options.env),
-    },
-  );
-}
 
 function makeRetryRepo(): { repoDir: string; headSha: string } {
   const dir = tempDirs.make("openclaw-pr-gates-retry-");
@@ -203,529 +156,8 @@ function prepareSyncHeadStubs(): string[] {
   ];
 }
 
-function makePublisherRepo() {
-  const root = tempDirs.make("openclaw-pr-publication-");
-  const repoDir = join(root, "repo");
-  const remote = join(root, "remote.git");
-  const env = sanitizedEnv({
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_ALLOW_PROTOCOL: "file",
-    GIT_TERMINAL_PROMPT: "0",
-    OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH: "1",
-    OPENCLAW_PR_PUSH_MODE: "git",
-  });
-  mkdirSync(repoDir);
-  function git(...args: string[]) {
-    const result = spawnSync("git", args, { cwd: repoDir, env, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  }
-  git("init", "-q", "-b", "prep");
-  git("config", "user.name", "Fixture");
-  git("config", "user.email", "fixture@example.invalid");
-  git("commit", "-qm", "base", "--allow-empty");
-  const base = git("rev-parse", "HEAD");
-  writeFileSync(join(repoDir, "reviewed.txt"), "reviewed\n");
-  git("add", ".");
-  git("commit", "-qm", "reviewed");
-  const source = git("rev-parse", "HEAD");
-  writeFileSync(join(repoDir, "fixup.txt"), "fixup\n");
-  git("add", ".");
-  git("commit", "-qm", "fixup");
-  const candidate = git("rev-parse", "HEAD");
-  const sameTree = git("commit-tree", `${candidate}^{tree}`, "-p", source, "-m", "foreign");
-  const advance = git("commit-tree", `${source}^{tree}`, "-p", source, "-m", "foreign advance");
-  git("init", "-q", "--bare", remote);
-  git("remote", "add", "origin", remote);
-  git("push", "-q", "origin", `${candidate}:refs/heads/objects`, `${source}:refs/heads/topic`);
-  git("--git-dir", remote, "symbolic-ref", "refs/pull/4242/head", "refs/heads/topic");
-  const local = join(repoDir, ".local");
-  mkdirSync(local);
-  const observation = {
-    number: 4242,
-    url: "https://github.com/fixture/repo/pull/4242",
-    state: "OPEN",
-    baseRefName: "main",
-    baseRepository: {
-      id: "R_fixture",
-      databaseId: 1,
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
-    headRefName: "topic",
-    headRefOid: source,
-    headRepository: { nameWithOwner: "fixture/repo" },
-    headRepositoryOwner: { login: "fixture" },
-    isCrossRepository: false,
-  };
-  writeFileSync(join(local, "pr-meta.json"), JSON.stringify(observation));
-  writeFileSync(join(local, "remote-observation.json"), JSON.stringify(observation));
-  writeFileSync(join(local, "github-reads"), "");
-  writeFileSync(
-    join(local, "pr-meta.env"),
-    `PR_NUMBER=4242\nPR_AUTHOR=fixture\nPR_HEAD=topic\nPR_HEAD_SHA=${source}\n`,
-  );
-  writeFileSync(
-    join(local, "prep-context.env"),
-    `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${source}\nPREP_BRANCH=prep\nPREP_STARTED_AT=2026-09-07T00:00:00Z\n`,
-  );
-  writeFileSync(
-    join(local, "gates.env"),
-    `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${candidate}\n`,
-  );
-  writeFileSync(join(local, "prep.md"), "# Prepare\n");
-  writeFileSync(join(local, "events"), "");
-  return {
-    repoDir,
-    remote,
-    local,
-    env,
-    git,
-    base,
-    source,
-    candidate,
-    sameTree,
-    advance,
-    observation,
-  };
-}
-
-function runPublisher(
-  f: ReturnType<typeof makePublisherRepo>,
-  command = "prepare_sync_head 4242",
-  setup: string[] = [],
-) {
-  return runGatesBash(
-    [
-      `remote='${f.remote}'`,
-      'repo_root() { printf "%s\\n" "$PWD"; }',
-      `enter_worktree() { PR_MAIN_SHA=${f.base}; }`,
-      'resolve_head_push_url() { printf "%s\\n" "$remote"; }',
-      'resolve_contributor_coauthor_email() { printf "fixture@example.invalid\\n"; }',
-      'remote_head() { command git --git-dir="$remote" rev-parse refs/heads/topic; }',
-      "pr_gh() {",
-      '  echo "$*" >> .local/github-reads',
-      '  case "$*" in',
-      '    *headRepository*) jq -c --arg sha "$(remote_head)" ".headRefOid = \\$sha" .local/remote-observation.json;;',
-      '    *headRefName*) printf \'{"headRefName":"topic"}\\n\';;',
-      "    *headRefOid*) remote_head;;",
-      '    *) echo "unexpected GitHub request" >&2; return 98;;',
-      "  esac",
-      "}",
-      "run_prepare_push_retry_gates() { echo retry-gates >> .local/events; }",
-      "pr_git() {",
-      '  case "$1" in',
-      "    push) echo push >> .local/events;;",
-      "    rebase) echo rebase >> .local/events;;",
-      "  esac",
-      '  command git "$@"',
-      "}",
-      "pr_gh_plain() {",
-      "  echo graphql >> .local/events",
-      "  local payload expected hosted",
-      '  test "$4" != "-" && test -f "$4" || return 1',
-      '  payload=$(cat "$4") || return $?',
-      "  expected=$(printf '%s' \"$payload\" | jq -r .variables.input.expectedHeadOid)",
-      '  test "$expected" = "$(remote_head)" || return 75',
-      '  hosted=$(command git commit-tree HEAD^{tree} -p "$expected" -m "Hosted verified commit")',
-      '  command git push -q "$remote" "$hosted:refs/heads/topic" || return $?',
-      '  printf \'{"data":{"createCommitOnBranch":{"commit":{"oid":"%s"}}}}\\n\' "$hosted"',
-      "}",
-      ...setup,
-      command,
-    ].join("\n"),
-    { cwd: f.repoDir, env: f.env, sourcePrepareCore: true, sourcePush: true },
-  );
-}
-
-describe("PR publication ownership", () => {
-  it.each([false, true])(
-    "binds deferred GitHub gates to verified publication (stale target=%s)",
-    (staleTarget) => {
-      const f = makePublisherRepo();
-      const gatesPath = join(f.local, "gates.env");
-      const gates = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${staleTarget ? f.source : f.candidate}\n`;
-      writeFileSync(gatesPath, gates);
-      const result = runPublisher(f, "prepare_push 4242", [
-        "PR_HEAD_OWNER=fixture",
-        "PR_HEAD_REPO_NAME=repo",
-        "OPENCLAW_PR_PUSH_MODE=graphql",
-      ]);
-      expect(result.status, result.stdout + result.stderr).toBe(staleTarget ? 1 : 0);
-      const events = readFileSync(join(f.local, "events"), "utf8");
-      if (staleTarget) {
-        expect(events).toBe("");
-        expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
-        expect(readFileSync(gatesPath, "utf8")).toBe(gates);
-        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-        return;
-      }
-      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
-      expect(events).toBe("graphql\n");
-      expect(hosted).not.toBe(f.candidate);
-      expect(readFileSync(gatesPath, "utf8")).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
-      expect(readFileSync(gatesPath, "utf8")).not.toMatch(
-        /VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/,
-      );
-      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
-        `PREP_HEAD_SHA=${hosted}\n`,
-      );
-      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toContain("GitHub gates deferred");
-      expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
-    },
-  );
-
-  it.each(["git", "graphql"])(
-    "revalidates identity after %s publication planning and before the write",
-    (transport) => {
-      const f = makePublisherRepo();
-      const result = runPublisher(f, "prepare_sync_head 4242", [
-        `OPENCLAW_PR_PUSH_MODE=${transport}`,
-        "PR_HEAD_OWNER=fixture",
-        "PR_HEAD_REPO_NAME=repo",
-        "pr_git() {",
-        `  if [ "$1" = verify-commit ] || [ "$*" = 'log -1 --format=%b HEAD' ]; then`,
-        "    jq '.headRepository.nameWithOwner = \"replacement/repo\"' .local/remote-observation.json > .local/changed-observation.json",
-        "    mv .local/changed-observation.json .local/remote-observation.json",
-        '    [ "$1" != verify-commit ] || return 0',
-        "  fi",
-        '  [ "$1" != push ] || echo push >> .local/events',
-        '  command git "$@"',
-        "}",
-      ]);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(result.stdout + result.stderr).toContain("PR identity changed");
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-    },
-  );
-
-  it.each(["head-repository", "base-repository", "base-branch", "closed"])(
-    "refuses changed %s identity before publication without relying on a matching head",
-    (movement) => {
-      const f = makePublisherRepo();
-      const remote = structuredClone(f.observation);
-      if (movement === "head-repository") {
-        remote.headRepository.nameWithOwner = "foreign/repo";
-      }
-      if (movement === "base-repository") {
-        remote.baseRepository.id = "R_replacement";
-      }
-      if (movement === "base-branch") {
-        remote.baseRefName = "release";
-      }
-      if (movement === "closed") {
-        remote.state = "CLOSED";
-      }
-      writeFileSync(join(f.local, "remote-observation.json"), JSON.stringify(remote));
-      const result = runPublisher(f);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(result.stdout + result.stderr).toContain("PR identity changed");
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-    },
-  );
-
-  it.each(
-    ["prepare_push", "prepare_sync_head"].flatMap((operation) =>
-      ["advance", "rewind", "same-tree"].map((movement) => ({ operation, movement })),
-    ),
-  )(
-    "$operation refuses a foreign $movement observed before publication",
-    ({ operation, movement }) => {
-      const f = makePublisherRepo();
-      const foreign =
-        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
-      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
-      f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", foreign);
-      const before = readFileSync(join(f.local, "prep.md"), "utf8");
-      const result = runPublisher(f, `${operation} 4242`);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
-      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toBe(before);
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
-    },
-  );
-
-  it.each(["advance", "rewind", "same-tree"] as const)(
-    "keeps the original lease when a foreign %s races the push",
-    (movement) => {
-      const f = makePublisherRepo();
-      const foreign =
-        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
-      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
-      const result = runPublisher(f, "prepare_push 4242", [
-        "pr_git() {",
-        '  if [ "$1" = push ]; then',
-        "    echo push >> .local/events",
-        `    command git --git-dir="$remote" update-ref refs/heads/topic ${foreign}`,
-        '  elif [ "$1" = rebase ]; then echo rebase >> .local/events; fi',
-        '  command git "$@"',
-        "}",
-      ]);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
-      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\n");
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
-      expect(readFileSync(join(f.local, "gates.env"), "utf8")).toContain(
-        `LAST_VERIFIED_HEAD_SHA=${f.candidate}`,
-      );
-    },
-  );
-
-  it.each(["readback", "fetch"] as const)(
-    "does not stamp a same-tree replacement at the post-publication %s",
-    (boundary) => {
-      const f = makePublisherRepo();
-      f.git("push", "-q", "origin", `${f.sameTree}:refs/heads/foreign`);
-      const result = runPublisher(
-        f,
-        "prepare_sync_head 4242",
-        boundary === "readback"
-          ? [
-              "wait_for_pr_head_sha() {",
-              '  test "$(remote_head)" = "$2" || return 1',
-              '  pr_observe "$1" || return 1',
-              `  command git --git-dir="$remote" update-ref refs/heads/topic ${f.sameTree}`,
-              "}",
-            ]
-          : [
-              "pr_git() {",
-              '  if [ "$1" = push ]; then echo push >> .local/events; fi',
-              '  for arg in "$@"; do',
-              '    if [ "$arg" = fetch ]; then',
-              `      command git --git-dir="$remote" update-ref refs/heads/topic ${f.sameTree}`,
-              "    fi",
-              "  done",
-              '  command git "$@"',
-              "}",
-            ],
-      );
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.sameTree);
-      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
-    },
-  );
-
-  it("propagates the actual Git failure when invoked in a conditional", () => {
-    const f = makePublisherRepo();
-    const result = runPublisher(
-      f,
-      [
-        `PRHEAD_REMOTE_URL='${f.remote}'`,
-        'pr_git() { if [ "$1" = push ]; then echo "transport failed" >&2; return 73; fi; command git "$@"; }',
-        `if oid=$(push_prep_head_once topic ${f.source} ${f.candidate} 4242 "$(cat .local/pr-meta.json)"); then exit 99; else status=$?; fi`,
-        'test -z "$oid"',
-        'exit "$status"',
-      ].join("\n"),
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(73);
-    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
-  });
-
-  it("publishes appended fixups repeatedly using its own prior publication", () => {
-    const f = makePublisherRepo();
-    for (const command of ["prepare_push 4242", "prepare_sync_head 4242"]) {
-      const result = runPublisher(f, command);
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const published = f.git("rev-parse", "HEAD");
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(published);
-      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
-        `PREP_HEAD_SHA=${published}\n`,
-      );
-      f.git("commit", "-qm", "another reviewed fixup", "--allow-empty");
-    }
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\npush\n");
-    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(6);
-    expect(f.git("merge-base", f.source, "HEAD")).toBe(f.source);
-  });
-
-  it("accepts the exact candidate already published without another push", () => {
-    const f = makePublisherRepo();
-    f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", f.candidate);
-    const result = runPublisher(f);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(3);
-    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
-      `PREP_HEAD_SHA=${f.candidate}\n`,
-    );
-  });
-
-  it.each(["prepare_push", "prepare_sync_head"])(
-    "%s rejects a same-tree no-op that lost reviewed ancestry",
-    (operation) => {
-      const f = makePublisherRepo();
-      const foreign = f.git(
-        "commit-tree",
-        `${f.candidate}^{tree}`,
-        "-p",
-        f.base,
-        "-m",
-        "replaced reviewed ancestry",
-      );
-      f.git("checkout", "-B", "prep", foreign);
-      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
-      f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", foreign);
-      const before = readFileSync(join(f.local, "prep.md"), "utf8");
-      const result = runPublisher(f, `${operation} 4242`);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(f.git("rev-parse", "HEAD")).toBe(foreign);
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toBe(before);
-      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
-      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
-    },
-  );
-
-  it("accepts the returned GraphQL OID but requires later fixups to extend it", () => {
-    const f = makePublisherRepo();
-    const graphql = [
-      "PR_HEAD_OWNER=fixture",
-      "PR_HEAD_REPO_NAME=repo",
-      "OPENCLAW_PR_PUSH_MODE=graphql",
-    ];
-    const first = runPublisher(f, "prepare_sync_head 4242", graphql);
-    expect(first.status, first.stdout + first.stderr).toBe(0);
-    const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
-    expect(hosted).not.toBe(f.candidate);
-    expect(f.git("rev-parse", `${hosted}^{tree}`)).toBe(f.git("rev-parse", "HEAD^{tree}"));
-    let receipt = readFileSync(join(f.local, "prep.env"), "utf8");
-    expect(receipt).toContain(`PREP_HEAD_SHA=${hosted}\n`);
-    expect(receipt).toContain(`LOCAL_PREP_HEAD_SHA=${f.candidate}\n`);
-    const noop = runPublisher(f, "prepare_sync_head 4242", graphql);
-    expect(noop.status, noop.stdout + noop.stderr).toBe(0);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    receipt = readFileSync(join(f.local, "prep.env"), "utf8");
-    f.git("commit", "-qm", "fixup on the unhosted local commit", "--allow-empty");
-    const rejected = runPublisher(f, "prepare_sync_head 4242", graphql);
-    expect(rejected.status, rejected.stdout + rejected.stderr).not.toBe(0);
-    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toBe(receipt);
-    f.git("checkout", "-B", "prep", hosted);
-    f.git("commit", "-qm", "fixup on the hosted commit", "--allow-empty");
-    const accepted = runPublisher(f, "prepare_sync_head 4242", graphql);
-    expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\ngraphql\n");
-  });
-
-  it.each(["git-permission", "git-failure", "graphql-permission"] as const)(
-    "limits transport fallback for %s",
-    (failure) => {
-      const f = makePublisherRepo();
-      const result = runPublisher(f, "prepare_sync_head 4242", [
-        "PR_HEAD_OWNER=fixture",
-        "PR_HEAD_REPO_NAME=repo",
-        ...(failure === "graphql-permission"
-          ? [
-              "OPENCLAW_PR_PUSH_MODE=graphql",
-              'pr_gh_plain() { echo graphql >> .local/events; echo "403 forbidden" >&2; return 74; }',
-            ]
-          : [
-              "pr_git() {",
-              '  if [ "$1" = push ]; then',
-              "    echo push >> .local/events",
-              failure === "git-permission"
-                ? '    echo "403 permission denied" >&2'
-                : '    echo "transport failed" >&2',
-              "    return 73",
-              "  fi",
-              '  command git "$@"',
-              "}",
-            ]),
-      ]);
-      if (failure === "git-permission") {
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\ngraphql\n");
-      } else {
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
-          failure === "git-failure" ? "push\n" : "graphql\n",
-        );
-        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      }
-    },
-  );
-
-  it.each(["number", "branch", "source", "local-tree"] as const)(
-    "rejects a prior receipt with mismatched %s provenance",
-    (mismatch) => {
-      const f = makePublisherRepo();
-      const first = runPublisher(f);
-      expect(first.status, first.stdout + first.stderr).toBe(0);
-      const path = join(f.local, "prep.env");
-      const before = readFileSync(path, "utf8");
-      const changes = {
-        number: ["PR_NUMBER=4242", "PR_NUMBER=4243"],
-        branch: ["PR_HEAD=topic", "PR_HEAD=other"],
-        source: [`PR_HEAD_SHA_BEFORE=${f.source}`, `PR_HEAD_SHA_BEFORE=${f.base}`],
-        "local-tree": [`LOCAL_PREP_HEAD_SHA=${f.candidate}`, `LOCAL_PREP_HEAD_SHA=${f.source}`],
-      } as const;
-      const [from, to] = changes[mismatch];
-      const changed = before.replace(from, to);
-      expect(changed).not.toBe(before);
-      writeFileSync(path, changed);
-      f.git("commit", "-qm", "appended fixup", "--allow-empty");
-      const result = runPublisher(f);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(readFileSync(path, "utf8")).toBe(changed);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\n");
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.candidate);
-    },
-  );
-});
-
 afterEach(() => {
   tempDirs.cleanup();
-});
-
-describe("resolve_pr_gates_remote_mode", () => {
-  it.each([
-    { value: undefined, expected: "local" },
-    { value: "", expected: "local" },
-    { value: "testbox", expected: "testbox" },
-    { value: "crabbox-aws", expected: "crabbox-aws" },
-    { value: "github", expected: "github" },
-  ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
-    const env: NodeJS.ProcessEnv = {};
-    if (value !== undefined) {
-      env.OPENCLAW_PR_GATES_REMOTE = value;
-    }
-    const result = runGatesBash("resolve_pr_gates_remote_mode", { env });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("rejects unsupported values", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "azure" },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
-  });
-
-  it.each(["testbox", "crabbox-aws", "github"])(
-    "rejects the %s hosted-gates conflict before touching the worktree",
-    (mode) => {
-      const result = runGatesBash("prepare_gates 424242", {
-        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
-      });
-      expect(result.status).toBe(2);
-      expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
-    },
-  );
 });
 
 describe("remote Crabbox AWS gate contract", () => {
@@ -805,25 +237,39 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).toContain(`REMOTE_GATES_RUN_URL=${runUrl}`);
   });
 
-  it("keeps pending evidence when the protected publisher fails", () => {
-    const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
-    mkdirSync(workDir, { recursive: true });
-    mkdirSync(join(workDir, ".local"));
-    writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
-    const result = runGatesBash(
-      [
-        "require_active_org_admin_for_crabbox_gate() { :; }",
-        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
-        "ci_dispatch() { return 1; }",
-        `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
-      ].join("\n"),
-      { cwd: workDir },
-    );
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
-      "GATES_MODE=remote_crabbox_aws_pending\n",
-    );
-  });
+  it.each([false, true])(
+    "keeps pending evidence when the protected publisher fails, conditional=%s",
+    (conditional) => {
+      const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(join(workDir, ".local"));
+      writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
+      const result = runGatesBash(
+        [
+          "require_active_org_admin_for_crabbox_gate() { :; }",
+          `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
+          `ci_dispatch() { printf '%s\\n' '${JSON.stringify({
+            actionsRunUrl: "https://github.com/openclaw/openclaw/actions/runs/99",
+            backend: "crabbox",
+            baseSha: "a".repeat(40),
+            headSha: "b".repeat(40),
+            leaseId: "cbx_stub",
+            provider: "aws",
+            runId: "run_stub",
+            target: "linux",
+          })}'; return 1; }`,
+          conditional
+            ? `if finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'; then exit 99; else exit "$?"; fi`
+            : `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
+        ].join("\n"),
+        { cwd: workDir },
+      );
+      expect(result.status).not.toBe(0);
+      expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
+        "GATES_MODE=remote_crabbox_aws_pending\n",
+      );
+    },
+  );
 });
 
 describe("prepare gate changed-file plan", () => {
@@ -905,7 +351,7 @@ describe("prepare gate changed-file plan", () => {
 });
 
 describe("remote testbox gate delegation", () => {
-  it("runs the full pnpm test through the worktree crabbox wrapper", () => {
+  function runRemoteGate(env: NodeJS.ProcessEnv) {
     const dir = tempDirs.make("openclaw-pr-gates-remote-");
     const stubBin = join(dir, "bin");
     mkdirSync(stubBin);
@@ -913,6 +359,7 @@ describe("remote testbox gate delegation", () => {
       join(stubBin, "node"),
       [
         "#!/bin/sh",
+        `if [ "$1" != scripts/crabbox-wrapper.mjs ]; then exec '${process.execPath}' "$@"; fi`,
         "printf 'ARG:%s\\n' \"$@\"",
         `printf '{"provider":"blacksmith-testbox","leaseId":"tbx_stub","exitCode":0,"runStatus":"passed"}\\n' >&2`,
       ].join("\n"),
@@ -922,31 +369,87 @@ describe("remote testbox gate delegation", () => {
     const workDir = join(dir, "work");
     mkdirSync(workDir);
     const result = runGatesBash(
-      "run_remote_testbox_full_test_gate 'pnpm test (blacksmith-testbox)' .local/gates-test.log pr-424242-gates\n" +
-        "grep '^ARG:' .local/gates-test.log | paste -sd ' ' -",
+      "run_remote_testbox_full_test_gate 'pnpm test (blacksmith-testbox)' .local/gates-test.log pr-424242-gates",
       {
         cwd: workDir,
-        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}` },
+        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}`, ...env },
       },
     );
 
-    expect(result.status).toBe(0);
-    const argLine = result.stdout
+    return { result, workDir, logPath: join(workDir, ".local/gates-test.log") };
+  }
+
+  it.each([
+    { name: "absent controls", env: {}, expected: [] },
+    {
+      name: "explicit controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2", OPENCLAW_VITEST_MAX_WORKERS: "1" },
+      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
+    },
+    {
+      name: "normalized integer controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ", OPENCLAW_VITEST_MAX_WORKERS: "001" },
+      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
+    },
+    {
+      name: "empty controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "", OPENCLAW_VITEST_MAX_WORKERS: " \t " },
+      expected: [],
+    },
+    {
+      name: "only the worker control",
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "3" },
+      expected: ["OPENCLAW_VITEST_MAX_WORKERS=3"],
+    },
+  ])("runs the full worktree Testbox command with $name", ({ env, expected }) => {
+    const { result, logPath } = runRemoteGate(env);
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(logPath, "utf8")
       .split("\n")
-      .find((line) => line.includes("crabbox-wrapper.mjs"))
-      ?.replaceAll("ARG:", "");
-    expect(argLine).toBe(
-      "scripts/crabbox-wrapper.mjs run " +
-        "--provider blacksmith-testbox " +
-        "--blacksmith-org openclaw " +
-        "--blacksmith-workflow .github/workflows/ci-check-testbox.yml " +
-        "--blacksmith-job check " +
-        "--blacksmith-ref main " +
-        "--idle-timeout 90m --ttl 240m --timing-json " +
-        "--label pr-424242-gates " +
-        "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
-        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test",
-    );
+      .filter((line) => line.startsWith("ARG:"))
+      .map((line) => line.slice(4));
+    expect(args).toEqual([
+      "scripts/crabbox-wrapper.mjs",
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--blacksmith-org",
+      "openclaw",
+      "--blacksmith-workflow",
+      ".github/workflows/ci-check-testbox.yml",
+      "--blacksmith-job",
+      "check",
+      "--blacksmith-ref",
+      "main",
+      "--idle-timeout",
+      "90m",
+      "--ttl",
+      "240m",
+      "--timing-json",
+      "--label",
+      "pr-424242-gates",
+      "--",
+      "env",
+      "CI=1",
+      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+      ...expected,
+      "corepack",
+      "pnpm",
+      "test",
+    ]);
+  });
+
+  it.each(
+    ["OPENCLAW_TEST_PROJECTS_PARALLEL", "OPENCLAW_VITEST_MAX_WORKERS"].flatMap((name) =>
+      ["0", "-1", "1.5", "9007199254740992", "2; touch injected"].map((value) => ({ name, value })),
+    ),
+  )("rejects $name=$value before remote dispatch", ({ name, value }) => {
+    const { result, workDir, logPath } = runRemoteGate({ [name]: value });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`${name} must be a positive integer`);
+    expect(existsSync(logPath)).toBe(false);
+    expect(existsSync(join(workDir, "injected"))).toBe(false);
   });
 
   it("extracts the last successful blacksmith-testbox timing stamp", () => {

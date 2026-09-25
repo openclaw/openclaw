@@ -8,10 +8,8 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import {
-  emitSessionIdentityMutation,
-  emitSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -119,6 +117,61 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const before = projection.materializedCount;
     await append("Pending update");
     expect(projection.materializedCount).toBe(before);
+    const reads: string[] = [];
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
+      readDatabases(targets, (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            readRowFacts(input) {
+              reads.push(...input.sessionKeys);
+              return owner.readRowFacts(input);
+            },
+          })),
+        ),
+      ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    await projection.ensureMaterialized();
+    expect(reads).toEqual([target.sessionKey]);
+    reads.length = 0;
+    const captured = createDeferredCore();
+    const resume = createDeferredCore();
+    let pause = true;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
+      readDatabases(targets, (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            async readRowFacts(input) {
+              reads.push(...input.sessionKeys);
+              const result = await owner.readRowFacts(input);
+              if (pause) {
+                pause = false;
+                captured.resolve();
+                await resume.promise;
+              }
+              return result;
+            },
+          })),
+        ),
+      ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
+    const refreshing = projection.ensureMaterialized();
+    try {
+      await captured.promise;
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Update during renewal" } }],
+        touchSessionEntry: false,
+      });
+    } finally {
+      resume.resolve();
+      await refreshing;
+    }
+    expect(reads.filter((key) => key === target.sessionKey)).toHaveLength(2);
+    expect(reads.filter((key) => key !== target.sessionKey)).toHaveLength(2);
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -160,12 +213,6 @@ it("does not carry a pending transcript refresh into a replacement session", asy
       updatedAt: 2,
       displayName: "Replacement",
       parentSessionKey: "agent:main:parent",
-    });
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: target.agentId,
-      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-      current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
     });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
@@ -253,12 +300,6 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: "main",
-        previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-        current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-      });
       expect(
         repairedProjection.snapshot(
           { agentId: "main", key: target.sessionKey },

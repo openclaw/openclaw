@@ -301,11 +301,12 @@ correction_review_snapshot() (
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] || return 0
   require_prepared_review "$pr" >/dev/null || return 1
-  local publication_receipt=()
-  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
-    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
-    publication_receipt+=(.local/prep.env)
-  fi
+  local publication_receipt=() receipt
+  for receipt in .local/prep.env .local/prepare-push-result.env .local/prepare-sync-result.env; do
+    [ -e "$receipt" ] || [ -L "$receipt" ] || continue
+    [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
+    publication_receipt+=("$receipt")
+  done
   pr_git hash-object --no-filters -- \
     .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
     .local/review.json \

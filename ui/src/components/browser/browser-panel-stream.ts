@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
@@ -12,7 +13,6 @@ import {
 } from "./browser-screencast-client.ts";
 import { browserRouteKey } from "./browser-target.ts";
 
-const FIRST_FRAME_TIMEOUT_MS = 1500;
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
@@ -29,13 +29,12 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   clearUnavailableView(): boolean;
-  scheduleViewportSync(): void;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
 }
@@ -49,6 +48,7 @@ type Attempt = {
   width: number;
   live: boolean;
   connection?: BrowserScreencastClient;
+  controller: AbortController;
   firstFrame: Promise<boolean>;
   settle: (received: boolean) => void;
   metadata?: BrowserScreencastMeta;
@@ -69,7 +69,6 @@ export class BrowserPanelStream {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setTimeout>;
   private recovery?: Recovery;
-  private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
   constructor(private readonly host: BrowserPanelStreamHost) {}
@@ -123,7 +122,13 @@ export class BrowserPanelStream {
     const dimensions = this.dimensions();
     let settle!: Attempt["settle"];
     const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), FIRST_FRAME_TIMEOUT_MS);
+      const timeout = setTimeout(() => {
+        if (this.current(attempt)) {
+          this.recover(attempt);
+        } else if (this.attempt === attempt) {
+          this.close(false);
+        }
+      }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
       settle = (received) => {
         clearTimeout(timeout);
         resolve(received);
@@ -135,6 +140,7 @@ export class BrowserPanelStream {
       epoch,
       width: dimensions.width,
       live: false,
+      controller: new AbortController(),
       firstFrame,
       settle,
       decoding: false,
@@ -150,10 +156,11 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(attempt.client, {
-        targetId: attempt.targetId,
-        ...dimensions,
-      });
+      const response = await requestBrowserScreencast(
+        attempt.client,
+        { targetId: attempt.targetId, ...dimensions },
+        { signal: attempt.controller.signal },
+      );
       if (!this.current(attempt)) {
         return;
       }
@@ -340,19 +347,9 @@ export class BrowserPanelStream {
             ? { browserTab: { ...this.host.operations.route, targetId: attempt.targetId } }
             : {}),
         });
-        this.host.operations.markNavigationReconciled(attempt.client, attempt.targetId);
+        this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
         if (!this.host.urlDraftEditing) {
           this.host.setState("urlDraft", frame.url);
-        }
-        if (
-          this.host.observedViewportSize &&
-          (Math.abs(frame.cssWidth - this.host.observedViewportSize.width) > 1 ||
-            Math.abs(frame.cssHeight - this.host.observedViewportSize.height) > 1) &&
-          !this.viewportSyncPending
-        ) {
-          // The sync is debounced; a repainting page must not keep postponing it.
-          this.viewportSyncPending = true;
-          this.host.scheduleViewportSync();
         }
         if (!attempt.presented) {
           attempt.presented = true;
@@ -371,8 +368,6 @@ export class BrowserPanelStream {
   }
 
   resize(): void {
-    // The debounced viewport sync just ran; later mismatched frames may schedule again.
-    this.viewportSyncPending = false;
     this.restartAfterResize();
   }
 
@@ -427,10 +422,9 @@ export class BrowserPanelStream {
     this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
-    // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.
-    this.viewportSyncPending = false;
     const attempt = this.attempt;
     this.attempt = undefined;
+    attempt?.controller.abort();
     attempt?.settle(false);
     attempt?.connection?.close();
     for (const url of [

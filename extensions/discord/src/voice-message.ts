@@ -72,13 +72,6 @@ async function runFfmpegToOutput(params: {
   });
 }
 
-function createRateLimitError(
-  response: Response,
-  body: { message: string; retry_after: number; global: boolean },
-): RateLimitError {
-  return new RateLimitError(response, body);
-}
-
 type VoiceMessageMetadata = {
   durationSecs: number;
   waveform: string; // base64 encoded
@@ -311,7 +304,7 @@ async function createVoiceRequestError(
   );
   const parsed = coerceDiscordErrorBody(raw);
   if (response.status === 429) {
-    throw createRateLimitError(response, {
+    throw new RateLimitError(response, {
       message: readDiscordMessage(parsed, "You are being rate limited."),
       retry_after: readRetryAfter(parsed, response, 1),
       global:

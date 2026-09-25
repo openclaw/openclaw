@@ -161,7 +161,6 @@ it("keeps Markdown attachment markup inert and does not load remote images", asy
 });
 
 it.each([
-  { title: "notes.txt", mimeType: "application/pdf" },
   { title: "archive.bin", mimeType: "application/octet-stream" },
   { title: "notes.txt", src: "https://files.example/notes.txt" },
   { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },

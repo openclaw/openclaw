@@ -1,8 +1,7 @@
-// Agents gateway methods expose agent listing, config mutation, workspace file
-// reads/writes, identity merging, and safe deletion for operator clients.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -248,39 +247,15 @@ type AgentDeleteCleanupPath = {
 };
 
 async function resolveAgentDeleteCleanupTarget(pathname: string): Promise<string> {
-  let candidate = path.resolve(pathname);
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await fs.realpath(candidate), ...missingSuffix);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      let candidateStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
-      try {
-        candidateStat = await fs.lstat(candidate);
-      } catch (statError) {
-        if (!isMissingPathError(statError)) {
-          throw statError;
-        }
-      }
-      if (candidateStat?.isSymbolicLink()) {
-        const linkTarget = await fs.readlink(candidate);
-        const resolvedLinkTarget = await resolveAgentDeleteCleanupTarget(
-          path.isAbsolute(linkTarget)
-            ? linkTarget
-            : path.resolve(path.dirname(candidate), linkTarget),
-        );
-        return path.resolve(resolvedLinkTarget, ...missingSuffix);
-      }
-      const parent = path.dirname(candidate);
-      if (parent === candidate) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(candidate));
-      candidate = parent;
+  const candidate = path.resolve(pathname);
+  try {
+    return await fs.realpath(candidate);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
     }
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(candidate);
+    return path.resolve(existingPath, ...unresolvedSegments);
   }
 }
 
@@ -358,16 +333,12 @@ async function prepareAgentDeleteCleanupPaths(
       }
     }
     const canonicalPath = normalizeAgentDirRegistryPath(resolvedPath);
-    let trashCoversDescendants = false;
-    if (targetStat) {
-      trashCoversDescendants = !targetStat.isSymbolicLink();
-    }
     addPath({
       path: resolvedPath,
       parentPath: path.dirname(resolvedPath),
       canonicalPath,
       trashPath: resolvedPath,
-      trashCoversDescendants,
+      trashCoversDescendants: targetStat ? !targetStat.isSymbolicLink() : false,
       kind: "target",
       preparedIdentity: cleanupPathIdentity(targetStat),
       done: false,
@@ -606,17 +577,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = normalized.value;
-    const workspaceDir =
-      typeof params.workspace === "string" && params.workspace.trim()
-        ? resolveUserPath(params.workspace.trim())
-        : undefined;
+    const workspace = resolveOptionalStringParam(params.workspace);
+    const workspaceDir = workspace ? resolveUserPath(workspace) : undefined;
 
     const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
-    const safeName =
-      typeof params.name === "string" && params.name.trim()
-        ? sanitizeAgentIdentityLine(params.name.trim())
-        : undefined;
+    const name = resolveOptionalStringParam(params.name);
+    const safeName = name ? sanitizeAgentIdentityLine(name) : undefined;
 
     const identity = createAgentIdentityConfig({
       name: safeName,
@@ -768,8 +735,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const requestedDeleteFiles =
-      typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
+    const requestedDeleteFiles = params.deleteFiles ?? true;
     try {
       const result = await withAgentDeletion(agentId, async (begin) =>
         withConfigMutationExclusive(async (lockedConfig) => {
@@ -893,45 +859,44 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 );
               }
             }
-            await context.cron.removeAgentJobsTransactional(
-              agentId,
-              async () =>
-                await withAgentExecApprovalsRemoved(agentId, async () => {
-                  deletion.assertCurrent();
-                  if (!rosterCommitted) {
+            await context.cron.removeAgentJobsTransactional(agentId, () =>
+              withAgentExecApprovalsRemoved(agentId, async () => {
+                deletion.assertCurrent();
+                if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({
+                      agentId,
+                      allowConfigSizeDrop: true,
+                      assertCurrent: deletion.assertCurrent,
+                    });
+                  } catch (error) {
                     try {
-                      committed = await deleteAgentConfigEntry({
-                        agentId,
-                        assertCurrent: deletion.assertCurrent,
-                      });
-                    } catch (error) {
-                      try {
-                        const persisted = await readConfigFileSnapshotForWrite();
-                        if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
-                          rosterCommitted = true;
-                          throw new AgentDeletionCommitUncertainError(error);
-                        }
-                      } catch (readError) {
-                        if (readError instanceof AgentDeletionCommitUncertainError) {
-                          throw readError;
-                        }
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
+                        rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
-                      throw error;
-                    }
-                    if (!committed.result) {
-                      rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
-                      const missingResultError = new Error(
-                        "agent delete config mutation did not return its target",
-                      );
-                      if (rosterCommitted) {
-                        throw new AgentDeletionCommitUncertainError(missingResultError);
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
                       }
-                      throw missingResultError;
+                      throw new AgentDeletionCommitUncertainError(error);
                     }
-                    rosterCommitted = true;
+                    throw error;
                   }
-                }),
+                  if (!committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
+                }
+              }),
             );
             deletion.assertCurrent();
           } catch (error) {
@@ -1043,10 +1008,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
               workspaceCleanupPaths.length > 0
                 ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
                 : undefined;
-            const outcomes: Array<{
-              cleanupPath: AgentDeleteCleanupPath;
-              outcome: AgentDeletePathOutcome;
-            }> = [];
             const completedCleanupPaths = new Set(
               cleanupPaths.filter((cleanupPath) => cleanupPath.done),
             );
@@ -1149,11 +1110,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
               const outcome = cleanupPath.preparationError
                 ? cleanupFailure(cleanupPath.path, cleanupPath.preparationError)
                 : await removeAgentPath(cleanupPath, deletion.assertCurrent);
-              outcomes.push({
-                cleanupPath,
-                outcome,
-              });
               if ("removed" in outcome) {
+                removed.push(outcome.removed);
                 markCleanupPathDone(cleanupPath);
               } else if ("skipped" in outcome) {
                 markCleanupPathDone(cleanupPath, outcome.skipped.reason);
@@ -1164,18 +1122,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
                   note: outcome.skipped.reason,
                 });
               } else {
+                failed.push(outcome.failed);
                 protectedCleanupPaths.push({
                   cleanupPath,
                   protectAliases: true,
                   terminal: false,
                 });
-              }
-            }
-            for (const { outcome } of outcomes) {
-              if ("removed" in outcome) {
-                removed.push(outcome.removed);
-              } else if ("failed" in outcome) {
-                failed.push(outcome.failed);
               }
             }
             if (

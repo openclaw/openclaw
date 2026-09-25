@@ -8,7 +8,6 @@ import {
 } from "../agents/workspace-legacy-state.js";
 import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { readFileWindowFully } from "./file-read.js";
 import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
@@ -23,58 +22,27 @@ async function readBoundedRegularFile(params: {
   sourcePath: string;
   maxBytes: number;
 }): Promise<SourceSnapshot> {
-  const opened = await params.sourceRoot.open(params.relativePath, {
+  const { buffer, stat } = await params.sourceRoot.read(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
+    maxBytes: params.maxBytes,
   });
+  let raw: string;
   try {
-    const before = opened.stat;
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      !Number.isSafeInteger(before.size) ||
-      before.size < 0 ||
-      before.size > params.maxBytes
-    ) {
-      throw new Error("legacy workspace source is not a safe regular file");
-    }
-    const buffer = Buffer.alloc(before.size);
-    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
-    if (bytesRead !== buffer.length) {
-      throw new Error("legacy workspace source ended unexpectedly");
-    }
-    const after = await opened.handle.stat();
-    if (
-      !after.isFile() ||
-      after.nlink !== 1 ||
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs ||
-      bytesRead !== after.size
-    ) {
-      throw new Error("legacy workspace source changed while reading");
-    }
-    let raw: string;
-    try {
-      raw = utf8Decoder.decode(buffer);
-    } catch {
-      throw new Error("legacy workspace source is not valid UTF-8");
-    }
-    return {
-      sourcePath: params.sourcePath,
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      sha256: createHash("sha256").update(buffer).digest("hex"),
-      size: after.size,
-      raw,
-      buffer,
-    };
-  } finally {
-    await opened[Symbol.asyncDispose]();
+    raw = utf8Decoder.decode(buffer);
+  } catch {
+    throw new Error("legacy workspace source is not valid UTF-8");
   }
+  return {
+    sourcePath: params.sourcePath,
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+    size: buffer.length,
+    raw,
+    buffer,
+  };
 }
 
 export async function archiveWorkspaceSetupSource(
@@ -95,16 +63,8 @@ export async function archiveWorkspaceSetupSource(
       await sourceRoot.create(relativePath, snapshot.buffer, {
         mode: 0o600,
         renameIdentity: "verify-content-with-lock",
+        durable: "file",
       });
-      const archive = await sourceRoot.open(relativePath, {
-        hardlinks: "reject",
-        symlinks: "reject",
-      });
-      try {
-        await archive.handle.sync();
-      } finally {
-        await archive[Symbol.asyncDispose]();
-      }
       requireDirectorySync(await parent.sync(), "Workspace setup archive directory");
     } finally {
       await parent.close();

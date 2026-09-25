@@ -22,7 +22,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -654,7 +654,7 @@ type WrapperCleanupProof =
   | { kind: "removal"; target: "script" | "source"; exitCode: 0 | 23 };
 
 type WrapperFixtureIdentity = { pid: number; parentPid: number; cwd: string };
-type WrapperReadinessPhase = { phase: string; at: number; pid?: number };
+type WrapperReadinessPhase = { phase: string; at: number; pid?: number; parentPid?: number };
 
 async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
@@ -695,7 +695,7 @@ const entry = path.resolve(process.argv[1] || ".");
 const phasesPath = ${JSON.stringify(phasesPath)};
 const phases = fs.existsSync(phasesPath) ? JSON.parse(fs.readFileSync(phasesPath, "utf8")) : [];
 const phase = (name) => {
-  phases.push({ phase: name, at: Date.now(), pid: process.pid });
+  phases.push({ phase: name, at: Date.now(), pid: process.pid, parentPid: process.ppid });
   const temporary = phasesPath + "." + process.pid;
   fs.writeFileSync(temporary, JSON.stringify(phases));
   fs.renameSync(temporary, phasesPath);
@@ -849,6 +849,8 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       let entrypointClosed: Promise<unknown> | undefined;
       let finishTerminal: (() => Promise<void>) | undefined;
       let entrypointPid = 0;
+      let pnpmRetainsShell = false;
+      const pnpmOwnerChain: Array<{ pid: number; parentPid: number; command: string }> = [];
       let identity: WrapperFixtureIdentity | undefined;
       let preparationIdentity: WrapperFixtureIdentity | undefined;
       let descendantPid = 0;
@@ -900,7 +902,6 @@ if (entry === ${JSON.stringify(implementationPath)}) {
             `
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-const { constants } = require("node:os");
 process.on("SIGINT", () => {});
 setInterval(() => {}, 1000);
 const child = spawn(${JSON.stringify(command.command)}, ${JSON.stringify(command.args)}, { stdio: "inherit" });
@@ -910,8 +911,7 @@ if (child.pid) {
 }
 child.once("error", (error) => { console.error(error); process.exit(1); });
 child.once("exit", (code, signal) => {
-  const status = signal ? 128 + constants.signals[signal] : code;
-  process.stdout.write("\\nopenclaw-pnpm-exit:" + status + "\\n");
+  process.stdout.write("\\nopenclaw-pnpm-exit:" + JSON.stringify({ status: code, signal }) + "\\n");
 });
 `,
           );
@@ -938,10 +938,10 @@ child.once("exit", (code, signal) => {
           });
           terminal.onData((data) => {
             output += data;
-            const receipt = /\r?\nopenclaw-pnpm-exit:(\d+)\r?\n/u.exec(output);
-            if (receipt) {
+            const receipt = /\r?\nopenclaw-pnpm-exit:(\{[^\r\n]+\})\r?\n/u.exec(output);
+            if (receipt?.[1]) {
               output = output.replace(receipt[0], "");
-              reportExit({ status: Number(receipt[1]), signal: null });
+              reportExit(JSON.parse(receipt[1]));
             }
           });
           entrypointClosed = new Promise<void>((resolve) => {
@@ -1000,6 +1000,43 @@ child.once("exit", (code, signal) => {
           expect(JSON.parse(readFileSync(claimPath, "utf8")).repoRoot).toBe(identity!.cwd);
           expect(existsSync(identity!.cwd)).toBe(true);
           if (proof.kind === "signal") {
+            if (entrypoint === "pnpm") {
+              const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+              const shim = phases.find(({ phase }) => phase === "entrypoint started")!;
+              const pnpmPid = Number(readFileSync(terminalCommandPidPath, "utf8"));
+              expect(shim.parentPid).toBeGreaterThan(1);
+              expect(pnpmPid).toBeGreaterThan(1);
+              let ownerPid = shim.parentPid;
+              const visited = new Set<number>();
+              while (ownerPid !== pnpmPid) {
+                if (
+                  ownerPid === undefined ||
+                  !Number.isSafeInteger(ownerPid) ||
+                  ownerPid <= 1 ||
+                  visited.has(ownerPid)
+                ) {
+                  throw new Error(
+                    `Wrapper shim is not owned by pnpm ${pnpmPid}: ${JSON.stringify(pnpmOwnerChain)}`,
+                  );
+                }
+                visited.add(ownerPid);
+                const owner = spawnSync(
+                  "ps",
+                  ["-o", "ppid=", "-o", "comm=", "-p", String(ownerPid)],
+                  { encoding: "utf8" },
+                );
+                expect(owner.status, owner.stderr).toBe(0);
+                const [parentPid, ...command] = owner.stdout.trim().split(/\s+/u);
+                const commandName = command.join(" ");
+                pnpmOwnerChain.push({
+                  pid: ownerPid,
+                  parentPid: Number(parentPid),
+                  command: commandName,
+                });
+                pnpmRetainsShell ||= ["sh", "dash", "bash"].includes(path.basename(commandName));
+                ownerPid = Number(parentPid);
+              }
+            }
             stop();
             if (proof.repeated) {
               await delay(20);
@@ -1021,7 +1058,6 @@ child.once("exit", (code, signal) => {
               : proof.kind === "stdin" || entrypoint === "pnpm"
                 ? 130
                 : 143;
-        expect(result, output).toEqual({ status: expectedStatus, signal: null });
         const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
         const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
@@ -1117,6 +1153,20 @@ child.once("exit", (code, signal) => {
         }
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
         expect(git("ls-files", "--stage", "-z")).toBe(sourceIndex);
+        // pnpm 12.4.2 escalates the second interrupt to TERM on its immediate child.
+        // Corepack can translate a retained shell's TERM into a numeric exit code.
+        if (entrypoint === "pnpm") {
+          const exitStatus = result.signal
+            ? 128 + osConstants.signals[result.signal]
+            : result.status;
+          const expectedLauncherStatus =
+            proof.kind === "signal" && proof.repeated && pnpmRetainsShell ? 143 : expectedStatus;
+          expect(exitStatus, `${output}\npnpm ownership: ${JSON.stringify(pnpmOwnerChain)}`).toBe(
+            expectedLauncherStatus,
+          );
+        } else {
+          expect(result, output).toEqual({ status: expectedStatus, signal: null });
+        }
         if (finishTerminal) {
           await finishTerminal();
         }
@@ -1240,6 +1290,7 @@ function testHomeEnv(home: string): Record<string, string> {
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
+    XDG_STATE_HOME: "",
   };
 }
 
@@ -2463,80 +2514,172 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("Actions run can show cancelled during external lease cleanup");
   });
 
-  it("rejects reused Blacksmith Testboxes that were not created by Crabbox", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+  it.each([false, true])(
+    "rejects reused Testboxes without a key at the selected root (custom state=%s)",
+    (customState) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const env = testHomeEnv(home);
+      if (customState) {
+        env.XDG_STATE_HOME = path.join(home, "selected state");
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.66.0";
+        const legacyKey = path.join(
+          testCrabboxConfigDir(home),
+          "testboxes",
+          "tbx_direct",
+          "id_ed25519",
+        );
+        mkdirSync(path.dirname(legacyKey), { recursive: true });
+        writeFileSync(legacyKey, "fake test key\n", "utf8");
+      }
+      const result = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", "tbx_direct", "--", "echo ok"],
+        { env },
+      );
 
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("provider=blacksmith-testbox --id tbx_direct");
+      expect(result.stderr).toContain("has no Crabbox SSH key");
+      expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
+    },
+  );
+
+  it.each([
+    { id: "tbx_owned", createKey: true, state: "", version: "0.56.0", selectedKey: false },
+    { id: "tbx_legacy", createKey: true, state: "state", version: "0.57.0", selectedKey: false },
+    { id: "tbx_first", createKey: true, state: "state", version: "0.58.0", selectedKey: true },
+    { id: "tbx_default", createKey: true, state: "", version: "0.66.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.66.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.66.0", selectedKey: false },
+    ...(process.platform === "win32"
+      ? [
+          {
+            id: "tbx_namespaced",
+            createKey: true,
+            state: "namespaced",
+            version: "0.66.0",
+            selectedKey: true,
+          },
+        ]
+      : []),
+  ])(
+    "delegates reusable Testbox identity $id to Crabbox $version",
+    ({ id, createKey, state, version, selectedKey }) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const directory = path.join(home, state);
+      const env = {
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: state
+          ? state === "namespaced"
+            ? path.toNamespacedPath(directory)
+            : directory
+          : "",
+        OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+      };
+      const keyRoot = selectedKey
+        ? path.join(env.XDG_STATE_HOME, "crabbox")
+        : testCrabboxConfigDir(home);
+      if (createKey) {
+        const keyPath = path.join(keyRoot, "testboxes", id, "id_ed25519");
+        mkdirSync(path.dirname(keyPath), { recursive: true });
+        writeFileSync(keyPath, "fake test key\n", "utf8");
+      }
+      const { output } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+        { env },
+      );
+      expect(output.args).toEqual([
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--id",
+        id,
+        "--reclaim",
+        "--shell",
+        "--",
+        expect.stringContaining("'echo ok'"),
+      ]);
+    },
+  );
+
+  it.each([
+    "relative-state",
+    " ",
+    ...(process.platform === "win32" ? ["C:state", "\\state", "/state"] : []),
+  ])("rejects the relative lease key root %j before running a reused Testbox", (stateRoot) => {
+    const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+    const id = "tbx_relative";
+    const legacyKey = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(legacyKey), { recursive: true });
+    writeFileSync(legacyKey, "fake test key\n", "utf8");
     const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", "tbx_direct", "--", "echo ok"],
-      { env: testHomeEnv(home) },
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.66.0",
+        },
+      },
     );
-
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=blacksmith-testbox --id tbx_direct");
-    expect(result.stderr).toContain("has no Crabbox SSH key");
-    expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
+    expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
   it.each([
-    { id: "tbx_owned", createKey: true },
-    { id: "blue-hermit", createKey: false },
-  ])("delegates reusable Testbox identity $id to Crabbox", ({ id, createKey }) => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    if (createKey) {
-      const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    { version: "0.57.0", stateDirectory: "state" },
+    { version: "0.66.0", stateDirectory: "state" },
+    { version: "0.57.0", stateDirectory: "state " },
+  ])(
+    "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
+    ({ version, stateDirectory }) => {
+      const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
+      const id = "tbx_claimed";
+      const stateRoot = path.join(home, ".local", stateDirectory);
+      const keyRoot =
+        version === "0.66.0" ? path.join(stateRoot, "crabbox") : testCrabboxConfigDir(home);
+      const keyPath = path.join(keyRoot, "testboxes", id, "id_ed25519");
       mkdirSync(path.dirname(keyPath), { recursive: true });
       writeFileSync(keyPath, "fake test key\n", "utf8");
-    }
-    const { output } = runSuccessfulDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
-      { env: testHomeEnv(home) },
-    );
-    expect(output.args).toEqual([
-      "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--id",
-      id,
-      "--reclaim",
-      "--shell",
-      "--",
-      expect.stringContaining("'echo ok'"),
-    ]);
-  });
+      const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      writeFileSync(
+        claimPath,
+        `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
+        "utf8",
+      );
 
-  it("fails before reuse when a Blacksmith Testbox is claimed by another repo", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const id = "tbx_claimed";
-    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
-    mkdirSync(path.dirname(keyPath), { recursive: true });
-    writeFileSync(keyPath, "fake test key\n", "utf8");
-    const stateRoot = path.join(home, ".local", "state");
-    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
-    mkdirSync(path.dirname(claimPath), { recursive: true });
-    writeFileSync(
-      claimPath,
-      `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
-      "utf8",
-    );
+      const result = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+        {
+          env: {
+            ...testHomeEnv(home),
+            XDG_STATE_HOME: stateRoot,
+            OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+          },
+        },
+      );
 
-    const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
-      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
-    );
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
+      expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
-    expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
-
-    const reclaimed = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
-      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
-    );
-    expect(reclaimed.status).toBe(0);
-    expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
-  });
+      const reclaimed = runDefaultWrapper(
+        ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
+        {
+          env: {
+            ...testHomeEnv(home),
+            XDG_STATE_HOME: stateRoot,
+            OPENCLAW_FAKE_CRABBOX_VERSION: `crabbox ${version}`,
+          },
+        },
+      );
+      expect(reclaimed.status).toBe(0);
+      expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+    },
+  );
 
   it.each([
     { label: "successful", status: 0 },
@@ -3327,7 +3470,7 @@ esac
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("bun_version=1.4.0");
+    expect(remoteCommand).toContain("bun_version=1.4.2");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -3633,7 +3776,7 @@ esac
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const { output } = runSuccessfulMacosScript(script);
-    expect(output.scriptContent).toContain("bun_version=1.4.0");
+    expect(output.scriptContent).toContain("bun_version=1.4.2");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );
@@ -4203,15 +4346,24 @@ esac
   });
 
   it.skipIf(process.platform === "win32").each([
-    { operation: "mkdir", method: "mkdirSync", code: "EACCES", errno: -13 },
-    { operation: "write file", method: "writeFileSync", code: "UNKNOWN", errno: -122 },
-    { operation: "write file", method: "writeFileSync", code: "EISDIR", errno: -21 },
-    { operation: "symlink", method: "symlinkSync", code: "EPERM", errno: -1 },
-    { operation: "write symlink blob", method: "writeFileSync", code: "ENOSPC", errno: -28 },
-    { operation: "chmod", method: "chmodSync", code: "EPERM", errno: -1 },
-  ])(
-    "identifies source capsule $operation failures ($code) before upload",
-    ({ operation, method, code, errno }) => {
+    ["mkdir", "mkdir", "mkdirSync", "EACCES", -13],
+    ["tagged write", "write file", "writeSync", "UNKNOWN", -122],
+    ["directory open", "write file", "openSync", "EISDIR", -21],
+    ["readonly write", "write file", "writeSync", "EBADF", -9],
+    ["symlink", "symlink", "symlinkSync", "EPERM", -1],
+    ["symlink blob", "write symlink blob", "writeFileSync", "ENOSPC", -28],
+    ["chmod", "chmod", "chmodSync", "EPERM", -1],
+    ["short writes", "copy", "writeSync", undefined, undefined],
+    ["read after prefix", "copy", "readSync", "EIO", -5],
+    ["unknown read", "copy", "readSync", "UNKNOWN", -122],
+    ["growth lookalike", "copy", "readSync", "too-large", undefined],
+    ["helper lookalike", "copy", "readSync", "helper-failed", undefined],
+    ["growth", "source change", "readSync", "too-large", undefined],
+    ["zero write", "write file", "writeSync", "helper-failed", undefined],
+    ["early EOF", "source change", "readSync", undefined, undefined],
+  ] as const)(
+    "handles source capsule %s without publishing partial source",
+    (fault, operation, method, code, errno) => {
       const root = invocationLogTempDirs.make("openclaw-capsule-write-failure-");
       const producer = path.join(root, "producer");
       const syncRoot = path.join(root, "sync");
@@ -4280,31 +4432,120 @@ esac
 const fs = require("node:fs");
 const path = require("node:path");
 const { syncBuiltinESMExports } = require("node:module");
+const fault = ${JSON.stringify(fault)};
 const operation = ${JSON.stringify(operation)};
 const method = ${JSON.stringify(method)};
 const sourcePath = ${JSON.stringify(sourcePath)};
+const source = ${JSON.stringify(path.join(producer, sourcePath))};
+const originalOpen = fs.openSync, originalClose = fs.closeSync;
+const originalReadFile = fs.readFileSync;
+const originalRead = fs.readSync, originalWrite = fs.writeSync;
 const original = fs[method];
-let failure;
-fs[method] = (...args) => {
+const owned = new Set();
+let sourceFd, targetFd, target, failure, diagnostic, opened = 0, closed = 0;
+let writes = 0, written = 0, targetBytes, grew = false;
+const selectedTarget = (file) => file.startsWith(${JSON.stringify(syncRoot + path.sep)}) &&
+  file.endsWith(path.join("source", sourcePath));
+fs.openSync = (file, ...args) => {
+  if (fault === "directory open" && selectedTarget(String(file))) {
+    try { return originalOpen(${JSON.stringify(syncRoot)}, "w"); }
+    catch (error) { failure = error; throw error; }
+  }
+  const fd = originalOpen(file, ...args);
+  if (file === source || selectedTarget(String(file))) {
+    owned.add(fd); opened++;
+    if (file === source) sourceFd = fd;
+    else { targetFd = fd; target = String(file); }
+  }
+  return fd;
+};
+fs.closeSync = (fd) => {
+  if (fd === targetFd) {
+    const inspectionFd = originalOpen(target, "r");
+    try { targetBytes = originalReadFile(inspectionFd).toString("base64"); }
+    finally { originalClose(inspectionFd); }
+  }
+  const result = originalClose(fd);
+  if (owned.delete(fd)) closed++;
+  if (fd === sourceFd) sourceFd = undefined;
+  if (fd === targetFd) targetFd = undefined;
+  return result;
+};
+fs.readFileSync = (file, ...args) => {
+  if (fault === "short writes" && file === sourceFd)
+    throw new Error("fixture source copy must use bounded reads");
+  return originalReadFile(file, ...args);
+};
+fs.readSync = (fd, buffer, offset, length, position) => {
+  if (fd === sourceFd) {
+    if (fault === "growth" && written > 0 && !grew) {
+      const growthFd = originalOpen(source, "a");
+      try { originalWrite(growthFd, Buffer.from("x"), 0, 1, null); }
+      finally { originalClose(growthFd); }
+      grew = true;
+    }
+    if (fault === "early EOF") {
+      if (written > 0) return 0;
+      length = Math.min(length, 3);
+    }
+    if (fault === "read after prefix" && written === 0)
+      length = Math.min(length, 3);
+    if ((fault === "read after prefix" && written > 0) ||
+        ["unknown read", "growth lookalike", "helper lookalike"].includes(fault)) {
+      failure = Object.assign(new Error("fixture filesystem failure"), {
+        code: ${JSON.stringify(code)}, errno: ${errno},
+        ...(fault === "read after prefix" ? { syscall: "read" } : {}),
+        ...(fault.endsWith("lookalike") ? { name: "FsSafeError" } : {})
+      });
+      throw failure;
+    }
+  }
+  return originalRead(fd, buffer, offset, length, position);
+};
+fs.writeSync = (fd, buffer, offset, length, position) => {
+  if (fd === targetFd) {
+    writes++;
+    if (fault === "readonly write") {
+      try { return originalWrite(sourceFd, buffer, offset, length, position); }
+      catch (error) { failure = error; throw error; }
+    }
+    if (fault === "tagged write") {
+      failure = Object.assign(new Error("fixture filesystem failure"), {
+        code: "UNKNOWN", errno: -122, syscall: "write"
+      });
+      throw failure;
+    }
+    if (fault === "zero write") return 0;
+    const count = originalWrite(fd, buffer, offset,
+      fault === "short writes" ? Math.min(length, 3) : length, position);
+    written += count;
+    return count;
+  }
+  return originalWrite(fd, buffer, offset, length, position);
+};
+if (!["openSync", "readSync", "writeSync"].includes(method)) fs[method] = (...args) => {
   const file = String(args[method === "symlinkSync" ? 1 : 0]);
   const selected = operation === "write symlink blob"
     ? path.dirname(file).endsWith(path.sep + "links")
     : file.endsWith(path.join("source", operation === "mkdir" ? path.dirname(sourcePath) : sourcePath));
   if (file.startsWith(${JSON.stringify(syncRoot + path.sep)}) && selected) {
-    if (${JSON.stringify(code)} === "EISDIR") {
-      try { original(${JSON.stringify(syncRoot)}, "cannot write a directory"); } catch (error) { failure = error; }
-    } else {
-      failure = Object.assign(new Error("fixture filesystem failure"), { code: ${JSON.stringify(code)}, errno: ${errno} });
-    }
+    failure = Object.assign(new Error("fixture filesystem failure"), { code: ${JSON.stringify(code)}, errno: ${errno} });
     throw failure;
   }
   return original(...args);
 };
 syncBuiltinESMExports();
 process.on("uncaughtExceptionMonitor", (error) => {
-  process.stderr.write("CAPSULE_FAILURE " + JSON.stringify({
-    message: error.message, code: failure?.code, errno: failure?.errno,
-    causeIsOriginal: failure !== undefined && error.cause === failure
+  const underlying = failure ?? error.cause ?? error;
+  diagnostic = {
+    message: error.message, code: underlying.code, errno: underlying.errno, syscall: underlying.syscall,
+    sameError: error === failure, causeIsOriginal: failure !== undefined && error.cause === failure,
+    cause: error.cause && { name: error.cause.name, code: error.cause.code }
+  };
+});
+process.on("exit", () => {
+  process.stderr.write("CAPSULE_IO " + JSON.stringify({
+    diagnostic, opened, closed, outstanding: owned.size, writes, written, targetBytes, grew
   }) + "\\n");
 });
 `,
@@ -4327,15 +4568,43 @@ process.on("uncaughtExceptionMonitor", (error) => {
         { cwd: producer, env, encoding: "utf8", timeout: 10_000 },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(
-        readInvocations(invocationLog).some(
-          (args) => args[0] === "sync-plan" || (args[0] === "run" && args[1] !== "--help"),
-        ),
-      ).toBe(false);
-      expect(existsSync(capturedBundle)).toBe(false);
-      expect(readdirSync(syncRoot)).toEqual([]);
+      const record = result.stderr.split("\n").find((line) => line.startsWith("CAPSULE_IO "));
+      expect(record, result.stderr).toBeDefined();
+      const observed = JSON.parse(record!.slice("CAPSULE_IO ".length));
+      expect(observed.outstanding).toBe(0);
+      expect(observed.closed).toBe(observed.opened);
+      if (!link && operation !== "mkdir" && fault !== "short writes") {
+        expect(observed.opened).toBe(fault === "directory open" ? 1 : 2);
+      }
+      if (fault === "short writes") {
+        expect(observed.diagnostic?.message).not.toBe("fixture source copy must use bounded reads");
+        expectSuccessfulWrapperRun(result);
+        expect(observed.diagnostic).toBeUndefined();
+        expect(observed.opened).toBe(2);
+        expect(observed.writes).toBeGreaterThan(1);
+        expect(observed.written).toBe(sourceBytes.length);
+        expect(Buffer.from(observed.targetBytes, "base64")).toEqual(sourceBytes);
+        expect(existsSync(capturedBundle)).toBe(true);
+        expect(readdirSync(syncRoot)).toEqual([]);
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(
+          readInvocations(invocationLog).some(
+            (args) => args[0] === "sync-plan" || (args[0] === "run" && args[1] !== "--help"),
+          ),
+        ).toBe(false);
+        expect(existsSync(capturedBundle)).toBe(false);
+        expect(readdirSync(syncRoot)).toEqual([]);
+        if (fault === "growth") {
+          expect(observed.grew).toBe(true);
+          expect(readFileSync(path.join(producer, sourcePath))).toEqual(
+            Buffer.concat([sourceBytes, Buffer.from("x")]),
+          );
+          // Restore only this deliberate fixture mutation after the child has joined.
+          writeFileSync(path.join(producer, sourcePath), sourceBytes);
+        }
+      }
       expect(git(["rev-parse", "HEAD"])).toBe(head);
       expect(git(["ls-files", "--stage", "-z"])).toBe(index);
       expect(git(["status", "--porcelain=v1", "-z"])).toBe("");
@@ -4345,15 +4614,48 @@ process.on("uncaughtExceptionMonitor", (error) => {
           ? readlinkSync(path.join(producer, sourcePath), { encoding: "buffer" })
           : readFileSync(path.join(producer, sourcePath)),
       ).toEqual(sourceBytes);
-      const failure = result.stderr.split("\n").find((line) => line.startsWith("CAPSULE_FAILURE "));
-      expect(failure).toBeDefined();
-      const diagnostic = JSON.parse(failure!.slice("CAPSULE_FAILURE ".length));
-      expect(diagnostic).toMatchObject({ code, errno });
+      if (fault === "short writes") {
+        return;
+      }
+      const diagnostic = observed.diagnostic;
+      expect(diagnostic).toBeDefined();
+      expect(diagnostic.code).toBe(code);
+      expect(diagnostic.errno).toBe(errno);
+      if (fault === "read after prefix" || fault === "early EOF") {
+        expect(observed.written).toBe(3);
+        expect(Buffer.from(observed.targetBytes, "base64")).toEqual(sourceBytes.subarray(0, 3));
+      }
+      if (operation === "copy") {
+        expect(diagnostic.sameError).toBe(true);
+        expect(diagnostic.causeIsOriginal).toBe(false);
+        expect(diagnostic.message).toBe("fixture filesystem failure");
+        return;
+      }
+      if (operation === "source change") {
+        expect(diagnostic.message).toBe(
+          `source changed while freezing ${JSON.stringify(sourcePath)}; retry after edits finish`,
+        );
+        expect(diagnostic.cause).toEqual(
+          fault === "growth" ? { name: "FsSafeError", code: "too-large" } : undefined,
+        );
+        return;
+      }
       expect(diagnostic.message).toContain(
         `source capsule: ${operation} failed for ${JSON.stringify(sourcePath)}`,
       );
-      expect(diagnostic.message).toContain(`code=${JSON.stringify(code)}, errno=${errno}`);
-      expect(diagnostic.causeIsOriginal).toBe(true);
+      if (fault === "zero write") {
+        expect(diagnostic.message).toContain('code="helper-failed"');
+        expect(diagnostic.cause).toEqual({ name: "FsSafeError", code: "helper-failed" });
+      } else {
+        expect(diagnostic.message).toContain(`code=${JSON.stringify(code)}, errno=${errno}`);
+        expect(diagnostic.causeIsOriginal).toBe(true);
+      }
+      if (fault === "directory open") {
+        expect(diagnostic.syscall).toBe("open");
+      }
+      if (fault === "readonly write" || fault === "tagged write") {
+        expect(diagnostic.syscall).toBe("write");
+      }
     },
   );
 
@@ -4451,7 +4753,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
       git(origin, ["commit", "-qm", "remove old content"]);
       git(origin, ["commit", "--allow-empty", "-qm", "advance history"]);
       const unchanged = Buffer.concat(
-        Array.from({ length: 4096 }, (_, index) =>
+        Array.from({ length: 24576 }, (_, index) =>
           createHash("sha256").update(`unchanged-${index}`).digest(),
         ),
       );
@@ -5142,7 +5444,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
       writeFileSync(
         path.join(producer, "dirty.bin"),
         Buffer.concat(
-          Array.from({ length: 2048 }, (_, index) =>
+          Array.from({ length: 12288 }, (_, index) =>
             createHash("sha256").update(`dirty-${index}`).digest(),
           ),
         ),
@@ -5228,6 +5530,9 @@ process.on("uncaughtExceptionMonitor", (error) => {
       }
       // A change must not resend the unchanged, incompressible base blob.
       expect(candidate.bundle.length).toBeLessThan(unchanged.length);
+      // Exercise a full 256 KiB hash chunk followed by a partial final chunk.
+      expect(candidate.bundle.length).toBeGreaterThan(256 * 1024);
+      expect(candidate.bundle.length).toBeLessThan(512 * 1024);
       expect(git(producer, ["rev-parse", "HEAD"])).toBe(headBefore);
       expect(readFileSync(path.join(producer, ".git", "index"))).toEqual(indexBefore);
       expect(git(producer, ["status", "--porcelain=v1"])).toBe(statusBefore);

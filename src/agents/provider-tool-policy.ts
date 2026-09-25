@@ -17,7 +17,7 @@ export function normalizeToolProviderPolicyKey(value: string): string {
   return modelId ? `${provider}/${modelId}` : provider;
 }
 
-export function isCanonicalToolProviderPolicyKey(value: string): boolean {
+function isCanonicalToolProviderPolicyKey(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(value) === normalizeToolProviderPolicyKey(value);
 }
 

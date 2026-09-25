@@ -14,6 +14,7 @@ import {
 } from "./session-progress-disclosure.ts";
 
 export type ComposerProgressDisclosureContext = {
+  presented?: boolean;
   gatewayScope?: object;
   sessionIdentity?: string;
   cardLifetime?: object;
@@ -102,6 +103,12 @@ class ProgressDisclosureController {
       }
       this.dispatch({ type: "history", readingHistory });
     }
+    // A question retains the card but takes over its input surface. Hidden
+    // transcript gestures must not change the disclosure restored afterward.
+    if (lifecycle?.presented === false) {
+      this.takeover();
+      this.disconnectHeader();
+    }
     this.connectHeader();
     this.apply();
     // Lit attaches the surrounding transcript after committing this element part.
@@ -166,7 +173,10 @@ class ProgressDisclosureController {
     if (this.touching || this.scrolling) {
       return;
     }
-    this.flushGesture();
+    // The idle timer can precede the first native offset; no movement has settled yet.
+    if (!this.gesture?.valid || this.gesture.distancePx > 0) {
+      this.flushGesture();
+    }
     if (this.state.distancePx > 0) {
       this.dispatch({ type: "settle" });
       this.apply();
@@ -174,12 +184,15 @@ class ProgressDisclosureController {
   }
 
   private readonly handleTranscriptScroll = (observation: TranscriptScrollObservation) => {
-    if (observation.type === "resize") {
+    if (observation.type !== "input" && observation.type !== "offset") {
       return;
     }
     this.touching = observation.touching;
     if (observation.type === "offset") {
       this.scrolling = observation.scrolling;
+      if (observation.programmatic && this.gesture?.distancePx === 0) {
+        this.gesture = undefined;
+      }
       if (!observation.programmatic && observation.delta !== 0) {
         if (this.gesture) {
           this.gesture.distancePx += Math.max(0, -observation.delta);
@@ -238,7 +251,9 @@ class ProgressDisclosureController {
       return;
     }
     const transcript =
-      this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+      this.lifecycle?.presented === false
+        ? null
+        : (this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
     if (transcript === this.transcript) {
       return;
     }
@@ -251,7 +266,7 @@ class ProgressDisclosureController {
   }
 
   private connectHeader(): void {
-    if (this.disposed) {
+    if (this.disposed || this.lifecycle?.presented === false) {
       return;
     }
     this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;

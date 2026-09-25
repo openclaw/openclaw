@@ -8,6 +8,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
@@ -120,7 +121,7 @@ export function createAnthropicPayloadLogger(params: {
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
   const cfg = resolvePayloadLogConfig(env);
-  if (!cfg.enabled) {
+  if (!cfg.enabled || isIncognitoSessionKey(params.sessionKey)) {
     return null;
   }
 

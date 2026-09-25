@@ -7,11 +7,19 @@ import type {
   CurrentTurnTranscriptFinal,
   TelegramDispatchTurn as Turn,
 } from "./bot-message-dispatch.types.js";
-import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  copyTelegramDroppedControlFallback,
+} from "./interactive-fallback.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
 export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload =>
-  payload.text === text ? payload : copyReplyPayloadMetadata(payload, { ...payload, text });
+  payload.text === text
+    ? payload
+    : copyTelegramDroppedControlFallback(
+        payload,
+        copyReplyPayloadMetadata(payload, { ...payload, text }),
+      );
 
 export const projectPayloadForDelivery = (
   turn: Turn,
@@ -76,6 +84,11 @@ export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPaylo
     richTables: false,
   });
 }
+
+export const usesNativeTelegramQuote = (turn: Turn, payload: ReplyPayload): boolean =>
+  (turn.replyToMode !== "off" || payload.replyToTag === true || payload.replyToCurrent === true) &&
+  (turn.replyQuoteText != null ||
+    (payload.replyToId != null && turn.replyQuoteByMessageId[payload.replyToId] != null));
 
 export function applyQuoteReplyTarget(turn: Turn, payload: ReplyPayload): ReplyPayload {
   if (

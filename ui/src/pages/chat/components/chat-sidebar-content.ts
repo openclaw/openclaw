@@ -22,6 +22,7 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -45,6 +46,7 @@ import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.ts";
 import type {
   AttachmentSidebarRuntime,
   SidebarContent,
@@ -53,6 +55,8 @@ import type {
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
+
+registerFilePreviewEnglish();
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
@@ -100,6 +104,26 @@ function renderSidebarAttachment(
           isSvgImageMediaPath(content.title, undefined)))) &&
     isCrossOriginHttpSource(src ?? "");
   const imagePreview = (src || pending) && !blockedExternalSvg && kind === "image";
+  if (
+    (src || pending) &&
+    kind === "document" &&
+    isPdfAttachment(mimeType, content.title) &&
+    !isCrossOriginHttpSource(src ?? "")
+  ) {
+    return html`<openclaw-chat-pdf-preview
+      .src=${src ?? ""}
+      .sourceIdentity=${[
+        runtime.connectionEpoch ?? "",
+        runtime.agentId ?? "",
+        runtime.sessionKey ?? "",
+        content.sourceIdentity ?? src ?? "",
+      ].join("\u0000")}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .downloadHref=${src ?? ""}
+    ></openclaw-chat-pdf-preview>`;
+  }
   if (
     (src || pending) &&
     isTextAttachment(mimeType, content.title) &&
@@ -219,19 +243,14 @@ export function buildRawContent(
   if (!content) {
     return null;
   }
-  if (content.kind === "markdown") {
+  if (content.kind === "markdown" || content.kind === "file") {
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: formatFencedCodeBlock(rawText),
-      rawText,
-    };
-  }
-  if (content.kind === "file") {
-    const rawText = content.rawText ?? content.content;
-    return {
-      kind: "markdown",
-      content: formatFencedCodeBlock(rawText, content.language),
+      content: formatFencedCodeBlock(
+        rawText,
+        content.kind === "file" ? content.language : undefined,
+      ),
       rawText,
     };
   }
@@ -243,19 +262,6 @@ export function buildRawContent(
     };
   }
   return null;
-}
-
-// Editing is only offered for uniform line endings: the editor serializes with
-// one configured separator, so a mixed-endings file would have its untouched
-// lines silently rewritten on save.
-
-function resolveSidebarCanvasSandbox(
-  content: ChatDetailPanelContent,
-  embedSandboxMode: EmbedSandboxMode,
-): string {
-  return content.kind === "canvas"
-    ? resolveEmbedSandbox(embedSandboxMode, content.sandbox)
-    : "allow-scripts";
 }
 
 type MarkdownSidebarProps = {
@@ -293,7 +299,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
-      ? resolveSidebarCanvasSandbox(content, props.embedSandboxMode ?? "scripts")
+      ? resolveEmbedSandbox(props.embedSandboxMode ?? "scripts", content.sandbox)
       : "";
   const canvasSrc =
     content?.kind === "canvas"

@@ -118,6 +118,10 @@ export class SessionAttentionController implements ReactiveController {
   }
 
   private scheduleAgentStatusExpiry(expiresAt: number): void {
+    // Lit can finish a queued render after disconnect has retired this timer.
+    if (!this.host.isConnected) {
+      return;
+    }
     // The gateway owns expiry; this timer only invalidates an otherwise-idle
     // sidebar so it stops rendering the declaration at the server timestamp.
     if (this.agentStatusExpiryAt !== null && this.agentStatusExpiryAt <= expiresAt) {

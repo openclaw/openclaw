@@ -78,6 +78,7 @@ import type {
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import {
   isRestartRecoveryLifecycleEvent,
   persistGatewaySessionLifecycleEvent,
@@ -822,23 +823,20 @@ export function createAgentEventHandler({
         void persistence
           .then(
             async () => {
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange();
+              await withPreparedSessionEventRow(
+                projection,
+                sessionKey,
+                sessionAgentId,
+                broadcastSessionChange,
+              );
             },
             async (err: unknown) => {
               logError(
                 `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
               );
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange(evt);
+              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, () =>
+                broadcastSessionChange(evt),
+              );
             },
           )
           .catch((error: unknown) => {
@@ -1168,6 +1166,30 @@ export function createAgentEventHandler({
       shouldSuppressSilent,
     });
     const spawnedBy = resolveSpawnedBy(sessionKey);
+    const terminalPayload = {
+      runId: clientRunId,
+      sessionKey,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(spawnedBy && { spawnedBy }),
+      seq,
+    };
+    const createTerminalMessage = (canvasBlocks: NonNullable<ChatRunRecord["canvasBlocks"]>) =>
+      appendChatCanvasBlocksToMessage(
+        {
+          role: "assistant",
+          content: text ? [{ type: "text", text }] : [],
+          timestamp: Date.now(),
+          ...(opts?.assistantTranscriptIdempotencyKey
+            ? {
+                __openclaw: {
+                  runId: clientRunId,
+                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
+                },
+              }
+            : {}),
+        },
+        canvasBlocks,
+      );
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
       const canvasBlocks = run?.canvasBlocks ?? [];
@@ -1178,11 +1200,7 @@ export function createAgentEventHandler({
         canvasBlocks.length > 0 &&
         !(run?.rawBuffer ?? run?.buffer ?? "").trim();
       const payload = {
-        runId: clientRunId,
-        sessionKey,
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-        ...(spawnedBy && { spawnedBy }),
-        seq,
+        ...terminalPayload,
         state: jobState === "done" ? ("final" as const) : ("aborted" as const),
         ...(jobState === "aborted" && opts?.abortErrorMessage
           ? { errorMessage: opts.abortErrorMessage }
@@ -1191,22 +1209,7 @@ export function createAgentEventHandler({
         ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           (text && !shouldSuppressSilent) || canvasOnly
-            ? appendChatCanvasBlocksToMessage(
-                {
-                  role: "assistant",
-                  content: text ? [{ type: "text", text }] : [],
-                  timestamp: Date.now(),
-                  ...(opts?.assistantTranscriptIdempotencyKey
-                    ? {
-                        __openclaw: {
-                          runId: clientRunId,
-                          idempotencyKey: opts.assistantTranscriptIdempotencyKey,
-                        },
-                      }
-                    : {}),
-                },
-                canvasBlocks,
-              )
+            ? createTerminalMessage(canvasBlocks)
             : undefined,
       };
       if (payload.message) {
@@ -1218,26 +1221,11 @@ export function createAgentEventHandler({
     }
     const errorDetail = projectChatErrorDetail(opts?.errorObservation);
     const payload = {
-      runId: clientRunId,
-      sessionKey,
-      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-      ...(spawnedBy && { spawnedBy }),
-      seq,
+      ...terminalPayload,
       state: "error" as const,
       ...(opts?.assistantTranscriptIdempotencyKey && text && !shouldSuppressSilent
         ? {
-            message: appendChatCanvasBlocksToMessage(
-              {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-                __openclaw: {
-                  runId: clientRunId,
-                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
-                },
-              },
-              chatRunState.runs.get(clientRunId)?.canvasBlocks ?? [],
-            ),
+            message: createTerminalMessage(chatRunState.runs.get(clientRunId)?.canvasBlocks ?? []),
           }
         : {}),
       errorMessage: error ? formatForLog(error) : undefined,
@@ -1884,18 +1872,10 @@ export function createAgentEventHandler({
             { dropIfSlow: true },
           );
         const projection = getSessionRowProjection?.();
-        if (projection) {
-          void (async () => {
-            do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
-            publish();
-          })().catch((error: unknown) =>
+        void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
+          (error: unknown) =>
             logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-          );
-        } else {
-          publish();
-        }
+        );
       }
     }
   };

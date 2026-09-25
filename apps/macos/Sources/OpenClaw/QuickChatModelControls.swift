@@ -8,6 +8,7 @@ struct QuickChatModelControlSnapshot: Sendable {
     let currentThinkingLevel: String?
     let thinkingOptions: [OpenClawChatThinkingLevelOption]
     let defaultProvider: String?
+    var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
     var catalogMessage: String?
     var catalogRefreshFailed = false
     var speed = OpenClawChatFastModeProfile.resolve(session: nil, model: nil)
@@ -23,7 +24,8 @@ enum QuickChatModelControlLogic {
         target: QuickChatRoutingTarget,
         models: [OpenClawChatModelChoice],
         sessions: OpenClawChatSessionsListResponse,
-        agents: AgentsListResult?) -> QuickChatModelControlSnapshot
+        agents: AgentsListResult?,
+        modelSelectionPolicy: OpenClawChatModelSelectionPolicy? = nil) -> QuickChatModelControlSnapshot
     {
         let entry = self.sessionEntry(target: target, sessions: sessions.sessions)
         let agent = self.agent(target: target, agents: agents)
@@ -32,13 +34,24 @@ enum QuickChatModelControlLogic {
         let agentModel = self.normalized(agent?.model?["primary"]?.value as? String)
         let defaultProvider = self.normalized(sessions.defaults?.modelProvider)
         let defaultModel = self.normalized(sessions.defaults?.model)
-        let selectionID = entryModel.map {
-            self.selectionID(model: $0, provider: entryProvider ?? defaultProvider)
-        } ?? agentModel ?? defaultModel.map {
-            self.selectionID(model: $0, provider: defaultProvider)
+        let automaticModel = if let policy = modelSelectionPolicy, policy.restricted {
+            policy.defaultModel
+        } else {
+            agentModel ?? defaultModel.map { self.selectionID(model: $0, provider: defaultProvider) }
         }
+        let entrySelectionID = entryModel.map {
+            self.selectionID(model: $0, provider: entryProvider ?? defaultProvider)
+        }
+        let currentSelectionID = if modelSelectionPolicy?.restricted == true {
+            entrySelectionID.flatMap { selection in
+                models.contains(where: { $0.selectionID == selection }) ? selection : nil
+            }
+        } else {
+            entrySelectionID
+        }
+        let selectionID = currentSelectionID ?? automaticModel
         let profile = OpenClawChatThinkingProfile.resolve(
-            session: entry,
+            session: modelSelectionPolicy?.restricted == true && selectionID != entrySelectionID ? nil : entry,
             defaults: selectionID == defaultModel.map { self.selectionID(model: $0, provider: defaultProvider) }
                 ? sessions.defaults : nil,
             model: models.first { $0.selectionID == selectionID })
@@ -49,6 +62,7 @@ enum QuickChatModelControlLogic {
             currentThinkingLevel: thinkingLevel,
             thinkingOptions: profile?.levels ?? [],
             defaultProvider: self.provider(selectionID: selectionID),
+            modelSelectionPolicy: modelSelectionPolicy,
             speed: .resolve(session: entry, model: models.first { $0.selectionID == selectionID }))
     }
 

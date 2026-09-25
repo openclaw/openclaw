@@ -1,10 +1,9 @@
-// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import type { TuiOptions } from "./tui.js";
+import type { TuiOptions } from "./tui-types.js";
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
@@ -45,7 +44,6 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   return args;
 }
 
-/** Launches a child TUI process with inherited stdio. */
 export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const args = buildTuiCliArgs(opts);
   // Pause parent stdin while the inherited-stdio child owns the terminal.

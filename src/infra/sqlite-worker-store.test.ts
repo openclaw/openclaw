@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   link,
@@ -13,9 +14,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -27,10 +27,14 @@ import {
   type SqliteWorkerReply,
 } from "./sqlite-worker-contract.js";
 import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
   openSharedStateSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
-  openSqliteWorkerStore,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -43,31 +47,9 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
+const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
+  "openclaw-sqlite-worker-store-",
 );
-
-function databasePath(): string {
-  return path.join(tempDirs.make("openclaw-sqlite-worker-store-"), "store.sqlite");
-}
-
-async function open(file: string, input?: FixtureOpenInput) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input,
-  });
-  stores.add(store);
-  return store;
-}
 
 async function expectRejectedOpen(
   file: string,
@@ -83,14 +65,6 @@ async function expectRejectedOpen(
   if (code) {
     expect(result).toMatchObject({ reason: { code } });
   }
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
 }
 
 async function openWithGateway(file: string) {
@@ -110,9 +84,7 @@ async function openWithGateway(file: string) {
         coordinatorRuntime: { directory: root, keepAlive: false },
       },
     );
-    if (!store) {
-      throw new Error("Fixture shared-state worker did not open");
-    }
+    assert(store, "Fixture shared-state worker did not open");
     stores.add(store);
     return { store, gateway };
   } catch (error) {
@@ -387,9 +359,7 @@ describe("SQLite worker store", () => {
       .spyOn(coordinatorOwner, "tryCreateGatewaySchemaFenceDelegate")
       .mockImplementationOnce((params) => {
         const original = createDelegate(params);
-        if (!original) {
-          throw new Error("Fixture Gateway delegate was not acquired");
-        }
+        assert(original, "Fixture Gateway delegate was not acquired");
         return {
           port: original.port,
           get closed() {
@@ -644,14 +614,14 @@ describe("SQLite worker store", () => {
     }
     const retiring = createDeferredCore();
     const release = createDeferredCore();
-    const spy = vi
-      .spyOn(Worker.prototype, "terminate")
-      .mockImplementationOnce(async function (this: Worker) {
-        retiring.resolve();
-        await release.promise;
-        spy.mockRestore();
-        return this.terminate();
-      });
+    const spy = vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (
+      this: Worker,
+    ) {
+      retiring.resolve();
+      await release.promise;
+      spy.mockRestore();
+      return this.terminate();
+    });
     const closed = first.close();
     let replacement: SqliteWorkerStore<FixtureOperations> | undefined;
     try {
@@ -782,7 +752,7 @@ describe("SQLite worker store", () => {
       }
     }
     const writes: ReturnType<typeof append>[] = [];
-    for (let round = 0; round < 32; round += 1) {
+    for (let round = 0; round < 128; round += 1) {
       for (const [index, store] of active.entries()) {
         writes.push(append(store, `${index}:${round}`));
       }
@@ -809,7 +779,7 @@ describe("SQLite worker store", () => {
       expect(results.find((result) => result.status === "rejected")).toBeUndefined();
       for (const [index, store] of active.entries()) {
         expect(await read(store)).toEqual(
-          Array.from({ length: 32 }, (_, round) => `${index}:${round}`),
+          Array.from({ length: 128 }, (_, round) => `${index}:${round}`),
         );
       }
       const admitted = await open(pendingFile);

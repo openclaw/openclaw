@@ -157,7 +157,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         me: context.me,
         getFile: context.getFile.bind(context),
       }),
-      resolveTelegramSessionState: () => ({
+      resolveTelegramSessionState: async () => ({
         agentId: "integration",
         sessionEntry: undefined,
         sessionKey: "integration",

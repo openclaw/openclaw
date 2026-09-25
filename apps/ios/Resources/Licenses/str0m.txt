@@ -102,7 +102,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L018
 
-cfg-if 1.0.4
+cfg-if 1.0.5
 Source: https://github.com/rust-lang/cfg-if
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -662,7 +662,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
 LICENSE-MIT: L039
 
-syn 3.0.5
+syn 3.0.6
 Source: https://github.com/dtolnay/syn
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
@@ -725,7 +725,7 @@ LICENSE: L094
 LICENSE-APACHE: L095
 LICENSE-MIT: L096
 
-unicode-ident 1.0.24
+unicode-ident 1.0.26
 Source: https://github.com/dtolnay/unicode-ident
 Declared license: (MIT OR Apache-2.0) AND Unicode-3.0
 LICENSE-APACHE: L055

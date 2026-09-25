@@ -464,6 +464,15 @@ export function createSessionCostSummaryAccumulator(
   return {
     add(source: SessionCostSummary): void {
       addCostUsageTotals(target, source);
+      if (source.computedAt !== undefined) {
+        target.computedAt = Math.min(target.computedAt ?? source.computedAt, source.computedAt);
+      }
+      if (source.staleSince !== undefined) {
+        target.staleSince = Math.min(target.staleSince ?? source.staleSince, source.staleSince);
+      }
+      if (source.refreshing) {
+        target.refreshing = true;
+      }
       target.firstActivity =
         target.firstActivity === undefined
           ? source.firstActivity
@@ -550,7 +559,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   let firstActivity: number | undefined;
   let lastActivity: number | undefined;
 
-  const mergeBucket = (bucket: SessionUsageRollupBucket): void => {
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
@@ -620,10 +629,6 @@ export function buildSessionCostSummaryFromRollup(params: {
     const dailyLatency = dailyLatencies.get(dayKey) ?? createLatencyAggregate();
     mergeLatencyAggregate(dailyLatency, bucket.latency);
     dailyLatencies.set(dayKey, dailyLatency);
-  };
-
-  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    mergeBucket(bucket);
   }
   if (params.includeUntimestamped) {
     addCostUsageTotals(totals, params.rollup.untimestamped.totals);

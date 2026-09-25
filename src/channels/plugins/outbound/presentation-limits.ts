@@ -38,6 +38,7 @@ type SelectCandidate = {
   adapted?: MessagePresentationOption;
 };
 type ButtonSelection = ReadonlySet<MessagePresentationButton> | undefined;
+type RenderableButtonCandidate = ButtonCandidate & { adapted: MessagePresentationButton };
 
 const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
@@ -260,23 +261,14 @@ function adaptButtonsBlock(
     adapted: adaptButton(button, limits),
   }));
   const renderableCandidates = candidates.filter(
-    (candidate): candidate is ButtonCandidate & { adapted: MessagePresentationButton } =>
-      Boolean(candidate.adapted),
+    (candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted),
   );
   const eligibleCandidates = buttonSelection
     ? renderableCandidates.filter((candidate) => buttonSelection.has(candidate.original))
     : renderableCandidates;
   const selectedCandidates =
     capacity !== undefined && eligibleCandidates.length > capacity
-      ? eligibleCandidates
-          .map((candidate, index) => ({ candidate, index }))
-          .toSorted((left, right) => {
-            const priorityDelta =
-              (right.candidate.adapted.priority ?? 0) - (left.candidate.adapted.priority ?? 0);
-            return priorityDelta || left.index - right.index;
-          })
-          .slice(0, capacity)
-          .map((entry) => entry.candidate)
+      ? selectButtonsByPriority(eligibleCandidates, capacity)
       : eligibleCandidates;
   const selected = new Set<ButtonCandidate>(selectedCandidates);
   const buttons = selectedCandidates.map((candidate) => candidate.adapted);
@@ -420,6 +412,19 @@ function createGlobalButtonSelection(params: {
   if (capacity === undefined) {
     return undefined;
   }
+  // Adaptation can only remove buttons, so authored occurrences bound the selection size.
+  let rawButtonCount = 0;
+  for (const block of params.presentation.blocks) {
+    if (block.type === "buttons") {
+      rawButtonCount += block.buttons.length;
+      if (rawButtonCount > capacity) {
+        break;
+      }
+    }
+  }
+  if (rawButtonCount <= capacity) {
+    return undefined;
+  }
   const candidates = params.presentation.blocks.flatMap((block) => {
     if (block.type !== "buttons") {
       return [];
@@ -429,29 +434,24 @@ function createGlobalButtonSelection(params: {
         original: button,
         adapted: adaptButton(button, params.limits),
       }))
-      .filter(
-        (
-          candidate,
-        ): candidate is {
-          original: MessagePresentationButton;
-          adapted: MessagePresentationButton;
-        } => Boolean(candidate.adapted),
-      );
+      .filter((candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted));
   });
   if (candidates.length <= capacity) {
     return undefined;
   }
   return new Set(
-    candidates
-      .map((candidate, index) => ({ candidate, index }))
-      .toSorted((left, right) => {
-        const priorityDelta =
-          (right.candidate.adapted.priority ?? 0) - (left.candidate.adapted.priority ?? 0);
-        return priorityDelta || left.index - right.index;
-      })
-      .slice(0, capacity)
-      .map((entry) => entry.candidate.original),
+    selectButtonsByPriority(candidates, capacity).map((candidate) => candidate.original),
   );
+}
+
+function selectButtonsByPriority(
+  candidates: RenderableButtonCandidate[],
+  capacity: number,
+): RenderableButtonCandidate[] {
+  // Stable sorting retains authored order for equal priorities.
+  return candidates
+    .toSorted((left, right) => (right.adapted.priority ?? 0) - (left.adapted.priority ?? 0))
+    .slice(0, capacity);
 }
 
 /**

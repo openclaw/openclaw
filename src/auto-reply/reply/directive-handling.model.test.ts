@@ -8,10 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import {
-  setPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthLabels,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -175,10 +172,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   }) => {
     const owner = createModelsTestOwner(params.config, entries, params);
     const store = readAuthProfileStoreForTest();
-    setPreparedModelRuntimeAuthStore(owner, store);
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      prepareModelCatalogAuthLabels({
+    bindPreparedModelRuntimeAuth(owner, {
+      store,
+      labels: prepareModelCatalogAuthLabels({
         config: params.config,
         agentDir: owner.agentDir,
         workspaceDir: owner.workspaceDir,
@@ -192,7 +188,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
           ...Object.keys(params.config.models?.providers ?? {}),
         ],
       }),
-    );
+    });
     return owner;
   };
   return {
@@ -694,8 +690,8 @@ describe("/model chat UX", () => {
       sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
     });
 
-    expect(reply?.text).toContain("Think: max (change with /think <level>)");
-    expect(reply?.text).not.toContain("Think: ultra");
+    expect(reply?.text).toContain("Think: ultra (change with /think <level>)");
+    expect(reply?.text).not.toContain("Think: max");
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
@@ -1303,6 +1299,7 @@ describe("/model chat UX", () => {
   });
 
   registerModelRuntimeDirectiveTests({
+    setOpenAiRuntimeScopedUltraProvider,
     createSessionEntry,
     createGptAliasIndex,
     persistModelDirectiveForTest,
@@ -1345,7 +1342,7 @@ describe("/model chat UX", () => {
     });
     const initialSessionEntry = { ...sessionEntry };
     const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime codex /think ultra please solve",
+      command: "/model openai/gpt-5.6-luna --runtime codex /think xhigh please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
       provider: "openai",
@@ -1354,37 +1351,11 @@ describe("/model chat UX", () => {
     });
 
     expect(persisted.errorText).toBe(
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.',
+      'Thinking level "xhigh" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max, ultra.',
     );
     expect(sessionEntry).toEqual(initialSessionEntry);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-  });
-
-  it("commits model/runtime selection while keeping supported mixed thinking on its turn", async () => {
-    setOpenAiRuntimeScopedUltraProvider();
-    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted, result } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
-      allowedModelKeys: ["openai/gpt-5.6-luna"],
-      sessionEntry,
-    });
-
-    expect(persisted.errorText).toBeUndefined();
-    expect(result).toMatchObject({
-      kind: "continue",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      directives: { thinkLevel: "ultra" },
-      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
-    });
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-luna",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-      thinkingLevel: "high",
-    });
   });
 
   it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
@@ -2175,7 +2146,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const result = await runHandleCommand("/think", { currentThinkLevel: "low" });
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: default, off, minimal, low, medium, adaptive, high.");
+    expect(result?.text).toContain(
+      "Options: default, off, minimal, low, medium, adaptive, high, ultra.",
+    );
   });
 
   it("reports the effective thinking level for the pinned runtime", async () => {
@@ -2211,9 +2184,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Current thinking level: max.");
-    expect(result?.text).toContain("Options: default, off, low, medium, high, max.");
-    expect(result?.text).not.toContain("ultra");
+    expect(result?.text).toContain("Current thinking level: ultra.");
+    expect(result?.text).toContain("Options: default, off, low, medium, high, max, ultra.");
   });
 
   it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {

@@ -204,7 +204,7 @@ function createTelegramInboundHandlers(
         threadSpec,
       } = gate.context;
 
-      const sessionState = resolveTelegramSessionState({
+      const sessionState = await resolveTelegramSessionState({
         chatId: event.chatId,
         isGroup: event.isGroup,
         threadSpec,

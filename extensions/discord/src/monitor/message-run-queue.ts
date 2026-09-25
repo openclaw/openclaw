@@ -1,11 +1,22 @@
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
-import type { RuntimeEnv } from "./message-handler.preflight.types.js";
+import type {
+  DiscordMessagePreflightContext,
+  RuntimeEnv,
+} from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
+
+type DiscordInboundJob = {
+  context: DiscordMessagePreflightContext;
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
+  };
+};
 
 type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
@@ -35,14 +46,14 @@ async function processDiscordQueuedMessage(params: {
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
   const abortSignal =
-    params.job.runtime.abortSignal && params.lifecycleSignal
-      ? AbortSignal.any([params.job.runtime.abortSignal, params.lifecycleSignal])
-      : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
+    params.job.context.abortSignal && params.lifecycleSignal
+      ? AbortSignal.any([params.job.context.abortSignal, params.lifecycleSignal])
+      : (params.job.context.abortSignal ?? params.lifecycleSignal);
   try {
     const processDiscordMessageImpl =
       params.testing?.processDiscordMessage ??
       (await loadMessageProcessRuntime()).processDiscordMessage;
-    await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
+    await processDiscordMessageImpl({ ...params.job.context, abortSignal });
     if (abortSignal?.aborted) {
       // Cancellation ended ownership before delivery; retain prior retry facts
       // so the durable claim can replay under a replacement lifecycle.
@@ -58,11 +69,6 @@ async function processDiscordQueuedMessage(params: {
     }
     throw error;
   }
-}
-
-async function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
-  // A skipped job never reached reply-lane adoption; reopen its durable claim.
-  await params.job.ingressSettlement?.cancel();
 }
 
 export function createDiscordMessageRunQueue(
@@ -114,7 +120,8 @@ export function createDiscordMessageRunQueue(
       };
       const cleanupSkipped = async () => {
         try {
-          await cleanupSkippedDiscordQueuedMessage({ job });
+          // A skipped job never reached reply-lane adoption; reopen its durable claim.
+          await job.ingressSettlement?.cancel();
         } catch (error) {
           // Durable release is best-effort during shutdown. One failed claim
           // must not strand the remaining accepted jobs or their pending tasks.
@@ -134,7 +141,7 @@ export function createDiscordMessageRunQueue(
       skippedCleanup.add(cleanupSkipped);
       // Core reply admission owns session serialization. A transport event key
       // lets later Discord messages reach active-run steering while this run continues.
-      runQueue.enqueue(job.payload.message.id, async ({ lifecycleSignal }) => {
+      runQueue.enqueue(job.context.message.id, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);

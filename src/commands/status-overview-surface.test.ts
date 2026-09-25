@@ -1,8 +1,10 @@
 // Status overview surface tests cover JSON and terminal rows derived from shared overview surfaces.
 import { describe, expect, it } from "vitest";
 import {
-  buildStatusGatewayJsonPayloadFromSurface,
-  buildStatusOverviewRowsFromSurface,
+  buildGatewayStatusJsonPayload,
+  buildStatusOverviewSurfaceRows,
+} from "./status-all/format.js";
+import {
   buildStatusOverviewSurfaceFromOverview,
   buildStatusOverviewSurfaceFromScan,
 } from "./status-overview-surface.ts";
@@ -44,29 +46,27 @@ describe("status-overview-surface", () => {
 
   it("builds overview rows from the shared surface bundle", () => {
     expect(
-      buildStatusOverviewRowsFromSurface({
-        surface: {
-          ...baseStatusOverviewSurface,
-          cfg: baseStatusCfg,
-          update: {
-            installKind: "git",
-            git: {
-              branch: "main",
-              tag: "v1.2.3",
-              upstream: "origin/main",
-              behind: 2,
-              ahead: 0,
-              dirty: false,
-              fetchOk: true,
-            },
-            registry: { latestVersion: "2026.4.10" },
-          } as never,
-          tailscaleMode: "off",
-          tailscaleHttpsUrl: null,
-          gatewayConnection: {
-            url: "wss://gateway.example.com",
-            urlSource: "config",
+      buildStatusOverviewSurfaceRows({
+        ...baseStatusOverviewSurface,
+        cfg: baseStatusCfg,
+        update: {
+          installKind: "git",
+          git: {
+            branch: "main",
+            tag: "v1.2.3",
+            upstream: "origin/main",
+            behind: 2,
+            ahead: 0,
+            dirty: false,
+            fetchOk: true,
           },
+          registry: { latestVersion: "2026.4.10" },
+        } as never,
+        tailscaleMode: "off",
+        tailscaleHttpsUrl: null,
+        gatewayConnection: {
+          url: "wss://gateway.example.com",
+          urlSource: "config",
         },
         prefixRows: [{ Item: "OS", Value: "macOS · node 22" }],
         suffixRows: [{ Item: "Secrets", Value: "none" }],
@@ -102,21 +102,19 @@ describe("status-overview-surface", () => {
 
   it("builds the shared gateway json payload from the overview surface", () => {
     expect(
-      buildStatusGatewayJsonPayloadFromSurface({
-        surface: {
-          gatewayMode: "remote",
-          remoteUrlMissing: false,
-          gatewayConnection: {
-            url: "wss://gateway.example.com",
-            urlSource: "config",
-            message: "Gateway target: wss://gateway.example.com",
-          },
-          gatewayReachable: true,
-          gatewayProbe: { connectLatencyMs: 42, error: null } as never,
-          gatewayProbeAuthWarning: "warn-text",
-          gatewaySelf: { host: "gateway", version: "1.2.3" },
-        } as never,
-      }),
+      buildGatewayStatusJsonPayload({
+        gatewayMode: "remote",
+        remoteUrlMissing: false,
+        gatewayConnection: {
+          url: "wss://gateway.example.com",
+          urlSource: "config",
+          message: "Gateway target: wss://gateway.example.com",
+        },
+        gatewayReachable: true,
+        gatewayProbe: { connectLatencyMs: 42, error: null } as never,
+        gatewayProbeAuthWarning: "warn-text",
+        gatewaySelf: { host: "gateway", version: "1.2.3" },
+      } as never),
     ).toEqual({
       mode: "remote",
       url: "wss://gateway.example.com",

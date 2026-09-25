@@ -144,32 +144,64 @@ export function createAcpAgentHarness(params: {
     async loadModelCatalog(input) {
       generation.signal.throwIfAborted();
       if (!params.isEnabled()) {
-        return [];
+        return { entries: [] };
       }
       const inspection = inspectAgent();
       if (inspection?.launch.kind !== "installed") {
-        return [];
+        return { entries: [] };
       }
       const config = resolveAcpxPluginConfig({
         rawConfig: params.api.pluginConfig,
         workspaceDir: input.workspaceDir,
       });
-      const models = await inspectAgentModels({
-        agentCommand: inspection.launch.argv,
-        cwd: input.workspaceDir ?? config.cwd,
-        signal: generation.signal,
-        timeoutMs:
-          config.timeoutSeconds === undefined
-            ? undefined
-            : (finiteSecondsToTimerSafeMilliseconds(config.timeoutSeconds) ?? 1),
-      });
-      generation.signal.throwIfAborted();
-      return (params.isEnabled() ? (models?.availableModels ?? []) : []).map((model) => ({
-        provider: id,
-        id: model.modelId,
-        name: model.name,
-        nativeRuntime: id,
-      }));
+      try {
+        const models = await inspectAgentModels({
+          agentCommand: inspection.launch.argv,
+          cwd: input.workspaceDir ?? config.cwd,
+          signal: generation.signal,
+          timeoutMs:
+            config.timeoutSeconds === undefined
+              ? undefined
+              : (finiteSecondsToTimerSafeMilliseconds(config.timeoutSeconds) ?? 1),
+        });
+        generation.signal.throwIfAborted();
+        if (!params.isEnabled()) {
+          return { entries: [] };
+        }
+        return {
+          entries: (models?.availableModels ?? []).map((model) => ({
+            provider: id,
+            id: model.modelId,
+            name: model.name,
+            nativeRuntime: id,
+          })),
+          outcomes: [{ provider: id, status: "ready" as const }],
+        };
+      } catch (error) {
+        generation.signal.throwIfAborted();
+        if (!params.isEnabled()) {
+          return { entries: [] };
+        }
+        // ACP SDK RequestError.authRequired reserves this code/message pair;
+        // a generic JSON-RPC server error with the same code is not an auth rejection.
+        const authRequired =
+          error instanceof Error &&
+          error.name === "RequestError" &&
+          "code" in error &&
+          error.code === -32000 &&
+          (error.message === "Authentication required" ||
+            error.message.startsWith("Authentication required: "));
+        return {
+          entries: [],
+          outcomes: [
+            {
+              provider: id,
+              status: authRequired ? ("auth-rejected" as const) : ("unavailable" as const),
+              rejectionScope: "catalog" as const,
+            },
+          ],
+        };
+      }
     },
     async runAttempt(input) {
       generation.signal.throwIfAborted();

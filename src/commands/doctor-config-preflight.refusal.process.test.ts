@@ -48,6 +48,15 @@ afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 let unmanagedRollbackRuntimeRoot: string | undefined;
 
+function createRollbackRuntime(root: string): string {
+  const runtimeRoot = createBuiltRuntime(root, undefined, { copyDirectories: true });
+  // Rehearsal clears environment overrides, so this core-only fixture owns an empty plugin tree.
+  const extensionsDir = path.join(runtimeRoot, "dist", "extensions");
+  fs.rmSync(extensionsDir, { recursive: true, force: true });
+  fs.mkdirSync(extensionsDir);
+  return runtimeRoot;
+}
+
 describe("Doctor CLI migration refusal", () => {
   it.each(["index.js", "entry.js"])(
     "refuses missing deferral metadata through %s with the 2026.9.2 row only in WAL",
@@ -463,11 +472,9 @@ it.each([
         const relocatesRuntime = mode === "valid managed pnpm" || malformedHandoff;
         // Managed handoff authority includes the install path, so keep those packages private.
         let runtimeRoot = managed
-          ? createBuiltRuntime(state.root, undefined, { copyDirectories: true })
-          : (unmanagedRollbackRuntimeRoot ??= createBuiltRuntime(
+          ? createRollbackRuntime(state.root)
+          : (unmanagedRollbackRuntimeRoot ??= createRollbackRuntime(
               fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-rollback-runtime-")),
-              undefined,
-              { copyDirectories: true },
             ));
         let managedRoot = runtimeRoot;
         if (relocatesRuntime) {

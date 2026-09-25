@@ -1,5 +1,4 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -33,7 +32,6 @@ import {
 } from "./diagnostic-session-recovery.js";
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
-// Runtime repair path for diagnostic sessions that appear stuck in processing/waiting states.
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 // Ownerless lane release shares the no-progress abort floor, then extends for
@@ -41,17 +39,14 @@ const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const STALE_ACTIVE_LANE_TASK_RELEASE_MS = STUCK_SESSION_PROGRESS_STALE_MS;
 const recoveriesInFlight = new Set<string>();
 
-/** Request parameters accepted by the stuck-session recovery runtime. */
-type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
-
-function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
+function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryRequest): number {
   const configured = params.staleActiveProgressAbortMs;
   return typeof configured === "number" && configured > 0
     ? configured
     : STUCK_SESSION_PROGRESS_STALE_MS;
 }
 
-function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryParams): number {
+function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryRequest): number {
   const compactionSafetyTimeoutMs = params.compactionSafetyTimeoutMs;
   const compactionReleaseMs =
     typeof compactionSafetyTimeoutMs === "number" && compactionSafetyTimeoutMs > 0
@@ -111,7 +106,7 @@ function isActiveRunProgressStale(params: {
 }
 
 function formatRecoveryContext(
-  params: StuckSessionRecoveryParams,
+  params: StuckSessionRecoveryRequest,
   extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
 ): string {
   const fields = [
@@ -141,7 +136,7 @@ function reportRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): StuckSessi
 }
 
 export async function recoverStuckDiagnosticSession(
-  params: StuckSessionRecoveryParams,
+  params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
   const key = resolveStuckSessionRecoveryRef(params);
   if (!key || recoveriesInFlight.has(key)) {

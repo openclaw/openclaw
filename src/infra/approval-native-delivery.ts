@@ -92,20 +92,12 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     });
   }
 
-  if (preferApproverDm) {
+  if (preferApproverDm || !originTarget) {
     for (const target of approverDmTargets) {
       plannedTargets.push({
         surface: "approver-dm",
         target,
-        reason: "preferred",
-      });
-    }
-  } else if (!originTarget) {
-    for (const target of approverDmTargets) {
-      plannedTargets.push({
-        surface: "approver-dm",
-        target,
-        reason: "fallback",
+        reason: preferApproverDm ? "preferred" : "fallback",
       });
     }
   }

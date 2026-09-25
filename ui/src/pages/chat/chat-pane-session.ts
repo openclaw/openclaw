@@ -360,6 +360,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const access = readSessionMethodAccess(scope.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, archived: false },
+      sessionScope: true,
+      session: selectedChatSessionRow(scope.state),
     });
     if (!access.allowed) {
       scope.state.lastError = access.reason;
@@ -573,8 +575,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         if (!older) {
           this.catalogLoading = false;
           state.chatLoading = false;
-        }
-        if (!older) {
           state.requestUpdate();
         }
       }

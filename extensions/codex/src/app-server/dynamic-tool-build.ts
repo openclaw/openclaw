@@ -51,6 +51,7 @@ import {
 } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 import {
@@ -191,20 +192,11 @@ export function resolveCodexAppServerHookChannelId(
     messageTo: params.messageTo,
   }).channelId;
 }
-type CodexDynamicToolBuildStageSummary = StageTimingSummary;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
-/** Captures bounded preparation stages before a slow turn needs diagnosis. */
-export function createCodexDynamicToolBuildStageTracker(): {
-  mark: (name: string) => void;
-  snapshot: () => CodexDynamicToolBuildStageSummary;
-} {
-  const { mark, snapshot } = createStageTimingTracker();
-  return { mark, snapshot };
-}
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
-  summary: CodexDynamicToolBuildStageSummary,
+  summary: StageTimingSummary,
   profilerEnabled = false,
 ): boolean {
   const totalWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS : 10_000;
@@ -213,12 +205,6 @@ export function shouldWarnCodexDynamicToolBuildStageSummary(
     summary.totalMs >= totalWarnMs ||
     summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
-}
-/** Formats per-stage timings into the compact form used by Codex app-server logs. */
-export function formatCodexDynamicToolBuildStageSummary(
-  summary: CodexDynamicToolBuildStageSummary,
-): string {
-  return formatStageTimings(summary.stages);
 }
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(
@@ -241,7 +227,7 @@ export async function buildDynamicTools(
     input.onWebSearchPolicyResolved?.(false);
     return [];
   }
-  const toolBuildStages = createCodexDynamicToolBuildStageTracker();
+  const toolBuildStages = createStageTimingTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForRun(params, {
@@ -252,7 +238,7 @@ export async function buildDynamicTools(
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
+    nativeToolSurfaceEnabled: isCodexResponsesOAuthRun(params) || input.nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const messageToolProvider = resolveCodexMessageToolProvider(params);
@@ -520,7 +506,7 @@ export async function buildDynamicTools(
   if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
-      `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,
+      `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatStageTimings(summary.stages)}`,
       {
         runId: params.runId,
         sessionId: params.sessionId,
@@ -604,6 +590,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  if (isCodexResponsesOAuthRun(params)) {
+    return false;
+  }
   if (params.pluginHarnessToolPolicyRestricted === true) {
     return false;
   }

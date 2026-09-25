@@ -22,6 +22,9 @@ export function createHarness(params?: {
   resolveFinalPayloadCandidate?: Parameters<
     typeof createLaneTextDeliverer
   >[0]["resolveFinalPayloadCandidate"];
+  resolveFinalPresentationText?: Parameters<
+    typeof createLaneTextDeliverer
+  >[0]["resolveFinalPresentationText"];
 }) {
   const answer =
     params?.answerStream === null
@@ -60,7 +63,6 @@ export function createHarness(params?: {
   const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
   const createPromptContextSequence = () =>
     createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
-  const log = vi.fn();
   const markDelivered = vi.fn();
 
   const deliverLaneText = createLaneTextDeliverer({
@@ -73,7 +75,8 @@ export function createHarness(params?: {
     editStreamMessage,
     createPromptContextSequence,
     resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
-    log,
+    resolveFinalPresentationText: params?.resolveFinalPresentationText,
+    log: () => {},
     markDelivered,
   });
 
@@ -88,7 +91,6 @@ export function createHarness(params?: {
     clearDraftLane,
     editStreamMessage,
     recordPromptContextPreview,
-    log,
     markDelivered,
   };
 }
@@ -102,7 +104,7 @@ export async function deliverFinalAnswer(harness: ReturnType<typeof createHarnes
   });
 }
 
-export function createProjectionSequence(
+function createProjectionSequence(
   record: PromptContextRecord,
 ): TelegramPromptContextProjectionSequence {
   return createTelegramPromptContextProjectionSequence({

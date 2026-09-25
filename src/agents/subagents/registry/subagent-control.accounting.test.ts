@@ -41,7 +41,7 @@ async function seed() {
       defaultSessionId: `${id}-session`,
       lifecycleRevision: `${id}-revision`,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: id,
       childSessionKey: key(id),
       requesterSessionKey: id === "root" ? owner : key("root"),

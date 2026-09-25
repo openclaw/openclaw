@@ -4,11 +4,9 @@
  */
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
+  modelEntryWithClaudeCliRuntime,
   resolveClaudeCliAnthropicModelRefs,
   splitTrailingModelAuthProfile,
 } from "./claude-model-refs.js";
@@ -161,21 +159,6 @@ function seedClaudeCliAllowlist(
     });
   }
   return next;
-}
-
-function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
-  const base = isRecord(entry) ? { ...entry } : {};
-  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
-  const currentRuntime =
-    typeof currentRuntimeId === "string" ? normalizeLowercaseStringOrEmpty(currentRuntimeId) : "";
-  if (currentRuntime && currentRuntime !== "auto") {
-    return base;
-  }
-  base.agentRuntime = {
-    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
-    id: CLAUDE_CLI_BACKEND_ID,
-  };
-  return base;
 }
 
 /** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */

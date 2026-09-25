@@ -1,6 +1,5 @@
-// Gateway Talk realtime agent-consult bridge.
-// Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -24,43 +23,20 @@ import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./relay/index.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
-type TalkChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
-
-function normalizeTalkChatSendAckStatus(result: unknown): TalkChatSendAckStatus {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return "started";
-  }
-  const status = (result as Record<string, unknown>).status;
-  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
-    ? status
-    : "started";
+function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
+  const status = asNullableRecord(result)?.status;
+  const message =
+    status === "timeout"
+      ? "Realtime agent consult ended before the run started."
+      : status === "error"
+        ? "Realtime agent consult failed before the run started."
+        : status === "ok"
+          ? "Realtime agent consult completed before the tool result subscription started."
+          : undefined;
+  return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
 }
 
-function terminalTalkChatSendAckError(status: TalkChatSendAckStatus): ErrorShape | undefined {
-  if (status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      "Realtime agent consult ended before the run started.",
-    );
-  }
-  if (status === "error") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      "Realtime agent consult failed before the run started.",
-    );
-  }
-  if (status === "ok") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      "Realtime agent consult completed before the tool result subscription started.",
-    );
-  }
-  return undefined;
-}
-
-/**
- * Starts the agent-consult chat run that backs realtime Talk tool calls.
- */
+/** Starts the chat run that backs a realtime Talk tool call. */
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
   params: {
@@ -128,11 +104,8 @@ export async function startTalkRealtimeAgentConsult(
       },
       respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
         acknowledged = true;
-        if (ok && !terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result))) {
-          const candidateRunId =
-            result && typeof result === "object" && !Array.isArray(result)
-              ? (result as Record<string, unknown>).runId
-              : undefined;
+        if (ok && !terminalTalkChatSendAckError(result)) {
+          const candidateRunId = asNullableRecord(result)?.runId;
           const runId = typeof candidateRunId === "string" ? candidateRunId : idempotencyKey;
           try {
             if (params.relaySessionId && params.connId) {
@@ -206,8 +179,7 @@ export async function startTalkRealtimeAgentConsult(
   if (!chatResponse.ok) {
     return { ok: false, error: chatResponse.error };
   }
-  const result = chatResponse.result;
-  const terminalAckError = terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result));
+  const terminalAckError = terminalTalkChatSendAckError(chatResponse.result);
   if (terminalAckError) {
     return { ok: false, error: terminalAckError };
   }

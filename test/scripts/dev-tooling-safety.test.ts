@@ -319,10 +319,17 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
-    expect(discordSmokeTesting.remainingTimeoutMs(1_500, 1_000)).toBe(500);
-    expect(() => discordSmokeTesting.remainingTimeoutMs(1_000, 1_000)).toThrow(
+    expect(discordSmokeTesting.remainingTimeoutMs(1_500, undefined, 1_000)).toBe(500);
+    expect(() => discordSmokeTesting.remainingTimeoutMs(1_000, undefined, 1_000)).toThrow(
       /exceeded total timeout/u,
     );
+    expect(() =>
+      discordSmokeTesting.remainingTimeoutMs(
+        1_000,
+        () => new Error("request-specific timeout"),
+        1_000,
+      ),
+    ).toThrow("request-specific timeout");
   });
 
   it("aborts stalled Discord smoke fetches at the request timeout", async () => {
@@ -345,6 +352,7 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled Discord smoke response body reads", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const response = new Response(
       new ReadableStream({
         start() {},
@@ -361,9 +369,11 @@ describe("script-specific dev tooling hardening", () => {
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
     });
 
-    await expect(request).rejects.toThrow(
+    const rejection = expect(request).rejects.toThrow(
       /Discord API GET \/channels\/123\/messages exceeded timeout/u,
     );
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
   });
 
   it("bounds Discord smoke response bodies by content-length", async () => {
@@ -412,6 +422,7 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let calls = 0;
     const response = {
       ok: false,

@@ -10,6 +10,7 @@ import {
   formatGatewayLogSentinelSummary,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { escapeTableCell } from "./report.js";
 import {
   findQaSuiteSummaryAccountingError,
   findQaSuiteSummaryCompletionError,
@@ -310,10 +311,6 @@ function isMissingFileError(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }
 
-function statusFromPassed(passed: boolean): Pick<QaConfidenceLaneResult, "status" | "verdict"> {
-  return passed ? { status: "pass", verdict: "pass" } : { status: "unknown" };
-}
-
 type QaConfidenceLaneEvaluation = {
   passed: boolean;
   details: string;
@@ -393,16 +390,9 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       details: `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(gatewayLogSentinels)}`,
     };
   }
-  if (
-    failedCount !== undefined &&
-    scenarios !== undefined &&
-    Math.floor(failedCount) !== failedScenarioCount
-  ) {
+  if (failedCount !== undefined && scenarios !== undefined && failedCount !== failedScenarioCount) {
     return unknownLaneEvaluation(
-      `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
-        0,
-        Math.floor(failedCount),
-      )}, failed scenarios=${failedScenarioCount}`,
+      `qa-suite-summary count/scenario mismatch: counts.failed=${failedCount}, failed scenarios=${failedScenarioCount}`,
     );
   }
   if (unknownBlockingScenarioCount > 0) {
@@ -420,7 +410,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
         ? undefined
-        : Math.max(0, Math.floor(totalCount) - Math.floor(passedCount) - Math.floor(failedCount));
+        : Math.max(0, totalCount - passedCount - failedCount);
     const skippedCount = Math.max(
       0,
       ...[explicitSkippedCount, inferredSkippedCount, skippedScenarioCount].filter(
@@ -428,15 +418,12 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       ),
     );
     const shouldReportSkippedCount = explicitSkippedCount !== undefined || skippedCount > 0;
-    const skippedDetails = shouldReportSkippedCount
-      ? ` counts.skipped=${Math.max(0, Math.floor(skippedCount))}`
-      : "";
-    const totalDetails =
-      totalCount === undefined ? "" : ` counts.total=${Math.max(0, Math.floor(totalCount))}`;
+    const skippedDetails = shouldReportSkippedCount ? ` counts.skipped=${skippedCount}` : "";
+    const totalDetails = totalCount === undefined ? "" : ` counts.total=${totalCount}`;
     return {
       passed: failedCount === 0,
-      details: `qa-suite-summary counts.failed=${Math.max(0, Math.floor(failedCount))}${totalDetails}${skippedDetails}`,
-      ...(skippedCount === 0 ? {} : { skippedCount: Math.max(0, Math.floor(skippedCount)) }),
+      details: `qa-suite-summary counts.failed=${failedCount}${totalDetails}${skippedDetails}`,
+      ...(skippedCount === 0 ? {} : { skippedCount }),
     };
   }
   const skippedCount = Math.max(explicitSkippedCount ?? 0, skippedScenarioCount);
@@ -618,25 +605,6 @@ function evaluateLaneArtifact(
   }
 }
 
-function resultForMissingLane(
-  lane: QaConfidenceManifestLane,
-  artifactPath: string,
-): QaConfidenceLaneResult {
-  if (lane.missingVerdict) {
-    return {
-      ...baseLaneResult(lane, artifactPath),
-      status: lane.missingVerdict === "environment-blocked" ? "blocked" : "fail",
-      verdict: lane.missingVerdict,
-      details: lane.missingReason ?? "artifact missing with explicit missing verdict",
-    };
-  }
-  return {
-    ...baseLaneResult(lane, artifactPath),
-    status: "missing",
-    details: "artifact missing and no missingVerdict was configured",
-  };
-}
-
 function baseLaneResult(
   lane: QaConfidenceManifestLane,
   artifactPath: string,
@@ -660,71 +628,54 @@ function baseLaneResult(
   };
 }
 
-function classifiedFailureResult(
-  lane: QaConfidenceManifestLane,
-  artifactPath: string,
-  details: string,
-): QaConfidenceLaneResult {
-  const base = baseLaneResult(lane, artifactPath);
-  if (lane.failureVerdict) {
-    return {
-      ...base,
-      status: "fail",
-      verdict: lane.failureVerdict,
-      details,
-    };
-  }
-  return {
-    ...base,
-    status: "unknown",
-    details,
-  };
-}
-
-function evaluatedFailureResult(
-  lane: QaConfidenceManifestLane,
-  artifactPath: string,
-  evaluated: QaConfidenceLaneEvaluation,
-): QaConfidenceLaneResult {
-  if (evaluated.status || evaluated.verdict) {
-    return {
-      ...baseLaneResult(lane, artifactPath),
-      status: evaluated.status ?? "fail",
-      ...(evaluated.verdict ? { verdict: evaluated.verdict } : {}),
-      details: evaluated.details,
-    };
-  }
-  return classifiedFailureResult(lane, artifactPath, evaluated.details);
-}
-
 async function evaluateLane(
   lane: QaConfidenceManifestLane,
   artifactRoot: string,
 ): Promise<QaConfidenceLaneResult> {
   const artifactPath = resolveArtifactPath(artifactRoot, lane.artifact);
+  const base = baseLaneResult(lane, artifactPath);
   let payload: unknown;
   try {
     payload = await readJsonFile(artifactPath);
   } catch (error) {
     if (!isMissingFileError(error)) {
       return {
-        ...baseLaneResult(lane, artifactPath),
+        ...base,
         status: "unknown",
         details: `artifact unreadable: ${formatErrorMessage(error)}`,
       };
     }
-    return resultForMissingLane(lane, artifactPath);
+    return lane.missingVerdict
+      ? {
+          ...base,
+          status: lane.missingVerdict === "environment-blocked" ? "blocked" : "fail",
+          verdict: lane.missingVerdict,
+          details: lane.missingReason ?? "artifact missing with explicit missing verdict",
+        }
+      : {
+          ...base,
+          status: "missing",
+          details: "artifact missing and no missingVerdict was configured",
+        };
   }
   const evaluated = evaluateLaneArtifact(lane, payload);
-  if (!evaluated.passed) {
-    return {
-      ...evaluatedFailureResult(lane, artifactPath, evaluated),
-      ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
-    };
-  }
+  const explicitlyClassified = evaluated.status || evaluated.verdict;
+  const verdict = evaluated.passed
+    ? "pass"
+    : explicitlyClassified
+      ? evaluated.verdict
+      : lane.failureVerdict;
+  const status = evaluated.passed
+    ? "pass"
+    : explicitlyClassified
+      ? (evaluated.status ?? "fail")
+      : verdict
+        ? "fail"
+        : "unknown";
   return {
-    ...baseLaneResult(lane, artifactPath),
-    ...statusFromPassed(true),
+    ...base,
+    status,
+    ...(verdict ? { verdict } : {}),
     details: evaluated.details,
     ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
   };
@@ -826,14 +777,6 @@ export async function buildQaConfidenceReport(params: {
   };
 }
 
-function formatVerdict(lane: QaConfidenceLaneResult): string {
-  return lane.verdict ?? "unclassified";
-}
-
-export function escapeTableCell(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
-}
-
 export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): string {
   const lines = [
     `# OpenClaw QA Confidence Report - ${report.profile}`,
@@ -851,7 +794,7 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   ];
   for (const lane of report.lanes) {
     lines.push(
-      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
+      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${lane.verdict ?? "unclassified"} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
     );
   }
   if (report.failures.length > 0) {
