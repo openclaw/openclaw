@@ -55,7 +55,7 @@ export function gateSubagentRequesterSettlement(
 ) {
   const released = createDeferred();
   let pending: Promise<boolean> | undefined;
-  const run = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
+  const calls = observeSubagentRequesterWake((params) => {
     pending = (async () => {
       await released.promise;
       return await settle(params);
@@ -63,10 +63,35 @@ export function gateSubagentRequesterSettlement(
     return pending;
   });
   return {
-    run,
+    ...calls,
     async release() {
       released.resolve();
       await pending;
+    },
+  };
+}
+
+/** Observe admission after real worker IO without racing a fake-clock polling deadline. */
+export function observeSubagentRequesterWake(
+  wake: typeof maybeWakeRequesterAfterAllChildrenSettled,
+) {
+  let calls = 0;
+  const admitted = new Map<number, ReturnType<typeof createDeferred<void>>>();
+  return {
+    run: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
+      admitted.get(++calls)?.resolve();
+      return wake(params);
+    }),
+    waitForCalls(this: void, count: number): Promise<void> {
+      if (calls >= count) {
+        return Promise.resolve();
+      }
+      let waiter = admitted.get(count);
+      if (!waiter) {
+        waiter = createDeferred();
+        admitted.set(count, waiter);
+      }
+      return waiter.promise;
     },
   };
 }

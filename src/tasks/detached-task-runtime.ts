@@ -28,6 +28,8 @@ import {
   setDetachedTaskDeliveryStatusByRunIdCore,
   startTaskRunByRunIdCore,
 } from "./task-executor.js";
+import { findTaskByRunIdAsync } from "./task-registry-query.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
@@ -255,6 +257,46 @@ export function findDetachedTaskRun(params: DetachedTaskFindParams): DetachedTas
   // Older custom runtimes may mirror records into core. When they do not, an
   // empty fallback cannot prove that the runtime-owned task is absent.
   return coreTask ? { lookup: "available", task: coreTask } : { lookup: "unavailable" };
+}
+
+/** Async lifecycle owners join accepted task writes without entering native writer custody. */
+export async function findDetachedTaskRunAsync(
+  params: DetachedTaskFindParams,
+): Promise<DetachedTaskFindResult> {
+  const owner = captureDetachedTaskRuntimeOwner();
+  try {
+    owner.assertCurrent();
+    if (owner.runtime?.findTaskRun) {
+      const task = owner.runtime.findTaskRun(params);
+      owner.assertCurrent();
+      return { lookup: "available", task };
+    }
+    const read = await prepareTaskRegistryRead();
+    owner.assertCurrent();
+    if (!read) {
+      return { lookup: "unavailable" };
+    }
+    const direct = await findTaskByRunIdAsync(params.runId, read);
+    owner.assertCurrent();
+    read.assertCurrent();
+    const task =
+      direct && taskMatchesFindIdentity(direct, params)
+        ? direct
+        : params.allowSessionFallback === true
+          ? read
+              .listTasksForRelatedSessionKey(params.sessionKey)
+              .find((candidate) => taskMatchesFindScope(candidate, params))
+          : undefined;
+    // A legacy custom runtime without a lookup hook cannot prove absence in its own store.
+    return task || !owner.runtime ? { lookup: "available", task } : { lookup: "unavailable" };
+  } catch (error) {
+    log.warn("Detached task lookup failed", {
+      runtime: params.runtime,
+      runId: params.runId,
+      error,
+    });
+    return { lookup: "unavailable" };
+  }
 }
 
 export async function tryRecoverTaskBeforeMarkLost(
