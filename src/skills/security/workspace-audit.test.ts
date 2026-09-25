@@ -75,6 +75,61 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it.runIf(!isWindows)(
+    "exempts symlink escapes whose target is inside an allowlisted symlink target",
+    async () => {
+      const tmp = await tempCases.makeTmpDir("workspace-skill-allowlist-exempt");
+      const workspaceDir = path.join(tmp, "workspace");
+      const allowedTargetDir = path.join(tmp, "shared-skills");
+      await fs.mkdir(path.join(workspaceDir, "skills", "shared"), { recursive: true });
+      await fs.mkdir(allowedTargetDir, { recursive: true });
+      const allowedSkillPath = path.join(allowedTargetDir, "SKILL.md");
+      await fs.writeFile(allowedSkillPath, "# shared\n", "utf-8");
+      await fs.symlink(allowedSkillPath, path.join(workspaceDir, "skills", "shared", "SKILL.md"));
+
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg: {
+          agents: { defaults: { workspace: workspaceDir } },
+          skills: { load: { allowSymlinkTargets: [allowedTargetDir] } },
+        } satisfies OpenClawConfig,
+      });
+      expect(findings.map((entry) => entry.checkId)).not.toContain(
+        "skills.workspace.symlink_escape",
+      );
+    },
+  );
+
+  it.runIf(!isWindows)(
+    "still reports symlink escapes whose target is outside any allowlisted symlink target",
+    async () => {
+      const tmp = await tempCases.makeTmpDir("workspace-skill-allowlist-not-covered");
+      const workspaceDir = path.join(tmp, "workspace");
+      const allowedTargetDir = path.join(tmp, "shared-skills");
+      const otherOutsideDir = path.join(tmp, "other-outside");
+      await fs.mkdir(path.join(workspaceDir, "skills", "leak"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, "skills", "allowed"), { recursive: true });
+      await fs.mkdir(allowedTargetDir, { recursive: true });
+      await fs.mkdir(otherOutsideDir, { recursive: true });
+      const allowedSkillPath = path.join(allowedTargetDir, "SKILL.md");
+      await fs.writeFile(allowedSkillPath, "# shared\n", "utf-8");
+      await fs.symlink(allowedSkillPath, path.join(workspaceDir, "skills", "allowed", "SKILL.md"));
+      const leakedSkillPath = path.join(otherOutsideDir, "SKILL.md");
+      await fs.writeFile(leakedSkillPath, "# leak\n", "utf-8");
+      await fs.symlink(leakedSkillPath, path.join(workspaceDir, "skills", "leak", "SKILL.md"));
+
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg: {
+          agents: { defaults: { workspace: workspaceDir } },
+          skills: { load: { allowSymlinkTargets: [allowedTargetDir] } },
+        } satisfies OpenClawConfig,
+      });
+      const finding = requireFinding(findings, "skills.workspace.symlink_escape");
+      expect(finding.severity).toBe("warn");
+      expect(finding.detail).toContain(leakedSkillPath);
+      expect(finding.detail).not.toContain(allowedSkillPath);
+    },
+  );
+
+  it.runIf(!isWindows)(
     "audits every explicit workspace when malformed defaults prevent default resolution",
     async () => {
       const tmp = await tempCases.makeTmpDir("workspace-skill-malformed-roster");
