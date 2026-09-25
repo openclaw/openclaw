@@ -233,6 +233,8 @@ const abortEmbeddedAgentRun = vi.fn(
 );
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const gatewayLog = {
+  isEnabled: vi.fn(() => false),
+  trace: vi.fn(),
   debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
