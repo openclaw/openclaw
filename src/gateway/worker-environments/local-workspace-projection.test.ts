@@ -292,6 +292,29 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
+  it("rejects an untracked non-UTF-8 path before initial guest capture", async ({ skip }) => {
+    const name = Buffer.concat([Buffer.from("private-"), Buffer.from([0xff])]);
+    const raw = Buffer.concat([Buffer.from(owner.worktree.path + path.sep), name]);
+    try {
+      await fs.writeFile(raw, "ordinary untracked source", { flag: "wx" });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EILSEQ") {
+        skip("filesystem rejects non-UTF-8 filenames (EILSEQ)");
+      }
+      throw error;
+    }
+    const names = await fs.readdir(owner.worktree.path, { encoding: "buffer" });
+    if (!names.some((entry) => entry.equals(name))) {
+      skip("filesystem does not preserve raw filename bytes");
+    }
+    const ignored = "private-\uFFFD";
+    await fs.writeFile(path.join(owner.worktree.path, ".gitignore"), ignored + "\n");
+    await fs.writeFile(path.join(owner.worktree.path, ignored), "synthetic ignored host secret");
+    await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
+      "UTF-8",
+    );
+  });
+
   it("admits exact canonical source and host-staged new paths without trusting guest Git", async () => {
     await fs.writeFile(path.join(owner.worktree.path, "initial.txt"), "initial untracked source");
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
