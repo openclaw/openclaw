@@ -465,7 +465,12 @@ async function runGoalOperation(
       }
     }
     if (targetIsCurrent()) {
-      setChatError(host, rejected ? formatUiError(error) : null);
+      setChatError(
+        host,
+        rejected
+          ? formatUiError(error)
+          : `${t("chat.goals.outcomeUnknown")} ${formatUiError(error)}`,
+      );
     }
     return false;
   } finally {

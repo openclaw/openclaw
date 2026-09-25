@@ -1,5 +1,5 @@
 import type {
-  SkillWorkshopAction,
+  SkillWorkshopActionBusy,
   SkillWorkshopActionNotice,
   SkillWorkshopInstalledSkill,
   SkillWorkshopMode,
@@ -16,7 +16,7 @@ export type SkillWorkshopState = {
   skillWorkshopInstalledSkills: SkillWorkshopInstalledSkill[];
   skillWorkshopInstalledName: string | null;
   skillWorkshopSelectedKey: string | null;
-  skillWorkshopActionBusy: { key: string; action: SkillWorkshopAction } | null;
+  skillWorkshopActionBusy: SkillWorkshopActionBusy | null;
   skillWorkshopActionNotice: SkillWorkshopActionNotice | null;
   skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   skillWorkshopRevisionKey: string | null;

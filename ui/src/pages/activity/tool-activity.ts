@@ -1,4 +1,3 @@
-// Control UI module implements activity model behavior.
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { redactToolPayloadText } from "../../lib/browser-redact.ts";
@@ -162,13 +161,9 @@ function resolveStatus(data: Record<string, unknown>): ActivityStatus {
   return "done";
 }
 
-function statusLabel(status: ActivityStatus): string {
-  return ACTIVITY_STATUS_SUMMARY_LABELS[status];
-}
-
 function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: number): string {
   const argText = `${hiddenArgCount} argument${hiddenArgCount === 1 ? "" : "s"} hidden`;
-  return `${toolName} ${statusLabel(status)}; ${argText}`;
+  return `${toolName} ${ACTIVITY_STATUS_SUMMARY_LABELS[status]}; ${argText}`;
 }
 
 export function updateToolActivity(

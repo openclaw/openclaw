@@ -314,7 +314,10 @@ export function prepareModelCatalogPublication(
   discovered: ModelCatalogSnapshot,
   runtimeModels: ReadonlyMap<string, readonly Model[]>,
   inventory:
-    | Pick<PreparedModelCatalogInventory, "catalog" | "discoveryOrigins" | "runtimeModels">
+    | Pick<
+        PreparedModelCatalogInventory,
+        "catalog" | "discoveryOrigins" | "runtimeModels" | "providers"
+      >
     | undefined,
   auth: PreparedModelCatalogAuth,
   normalizeProvider: (provider: string) => string,
@@ -352,10 +355,18 @@ export function prepareModelCatalogPublication(
       const previousOrigins = inventory?.discoveryOrigins.filter(
         (candidate) => normalizeProvider(candidate.provider) === provider,
       );
+      const hasLegacyInventory =
+        inventory?.providers.has(provider) &&
+        !previous?.providerOutcomes?.some(
+          (candidate) => normalizeProvider(candidate.provider) === provider,
+        ) &&
+        [...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])].some(
+          (entry) => !entry.nativeRuntime && normalizeProvider(entry.provider) === provider,
+        );
       if (
         discoveryOrigins.some((origin) => origin.provider === provider) ||
-        // Configured startup rows are not a discovered account inventory.
-        !previousOrigins?.length ||
+        // A completed legacy acquisition can retain rows without claiming live discovery.
+        (!previousOrigins?.length && !hasLegacyInventory) ||
         !previousAuth ||
         !previousAuth.credentials ||
         !auth.credentials ||

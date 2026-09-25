@@ -57,13 +57,10 @@ acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
 Neither a static catalog nor skipped discovery produces a live outcome.
-Legacy hooks that return provider configurations without `outcomes` record a
-successful discovery for those providers, including an empty model list.
-An explicit `outcomes` array remains authoritative. SDK advisory and skipped
-discovery results use `outcomes: []` so their fallback rows are not recorded as
-successful account discovery.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+Provider-scoped refreshes preserve explicit outcomes reported under a registered
+alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
 successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
@@ -85,8 +82,13 @@ without the selected credential.
 The strict and advisory paths share the same guarded transport and cache, with
 separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
-to convert acquisition errors into outcomes. Keep metadata-feed fallback
-separate from account discovery; do not retry a rejected account request
+to report successful acquisition and convert acquisition errors into outcomes.
+Returning provider configuration alone does not establish a live discovery outcome.
+For compatibility, nonempty rows from a completed catalog acquisition without
+an outcome can survive a later provider-wide failure under the same credentials.
+This does not establish a successful discovery origin: configured startup rows,
+empty legacy catalogs, and profile-specific failures do not use that fallback.
+Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
 
 Custom catalog hooks may receive optional `mode` metadata from

@@ -42,6 +42,5 @@ export async function runAnthropicVertexCatalog(ctx: ProviderCatalogContext) {
   }
   return {
     provider: implicit,
-    outcomes: [],
   };
 }

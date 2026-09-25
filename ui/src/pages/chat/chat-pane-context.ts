@@ -1,7 +1,11 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { isBrowserPanelSurfaceAvailable } from "../../app/panel-availability.ts";
+import {
+  isBrowserPanelSurfaceAvailable,
+  isDesktopPanelAvailable,
+} from "../../app/panel-availability.ts";
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
@@ -34,11 +38,7 @@ import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-histor
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
-import {
-  applySelectedSessionProjection,
-  dismissChatError,
-  resolveAssistantAttachmentAuthToken,
-} from "./chat-pane-state.ts";
+import { applySelectedSessionProjection, dismissChatError } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -379,7 +379,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
-    const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
+    const previousMediaAuthToken = resolveControlUiAuthToken(state);
     const wasConnected = state.connected;
     const previousAssistantAgentId = state.assistantAgentId;
     // Gateway identity is its default, while each retained pane owns its routed agent.
@@ -495,7 +495,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state);
     }
-    if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
+    if (!sourceChanged && previousMediaAuthToken !== resolveControlUiAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
@@ -505,10 +505,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
     state.browserPanelAvailable = isBrowserPanelSurfaceAvailable(snapshot);
-    const desktopPanelAvailable =
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "desktop.observe") === true;
+    const desktopPanelAvailable = isDesktopPanelAvailable(snapshot);
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     // Restore offline/compact preferences immediately, then migrate ready-only

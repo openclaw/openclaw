@@ -1,4 +1,3 @@
-// Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -71,23 +70,6 @@ type PendingWorkspaceFileAction = {
   byteLength: number;
   content?: Buffer;
 };
-
-function blockedWorkspaceFileAction(params: {
-  id: string;
-  source: string;
-  target: string;
-  reason: string;
-}): ClawAddPlanAction {
-  return {
-    kind: "workspaceFile",
-    id: params.id,
-    action: "write",
-    target: params.target,
-    source: params.source,
-    blocked: true,
-    reason: params.reason,
-  };
-}
 
 function workspaceSourceErrorCode(
   error: unknown,
@@ -173,12 +155,15 @@ async function inspectWorkspaceFileAction(params: {
     const message = workspaceSourceMessage(code, params.sourcePath);
     const diagnostic = blocker(code, params.manifestPath, message);
     return {
-      action: blockedWorkspaceFileAction({
+      action: {
+        kind: "workspaceFile",
         id: params.id,
+        action: "write",
         target: requestedTarget,
         source: requestedSource,
+        blocked: true,
         reason: diagnostic.message,
-      }),
+      },
       blocker: diagnostic,
     };
   }
@@ -331,10 +316,7 @@ export async function buildClawAddPlan(params: {
       sourceRoot,
       source,
       workspace,
-      sourcePath: fileParams.sourcePath,
-      targetPath: fileParams.targetPath,
-      id: fileParams.id,
-      manifestPath: fileParams.manifestPath,
+      ...fileParams,
     });
     const action = result.pending?.action ?? result.action;
     if (!action) {

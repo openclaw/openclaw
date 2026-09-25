@@ -218,11 +218,13 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             {
               value: "",
               label: t("modelProviders.defaults.selectModel"),
-              disabled: Boolean(props.selection.primary),
+              disabled: !props.canMutate || Boolean(props.selection.primary),
             },
-            ...options,
+            ...(props.canMutate
+              ? options
+              : options.map((option) => ({ ...option, disabled: true }))),
           ],
-          disabled: modelControlsDisabled || saving,
+          disabled: props.models.length === 0 || saving,
           title,
           showSelectedDetail: true,
           onChange: props.onPrimaryChange,

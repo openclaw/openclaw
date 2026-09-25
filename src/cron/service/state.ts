@@ -40,6 +40,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 import type {
   CronNotificationIntent,
   CronNotificationJob,
@@ -305,6 +306,15 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** One prepared list, invalidated by committed revisions and service mutations. */
+  listPageSnapshot?: {
+    storeRevision: number;
+    filteredJobs: CronJob[];
+    sortBy: CronJobsSortBy;
+    sortDir: CronSortDir;
+    jobs: CronJob[];
+    snapshotRevision: string;
+  };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;

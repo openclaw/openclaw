@@ -20,6 +20,8 @@ import {
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
+import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
@@ -292,6 +294,15 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     observation: observeCronRunRecoveryInDatabase(db, command),
+                  };
+                }
+                if (command.type === "cron.jobNames") {
+                  const storePath = command.storePath ?? resolveCronJobsStorePath();
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
                   };
                 }
                 if (command.type === "cron.activeReceiptOwners") {

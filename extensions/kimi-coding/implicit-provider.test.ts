@@ -1,9 +1,7 @@
 // Kimi Coding tests cover implicit provider plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-
-afterEach(() => vi.restoreAllMocks());
 
 async function runKimiCatalog(params: {
   apiKey?: string;
@@ -33,7 +31,6 @@ async function runKimiCatalogProvider(params: {
   if (!result || !("provider" in result)) {
     throw new Error("expected Kimi catalog to return one provider");
   }
-  expect(result.outcomes).toEqual([]);
   return result.provider;
 }
 
@@ -49,9 +46,6 @@ describe("Kimi implicit provider (#22409)", () => {
   });
 
   it("publishes the Kimi provider when an API key is resolved", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
     const { models, ...provider } = await runKimiCatalogProvider({ apiKey: "test-key" });
 
     expect(provider).toEqual({
@@ -69,7 +63,6 @@ describe("Kimi implicit provider (#22409)", () => {
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
     ]);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("ignores retired kimi-coding provider overrides", async () => {

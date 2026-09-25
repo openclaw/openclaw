@@ -317,7 +317,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     });
 
     expect(providerCalled).toBe(false);
-    expect(result).toMatchObject({ provider: { models: [cloudModel] }, outcomes: [] });
+    expect(result).toMatchObject({ provider: { models: [cloudModel] } });
   });
 
   it.each([

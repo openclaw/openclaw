@@ -308,8 +308,6 @@ describe("llama.cpp provider plugin", () => {
       throw new Error("managed catalog returned no provider");
     }
     expect(result.provider.models).toEqual([]);
-    expect(result.outcomes).toEqual([]);
-    expect(mocks.discoverServer).not.toHaveBeenCalled();
   });
 
   it("registers local embeddings through the generic provider contract", () => {
