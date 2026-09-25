@@ -25,7 +25,12 @@ cancellation and manual dispatch behavior are unchanged; draft isolation adds no
 downstream automatic recovery. `preflight` classifies the
 diff and turns expensive lanes off when only unrelated areas changed. Ordinary
 manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out
-the full graph for release candidates and broad validation. Exact-head
+the full graph for admitted release candidates and broad validation. A dispatch
+from `main` can validate the workflow revision, the resolved current main head,
+or a target proven by a canonical release branch or tag. Other candidate heads
+use a branch-scoped dispatch; the existing `release_gate` route provides exact-head
+PR qualification. See [Manual dispatches](/ci/scope-and-routing/manual-dispatches)
+for accepted inputs and coverage limits. Exact-head
 `release_gate` fallbacks retain the pull request's macOS, iOS smoke, and native
 generated-locale scope instead of forcing unrelated Apple lanes or locale
 parity. Native source verification still runs. Android lanes stay opt-in through

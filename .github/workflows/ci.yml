@@ -115,6 +115,8 @@ jobs:
   # Fork PRs cannot read base-repository vars, so their retries select hosted
   # runners independently of the backend override, including preflight itself.
   preflight:
+    # Candidate identity is not established until this job admits the checkout.
+    cache-mode: read
     permissions:
       contents: read
       actions: read
@@ -1319,6 +1321,16 @@ jobs:
               trust=workflow
               cache_mode=restore
             fi
+          fi
+
+          # A main-ref dispatch receives a main-scoped cache token in later jobs.
+          # Admit only the workflow revision or a proven main/release identity.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                "$GITHUB_REF" == "refs/heads/main" &&
+                "$CHECKOUT_REVISION" != "$WORKFLOW_REVISION" &&
+                "$cache_write_allowed" != "true" ]]; then
+            echo "Untrusted target_ref requires a release_gate dispatch from the candidate branch." >&2
+            exit 1
           fi
 
           {
@@ -2618,6 +2630,8 @@ jobs:
   # Preflight budgets optional hosted work before security allocates a runner.
   # Security still runs after a failed preflight; other work never waits for it.
   security-fast:
+    # Security still executes candidate-owned code when preflight rejects it.
+    cache-mode: read
     permissions:
       contents: read
     needs: [preflight]

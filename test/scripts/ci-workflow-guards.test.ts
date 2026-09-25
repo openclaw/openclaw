@@ -7726,6 +7726,47 @@ server.listen(0, "127.0.0.1", () => {
     expect(manualCheckoutStep.run).toContain("workflow_dispatch target_ref");
   });
 
+  it("restricts native cache tokens before manual candidate admission", () => {
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight["cache-mode"]).toBe("read");
+    expect(workflow.jobs["security-fast"]["cache-mode"]).toBe("read");
+    const preflight = workflow.jobs.preflight;
+    const admissionIndex = preflight.steps.findIndex(
+      (step: WorkflowStep) => step.id === "candidate_trust",
+    );
+    expect(admissionIndex).toBeGreaterThan(-1);
+    expect(admissionIndex).toBeLessThan(
+      preflight.steps.findIndex((step: WorkflowStep) => step.id === "manifest"),
+    );
+    expect(preflight.steps[admissionIndex].run).toContain(
+      "Untrusted target_ref requires a release_gate dispatch from the candidate branch.",
+    );
+
+    // Only the secretless scanner and the result-only gate may run after a
+    // rejected preflight. No cache-writing candidate job can bypass admission.
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      if (["preflight", "security-fast", "ci-gate"].includes(jobName)) {
+        continue;
+      }
+      const candidateJob = job as { if: string; needs: string[] };
+      expect(candidateJob.needs, `${jobName} preflight dependency`).toContain("preflight");
+      const condition = candidateJob.if.startsWith("${{")
+        ? candidateJob.if
+        : "${{ " + candidateJob.if + " }}";
+      expect(
+        evaluateWorkflowExpression(condition, {
+          eventName: "workflow_dispatch",
+          ref: "refs/heads/main",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runCheck: false,
+          targetRef: "c".repeat(40),
+        }),
+        `${jobName} rejected manual candidate`,
+      ).toBe(false);
+    }
+  });
+
   it("keeps manual candidates separate from trusted cache authority", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;

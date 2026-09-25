@@ -13,7 +13,7 @@ Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Pro
 
 Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 24 minimum compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, full iOS build/test and screenshot qualification, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 24 minimum compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS smoke, and generated-native-locale scope without selecting iOS screenshots or native tests. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope release validation, and release prep. CI reports proven obsolete native translation IDs, Android generated rows, and Apple catalog rows as warnings while the locale refresh catches up; active-key coverage, correctness, and all other parity checks remain blocking. See [local checks](/ci/local-proof) for the exact boundary. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); full-scope release validation enables Android by passing `include_android=true` without setting `release_gate`; npm qualification scopes defer Android. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
-PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
+PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input selects a branch, tag, or full commit SHA while keeping the workflow file from the dispatch ref. A dispatch from `main` admits only its own workflow revision, the resolved current main head, or a target proven by one of the release-context inputs below. Arbitrary main-pinned targets are rejected before build and test jobs start. Ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
 Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI
 performance without owner-path filtering. When the target declares
@@ -29,15 +29,62 @@ Pull requests and exact-head `release_gate` fallbacks omit Docker seed and QA Sm
 Full Release Validation reaches these lanes through its normal CI child without
 setting `release_gate`; frozen targets retain their existing capability checks.
 
+To validate current `main`, dispatch without `target_ref`. For a canonical
+release branch, freeze its head and supply `release_candidate_ref`; the workflow
+checks that the branch still resolves to that exact source revision. Add
+`include_android=true` when the direct run needs Android coverage.
+
 ```bash
-gh workflow run ci.yml --ref release/YYYY.M.PATCH
-gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
-VALIDATION_SHA="<full-commit-sha>"
+gh workflow run ci.yml --ref main
+RELEASE_REF="release/YYYY.M.PATCH"
+VALIDATION_SHA="$(gh api "repos/openclaw/openclaw/git/ref/heads/$RELEASE_REF" --jq .object.sha)"
+gh workflow run ci.yml --ref main \
+  -f target_ref="$VALIDATION_SHA" \
+  -f release_candidate_ref="$RELEASE_REF" \
+  -f include_android=true
+```
+
+For a frozen full commit SHA that is still the head or an ancestor of a live
+canonical release branch, pass `target_context_ref=release/YYYY.M.PATCH` instead.
+For an exact published release commit, pass
+`historical_target_tag=vYYYY.M.PATCH`; that tag must resolve to the selected
+commit. Canonical correction and extended-stable contexts are also accepted.
+These inputs establish release identity; they do not authorize arbitrary source.
+
+For an open PR in `openclaw/openclaw`, use the existing maintainer dispatcher:
+
+```bash
+scripts/pr ci-dispatch <pr-number>
+```
+
+It dispatches `ci.yml` from the PR's current candidate branch with
+`target_ref=<full-head-sha>`, `release_gate=true`, and
+`pull_request_number=<pr-number>`. The workflow checks that the dispatch branch
+and PR merge tree still name that head. The dispatcher accepts same-repository
+PRs only and refuses fork PRs. The result has the release-gate coverage
+limits described above; it is not proof of the full ordinary manual suite.
+When full ordinary CI is needed for a non-release branch, a direct
+`gh workflow run ci.yml --ref <candidate-branch>` uses that branch's workflow
+and source. It requires a compatible workflow on that branch and does not test
+the candidate using the current `main` workflow.
+
+Use [Full Release Validation](/ci/release-validation#full-release-validation)
+when the release needs the other release-validation boxes. Its normal CI child
+passes the frozen SHA and the validated release-branch or historical-tag context,
+without `release_gate`. For example, a diagnostic release-branch campaign uses:
+
+```bash
+RELEASE_REF="release/YYYY.M.PATCH"
+VALIDATION_SHA="$(gh api "repos/openclaw/openclaw/git/ref/heads/$RELEASE_REF" --jq .object.sha)"
 gh workflow run full-release-validation.yml --ref main \
   -f trusted_workflow_json='{"trustedWorkflow":null,"validationPurpose":"diagnostic","publicationSelection":null}' \
   -f ref="$VALIDATION_SHA" \
-  -f expected_sha="$VALIDATION_SHA"
+  -f expected_sha="$VALIDATION_SHA" \
+  -f target_context_ref="$RELEASE_REF"
 ```
+
+This diagnostic command does not provide publication authority. Use the release
+runbook's frozen trusted-harness route when preparing publication evidence.
 
 Gateway extended-stable shared publication requires complete exact-target Full
 Release Validation from the trusted main-pinned `release-ci/*` harness targeting

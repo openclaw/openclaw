@@ -5221,6 +5221,40 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("rejects untrusted main-ref dispatch targets before candidate execution", () => {
+    const workflowRevision = "a".repeat(40);
+    const defaultRevision = "b".repeat(40);
+    const arbitraryRevision = "c".repeat(40);
+    const base = {
+      checkoutRevision: arbitraryRevision,
+      defaultRevision,
+      eventName: "workflow_dispatch" as const,
+      ref: "refs/heads/main",
+      targetRef: arbitraryRevision,
+      workflowRevision,
+    };
+    const rejected = runCandidateTrustClassification(base);
+    expect(rejected.status).toBe(1);
+    expect(rejected.outputs).toEqual({});
+    expect(rejected.output).toContain(
+      "Untrusted target_ref requires a release_gate dispatch from the candidate branch.",
+    );
+
+    for (const admitted of [
+      { checkoutRevision: workflowRevision },
+      { checkoutRevision: defaultRevision },
+      { historicalTarget: true },
+      { releaseCandidateTarget: true },
+      { targetContextTarget: true },
+      { ref: "refs/heads/candidate", releaseGate: true },
+      { eventName: "pull_request" as const, ref: "refs/pull/123/merge" },
+    ]) {
+      const result = runCandidateTrustClassification({ ...base, ...admitted });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs).toHaveProperty("trust");
+    }
+  });
+
   it("classifies cache write authority from proven candidate identity", () => {
     const workflowRevision = "a".repeat(40);
     const defaultRevision = "b".repeat(40);

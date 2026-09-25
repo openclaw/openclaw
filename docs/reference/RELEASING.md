@@ -1235,12 +1235,27 @@ Use this box to answer "did the source tree pass the selected CI suite?" It is s
 - failed or slow shard names from the CI jobs when investigating regressions
 - Vitest timing artifacts such as `.artifacts/vitest-shard-timings.json` when a run needs performance analysis
 
-Run manual CI directly only when the release needs deterministic normal CI but not the Docker, QA Lab, live, cross-OS, or package boxes. Use the first command for non-Android direct CI. Add `include_android=true` when direct release-candidate CI must cover Android:
+Run manual CI directly only when the release needs deterministic normal CI but not the Docker, QA Lab, live, cross-OS, or package boxes. Freeze the canonical release branch head and pass `release_candidate_ref` so CI can verify that source identity before admitting a main-pinned run. Use the first dispatch for non-Android direct CI. Use the second when direct release-candidate CI must cover Android:
 
 ```bash
-gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH
-gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH -f include_android=true
+RELEASE_REF="release/YYYY.M.PATCH"
+VALIDATION_SHA="$(gh api "repos/openclaw/openclaw/git/ref/heads/$RELEASE_REF" --jq .object.sha)"
+gh workflow run ci.yml --ref main \
+  -f target_ref="$VALIDATION_SHA" -f release_candidate_ref="$RELEASE_REF"
+gh workflow run ci.yml --ref main \
+  -f target_ref="$VALIDATION_SHA" -f release_candidate_ref="$RELEASE_REF" \
+  -f include_android=true
 ```
+
+For a frozen ancestor of a live canonical release branch, replace
+`release_candidate_ref` with `target_context_ref`; for an exact published release
+commit, use `historical_target_tag=vYYYY.M.PATCH`. Full Release Validation already
+passes its verified release context to the normal CI child. Arbitrary non-release
+branches and SHAs cannot use the main-pinned full-suite route. The candidate-branch
+`release_gate` fallback is for exact-head PR qualification and retains PR-scoped
+Apple/native coverage while omitting Docker seed and QA Smoke. See
+[Manual dispatches](/ci/scope-and-routing/manual-dispatches) for the supported
+branch-scoped commands and coverage limits.
 
 ### Docker
 

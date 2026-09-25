@@ -31,6 +31,10 @@ paths:
       - 'constant expression "false" in condition'
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
+  # GitHub Actions supports job cache-mode, but the pinned actionlint predates it.
+  .github/workflows/ci.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
   .github/workflows/qa-live-transports-convex.yml:
     ignore:
