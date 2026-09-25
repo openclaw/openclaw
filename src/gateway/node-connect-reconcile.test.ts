@@ -9,10 +9,8 @@ import {
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
-import {
-  registerComputerUseProvider,
-  type ComputerUseCapabilityDescriptor,
-} from "../plugins/computer-use-contract.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";

@@ -8,9 +8,11 @@ import {
   parseComputerActResult,
   parseComputerUseCapabilityDescriptor,
   parseScreenSnapshotResult,
+} from "./computer-use-contract.js";
+import {
   registerComputerUseProvider,
   type ComputerUseProvider,
-} from "./computer-use-contract.js";
+} from "./computer-use-registration.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 describe("Computer Use wire contract", () => {
@@ -466,8 +468,15 @@ describe("Computer Use provider registration", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
-    const close = vi.fn(async () => {});
-    const stopWatching = vi.fn();
+    const executionRetiring = createDeferredCore();
+    const close = vi.fn(async () => await executionRetiring.promise);
+    const retiring = createDeferredCore();
+    const stopEntered = createDeferredCore();
+    const failure = new Error("availability stop failed");
+    const stopWatching = vi.fn(() => {
+      stopEntered.resolve();
+      return retiring.promise;
+    });
     const openExecution = vi.fn(async () => ({ snapshot, act, close }));
     const provider: ComputerUseProvider = {
       id: "fixture",
@@ -507,9 +516,34 @@ describe("Computer Use provider registration", () => {
     expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = commands[0]!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
-    expect(stopWatching).toHaveBeenCalledOnce();
+    const stopping = Promise.resolve(stop?.());
+    let settled = false;
+    const observed = stopping.then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await stopEntered.promise;
+      await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
+      retiring.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      executionRetiring.resolve();
+      expect(await observed).toBe(failure);
+      expect(stopWatching).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      executionRetiring.resolve();
+      await Promise.allSettled([stopping, observed]);
+    }
   });
 
   it("refuses a second mutating execution and closes only the exact host execution", async () => {

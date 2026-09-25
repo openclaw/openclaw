@@ -24,7 +24,6 @@ extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
-extensions/codex/src/app-server/compact.ts
 extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
@@ -714,7 +713,6 @@ src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
 src/secrets/runtime-web-tools.ts
-src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/shared/json-schema-defaults.ts

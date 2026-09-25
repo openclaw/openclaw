@@ -24,6 +24,13 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const writeJson = (file, value) =>
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 
+function readUpdateResult(file) {
+  const raw = fs.readFileSync(file, "utf8");
+  const start = raw.indexOf("{");
+  assert.notEqual(start, -1, "Update reported no JSON result");
+  return JSON.parse(raw.slice(start));
+}
+
 function installedIdentity(root) {
   const manifestBytes = fs.readFileSync(path.join(root, "package.json"));
   const buildBytes = fs.readFileSync(path.join(root, "dist/build-info.json"));
@@ -31,12 +38,38 @@ function installedIdentity(root) {
   const build = JSON.parse(buildBytes);
   assert.equal(manifest.name, "openclaw");
   assert.equal(manifest.version, build.version);
+  const schemaVersions = manifest.openclaw?.schemaVersions;
+  for (const kind of ["state", "agent"]) {
+    assert(Number.isSafeInteger(schemaVersions?.[kind]) && schemaVersions[kind] >= 0);
+  }
   return {
     version: manifest.version,
     commit: build.commit,
     manifestSha256: hash(manifestBytes),
     buildInfoSha256: hash(buildBytes),
+    schemaVersions: { state: schemaVersions.state, agent: schemaVersions.agent },
   };
+}
+
+function inspectSharedSchema(databasePath) {
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const userVersion = db.prepare("PRAGMA user_version").get().user_version;
+    assert(Number.isSafeInteger(userVersion) && userVersion >= 0);
+    const hasMarkers = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_machine_state'")
+      .get();
+    const row = hasMarkers
+      ? db
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          .get("state.schema.contentVersion")
+      : undefined;
+    const marker = row ? JSON.parse(row.value_json) : null;
+    assert(marker === null || (Number.isSafeInteger(marker) && marker >= 0));
+    return { userVersion, marker, contentVersion: Math.max(userVersion, marker ?? 0) };
+  } finally {
+    db.close();
+  }
 }
 
 function inspectRows(databasePath) {
@@ -132,6 +165,8 @@ function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
   }
   const databasePath = path.join(stateDir, "state/openclaw.sqlite");
   assert(fs.statSync(databasePath).isFile(), "Baseline preparation did not create SQLite state");
+  const sharedSchemaBefore = inspectSharedSchema(databasePath);
+  assert.equal(sharedSchemaBefore.contentVersion, baseline.schemaVersions.state);
   const active = path.resolve(stateDir, "cron/jobs.json");
   const inactive = path.resolve(stateDir, "cron/retired-profile.json");
   const phaseOnly = path.resolve(stateDir, "cron/phase-only.json");
@@ -271,6 +306,7 @@ function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
     candidateTarballSha256: hash(fs.readFileSync(candidateTarball)),
     databasePath,
     baselineRows,
+    sharedSchemaBefore,
   };
   writeJson(path.join(artifacts, "dreaming-cron-fixture.json"), {
     ...fixture,
@@ -391,6 +427,25 @@ function observeProcess() {
 
 function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
   const fixture = readJson(path.join(artifacts, "dreaming-cron-fixture.json"));
+  const sharedSchemaAfter = inspectSharedSchema(fixture.databasePath);
+  assert.equal(sharedSchemaAfter.contentVersion, fixture.candidate.schemaVersions.state);
+  const update = readUpdateResult(path.join(artifacts, "update.json"));
+  assert.equal(update.status, "ok");
+  assert.equal(update.before.version, fixture.baseline.version);
+  assert.equal(update.after.version, fixture.candidate.version);
+  assert.match(update.runId, /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu);
+  assert.equal(update.run.runId, update.runId);
+  assert.equal(update.run.status, "succeeded");
+  assert.equal(update.run.phase, "finished");
+  assert(Number.isFinite(update.run.finishedAtMs));
+  for (const [side, expected] of [
+    ["before", fixture.baseline],
+    ["after", fixture.candidate],
+  ]) {
+    if (update.run[side]?.version != null) {
+      assert.equal(update.run[side].version, expected.version);
+    }
+  }
   assert.equal(hash(fs.readFileSync(candidateTarball)), fixture.candidateTarballSha256);
   assertWorkerCellPackageIdentity(
     readWorkerCellPackageIdentity(packageRoot),
@@ -476,6 +531,16 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
     status: "updater-child-repaired",
     baseline: fixture.baseline,
     candidate: fixture.candidate,
+    sharedSchema: { before: fixture.sharedSchemaBefore, after: sharedSchemaAfter },
+    terminalUpdate: {
+      runId: update.runId,
+      status: update.status,
+      before: update.before,
+      after: update.after,
+      runStatus: update.run.status,
+      runPhase: update.run.phase,
+      finishedAtMs: update.run.finishedAtMs,
+    },
     updaterPid: updater.pid,
     doctorPid: doctor.pid,
     doctorTransport: doctor.transport,
@@ -682,10 +747,7 @@ function assertRuntime(artifacts, gatewayLog) {
 }
 
 async function reportUpdateFailure(file, packageRoot) {
-  const raw = fs.readFileSync(file, "utf8");
-  const jsonStart = raw.indexOf("{");
-  assert.notEqual(jsonStart, -1, "Update reported no JSON result");
-  const result = JSON.parse(raw.slice(jsonStart));
+  const result = readUpdateResult(file);
   const step = result.steps?.find((entry) => entry.name === "candidate-gateway-startup");
   assert(step, "Update result has no candidate Gateway startup step");
   const { redactSensitiveText } = await import(

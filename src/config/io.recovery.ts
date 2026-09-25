@@ -1,5 +1,5 @@
 import path from "node:path";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {

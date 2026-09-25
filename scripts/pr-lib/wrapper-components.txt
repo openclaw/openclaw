@@ -1,5 +1,6 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-root-options.mjs
+node-compile-cache.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -184,6 +185,7 @@ src/agents/defaults.ts
 src/agents/glob-pattern.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -353,6 +355,7 @@ src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
 src/config/config-env-vars.ts
+src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
 src/config/config-path-mutation.ts
 src/config/config-paths.ts
@@ -368,6 +371,7 @@ src/config/future-version-guard.ts
 src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
 src/config/gateway-portal-ingress.ts
+src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
@@ -634,11 +638,8 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
-src/infra/file-read.ts
 src/infra/fixed-window-rate-limit.ts
-src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
@@ -703,16 +704,12 @@ src/infra/openclaw-root.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
-src/infra/path-safety.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
 src/infra/private-mode.ts
-src/infra/private-temp-workspace.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
-src/infra/regular-file.ts
-src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -736,6 +733,7 @@ src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
+src/infra/sqlite-index-recovery.ts
 src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
@@ -1245,6 +1243,7 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts

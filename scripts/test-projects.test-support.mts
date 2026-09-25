@@ -3316,7 +3316,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/build-metadata\.sh$/u,
     [
-      "src/docker-setup.e2e.test.ts",
+      "test/scripts/docker-setup.test.ts",
       "apple-release-source-check",
       "ios-version",
       "package-mac-app",

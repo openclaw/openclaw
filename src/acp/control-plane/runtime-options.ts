@@ -179,48 +179,21 @@ export function validateRuntimeOptionPatch(
   }
 
   const next: Partial<AcpSessionRuntimeOptions> = {};
-  if (Object.hasOwn(rawPatch, "runtimeMode")) {
-    if (rawPatch.runtimeMode === undefined) {
-      next.runtimeMode = undefined;
-    } else {
-      next.runtimeMode = validateRuntimeModeInput(rawPatch.runtimeMode);
+  function setOption<K extends Exclude<keyof AcpSessionRuntimeOptions, "backendExtras">>(
+    key: K,
+    validate: (value: unknown) => AcpSessionRuntimeOptions[K],
+  ): void {
+    // Own undefined clears an option; missing and inherited fields leave it unchanged.
+    if (Object.hasOwn(rawPatch, key)) {
+      next[key] = rawPatch[key] === undefined ? undefined : validate(rawPatch[key]);
     }
   }
-  if (Object.hasOwn(rawPatch, "model")) {
-    if (rawPatch.model === undefined) {
-      next.model = undefined;
-    } else {
-      next.model = validateRuntimeModelInput(rawPatch.model);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "thinking")) {
-    if (rawPatch.thinking === undefined) {
-      next.thinking = undefined;
-    } else {
-      next.thinking = validateRuntimeThinkingInput(rawPatch.thinking);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "cwd")) {
-    if (rawPatch.cwd === undefined) {
-      next.cwd = undefined;
-    } else {
-      next.cwd = validateRuntimeCwdInput(rawPatch.cwd);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "permissionProfile")) {
-    if (rawPatch.permissionProfile === undefined) {
-      next.permissionProfile = undefined;
-    } else {
-      next.permissionProfile = validateRuntimePermissionProfileInput(rawPatch.permissionProfile);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "timeoutSeconds")) {
-    if (rawPatch.timeoutSeconds === undefined) {
-      next.timeoutSeconds = undefined;
-    } else {
-      next.timeoutSeconds = validateRuntimeTimeoutSecondsInput(rawPatch.timeoutSeconds);
-    }
-  }
+  setOption("runtimeMode", validateRuntimeModeInput);
+  setOption("model", validateRuntimeModelInput);
+  setOption("thinking", validateRuntimeThinkingInput);
+  setOption("cwd", validateRuntimeCwdInput);
+  setOption("permissionProfile", validateRuntimePermissionProfileInput);
+  setOption("timeoutSeconds", validateRuntimeTimeoutSecondsInput);
   if (Object.hasOwn(rawPatch, "backendExtras")) {
     const rawExtras = rawPatch.backendExtras;
     if (rawExtras === undefined) {

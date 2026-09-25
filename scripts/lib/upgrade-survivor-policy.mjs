@@ -29,6 +29,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "projects-startup-migration",
   "taskflow-restoration",
   "workshop-doctor-recovery",
+  "update-report-recovery",
   "dreaming-cron-doctor",
 ]);
 
@@ -49,6 +50,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "projects-startup-migration" &&
     scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
+    scenario !== "update-report-recovery" &&
     scenario !== "dreaming-cron-doctor" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
@@ -179,6 +181,9 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   }
   if (scenario === "workshop-doctor-recovery") {
     return baselineSpec === "openclaw@2026.9.4";
+  }
+  if (scenario === "update-report-recovery") {
+    return baselineSpec === "openclaw@2026.9.6";
   }
   const minimumBaseline = scenarioMinimumBaselines.get(scenario);
   return (

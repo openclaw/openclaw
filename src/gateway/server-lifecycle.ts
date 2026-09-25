@@ -335,10 +335,10 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
     isConnectionActive,
-    prepareRead: (connId, session) => {
+    prepareRead: async (connId, session) => {
       const client = clients.getByConnectionId(connId);
       return client
-        ? prepareControlUiSessionPrRead({
+        ? await prepareControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,

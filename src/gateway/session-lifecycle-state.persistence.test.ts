@@ -13,6 +13,7 @@ import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -624,6 +625,17 @@ it.for([
         );
         expect(persistenceTestWarnings).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)?.status).toBe(status);
+        if (status === "failed") {
+          await expect(loadTranscriptEvents({ ...target, sessionId })).resolves.toContainEqual(
+            expect.objectContaining({
+              type: "custom_message",
+              customType: "run-failed-before-reply",
+              content: "This turn ended before a reply: Preparation failed",
+              display: true,
+              details: { runId, error: "Preparation failed" },
+            }),
+          );
+        }
         expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
           "clear-requested",
         );

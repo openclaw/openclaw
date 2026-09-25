@@ -7,6 +7,7 @@ import {
   type MockOpenAiRequestSnapshot,
 } from "../extensions/qa-lab/api.js";
 import { listConversations } from "../src/config/sessions/conversation-registry.js";
+import type { GatewaySessionRow } from "../src/gateway/session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
@@ -48,7 +49,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       if (method === "getUpdates") {
         poll = response;
         response.on("close", () => {
-          if (poll === response) poll = undefined;
+          if (poll === response) {
+            poll = undefined;
+          }
         });
         return;
       }
@@ -62,7 +65,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
         return;
       }
       let raw = "";
-      for await (const chunk of request) raw += chunk;
+      for await (const chunk of request) {
+        raw += chunk;
+      }
       if (request.url === "/v1/responses/compact") {
         compactRequests.push(raw);
         response.writeHead(200, { "content-type": "application/json" }).end(
@@ -90,9 +95,13 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       response.writeHead(500).end(String(error));
     });
   });
-  await new Promise<void>((resolve) => transport.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    transport.listen(0, "127.0.0.1", resolve);
+  });
   const address = transport.address();
-  if (!address || typeof address === "string") throw new Error("Telegram fixture did not bind");
+  if (!address || typeof address === "string") {
+    throw new Error("Telegram fixture did not bind");
+  }
   const instance = await createOpenClawTestInstance({
     name: "account-history",
     config: {
@@ -184,6 +193,14 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
   let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   try {
     await instance.startGateway();
+    const gateway = await connectGatewayClient({
+      url: instance.url,
+      token: instance.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    client = gateway;
+    const key = "agent:main:telegram:direct:direct:peer";
     const sendTurn = async (turn: number) => {
       await expect.poll(() => Boolean(poll), { timeout: 30000 }).toBe(true);
       const currentPoll = poll!;
@@ -203,8 +220,22 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       await expect
         .poll(() => replies.some((reply) => reply.includes(`ACK_${turn}`)), { timeout: 30000 })
         .toBe(true);
+      // Telegram receives the ACK before delivery cleanup releases the session.
+      await expect
+        .poll(
+          async () =>
+            (
+              await gateway.request<{ session: GatewaySessionRow | null }>("sessions.describe", {
+                key,
+              })
+            ).session,
+          { timeout: 30000 },
+        )
+        .toMatchObject({ hasActiveRun: false, status: "done" });
     };
-    for (let turn = 1; turn <= 6; turn++) await sendTurn(turn);
+    for (let turn = 1; turn <= 6; turn++) {
+      await sendTurn(turn);
+    }
     const requests = async () =>
       (await fetch(`${model.baseUrl}/debug/requests`).then((response) =>
         response.json(),
@@ -215,13 +246,6 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     expect(prompt.allInputText).toContain("HISTORY_TURN_6");
     expect(prompt.allInputText).not.toContain("HISTORY_TURN_1");
     expect(prompt.allInputText).not.toContain("HISTORY_TURN_2");
-    client = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
-      role: "operator",
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-    });
-    const key = "agent:main:telegram:direct:direct:peer";
     const listed = await client.request<{ sessions: Array<{ key: string; sessionId: string }> }>(
       "sessions.list",
       { limit: 20 },
@@ -298,7 +322,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     expect(summaryInput).toContain("HISTORY_TURN_1");
     expect(summaryInput).toContain("HISTORY_TURN_4");
     expect(compacted.result?.summary).toBeTruthy();
-    for (let turn = 7; turn <= 12; turn++) await sendTurn(turn);
+    for (let turn = 7; turn <= 12; turn++) {
+      await sendTurn(turn);
+    }
     const afterCompaction = (await requests()).findLast(
       (request) => request.requestKind === "agent-initial",
     )!;
@@ -309,11 +335,15 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
   } catch (error) {
     throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
   } finally {
-    if (client) await disconnectGatewayClient(client);
+    if (client) {
+      await disconnectGatewayClient(client);
+    }
     await instance.cleanup();
     await model.stop();
     transport.closeAllConnections();
-    await new Promise<void>((resolve) => transport.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      transport.close(() => resolve());
+    });
   }
 }
 

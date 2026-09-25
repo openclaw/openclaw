@@ -17,6 +17,7 @@ import type {
 } from "../audit/execution-identity-inspection.types.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronRunReceiptOwnerObservation } from "../cron/store/run-receipt.types.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -81,11 +82,12 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import type {
-  UserChannelIdentity,
+  UserChannelIdentitySelector,
   UserChannelIdentityLink,
   UserChannelIdentityAuthorityFacts,
   UserChannelIdentityResult,
   CachedGitHubIdentity,
+  UserProfileGitHubAttributionRead,
   UserProfileDisplay,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -127,6 +129,7 @@ export type OpenClawStateReadCommand =
       scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
     }
   | CronRunRecoveryReadCommand
+  | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
@@ -147,9 +150,10 @@ export type OpenClawStateReadCommand =
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
-  | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentity }
+  | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | { type: "userProfiles.authority.resolve"; profileId: string }
   | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {
@@ -308,6 +312,12 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
+      type: "cron.activeReceiptOwners";
+      sourceAdmitted: true;
+      owners: CronRunReceiptOwnerObservation[];
+    }
+  | {
+      ok: true;
       type: "subagents.sessionList";
       sourceAdmitted: true;
       runs: Map<string, SubagentRunReadRecord>;
@@ -388,6 +398,11 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       identity: CachedGitHubIdentity | undefined;
     }
+  | ({
+      ok: true;
+      type: "userProfiles.githubAttribution.resolve";
+      sourceAdmitted: true;
+    } & UserProfileGitHubAttributionRead)
   | {
       ok: true;
       type: "audit.run.inspect";

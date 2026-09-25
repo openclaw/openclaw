@@ -348,11 +348,14 @@ it.for([
         pending = completion;
         if (deferred) {
           await completion;
-          await withTestTimeout(
-            entered.promise,
-            5_000,
-            "Deferred factory never entered maintenance",
+          const maintenanceResult = await racePromiseWithAbortSignal(
+            Promise.race([
+              entered.promise.then(() => "started"),
+              waitForDeferredTurnMaintenanceForSession(target.sessionKey).then(() => "settled"),
+            ]),
+            signal,
           );
+          expect(maintenanceResult).toBe("started");
         } else {
           await Promise.race([
             entered.promise,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "./errno.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
 type SessionStorePathRelationship = "same" | "different" | "unknown";

@@ -263,7 +263,9 @@ describe("session resolution metadata", () => {
         });
       await request();
       const pending = request();
-      replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      queueMicrotask(() => {
+        replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      });
       await pending;
       await request();
 
@@ -271,8 +273,7 @@ describe("session resolution metadata", () => {
       const missing = [true, { ok: false }, undefined];
       expect(publications).toHaveLength(3);
       expect(publications[0]).toEqual({ visibility: "shared", response: found });
-      const raced = publications[1]!;
-      expect(raced.response).toEqual(raced.visibility === "shared" ? found : missing);
+      expect(publications[1]).toEqual({ visibility: "shared", response: found });
       expect(publications[2]).toEqual({ visibility: "draft", response: missing });
     });
   });

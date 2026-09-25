@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasEncodedFileUrlSeparator } from "../infra/local-file-access.js";
+import { hasEncodedFileUrlSeparator } from "@openclaw/fs-safe/advanced";
 
 const PATH_PARENT_SEGMENT_RE = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
 const FORWARD_NETWORK_PATH_PREFIX_RE = /^\/\//u;

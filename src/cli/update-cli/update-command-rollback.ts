@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   hashConfigRaw,
@@ -18,7 +19,6 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import { replaceFileAtomic } from "../../infra/replace-file.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,

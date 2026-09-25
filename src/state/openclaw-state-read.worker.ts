@@ -20,6 +20,7 @@ import {
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
   readGitHubPublicationRequest,
@@ -87,7 +88,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
@@ -291,6 +292,14 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     observation: observeCronRunRecoveryInDatabase(db, command),
+                  };
+                }
+                if (command.type === "cron.activeReceiptOwners") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
                   };
                 }
                 if (
@@ -534,15 +543,11 @@ serveOwnedWorkerTasks(
                     profile,
                   };
                 }
-                if (command.type === "userProfiles.githubIdentity.cached") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    identity: runSqliteDeferredTransactionSync(db, () =>
-                      resolveCachedGitHubIdentityInDatabase(db, command),
-                    ),
-                  };
+                if (
+                  command.type === "userProfiles.githubIdentity.cached" ||
+                  command.type === "userProfiles.githubAttribution.resolve"
+                ) {
+                  return { ok: true, ...readUserProfileGitHubCommand(db, command), sourceAdmitted };
                 }
                 if (command.type === "userProfiles.channelIdentity.list") {
                   return {
