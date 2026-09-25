@@ -5,6 +5,7 @@ import { ok } from "@openclaw/normalization-core/result";
 import type { FSWatcherEventMap } from "chokidar";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { trackSkillsWatcherClose } from "./refresh-watch-close.js";
 
 // Keep the global timer so mocked-timer callers control this checkpoint.
@@ -34,6 +35,8 @@ export function useSkillsWatcherFixture() {
   }
 
   beforeEach(async () => {
+    // Runtime state initialization must not move unrelated shared observation roots mid-case.
+    await fs.mkdir(CONFIG_DIR, { recursive: true });
     fixtureRoot = tempDirs.make("openclaw-watch-fixture-");
     workspaceDir = await createFixtureDirectory("workspace");
     await createFixtureDirectory("workspace/skills");
