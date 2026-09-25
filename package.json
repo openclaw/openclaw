@@ -871,6 +871,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/github-worker-runtime": {
+      "types": "./dist/plugin-sdk/github-worker-runtime.d.ts",
+      "default": "./dist/plugin-sdk/github-worker-runtime.js"
+    },
     "./plugin-sdk/websocket-runtime": {
       "types": "./dist/plugin-sdk/websocket-runtime.d.ts",
       "default": "./dist/plugin-sdk/websocket-runtime.js"

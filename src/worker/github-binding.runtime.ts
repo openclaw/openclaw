@@ -108,6 +108,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
   signal?: AbortSignal;
 }): Promise<PreparedGitHubToolEnvironment | undefined> {
   const { binding, stateDir, runId, cwd, signal } = params;
+  const githubHost = binding.host ?? "github.com";
   registerSecretValueForRedaction(binding.token);
   const profilesRoot = path.join(stateDir, "github-profiles");
   const profileDir = path.join(profilesRoot, sha256HexPrefixCore(runId, 16));
@@ -116,7 +117,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     // Remove earlier profiles first so an inherited path cannot expose a later credential;
     // an earlier process keeps only the token in its own environment.
     await fs.rm(profilesRoot, { recursive: true, force: true });
-    await writeManagedGitHubProfileFiles(profileDir, binding);
+    await writeManagedGitHubProfileFiles(profileDir, { ...binding, host: githubHost });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Worker GitHub identity profile could not be written: ${message}`, {
@@ -132,6 +133,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
       ["credential.helper", "!gh auth git-credential"],
     ],
   });
+  const hostIdentityEnv = { ...localIdentityEnv, GH_HOST: githubHost };
   if (process.platform === "win32") {
     const permissions = await inspectPathPermissions(profileDir);
     if (
@@ -152,16 +154,24 @@ export async function prepareWorkerGitHubEnvironment(params: {
     binding,
     {
       ...process.env,
-      ...localIdentityEnv,
-      GH_TOKEN: binding.token,
+      ...hostIdentityEnv,
+      ...(githubHost === "github.com"
+        ? { GH_TOKEN: binding.token, GH_ENTERPRISE_TOKEN: "" }
+        : { GH_TOKEN: "", GH_ENTERPRISE_TOKEN: binding.token }),
       GITHUB_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
     },
     signal,
   );
   return {
     managedLocalIdentity: true,
     excludedStoreNames: [],
-    credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-    localIdentityEnv,
+    credentialScrubEnv: {
+      GH_TOKEN: "",
+      GH_ENTERPRISE_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
+    },
+    localIdentityEnv: hostIdentityEnv,
   };
 }

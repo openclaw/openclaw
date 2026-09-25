@@ -177,6 +177,7 @@ export async function runCodexNodeExecServer(params: {
   workspace: { workspaceDir: string; homeDir?: string; release: () => void };
   io: OpenClawPluginNodeHostCommandIo;
   activeProcesses: Set<() => Promise<void>>;
+  github?: import("openclaw/plugin-sdk/github-worker-runtime").WorkerGitHubLaunchBinding;
 }): Promise<string> {
   const { io, workspace } = params;
   const frames = io.frames;
@@ -220,6 +221,30 @@ export async function runCodexNodeExecServer(params: {
     const codexHome = path.join(dir, ".codex");
     // Codex canonicalizes CODEX_HOME during startup and rejects missing directories.
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
+    let githubEnv: Record<string, string> = {};
+    if (params.github) {
+      const { managedGitHubIdentityEnvironment, writeManagedGitHubProfileFiles } =
+        await import("openclaw/plugin-sdk/github-worker-runtime");
+      const profileDir = path.join(dir, "github");
+      const host = params.github.host ?? "github.com";
+      await writeManagedGitHubProfileFiles(profileDir, { ...params.github, host });
+      githubEnv = {
+        ...managedGitHubIdentityEnvironment({
+          profileDir,
+          gitAuthor: params.github.gitAuthor,
+          gitConfig: [
+            ["credential.helper", ""],
+            ["credential.helper", "!gh auth git-credential"],
+          ],
+        }),
+        GH_HOST: host,
+        ...(host === "github.com"
+          ? { GH_TOKEN: params.github.token, GH_ENTERPRISE_TOKEN: "" }
+          : { GH_TOKEN: "", GH_ENTERPRISE_TOKEN: params.github.token }),
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      };
+    }
     const resolved = await resolveManagedCodexAppServerStartOptions({
       transport: "stdio",
       command: "codex",
@@ -262,6 +287,7 @@ export async function runCodexNodeExecServer(params: {
           CODEX_HOME: codexHome,
           RUST_LOG:
             "error,opentelemetry_sdk=off,opentelemetry_otlp=off,codex_exec_server::server::transport=info",
+          ...githubEnv,
           ...(process.platform === "win32" ? { USERPROFILE: workspace.homeDir ?? dir } : {}),
         },
         clearEnv: ["NODE_OPTIONS"],

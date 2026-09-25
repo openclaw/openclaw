@@ -29,7 +29,10 @@ import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+vi.mock("./worker-github-binding.js", () => ({
+  prepareWorkerGitHubBinding: vi.fn(),
+  prepareWorkerGitHubBindingGrant: vi.fn(),
+}));
 
 const session = {
   sessionId: "repository-session",

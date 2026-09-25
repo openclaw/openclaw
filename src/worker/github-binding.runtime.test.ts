@@ -319,6 +319,35 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
   });
 
+  it("writes an isolated enterprise profile without exposing the token in the prepared env", async () => {
+    const enterprise = {
+      ...binding,
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+    };
+    const prepared = await prepareWorkerGitHubEnvironment({
+      binding: enterprise,
+      stateDir: path.join(root, "enterprise-state"),
+      runId: "enterprise-turn",
+      cwd,
+    });
+    const hosts = await fs.readFile(
+      path.join(prepared!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+      "utf8",
+    );
+
+    expect(prepared?.localIdentityEnv.GH_HOST).toBe("microsoft.ghe.com");
+    expect(hosts).toContain("microsoft.ghe.com");
+    expect(hosts).toContain(binding.token);
+    expect(JSON.stringify(prepared)).not.toContain(binding.token);
+    expect(prepared?.credentialScrubEnv).toEqual({
+      GH_TOKEN: "",
+      GH_ENTERPRISE_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
+    });
+  });
+
   it("warns and continues without changing local files when origin cannot be fetched", async () => {
     await fs.writeFile(path.join(cwd, filename), "unpublished work\n");
     await fs.rm(path.join(root, "origin.git"), { recursive: true });

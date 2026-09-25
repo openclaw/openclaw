@@ -64,6 +64,7 @@ import {
 // This fixture clones a local Git origin; no GitHub identity is involved.
 vi.mock("./worker-github-binding.js", () => ({
   prepareWorkerGitHubBinding: async () => undefined,
+  prepareWorkerGitHubBindingGrant: async () => undefined,
 }));
 
 describe("repository workspace result ownership", () => {

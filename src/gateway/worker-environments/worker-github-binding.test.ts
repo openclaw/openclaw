@@ -1,12 +1,17 @@
+import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import {
+  prepareWorkerGitHubBinding,
+  prepareWorkerGitHubBindingGrant,
+} from "./worker-github-binding.js";
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
@@ -41,6 +46,12 @@ vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const profileId = "ghp_11111111111111111111111111111111";
 const token = "synthetic-worker-github-binding-token";
+const appPrivateKey = generateKeyPairSync("rsa", { modulusLength: 2048 })
+  .privateKey.export({
+    type: "pkcs8",
+    format: "pem",
+  })
+  .toString();
 const session = { sessionId: "worker-session", sessionKey: "agent:main:worker", agentId: "main" };
 const worktree = {
   id: "worker-worktree",
@@ -58,13 +69,20 @@ const verified = {
 };
 let config: OpenClawConfig;
 
-async function installProfile(scope: "agent" | "system" = "system") {
+async function installProfile(scope: "agent" | "system" = "system", host?: string) {
   const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId });
   await installManagedGitHubProfile({
     profileDir,
     token,
     commitConfig: async () => {},
   });
+  if (host) {
+    await writeManagedGitHubProfileFiles(profileDir, {
+      login: verified.account.login,
+      token,
+      host,
+    });
+  }
   mocks.verify.mockClear();
   return profileDir;
 }
@@ -93,7 +111,10 @@ describe("worker GitHub launch binding", () => {
       stderr: Buffer.alloc(0),
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
 
   it.each([
     "git@github.com:owner/repo.git",
@@ -110,8 +131,61 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       gitAuthor: { name: "Shared Bot" },
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token);
+    expect(mocks.verify).toHaveBeenCalledWith(token, { apiBaseUrl: "https://api.github.com" });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it("binds the configured enterprise host and canonical HTTPS remote", async () => {
+    vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
+    vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    await installProfile("system", "microsoft.ghe.com");
+    mocks.repository.mockResolvedValue({ originUrl: "git@microsoft.ghe.com:bic/lobster.git" });
+
+    await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
+      token,
+      login: "shared-bot",
+      branch: worktree.branch,
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+      gitAuthor: { name: "Shared Bot" },
+    });
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.microsoft.ghe.com",
+    });
+  });
+
+  it("issues one process-scoped enterprise App token and revokes it", async () => {
+    vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
+    vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
+    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "119386");
+    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", appPrivateKey);
+    mocks.repository.mockResolvedValue({ originUrl: "git@microsoft.ghe.com:bic/lobster.git" });
+    const fetch = vi.fn(async (_input: string | URL | Request, init: RequestInit = {}) =>
+      init.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : new Response(
+            JSON.stringify({
+              token: "synthetic-installation-token",
+              expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            }),
+            { status: 201, headers: { "content-type": "application/json" } },
+          ),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+
+    expect(grant?.binding).toEqual({
+      token: "synthetic-installation-token",
+      login: "x-access-token",
+      branch: worktree.branch,
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+    });
+    await grant?.revoke();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

@@ -201,6 +201,50 @@ describe("Codex node exec-server", () => {
     expect(invokeNodeWithSessionFull).toHaveBeenCalledOnce();
   });
 
+  it("carries a validated GitHub binding only through the approved node launch", async () => {
+    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const github = {
+      token: "synthetic-node-installation-token",
+      login: "worker-bot",
+      branch: "openclaw/session-worker",
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+    };
+    const invokeNodeWithSessionFull = vi.fn(async ({ createParams }) => ({
+      ok: true as const,
+      payload: createParams(),
+    }));
+
+    await expect(
+      createCodexNodeExecServerInvokePolicy().handle({
+        nodeId: "paired-node",
+        command: CODEX_NODE_EXEC_SERVER_COMMAND,
+        params: { ...placement, github },
+        config: {},
+        risk: { level: "high", family: "codex.exec-server" },
+        invokeNode: vi.fn(),
+        invokeNodeWithSessionFull,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { placement, authorization: "session-full", github },
+    });
+    await expect(
+      createCodexNodeExecServerInvokePolicy().handle({
+        nodeId: "paired-node",
+        command: CODEX_NODE_EXEC_SERVER_COMMAND,
+        params: {
+          ...placement,
+          github: { ...github, remoteUrl: "https://outside.test/bic/lobster.git" },
+        },
+        config: {},
+        risk: { level: "high", family: "codex.exec-server" },
+        invokeNode: vi.fn(),
+        invokeNodeWithSessionFull,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "CODEX_NODE_EXEC_GITHUB_BINDING_INVALID" });
+  });
+
   it("checks node-local authorization before starting the pinned process", async () => {
     const frames = createNodeFrames();
     const workspace = createManagedWorkspaceInvocation(process.cwd());
@@ -469,13 +513,25 @@ describe("Codex node exec-server", () => {
         const frames = createNodeFrames(signal);
         const command = createCodexNodeExecServerCommand();
         const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+        const github = {
+          token: "synthetic-node-installation-token",
+          login: "worker-bot",
+          branch: "openclaw/session-worker",
+          host: "microsoft.ghe.com",
+          remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+        };
         const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+          JSON.stringify({
+            placement: workspace.placement,
+            authorization: "human-approved",
+            github,
+          }),
           frames.io,
           workspace.context,
         );
         void invocation.catch((error: unknown) => frames.controller.abort(error));
         let isolatedCodexHome: string | undefined;
+        let isolatedGitHubProfile: string | undefined;
         try {
           await Promise.race([frames.ready, invocation]);
           await frames.send({
@@ -487,6 +543,8 @@ describe("Codex node exec-server", () => {
           await frames.send({ method: "initialized", params: {} });
           const script = `const fs = require('node:fs'); const path = require('node:path');
 process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
+  githubProfile: process.env.GH_CONFIG_DIR, githubHost: process.env.GH_HOST,
+  githubToken: process.env.GH_ENTERPRISE_TOKEN ? 'present' : null,
   cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
           await frames.send({
             id: 2,
@@ -519,10 +577,19 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           const observed: unknown = JSON.parse(
             Buffer.from(output.chunk, "base64").toString("utf8"),
           );
-          expect(observed).toMatchObject({ home: homeDir, cached: true });
+          expect(observed).toMatchObject({
+            home: homeDir,
+            cached: true,
+            githubHost: "microsoft.ghe.com",
+            githubToken: "present",
+          });
           if (!isRecord(observed) || typeof observed.codexHome !== "string") {
             throw new Error("Pinned exec-server omitted its private Codex home");
           }
+          if (typeof observed.githubProfile !== "string") {
+            throw new Error("Pinned exec-server omitted its private GitHub profile");
+          }
+          isolatedGitHubProfile = observed.githubProfile;
           isolatedCodexHome = observed.codexHome;
           expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
         } finally {
@@ -538,6 +605,10 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           throw new Error("Private Codex home was not observed");
         }
         await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
+        if (!isolatedGitHubProfile) {
+          throw new Error("Private GitHub profile was not observed");
+        }
+        await expect(access(isolatedGitHubProfile)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
     await pendingNodeProof;

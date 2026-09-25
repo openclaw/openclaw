@@ -5,6 +5,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveGitHubApiBaseUrl } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
 
@@ -51,6 +52,7 @@ export function clearGitHubCredentialVerificationCache(): void {
 type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  apiBaseUrl?: string;
 };
 
 type GitHubOAuthDeviceAuthorization = {
@@ -321,7 +323,8 @@ export async function verifyGitHubCredential(
     if (/\s/u.test(token)) {
       return { status: "unavailable" };
     }
-    const key = createHash("sha256").update(token).digest("hex");
+    const apiBaseUrl = options.apiBaseUrl ?? resolveGitHubApiBaseUrl();
+    const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
     const cache = verifiedCredentials;
     const cached = cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
@@ -335,7 +338,7 @@ export async function verifyGitHubCredential(
         1,
       );
       const timeout = AbortSignal.timeout(timeoutMs);
-      const response = await fetch("https://api.github.com/user", {
+      const response = await fetch(`${apiBaseUrl}/user`, {
         method: "GET",
         redirect: "error",
         headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },

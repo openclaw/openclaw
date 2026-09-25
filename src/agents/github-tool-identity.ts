@@ -17,6 +17,7 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveGitHubApiBaseUrl, resolveGitHubHost } from "./github-host.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
@@ -189,9 +190,17 @@ function prepareGitHubToolEnvironmentForIdentity(
   const previewToken =
     params.sourceConfig?.gateway?.controlUi?.github?.token ??
     params.config.gateway?.controlUi?.github?.token;
-  const credentialScrubEnv: Record<string, string> = managedLocalIdentity
-    ? { GH_TOKEN: "", GITHUB_TOKEN: "" }
-    : {};
+  const credentialScrubEnv: Record<string, string> = {
+    OPENCLAW_GITHUB_APP_PRIVATE_KEY: "",
+    ...(managedLocalIdentity
+      ? {
+          GH_TOKEN: "",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_TOKEN: "",
+          GITHUB_ENTERPRISE_TOKEN: "",
+        }
+      : {}),
+  };
   const excludedStoreNames: string[] = [];
   if (isSecretRef(previewToken)) {
     if (previewToken.source === "env" && isValidEnvSecretRefId(previewToken.id)) {
@@ -266,7 +275,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
         hosts = value;
       }
     }
-    const host = isRecord(hosts) ? hosts[GITHUB_HOST] : undefined;
+    const host = isRecord(hosts) ? hosts[resolveGitHubHost()] : undefined;
     // gh reads the active host token before considering the global keyring.
     // User-keyed entries alone cannot prove isolation from native auth.
     return isRecord(host) && typeof host.oauth_token === "string"
@@ -509,6 +518,7 @@ async function prepareSharedGitHubIdentity(
     GH_PROMPT_DISABLED: "1",
   });
   const env = currentEnvironment();
+  const apiBaseUrl = resolveGitHubApiBaseUrl(env);
   const readToken = () =>
     managed
       ? readManagedGitHubToken(identity.profileDir)
@@ -522,7 +532,10 @@ async function prepareSharedGitHubIdentity(
       throw new GitHubIdentityError("unavailable");
     }, params);
   }
-  const probe = await startGitHubIdentityOperation(() => verifyGitHubCredential(token), params);
+  const probe = await startGitHubIdentityOperation(
+    () => verifyGitHubCredential(token, { apiBaseUrl }),
+    params,
+  );
   return startGitHubIdentityOperation(() => {
     if (probe.status !== "available") {
       throw new GitHubIdentityError(probe.status);
@@ -650,7 +663,7 @@ async function stageManagedGitHubProfile(parent: string, token: string) {
 /** Write gh's external file contract without touching its OS keyring or verifying again. */
 export async function writeManagedGitHubProfileFiles(
   profileDir: string,
-  identity: { login: string; token: string },
+  identity: { login: string; token: string; host?: string },
 ): Promise<void> {
   await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
   await fs.chmod(profileDir, 0o700);
@@ -659,7 +672,7 @@ export async function writeManagedGitHubProfileFiles(
     await fs.writeFile(
       temporaryHosts,
       stringifyYaml({
-        [GITHUB_HOST]: {
+        [identity.host ?? GITHUB_HOST]: {
           user: identity.login,
           oauth_token: identity.token,
           users: { [identity.login]: { oauth_token: identity.token } },

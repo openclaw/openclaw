@@ -7,6 +7,10 @@ import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  prepareWorkerGitHubBindingGrant,
+  type WorkerGitHubBindingGrant,
+} from "openclaw/plugin-sdk/github-worker-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { RawData, WebSocket } from "ws";
@@ -189,17 +193,37 @@ async function acquireOpenClawExecServer(params: {
       }
       try {
         const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
-        // Capture the admitted caller's exact async scope before a detached WebSocket event.
-        const channel = await runtime.nodes.openDuplex({
-          nodeId: server.node.id,
-          command: "codex.exec-server.stdio.v1",
-          params: { cwd: sandbox.containerWorkdir, ...placementIdentity },
-          sessionKey: sandbox.sessionKey,
-          timeoutMs: 0,
-          maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
-          maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
-          signal,
-        });
+        const { agentId, ...nodePlacementIdentity } = placementIdentity;
+        let githubGrant: WorkerGitHubBindingGrant | undefined;
+        if (agentId) {
+          githubGrant = await prepareWorkerGitHubBindingGrant({
+            sessionId: placementIdentity.sessionId,
+            sessionKey: placementIdentity.sessionKey,
+            agentId,
+            assertCurrent: () => !signal.aborted && !server.closed,
+          });
+        }
+        let channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
+        try {
+          // Capture the admitted caller's exact async scope before a detached WebSocket event.
+          channel = await runtime.nodes.openDuplex({
+            nodeId: server.node.id,
+            command: "codex.exec-server.stdio.v1",
+            params: {
+              cwd: sandbox.containerWorkdir,
+              ...nodePlacementIdentity,
+              ...(githubGrant ? { github: githubGrant.binding } : {}),
+            },
+            sessionKey: sandbox.sessionKey,
+            timeoutMs: 0,
+            maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
+            maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
+            signal,
+          });
+        } catch (error) {
+          await githubGrant?.revoke();
+          throw error;
+        }
         if (
           signal.aborted ||
           server.closed ||
@@ -218,7 +242,14 @@ async function acquireOpenClawExecServer(params: {
         server.node.leases.set(nodeLease.id, nodeLease);
         // The approved child can exit before app-server claims its loopback socket.
         // Observe that lifetime immediately instead of losing its terminal fact.
-        void channel.closed
+        const closedAndRevoked = channel.closed.then(
+          async () => await githubGrant?.revoke(),
+          async (error: unknown) => {
+            await githubGrant?.revoke();
+            throw error;
+          },
+        );
+        void closedAndRevoked
           .then(
             () => handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: false }),
             (error: unknown) =>
@@ -387,12 +418,17 @@ function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
 }
 
 function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
+  agentId?: string;
   environmentId: string;
   sessionId: string;
   ownerEpoch: number;
   sessionKey: string;
 } {
   if (
+    ("placementAgentId" in sandbox &&
+      (typeof sandbox.placementAgentId !== "string" ||
+        !sandbox.placementAgentId ||
+        sandbox.placementAgentId.trim() !== sandbox.placementAgentId)) ||
     !("placementEnvironmentId" in sandbox) ||
     typeof sandbox.placementEnvironmentId !== "string" ||
     !sandbox.placementEnvironmentId ||
@@ -411,6 +447,7 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
+    ...("placementAgentId" in sandbox ? { agentId: sandbox.placementAgentId as string } : {}),
     environmentId: sandbox.placementEnvironmentId,
     sessionId: sandbox.placementSessionId,
     ownerEpoch: sandbox.placementOwnerEpoch,

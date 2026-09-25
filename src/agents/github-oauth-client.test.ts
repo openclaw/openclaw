@@ -235,6 +235,24 @@ describe("GitHub OAuth client", () => {
     },
   );
 
+  it("verifies enterprise credentials at the configured API origin", async () => {
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 303, login: "enterprise-user", avatar_url: null }));
+    await expect(
+      verifyGitHubCredential("synthetic-enterprise-token", {
+        apiBaseUrl: "https://api.microsoft.ghe.com",
+      }),
+    ).resolves.toMatchObject({
+      status: "available",
+      account: { accountId: 303, login: "enterprise-user" },
+    });
+    expect(probe).toHaveBeenCalledExactlyOnceWith(
+      "https://api.microsoft.ghe.com/user",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it.each([
     ["invalid-json", "not-json synthetic-token"],
     ["long-login", JSON.stringify({ id: 202, login: "x".repeat(101) })],

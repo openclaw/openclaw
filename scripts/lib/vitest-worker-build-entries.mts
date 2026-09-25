@@ -358,4 +358,5 @@ export const vitestWorkerBuildEntries = {
   "test-support/provider-hook-scope": "test/scripts/provider-hook-scope.test-support.ts",
   // Exercise native writes through the existing plugin facade in the private graph.
   "plugin-sdk/file-access-runtime": "src/plugin-sdk/file-access-runtime.ts",
+  "plugin-sdk/github-worker-runtime": "src/plugin-sdk/github-worker-runtime.ts",
 };
