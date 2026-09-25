@@ -5,82 +5,32 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  ChannelIngressEvents,
-  DB as OpenClawStateKyselyDatabase,
-} from "../../state/openclaw-state-db.generated.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import type {
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueueRecord,
+  ChannelIngressRow,
+} from "./ingress-queue.types.js";
 
-/** Pending or retryable inbound channel event stored in the durable ingress queue. */
-export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  payload: TPayload;
-  metadata?: TMetadata;
-  receivedAt: number;
-  updatedAt: number;
-  laneKey?: string;
-  attempts: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-};
-
-/** Pending ingress event currently claimed by a worker. */
-export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
-  TPayload,
-  TMetadata
-> & {
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
-};
-
-/** Minimal claim reference used to guard completion/release/failure with a claim token. */
-export type ChannelIngressQueueClaimRef = {
-  id: string;
-  claim: {
-    token: string;
-  };
-};
-
-/** Claim identity available when a stale row's payload cannot be decoded. */
-export type ChannelIngressQueueCorruptClaim = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  laneKey?: string;
-  reason: "corrupt_payload";
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
-};
-
-/** Completed ingress event tombstone retained for duplicate detection. */
-type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  completedAt: number;
-  metadata?: TCompletedMetadata;
-};
+export type {
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueueRecord,
+} from "./ingress-queue.types.js";
 
 /** Failed ingress event tombstone retained for duplicate detection. */
 type ChannelIngressQueueFailedRecord = {
@@ -262,7 +212,6 @@ export type CreateChannelIngressQueueOptions = {
 };
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
-type ChannelIngressRow = Selectable<ChannelIngressEvents>;
 
 // Failed rows need to distinguish a retained JSON null payload from the "null"
 // scrub marker written by older versions. Invalid JSON cannot collide with enqueue output.
