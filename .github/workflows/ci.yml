@@ -1920,8 +1920,10 @@ jobs:
                 (!proposedCheckScope || proposedCheckScope.baselineRatchets),
             });
             if (changedNodeTestShards === null) {
-              pluginContractShards = createPluginContractTestShards();
-              channelContractShards = createChannelContractTestShards();
+              if (!releaseFastLane) {
+                pluginContractShards = createPluginContractTestShards();
+                channelContractShards = createChannelContractTestShards();
+              }
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
             } else {
