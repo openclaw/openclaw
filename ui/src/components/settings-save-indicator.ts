@@ -106,6 +106,13 @@ class SettingsSaveIndicator extends LitElement {
           @click=${props.onRetry}
         >
           ${t("configView.retry")}
+        </button>
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onReload}
+        >
+          ${t("configView.recoveryReload")}
         </button>`;
     } else if (props.status === "error") {
       title = props.lastError?.trim() ?? "";

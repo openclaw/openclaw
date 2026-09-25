@@ -300,7 +300,7 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
+      "agentId" | "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
     > = {},
   ) =>
     metadata.run(() =>

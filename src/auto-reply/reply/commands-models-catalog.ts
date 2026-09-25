@@ -229,6 +229,7 @@ async function projectPreparedModelsProviderData(
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault,
+    selectedModel: resolvedDefault,
     agentId,
     workspaceDir,
     view: options.view,
