@@ -179,6 +179,11 @@ export const sharedVitestConfig = {
         replacement: "undici/index.js",
       },
       {
+        // Keep the installed WebSocket package and its mocks on one module identity in Bun.
+        find: /^ws$/u,
+        replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
+      },
+      {
         find: "discord-api-types/v10",
         replacement: path.join(
           repoRoot,
@@ -510,9 +515,12 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: workerConfig.pool,
     // Native imports keep the invocation owner's isolated source-cache policy.
-    execArgv: process.versions.bun
-      ? resolveVitestBunSourceArgs()
-      : ["--import", resolveTsxImport(repoRoot)],
+    execArgv: [
+      ...(process.versions.bun
+        ? resolveVitestBunSourceArgs()
+        : ["--import", resolveTsxImport(repoRoot)]),
+      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+    ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

@@ -973,16 +973,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
     onRequestTiming.mockClear();
 
     const request = client.request("sessions.list", { includeGlobal: true });
@@ -1010,12 +1001,7 @@ describe("GatewayBrowserClient", () => {
       token: "shared-auth-token",
     });
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
-    });
+    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
 
     const answer = client.request(
       "sessions.companion.ask",
@@ -1043,16 +1029,7 @@ describe("GatewayBrowserClient", () => {
       token: "token-oversized",
     });
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
     const activityAfterConnect = client.inboundActivitySeq;
 
     ws.emitMessage({ type: "event", event: "tick", seq: 1, payload: {} });
@@ -1182,16 +1159,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
     onRequestTiming.mockClear();
 
     const request = client.request("config.get", { token: "do-not-log" });
@@ -1272,16 +1240,7 @@ describe("GatewayBrowserClient", () => {
       expect(JSON.stringify(payload)).not.toContain("nonce-secret");
     }
 
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
 
     await vi.waitFor(() => {
       expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("hello");
@@ -1364,16 +1323,7 @@ describe("GatewayBrowserClient", () => {
 
     try {
       const { ws, connectFrame } = await startConnect(client);
-      ws.emitMessage({
-        type: "res",
-        id: connectFrame.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          protocol: 4,
-          auth: { role: "operator", scopes: [] },
-        },
-      });
+      emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
 
       await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
       await Promise.resolve();

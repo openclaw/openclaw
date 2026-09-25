@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
-import { readPluginCacheFile } from "./plugin-cache-files.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.js";
 
 /** Read presentation artifacts through the lifecycle-owned, bounded plugin root cache. */
 export function readInstalledPluginOverview(
@@ -21,14 +21,8 @@ export function readInstalledPluginOverview(
     });
   const readme = read("README.md");
   const packageFile = read("package.json");
-  let pkg: Record<string, unknown> = {};
-  if (packageFile.ok) {
-    try {
-      pkg = asRecord(JSON.parse(packageFile.contents.toString("utf8")));
-    } catch {
-      /* Invalid optional presentation metadata does not disable plugin controls. */
-    }
-  }
+  const parsed = packageFile.ok ? parsePluginCacheJson(packageFile) : undefined;
+  const pkg = asRecord(parsed?.ok ? parsed.value : undefined);
   const repository =
     typeof pkg.repository === "string" ? pkg.repository : asRecord(pkg.repository).url;
   const repositoryUrl = normalizeOptionalString(repository);

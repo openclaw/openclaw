@@ -24,8 +24,9 @@ export async function readMacOSDesktopGenerationFingerprint(
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
-    const pluginRoot = resolveComputerUsePluginRoot(candidate);
-    entries.push(`${pluginRoot}\0${await directoryTreeFingerprint(pluginRoot)}`);
+    for (const pluginRoot of resolveComputerUseArtifactRoots(candidate)) {
+      entries.push(`${pluginRoot}\0${await readCodexDesktopArtifactTreeFingerprint(pluginRoot)}`);
+    }
   }
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -36,6 +37,8 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
+    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node"),
+    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node_repl"),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -52,8 +55,21 @@ function resolveMacOSDesktopGenerationPaths(
   ];
 }
 
-function resolveComputerUsePluginRoot(candidate: MacOSDesktopCodexAppPathCandidate): string {
-  return path.join(candidate.bundledMarketplacePath, "plugins", "computer-use");
+function resolveComputerUseArtifactRoots(candidate: MacOSDesktopCodexAppPathCandidate): string[] {
+  const modules = path.join(
+    path.dirname(candidate.appServerCommandPath),
+    "cua_node",
+    "lib",
+    "node_modules",
+    "@oai",
+  );
+  return [
+    path.join(candidate.bundledMarketplacePath, "plugins", "computer-use"),
+    path.join(candidate.bundledMarketplacePath, "plugins", "unified-computer-use"),
+    path.join(modules, "cua-repl"),
+    path.join(modules, "cua"),
+    path.join(modules, "sky", "dist"),
+  ];
 }
 
 /** Stable roots that cover bundle replacement and recursive artifact updates. */
@@ -69,7 +85,7 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   return [...watched];
 }
 
-async function directoryTreeFingerprint(root: string): Promise<string> {
+export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
   let rootStat: BigIntStats;
   try {
     rootStat = await fs.lstat(root, { bigint: true });

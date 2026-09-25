@@ -76,6 +76,8 @@ export function retainGatewayPluginMetadata() {
   const waitForRetirement = async (
     required: readonly Promise<void | PluginHostCleanupResult>[] = [],
   ): Promise<PluginHostCleanupResult> => {
+    // Admission closes before reloads drain; their consumers retire only in final close.
+    const deferConsumers = owner.closing === undefined;
     const results = await Promise.allSettled([
       ...required,
       ...[...owner.retirements].map(async (retirement) => {
@@ -101,7 +103,6 @@ export function retainGatewayPluginMetadata() {
               }
             });
           }
-          owner.retirements.delete(retirement);
           return {
             cleanupCount: (previous?.cleanupCount ?? 0) + (cleanup?.cleanupCount ?? 0),
             failures: [...(previous?.failures ?? []), ...(cleanup?.failures ?? [])],
@@ -110,15 +111,19 @@ export function retainGatewayPluginMetadata() {
         // Publication cannot await its requesting turn or borrowed generation.
         // Keep raw retirement owned so shutdown still joins cleanup and its failures.
         void pending.catch(() => {});
-        const observed =
-          owner.phase !== "closing"
-            ? await retirement.beforeRetire?.({ deferConsumers: true })
-            : undefined;
-        return owner.phase !== "closing" &&
+        const observed = deferConsumers
+          ? await retirement.beforeRetire?.({ deferConsumers: true })
+          : undefined;
+        if (
+          deferConsumers &&
           (observed?.deferredPluginIds?.length ||
             (retirement.cache.kind === "process" && getPluginCacheRetention(retirement.cache)))
-          ? observed
-          : pending;
+        ) {
+          return observed;
+        }
+        const completed = await pending;
+        owner.retirements.delete(retirement);
+        return completed;
       }),
     ]);
     const failures = results.flatMap((result) =>

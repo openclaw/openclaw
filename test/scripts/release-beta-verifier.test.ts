@@ -729,6 +729,7 @@ syncBuiltinESMExports();
   it.each([false, true])(
     "queries a beta-only plugin without latest (npm 12 and initial E404: %s)",
     async (transientlyMissing) => {
+      vi.useFakeTimers();
       const beta = "2026.9.4-beta.1";
       const fixture = workflowFixture({}, true, undefined, {
         version: beta,
@@ -741,9 +742,24 @@ syncBuiltinESMExports();
         transientlyMissing: transientlyMissing ? "@openclaw/demo" : undefined,
       });
 
-      await expect(
+      const verified = expect(
         verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir }),
       ).resolves.toContain("plugin npm OK: 1");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await verified;
+
+      const tagRead = JSON.stringify([
+        "npm",
+        "view",
+        `@openclaw/demo@${beta}`,
+        "dist-tags",
+        "--json",
+        "--prefer-online",
+      ]);
+      const commands = readFileSync(join(fixture.binDir, "commands.jsonl"), "utf8").split("\n");
+      expect(commands.filter((command) => command === tagRead)).toHaveLength(
+        transientlyMissing ? 2 : 1,
+      );
     },
   );
 

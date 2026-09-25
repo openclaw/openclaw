@@ -2324,20 +2324,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(stripe.timeoutMinutes).toBe(gatewayOwner.timeoutMinutes);
       expect(stripe.planConcurrency).toBe(gatewayOwner.planConcurrency);
     }
+    const gatewayPatterns = [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles];
     const basePatterns = base
-      .flatMap(
-        (shard) =>
-          shard.includePatterns ??
-          (shard === gatewayOwner
-            ? [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles]
-            : []),
-      )
+      .flatMap((shard) => shard.includePatterns ?? (shard === gatewayOwner ? gatewayPatterns : []))
       .toSorted((a, b) => a.localeCompare(b));
     const bundledPatterns = bundled
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(bundled.length - gatewayStripes.length).toBeLessThan(base.length - 1);
+    const outputBundles = bundled.filter((shard) => shard.shardName.startsWith("bundle-"));
+    const bundledConfigs = new Set(outputBundles.flatMap((shard) => shard.configs));
+    // Required 64-file splits can offset bundling savings in the total owner count.
+    const inputChunks = base
+      .filter((shard) => shard.configs.every((config) => bundledConfigs.has(config)))
+      .reduce((count, shard) => count + Math.ceil((shard.includePatterns?.length ?? 0) / 64), 0);
+    expect(outputBundles.length).toBeLessThan(inputChunks);
     expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(
@@ -4718,7 +4719,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     timings: Record<string, number>;
     fileSeconds: (file: string) => number;
     options: {
-      compactMode: "pull-request";
+      compactMode: "push" | "pull-request";
       runnerBackend: string;
       includeReleaseOnlyPluginShards: false;
       compactNodeJobCap?: number;
@@ -4765,6 +4766,51 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       vi.resetModules();
     }
   }
+
+  it.each(["push", "pull-request"] as const)(
+    "exchanges hosted anchors before opening another %s job",
+    async (compactMode) => {
+      const anchors = [126, 105, 63, 42, 42, 42].map((seconds, index) => ({
+        name: `exchange-anchor-${index}`,
+        seconds,
+      }));
+      const shards = anchors.map(({ name }) => ({
+        config: `test/vitest/vitest.${name}.config.ts`,
+        name,
+        projects: [`test/vitest/vitest.${name}.config.ts`],
+      }));
+      const plan = await createToolingFixturePlan({
+        files: [],
+        shards,
+        timings: Object.fromEntries(anchors.map(({ name, seconds }) => [name, seconds])),
+        fileSeconds: () => 0,
+        options: {
+          compactMode,
+          runnerBackend: "github",
+          includeReleaseOnlyPluginShards: false,
+          compactNodeJobCap: 2,
+        },
+      });
+      expect(plan).toHaveLength(2);
+      expect(
+        plan
+          .flatMap((job) => job.groups)
+          .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name)),
+      ).toEqual(
+        shards.map(({ name, projects }) => ({
+          shard_name: name,
+          configs: projects,
+          requiresDist: false,
+          runner: BUNDLED_NODE_TEST_RUNNER,
+        })),
+      );
+      for (const job of plan) {
+        expect(job.predictedSeconds).toBe(210);
+        expect(job.planConcurrency).toBe(1);
+        expect(job.groups.length).toBeLessThanOrEqual(10);
+      }
+    },
+  );
 
   it.each([
     { profile: "blacksmith", expectedSeconds: 840, whaleSeconds: 200 },

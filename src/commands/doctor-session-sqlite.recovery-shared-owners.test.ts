@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -115,6 +119,23 @@ describe("runDoctorSessionSqlite", () => {
       }));
       const imported = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
       expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
+      const current = [];
+      for (const owner of ["main", "work"]) {
+        const scope = {
+          agentId: owner,
+          env,
+          storePath: expectDefined(
+            imported.targets.find((target) => target.agentId === owner),
+            "imported owner target",
+          ).sqlitePath,
+          sessionKey: `agent:${owner}:main`,
+        };
+        await updateSessionEntry(scope, () => ({ label: `Current ${owner} metadata` }));
+        const entry = expectDefined(loadSessionEntry(scope), "current owner entry");
+        expect(entry.label).toBe(`Current ${owner} metadata`);
+        current.push({ scope, entry: structuredClone(entry) });
+      }
+      closeOpenClawAgentDatabasesForTest();
       const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
       expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
       for (const original of originals) {
@@ -128,6 +149,9 @@ describe("runDoctorSessionSqlite", () => {
         mode: "import",
       });
       expect(reimported.targets.flatMap((target) => target.issues)).toEqual([]);
+      for (const { scope, entry } of current) {
+        expect(loadSessionEntry(scope)).toEqual(entry);
+      }
       closeOpenClawAgentDatabasesForTest();
       const retired = await retireSessionSqliteRecovery({
         env,
@@ -138,6 +162,42 @@ describe("runDoctorSessionSqlite", () => {
       expect(retired.totals.removedFiles).toBe(separateIndexes ? 5 : 4);
     },
   );
+
+  it("refuses shared-index replay when only another owner's receipt remains", async () => {
+    const { cfg, env, indexes } = createSharedRecoveryFixture({
+      separateIndexes: false,
+      reverse: false,
+    });
+    const imported = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
+    expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
+    const scope = {
+      agentId: "main",
+      env,
+      storePath: expectDefined(
+        imported.targets.find((target) => target.agentId === "main"),
+        "main target",
+      ).sqlitePath,
+      sessionKey: "agent:main:main",
+    };
+    await updateSessionEntry(scope, () => ({ label: "Current main metadata" }));
+    const before = structuredClone(expectDefined(loadSessionEntry(scope), "current main entry"));
+    expect(before.label).toBe("Current main metadata");
+    closeOpenClawAgentDatabasesForTest();
+    const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
+    expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
+    const indexPath = expectDefined(indexes[0], "shared index");
+    const original = fs.readFileSync(indexPath);
+    const manifestPath = expectDefined(imported.migrationRun, "import run").manifestPath;
+    const manifest = readMigrationManifest(manifestPath);
+    manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
+    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+
+    await expect(
+      runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" }),
+    ).rejects.toThrow("Restored session index evidence cannot be verified");
+    expect(loadSessionEntry(scope)).toEqual(before);
+    expect(fs.readFileSync(indexPath)).toEqual(original);
+  });
 
   it.each(["shared", "distinct", "unreadable", "invalid-entry"] as const)(
     "retains known unselected index recovery (%s)",

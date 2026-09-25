@@ -66,7 +66,7 @@ type NativeMonitorFixture = {
       taskRuntimeScope: ReturnType<typeof createAgentHarnessTaskRuntimeScope>;
       agentId: string;
       historyOwner?: NativeHistoryOwner;
-    }): { bindTurn(turnId: string): void; unregister(): Promise<void> };
+    }): Promise<{ bindTurn(turnId: string): void; unregister(): Promise<void> }>;
     retireParent(parentThreadId: string): void;
     dispose(): void;
   };
@@ -110,7 +110,7 @@ describe("native task event custody", () => {
   ] as const)("keeps original assignment ownership through %s completion", async (ordering) => {
     const fixture = await loadCodexNativeSubagentMonitorTestFixture();
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       using notifications = captureTaskDeliveryWork();
       const requesterSessionKey = "agent:main:main";
       const context = createContext();
@@ -193,7 +193,7 @@ describe("native task event custody", () => {
                 receiptAuthority: () => !retired,
               },
               async () => {
-                const registration = monitor.registerParent({
+                const registration = await monitor.registerParent({
                   parentThreadId: "parent-thread",
                   requesterSessionKey,
                   taskRuntimeScope: scope,
@@ -351,7 +351,7 @@ describe("native task event custody", () => {
     async (historyOutcome) => {
       const fixture = await loadCodexNativeSubagentMonitorTestFixture();
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         using deliveries = captureTaskDeliveryWork();
         const history = fixture.nativeHistoryOwner();
         const requesterSessionKey = "agent:main:main";
@@ -556,7 +556,7 @@ describe("native task event custody", () => {
     async (deliveryMode) => {
       const fixture = await loadCodexNativeSubagentMonitorTestFixture();
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         using deliveries = captureTaskDeliveryWork();
         const requesterSessionKey = "agent:main:main";
         const context = createContext();
@@ -607,7 +607,7 @@ describe("native task event custody", () => {
         );
         const warning = vi.spyOn(taskRegistryLog, "warn");
         const root = tryBeginGatewayRootWorkAdmission("test:native-parent")!;
-        let parent: ReturnType<typeof monitor.registerParent> | undefined;
+        let parent: Awaited<ReturnType<typeof monitor.registerParent>> | undefined;
         let retired = false;
         try {
           await root.run(async () => {
@@ -621,7 +621,7 @@ describe("native task event custody", () => {
                 gatewayContextResolver: resolver,
               },
               async () => {
-                parent = monitor.registerParent({
+                parent = await monitor.registerParent({
                   parentThreadId: "parent-thread",
                   requesterSessionKey,
                   taskRuntimeScope: scope,
@@ -724,7 +724,7 @@ describe("native task event custody", () => {
     "rejects an old event producer after same-id %s replacement",
     async (field) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const context = createContext();
         const resolver = () => context;
         context.resolveGatewayContext = resolver;
@@ -742,7 +742,7 @@ describe("native task event custody", () => {
             gatewayContextResolver: resolver,
           },
           async () => {
-            const custody = captureAgentHarnessCompletionCustody(scope)!;
+            const custody = (await captureAgentHarnessCompletionCustody(scope))!;
             try {
               const runtime = createAgentHarnessTaskRuntime({
                 scope,

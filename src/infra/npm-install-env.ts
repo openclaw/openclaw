@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
@@ -174,12 +175,8 @@ function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConf
 }
 
 function readFileSignature(filePath: string): string {
-  try {
-    const stat = fsSync.statSync(filePath);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return "missing";
-  }
+  const stat = safeStatSync(filePath);
+  return stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
 }
 
 function safeCwd(): string {

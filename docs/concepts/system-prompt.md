@@ -31,10 +31,10 @@ The built-in GPT-5-family prompt contribution (`resolveGpt5SystemPromptContribut
 The prompt is compact, with fixed sections:
 
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When `progress_card` is enabled (`tools.updatePlan`, on by default), its own description explains how to maintain one durable plan and status note, keep at most one step `in_progress`, and skip routine updates that do not change the picture.
-- **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing.
+- **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing. A requested action with an available tool is authorized: tool policy, sandboxing, and exec approvals gate risk at runtime, so the prompt does not ask the model to pre-refuse, warn, or seek extra permission.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
-- **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight, plus private delivery of short-lived login codes in groups and a terminal setup route when no control tools are available.
-- **Runtime Context**: stable guidance for all providers, immediately after Safety and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
+- **Care**: inspect and merge before editing existing config or scheduler files, use or store credentials the user shares as asked, private delivery of short-lived login codes in groups, and a terminal setup route when no control tools are available.
+- **Runtime Context**: stable guidance for all providers, immediately after Care and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). For the Gateway hosting this session, owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI for updates to that Gateway. Never modify that Gateway's installation or control its service through exec or detached jobs; do not invent CLI commands. When `exec` is available, the prompt also says: "For a user-requested update on another host, verify it is not this Gateway, then use exec/SSH with `openclaw update --yes`; normal exec approvals still apply." See [Automation and SSH](/cli/update#automation-and-ssh).
 - **Messaging**: use OpenClaw routing for connected channel replies and actions, not shell or HTTP workarounds. This does not prohibit user-authorized CLI or API actions for other services, such as sending email; normal tool permissions and approvals still apply.
@@ -70,14 +70,17 @@ At the `ultra` thinking level, a **Proactive Sub-Agent Orchestration** section i
 The `secrets` tool description teaches metadata-first discovery, task-needed
 masked requests, and returned store SecretRefs for supported config fields.
 Setup tool descriptions route credential collection through masked flows.
-The **Safety** section directs user-requested login or pairing codes and
-verification URLs from group conversations to the requesting user in private,
-followed by a group acknowledgment without the code or URL. When neither
-`openclaw` nor `gateway` is available, it directs
-channel, provider, and credential setup to `openclaw channels add <channel>` or
-`openclaw configure` in a terminal, where prompts mask secrets. Tokens, API keys,
-and passwords are not collected in chat. This credential guidance also appears
-in Codex and Copilot prompts, based on their callable control tools.
+The **Care** section tells the agent to use or store credentials the user shares
+as asked, complete the task, and briefly acknowledge how the supplied credential
+was used or stored in the final reply without repeating its value. The
+acknowledgment stays factual and non-alarming. It also directs user-requested login
+or pairing codes and verification URLs from group conversations to the requesting
+user in private, followed by a group
+acknowledgment without the code or URL. When neither `openclaw` nor `gateway` is
+available, it directs channel, provider, and credential setup to
+`openclaw channels add <channel>` or `openclaw configure` in a terminal, where
+prompts mask secrets. This credential guidance also appears in Codex and Copilot
+prompts, based on their callable control tools.
 See [Secrets](/tools/secrets).
 
 UI presentation guidance is shared with native Codex developer instructions.
@@ -93,7 +96,7 @@ not a bare `publicUrl`; token-bearing URLs stay private. The agent must verify t
 delivered interaction or say it is unverified. Tool descriptions and linked docs
 own the detailed sandbox, permission, and server-setup instructions.
 
-Safety guardrails in the system prompt are advisory, not enforcement. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable prompt guardrails by design.
+Risk is enforced at runtime, not in prompt prose. Tool policy, exec approvals, sandboxing, and channel allowlists decide what runs or needs confirmation; the prompt tells the agent to act on requested work and let those gates decide.
 
 Gateway-owned prompt assembly carries context provenance separately from message text.
 Context producers distinguish runtime instructions from conversation data and
@@ -122,7 +125,7 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Care**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
@@ -195,7 +198,7 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
-Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Other harnesses keep the normal prompt section.
+Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Connections without that relay use thread developer instructions so model-owned collaboration instructions cannot replace the catalog. Other harnesses keep the normal prompt section.
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.
 

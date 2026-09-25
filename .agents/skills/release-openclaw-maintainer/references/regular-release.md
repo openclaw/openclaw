@@ -1,5 +1,19 @@
 # Regular beta and stable release
 
+## Orchestrated stable (default)
+
+`pnpm release:stable YYYY.M.PATCH` drives the whole fast path from
+`docs/reference/RELEASING.md` (cut → validate → publish → sync-beta →
+flip-github → macos → closeout) with state in
+`.artifacts/release-YYYY.M.PATCH/state.json`. Rerun to resume, `--from <phase>`
+to restart a phase, `--status` to inspect, `--dry-run` to print every command.
+Two prompts only: confirm the cut SHA (`--confirm-cut-sha <sha>` without a
+terminal) and approve publication (`--approve-publication`). A refusal prints
+`Next:` with the exact commands; run them, then resume. Use the manual sequence
+below when the orchestrator refuses a step it cannot repair itself (editorial
+changelog work, the compat inventory PR, an appcast PR, the closeout PR) or for
+betas.
+
 ## Freeze and validate code
 
 Read [preparation](preparation.md) before branch or version changes. Record the
@@ -50,9 +64,9 @@ proven by diagnosis. A flake, an advisory lane, or a publish-tooling re-tag
 never does. Tooling,
 credentials, infrastructure or wrapper failure keeps the candidate and recovers
 the failed surface. Use [publication recovery](publication-recovery.md) for
-classification. While the parent runs, hold runner priority with the recipe
-in `docs/reference/RELEASING.md` (`pnpm frv prioritize` once #156305 lands)
-and restore cancelled runs after the seal.
+classification. Keep PR CI and supporting workflows running while the parent
+runs. Use the release recovery guidance in `docs/reference/RELEASING.md` only
+for runs already deferred by historical workflows.
 
 An early `OpenClaw Performance` run is optional beta confidence:
 `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling/live OpenAI
@@ -93,8 +107,11 @@ its delta is release metadata only; record the skip, it is not a blocker. A
 prepare-only request does not
 authorize pushing publication tags: use an existing matching protected tooling
 ref where available, otherwise report that qualification still needs one.
-With publication/tag-push authority, create and push the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tooling tag at the recorded
-Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
+With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
+`pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
+mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
+through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
+Manual tag creation remains the fallback (see `docs/reference/RELEASING.md`). The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
@@ -110,18 +127,18 @@ pnpm release:candidate -- \
   --npm-dist-tag <beta-or-latest> \
   --publication-route <normal-or-prepared> \
   --full-release-run <release-sha-validation-run-id> \
-  --publish-workflow-ref release-publish/<tooling-sha12>-<epoch> \
+  --workflow-sha <tooling-sha> \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
 
 Match `--npm-dist-tag` and `--publication-route` to the frozen validation
 selection; the helper defaults to `beta` and `normal`.
-`--publish-workflow-ref` selects the publication tag, not the helper checkout.
-The same-checkout bootstrap fetches the workflow branch tip. Verify that the
-executing helper's Tooling SHA matches the recorded tag; if it differs, use
-only an owner-supported exact-tooling entry path, without moving the protected
-tag or silently changing qualification identity.
+`--workflow-sha` pins both the helper checkout and publication tag to the recorded
+Tooling SHA. Alternatively, `--publish-workflow-ref` selects an existing
+publication tag while the same-checkout bootstrap fetches the workflow branch
+tip; verify that the executing helper's Tooling SHA matches that tag, without
+moving it or silently changing qualification identity.
 
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
@@ -170,16 +187,22 @@ candidate-approved digests are supplied together or both omitted.
 Wait for `npm-release` environment approval, plugin npm then core npm, parallel
 ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
-on recovery; never rebuild or republish successful versions. Each npm child
-needs its own `npm-release` approval and ClawHub children must never be
-approved by hand; watch `pending_deployments` on every child per
-`$release-openclaw-ci` (Publish children). Children run on hosted
-`ubuntu-latest`; if that pool is saturated, apply the runner-priority recipe in
-`docs/reference/RELEASING.md` (Blacksmith testbox runs do not compete).
+on recovery; never rebuild or republish successful versions. The parent's
+approval receipt lets the ClawHub child skip its gate; each npm child still
+needs its own `npm-release` approval (the workflow token cannot approve it).
+ClawHub children must never be approved by hand; watch `pending_deployments`
+on every child per `$release-openclaw-ci` (Publish children). Children run on hosted
+`ubuntu-latest`; if that pool is saturated, let jobs queue normally without
+cancelling PR CI. Blacksmith testbox runs use a separate pool.
 
 After the core child logs `+ openclaw@<version>`, the package takes 5-6 minutes
-to appear in `npm view openclaw versions --json --prefer-online`; poll it before
-the dist-tag sync, the GitHub flip, or verification. Run postpublish
+to appear in `npm view openclaw versions --json --prefer-online`. The parent's
+`Complete publish workflows` step polls the registry document for the version
+under the target dist-tag (bounded 10 minutes), then dispatches the
+`sync_beta_to_stable` ledger sync through a release-ledger app token and waits
+for it before verification; if its summary reports the token unavailable,
+dispatch the sync by hand before the verify runs. For manual work, poll the
+registry yourself before the sync, the GitHub flip, or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
 reports main-only bundled plugin files as missing), with the tooling identity
 exported, or it fails `SHA-pinned release-publish ref does not match`:
@@ -199,10 +222,9 @@ release evidence, and Docker.
 As soon as `openclaw@<version>` is visible on npm under the target dist-tag,
 flip the GitHub release public: un-draft it and mark it latest for stable.
 Never wait for Docker, ClawHub, the app publishers, or the parent's finalize
-step; the macOS publisher requires the public release. Dispatch the
-`sync_beta_to_stable` dist-tag sync right after core npm and before the parent's
-completion verify, which fails on a stale `beta` tag. If the parent has not
-flipped it, run
+step; the macOS publisher requires the public release. The parent's finalize
+step accepts an already public release with the expected tag target and latest
+state, so a manual flip does not fail it. If the parent has not flipped it, run
 `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`.
 
 Native applications use [platform publication](platform-publication.md) as

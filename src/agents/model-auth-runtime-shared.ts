@@ -18,6 +18,8 @@ export type ResolvedProviderAuth = {
   profileId?: string;
   source: string;
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  /** Provider-owned OAuth grant family; distinct from credential renewal mode. */
+  authFlow?: string;
 };
 
 export function resolveDirectProviderCredentialMode(params: {

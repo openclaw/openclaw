@@ -58,6 +58,7 @@ libc = "0.2.189"
 cairo-rs = { version = "0.18.5", features = ["png"] }
 gtk = "0.18.2"
 webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
+x11 = { version = "2.21.0", features = ["xlib"] }
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 

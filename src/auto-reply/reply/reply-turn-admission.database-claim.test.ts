@@ -31,6 +31,162 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([
+  "cancelled",
+  "foreign-store",
+  "request-changed",
+  "later-foreign-store",
+  "later-rekey",
+  "later-rebound-store",
+] as const)("does not admit a delayed healthy rotation after %s", async (change) => {
+  const root = tempDirs.make("reply-delayed-rotation-");
+  const ownerStore = path.join(root, "owner.sqlite");
+  const foreignStore = path.join(root, "target.sqlite");
+  const isForeignStore = change === "foreign-store" || change === "later-foreign-store";
+  const storePath = isForeignStore ? foreignStore : ownerStore;
+  const sessionKey = "global";
+  const sessionId = "before-compaction";
+  const nextSessionId = "after-compaction";
+  const stores = new Set([ownerStore, storePath]);
+  if (change === "later-rebound-store") {
+    stores.add(foreignStore);
+  }
+  for (const target of stores) {
+    sessionEntries.replaceSessionEntrySync(
+      { storePath: target, sessionKey },
+      { sessionId, updatedAt: 1 },
+    );
+  }
+  let preparingOwner = false;
+  const registerOwner = async () => {
+    preparingOwner = true;
+    try {
+      const result = await admitReplyTurn({
+        storePath: ownerStore,
+        sessionKey,
+        sessionId,
+        kind: "visible",
+        resetTriggered: false,
+      });
+      if (result.status !== "owned" || !result.databaseClaim) {
+        throw new Error("Fixture requires an admitted physical database owner");
+      }
+      return result;
+    } finally {
+      preparingOwner = false;
+    }
+  };
+  let owner = change.startsWith("later-") ? undefined : await registerOwner();
+  const captured =
+    createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
+  const release = createDeferred();
+  const load = sessionEntries.loadSessionEntryForAdmission;
+  let reads = 0;
+  vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(async (...args) => {
+    if (preparingOwner) {
+      return await load(...args);
+    }
+    const read = ++reads;
+    const snapshot = await load(...args);
+    if (read === 1 && change.startsWith("later-")) {
+      expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+      owner = await registerOwner();
+    }
+    if (read === 2) {
+      captured.resolve(snapshot);
+      await release.promise;
+    }
+    return snapshot;
+  });
+  const controller = new AbortController();
+  let requestFailure: Error | undefined;
+  const pending = admitReplyTurn({
+    storePath,
+    sessionKey,
+    sessionId,
+    expectedSessionId: sessionId,
+    kind: "visible",
+    resetTriggered: false,
+    upstreamAbortSignal: controller.signal,
+    assertRequestCurrent: () => {
+      if (requestFailure) {
+        throw requestFailure;
+      }
+    },
+  });
+  try {
+    const snapshot = await Promise.race([
+      captured.promise,
+      pending.then(() => {
+        throw new Error("Admission completed before its final snapshot was captured");
+      }),
+    ]);
+    expect(snapshot.entry?.sessionId).toBe(sessionId);
+    expect(snapshot.databaseClaim.isCurrent()).toBe(true);
+    if (!owner?.databaseClaim) {
+      throw new Error("Fixture requires the admitted predecessor before rotation");
+    }
+    expect(snapshot.databaseClaim.identity === owner.databaseClaim.identity).toBe(!isForeignStore);
+    // Identical row IDs in another store still cannot establish target lineage.
+    for (const target of new Set([ownerStore, storePath])) {
+      await sessionEntries.replaceSessionEntry(
+        { storePath: target, sessionKey },
+        { sessionId: nextSessionId, updatedAt: 2 },
+      );
+    }
+    if (change === "later-rekey") {
+      owner.operation.updateSessionKey("other-session");
+    } else if (change === "later-rebound-store") {
+      preparingOwner = true;
+      try {
+        const adopted = await admitReplyTurn({
+          storePath: foreignStore,
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          kind: "visible",
+          resetTriggered: false,
+          adoptOperation: owner.operation,
+        });
+        if (adopted.status !== "owned" || !adopted.databaseClaim) {
+          throw new Error("Fixture requires physical-store adoption");
+        }
+        expect(adopted.databaseClaim.identity).not.toBe(owner.databaseClaim.identity);
+        expect(snapshot.databaseClaim.isCurrent()).toBe(true);
+      } finally {
+        preparingOwner = false;
+      }
+    }
+    owner.operation.updateSessionId(nextSessionId);
+    owner.operation.complete();
+    if (change === "cancelled") {
+      controller.abort();
+    } else if (change === "request-changed") {
+      requestFailure = new Error("Original caller was retired during preparation");
+      expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+    }
+    release.resolve();
+    if (change === "cancelled") {
+      await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
+      expect(reads).toBe(2);
+    } else if (change === "request-changed") {
+      // Caller refusal keeps precedence over a concurrent physical-store retirement.
+      await expect(pending).rejects.toBe(requestFailure);
+      expect(reads).toBe(2);
+    } else {
+      await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    }
+    expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+  } finally {
+    release.resolve();
+    owner?.operation.complete();
+    const result = await pending.catch(() => undefined);
+    if (result?.status === "owned") {
+      result.operation.complete();
+    }
+  }
+});
+
 it.each(
   (["writer", "active", "delivery"] as const).flatMap((wait) =>
     (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({

@@ -65,7 +65,8 @@ describe("Windows skills watcher paths", () => {
         const shared = watchForSkillRoot(siblingRoot).watcher;
         const emitRawAndDrain = async (rawPath: string) => {
           shared.emit("raw", "rename", rawPath, { watchedPath: root });
-          await Promise.resolve();
+          // Promotion waits for the prior logical owner's joined retirement.
+          await vi.advanceTimersByTimeAsync(0);
         };
         if (phase === "reconciliation") {
           refreshModule.ensureSkillsWatcher({ workspaceDir, config });

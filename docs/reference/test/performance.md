@@ -70,9 +70,21 @@ alongside the report.
 Each case records startup from the initialized measurement preload to HTTP
 readiness, one unmeasured health warmup, a 250 ms idle window, 20 completed
 `health` RPCs, and a 250 ms post-work window. The conformance case additionally
-creates a session and runs 20 asserted `kitchen_sink_text` calls with unique
-idempotency keys, followed by another observation window. Setup and package
-installation are outside measured phases; failed measured calls are not retried.
+measures one asserted `session-create`, then 20 asserted `kitchen_sink_text`
+calls with unique idempotency keys, followed by another observation window.
+The `plugin-tool` aggregate retains all 20 calls. Its nested `breakdown` separates
+`plugin-tool-first` (the original first call) from `plugin-tool-warm` (the remaining
+19); no call is discarded or added as warmup. Both children share the same raw
+midpoint snapshot, and the aggregate uses the original outer snapshots. Do not
+sum the aggregate and its children. The aggregate includes midpoint sampling
+overhead; these are whole-Gateway costs in an already started host, not isolated
+schema construction, cold loading or plugin allocation costs. Neither session
+creation nor plugin tools have an empty-host subtraction.
+
+Setup and package installation are outside measured phases. Failed measured
+calls are not retried. Missing or invalid boundary samples fail the observation
+without changing the completed-call count; an unavailable midpoint stops work
+before warm calls. A later failure preserves the successful first-call receipt.
 
 After those matched phases, the conformance case uses `kitchen.resources` to
 verify ten million CPU iterations and a fixed checksum, hold a 16 MiB Buffer,
@@ -139,6 +151,8 @@ only the selected plugins there. The workload callback receives authenticated
 CLI-mode RPC calls, resource snapshots and counted `measure(name, count, run)`
 phases. Assert the active plugin inventory and operation results in the workload;
 registration or a successful transport response alone does not establish coverage.
+Pass `{ splitFirst: true }` as the fourth `measure` argument to retain a nested
+first/warm breakdown with shared boundary samples and unchanged operation indices.
 
 The host records startup, preserves failed phases and joins Gateway shutdown
 before checking service-stop logs. A failed workload, nonzero exit, attempted

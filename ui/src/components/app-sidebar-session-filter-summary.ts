@@ -122,6 +122,30 @@ export function renderSessionListToolbar(host: SessionListHost) {
   `;
 }
 
+export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionMutationError
+    ? html`
+        <div
+          class="sidebar-session-error callout danger callout--dismissible"
+          role="alert"
+          data-sidebar-session-error
+        >
+          <span class="callout__content">${host.sessionData.sessionMutationError}</span>
+          <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+            <button
+              class="callout__dismiss"
+              type="button"
+              @click=${() => host.sessionData.dismissSessionMutationError()}
+              aria-label=${t("chat.actions.dismissError")}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      `
+    : nothing;
+}
+
 /** Each list supplies settlement from its own request owner, not its sibling's cache. */
 export function renderPersonalSessionEmpty(
   host: Pick<

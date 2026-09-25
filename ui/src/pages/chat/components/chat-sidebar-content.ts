@@ -222,19 +222,14 @@ export function buildRawContent(
   if (!content) {
     return null;
   }
-  if (content.kind === "markdown") {
+  if (content.kind === "markdown" || content.kind === "file") {
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: formatFencedCodeBlock(rawText),
-      rawText,
-    };
-  }
-  if (content.kind === "file") {
-    const rawText = content.rawText ?? content.content;
-    return {
-      kind: "markdown",
-      content: formatFencedCodeBlock(rawText, content.language),
+      content: formatFencedCodeBlock(
+        rawText,
+        content.kind === "file" ? content.language : undefined,
+      ),
       rawText,
     };
   }
@@ -246,19 +241,6 @@ export function buildRawContent(
     };
   }
   return null;
-}
-
-// Editing is only offered for uniform line endings: the editor serializes with
-// one configured separator, so a mixed-endings file would have its untouched
-// lines silently rewritten on save.
-
-function resolveSidebarCanvasSandbox(
-  content: ChatDetailPanelContent,
-  embedSandboxMode: EmbedSandboxMode,
-): string {
-  return content.kind === "canvas"
-    ? resolveEmbedSandbox(embedSandboxMode, content.sandbox)
-    : "allow-scripts";
 }
 
 type MarkdownSidebarProps = {
@@ -296,7 +278,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
-      ? resolveSidebarCanvasSandbox(content, props.embedSandboxMode ?? "scripts")
+      ? resolveEmbedSandbox(props.embedSandboxMode ?? "scripts", content.sandbox)
       : "";
   const canvasSrc =
     content?.kind === "canvas"

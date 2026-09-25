@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
@@ -106,19 +107,11 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
 }
 
 function existsDir(dir: string): boolean {
-  try {
-    return fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
+  return safeStatSync(dir)?.isDirectory() ?? false;
 }
 
 function existsFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
 function resolveFeishuAgentSessionsDir(agentId: string): string {
@@ -438,10 +431,8 @@ function inspectSessionTranscript(params: {
   storePath: string;
   transcriptPath: string;
 }): FeishuDoctorFinding | null {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(params.transcriptPath);
-  } catch {
+  const stat = safeStatSync(params.transcriptPath);
+  if (!stat) {
     return null;
   }
   if (!stat.isFile()) {

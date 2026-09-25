@@ -538,6 +538,7 @@ describe("detectChangedScope", () => {
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
     ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["scripts/lib/vitest-build-prerequisites.mts", true, false],
     ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
@@ -891,6 +892,7 @@ describe("detectChangedScope", () => {
         "scripts/ci-changed-scope.mjs",
         "scripts/lib/arg-utils.runtime.mjs",
         "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/ci-native-generated-scope.mjs",
         "scripts/lib/direct-run.mjs",
         "scripts/lib/merge-head-diff-base.mjs",
       ]) {

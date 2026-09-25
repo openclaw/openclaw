@@ -30,6 +30,7 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   createYieldAbortedResponse,
@@ -47,7 +48,6 @@ import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
-  wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
@@ -340,7 +340,9 @@ export function installEmbeddedAttemptStreamGuards(
   }
 
   if (resolveToolCallArgumentsEncoding(attempt.model) === "html-entities") {
-    session.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(session.agent.streamFn);
+    session.agent.streamFn = createHtmlEntityToolCallArgumentDecodingWrapper(
+      session.agent.streamFn,
+    );
   }
 
   // Tool-call repair can replace structured arguments from fragmented deltas.

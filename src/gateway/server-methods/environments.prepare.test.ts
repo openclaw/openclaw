@@ -87,7 +87,7 @@ describe("environments.prepare", () => {
     ]);
   });
 
-  it("projects preparation identity without the durable demand or expiry fields", () => {
+  it("omits administrator preparation details by default", () => {
     const preparation = {
       purpose: "build" as const,
       key: "project-key",

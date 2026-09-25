@@ -1,6 +1,7 @@
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 // Codex plugin module implements auth bridge behavior.
 
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -48,8 +49,12 @@ import {
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
 } from "./auth-start-options.js";
+import type {
+  CodexAppServerPreparedAuth,
+  CodexAppServerPreparedAuthProfileSnapshot,
+  CodexAppServerResolvedPreparedAuth,
+} from "./auth-types.js";
 import type { CodexAppServerClient } from "./client.js";
-import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import {
   ensureCodexManagedBundledMarketplace,
   resolveCodexManagedBundledMarketplaceSource,
@@ -59,6 +64,7 @@ import {
   ensureCodexComputerUseServiceApp,
   resolveCodexComputerUseServiceAppSourcePath,
 } from "./computer-use-service.js";
+import { reconcileManagedCodexComputerUseCache } from "./computer-use-unified.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
 import {
@@ -71,7 +77,16 @@ import type {
   CodexGetAccountResponse,
   CodexLoginAccountParams,
 } from "./protocol.js";
+import {
+  isCodexResponsesOAuthCredential,
+  resolveCodexResponsesOAuthProfileFingerprint,
+} from "./responses-oauth.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+
+export type {
+  CodexAppServerPreparedAuth,
+  CodexAppServerResolvedPreparedAuth,
+} from "./auth-types.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
@@ -193,28 +208,6 @@ function resolveUnimportedAgentCodexAuthMessage(params: {
   return `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`;
 }
 
-type CodexAppServerPreparedAuthProfileSnapshot = {
-  loginParams: CodexLoginAccountParams;
-  secretFreeCacheKey: string;
-  /** Genuine ChatGPT principal id; email/profile fallbacks are not authorization identity. */
-  chatgptAccountId?: string;
-};
-
-export type CodexAppServerPreparedAuth =
-  | { kind: "api-key"; apiKey: string }
-  | {
-      kind: "profile";
-      profileId: string;
-      store: AuthProfileStore;
-      snapshot?: CodexAppServerPreparedAuthProfileSnapshot;
-    };
-
-export type CodexAppServerResolvedPreparedAuth =
-  | Extract<CodexAppServerPreparedAuth, { kind: "api-key" }>
-  | (Extract<CodexAppServerPreparedAuth, { kind: "profile" }> & {
-      snapshot: CodexAppServerPreparedAuthProfileSnapshot;
-    });
-
 /** Resolves prepared profile login material once so cache identity and RPC login cannot drift. */
 export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
   authProfileId?: string;
@@ -240,6 +233,25 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
   const credential = store.profiles[profileId];
   if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
+  }
+  if (isCodexResponsesOAuthCredential(credential)) {
+    return {
+      inferenceAuth: "host-oauth",
+      // Native Codex also uses API-key auth for auxiliary services. Only this local
+      // placeholder may enter native auth; the parent relay owns the real bearer.
+      loginParams: { type: "apiKey", apiKey: `openclaw-local-${randomUUID()}` },
+      secretFreeCacheKey: await resolveCodexResponsesOAuthProfileFingerprint({
+        profileId,
+        store,
+        agentDir,
+        config: params.config,
+      }),
+    };
+  }
+  if (credential.type === "oauth" && credential.authFlow === "chatgpt-identity") {
+    throw new Error(
+      "ChatGPT subscription sharing was not granted; sign in again and enable sharing.",
+    );
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     agentDir,
@@ -291,6 +303,30 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
   const usesNativeHome = params.homeScope === "user";
+  const selectedCredential = params.authProfileId
+    ? params.authProfileStore.profiles[params.authProfileId]
+    : undefined;
+  if (isCodexResponsesOAuthCredential(selectedCredential)) {
+    if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
+      throw new Error(
+        "ChatGPT subscription sharing requires the managed local Codex API route and an isolated home.",
+      );
+    }
+    const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot(params);
+    if (!snapshot || !params.authProfileId) {
+      throw new Error("ChatGPT subscription sharing could not prepare the selected profile.");
+    }
+    return {
+      authProfileId: params.authProfileId,
+      nativeAuthProfile: false,
+      preparedAuth: {
+        kind: "profile" as const,
+        profileId: params.authProfileId,
+        store: params.authProfileStore,
+        snapshot,
+      },
+    };
+  }
   if (params.requirePreparedAuth && usesNativeHome) {
     throw createCodexAppServerAuthError(
       'Codex remote-exec cloud placement requires prepared OpenAI auth. Configure an OpenAI API-key, OAuth, or token profile and use appServer.homeScope="agent"; ambient credentials and native Codex auth are not allowed.',
@@ -552,15 +588,18 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
       })
     : exactDesktopCandidate;
   params.assertCurrent();
+  let marketplacePath: string | undefined;
   if (provisioningAgentDir) {
     if (desktopCandidates.length > 0 && !artifactCandidate) {
       throw new CodexComputerUseCandidateArtifactsUnavailableError();
     }
     try {
-      const marketplacePath = usesManagedBundledMarketplace
+      marketplacePath = usesManagedBundledMarketplace
         ? await ensureCodexManagedBundledMarketplace({
             codexHome,
             ownershipRoot: provisioningAgentDir,
+            computerUsePluginName: computerUseConfig.pluginName,
+            computerUseMcpServerName: computerUseConfig.mcpServerName,
             ...(artifactCandidate
               ? {
                   appServerCommand: artifactCandidate.appServerCommandPath,
@@ -602,23 +641,17 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
     }
   }
   params.assertCurrent();
-  const cacheBinding = [
-    params.desktopGeneration?.epoch ?? "manual",
-    artifactCandidate?.bundledMarketplacePath ?? "default",
-    computerUseConfig.pluginName,
-  ].join("\0");
-  const cache = await ensureCodexComputerUseSharedPluginCache({
+  return await reconcileManagedCodexComputerUseCache({
     codexHome,
     config: computerUseConfig,
-    ...(ownsIsolatedCodexHome ? { ownershipRoot: params.agentDir } : {}),
-    ...(artifactCandidate
-      ? { bundledMarketplacePath: artifactCandidate.bundledMarketplacePath }
-      : {}),
+    ownershipRoot: ownsIsolatedCodexHome ? params.agentDir : undefined,
+    managedMarketplacePath: marketplacePath,
+    bundledMarketplacePath: artifactCandidate?.bundledMarketplacePath,
+    epoch: params.desktopGeneration?.epoch,
     assertCurrent: params.assertCurrent,
-    forceRefresh: params.forceCacheRefresh === true || params.previousCacheBinding !== cacheBinding,
+    forceRefresh: params.forceCacheRefresh,
+    previousCacheBinding: params.previousCacheBinding,
   });
-  params.assertCurrent();
-  return cache.status === "shared" ? cacheBinding : undefined;
 }
 
 async function resolveCompleteComputerUseArtifactCandidate(params: {

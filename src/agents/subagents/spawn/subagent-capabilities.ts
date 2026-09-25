@@ -165,32 +165,21 @@ export function resolveSubagentCapabilityStore(
   );
 }
 
-/** Resolve depth-derived role/scope booleans for a subagent position. */
-function resolveSubagentRoleForDepth(params: {
-  depth: number;
-  maxSpawnDepth?: number;
-}): SubagentSessionRole {
+/** Resolve depth-derived role, scope, and spawn/control booleans. */
+export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
   const depth = resolveNonNegativeIntegerOption(params.depth, 0);
   const maxSpawnDepth = resolveIntegerOption(
     params.maxSpawnDepth,
     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
     { min: 1 },
   );
-  if (depth <= 0) {
-    return "main";
-  }
-  return isSubagentSpawnDepthAllowed(depth, maxSpawnDepth) ? "orchestrator" : "leaf";
-}
-
-function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
-  return role === "leaf" ? "none" : "children";
-}
-
-/** Resolve depth-derived role, scope, and spawn/control booleans. */
-export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
-  const depth = resolveNonNegativeIntegerOption(params.depth, 0);
-  const role = resolveSubagentRoleForDepth(params);
-  const controlScope = resolveSubagentControlScopeForRole(role);
+  const role: SubagentSessionRole =
+    depth <= 0
+      ? "main"
+      : isSubagentSpawnDepthAllowed(depth, maxSpawnDepth)
+        ? "orchestrator"
+        : "leaf";
+  const controlScope: SubagentControlScope = role === "leaf" ? "none" : "children";
   return {
     depth,
     role,
@@ -368,13 +357,11 @@ export function resolveStoredSubagentCapabilities(
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = normalizedSessionKey
-    ? resolveSessionCapabilityEntry({
-        sessionKey: normalizedSessionKey,
-        cfg: opts?.cfg,
-        store,
-      })
-    : undefined;
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
   const depthStore =
     opts?.cfg && !isSessionCapabilityLookup(store) && typeof entry?.spawnDepth !== "number"
       ? undefined

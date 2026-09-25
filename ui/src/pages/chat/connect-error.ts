@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements connect error behavior.
 import {
   ConnectErrorDetailCodes,
   describePairingConnectRequirement,

@@ -243,8 +243,9 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.writeFile(targetPath, "{}");
     await fsp.symlink(targetPath, malformedPath);
     const symlinked = migrate(stateDir);
-    expect(symlinked.warnings.join("\n")).toContain("non-symlink file");
+    expect(symlinked.warnings.join("\n")).toContain("regular file");
     expect(fs.lstatSync(malformedPath).isSymbolicLink()).toBe(true);
+    expect(await fsp.readFile(targetPath, "utf8")).toBe("{}");
   });
 
   it.each([
