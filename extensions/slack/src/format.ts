@@ -84,7 +84,8 @@ function escapeSlackMrkdwnText(text: string, mentions?: "escape"): string {
 
 function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   const href = link.href.trim();
-  if (!href) {
+  // Slack cannot open local paths; keep the label beside the uploaded attachment.
+  if (!href || /^(?:\/(?!\/)|\.{1,2}\/|~\/)/u.test(href)) {
     return null;
   }
   const label = text.slice(link.start, link.end);
