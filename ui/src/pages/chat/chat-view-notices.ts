@@ -8,7 +8,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { hasTranscriptRunError } from "./chat-error-presentation.ts";
-import { renderChatErrorCard } from "./components/chat-error-card.ts";
+import { renderChatErrorCard, renderChatErrorRefresh } from "./components/chat-error-card.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -117,16 +117,7 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   const contention = props.runError?.kind === "state_contention";
-  const refresh = props.onRefresh
-    ? html`<button
-        class="btn btn--sm chat-error__refresh"
-        type="button"
-        ?disabled=${!props.connected}
-        @click=${props.onRefresh}
-      >
-        ${t(contention ? "chat.checkStatus" : "common.refresh")}
-      </button>`
-    : nothing;
+  const refresh = renderChatErrorRefresh(props.onRefresh, props.connected, contention);
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}

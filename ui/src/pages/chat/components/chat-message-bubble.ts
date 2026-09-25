@@ -35,7 +35,7 @@ import "./chat-clawhub-card.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import { renderChatErrorCard } from "./chat-error-card.ts";
+import { renderChatErrorCard, renderChatErrorRefresh } from "./chat-error-card.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -185,6 +185,8 @@ export function renderGroupedMessage(
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
     onRequestUpdate?: () => void;
+    onRefreshDiagnostic?: () => void;
+    diagnosticRefreshConnected?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
     mediaPolicyKey?: string;
@@ -512,7 +514,10 @@ export function renderGroupedMessage(
   };
   const renderMessageContent = () =>
     diagnostic
-      ? renderChatErrorCard(diagnostic)
+      ? renderChatErrorCard(
+          diagnostic,
+          renderChatErrorRefresh(opts.onRefreshDiagnostic, opts.diagnosticRefreshConnected),
+        )
       : renderInOrder
         ? renderOrderedContent()
         : renderText();

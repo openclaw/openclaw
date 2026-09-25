@@ -5,6 +5,23 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { clampText } from "../../../lib/format.ts";
 
+export function renderChatErrorRefresh(
+  onRefresh: (() => void) | undefined,
+  connected: boolean | undefined,
+  checkStatus = false,
+) {
+  return onRefresh
+    ? html`<button
+        class="btn btn--sm chat-error__refresh"
+        type="button"
+        ?disabled=${!connected}
+        @click=${onRefresh}
+      >
+        ${t(checkStatus ? "chat.checkStatus" : "common.refresh")}
+      </button>`
+    : nothing;
+}
+
 export function renderChatErrorCard(
   error: string,
   action: TemplateResult | typeof nothing = nothing,

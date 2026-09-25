@@ -81,6 +81,11 @@ suite.define(() => {
         });
         await expect.poll(() => page.locator(".chat-bubble .chat-error").count()).toBe(1);
         expect(await page.locator(".agent-chat__composer-notices .chat-error").count()).toBe(0);
+        // The transferred control refreshes this history; it never resubmits the failed turn.
+        const historyCount = (await gateway.getRequests("chat.history")).length;
+        await page.locator(".chat-bubble--run-error .chat-error__refresh").click();
+        await gateway.waitForRequest("chat.history", { after: historyCount });
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         // Reconnect recovers the same durable diagnostic rather than reviving its banner.
         await gateway.closeLatest();
         await expect.poll(async () => await gateway.getSocketCount()).toBeGreaterThan(1);
