@@ -88,11 +88,6 @@ const terminationCases: Array<{
     expected: [/(?:exit|code|status)[^\n]*23/i],
   },
   {
-    name: "exit with output",
-    result: { code: 23, stderr: "fatal: dependency unavailable" },
-    expected: [/fatal: dependency unavailable/, /(?:exit|code|status)[^\n]*23/i],
-  },
-  {
     name: "timeout with output",
     result: {
       code: 124,

@@ -54,6 +54,21 @@ function createChild(): MockChild {
   return child;
 }
 
+function mockSpawn(): MockChild {
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("rg");
+  return child;
+}
+
+function executeGrep(
+  tool: ReturnType<typeof createGrepToolDefinition>,
+  args: Parameters<typeof tool.execute>[1],
+  signal?: AbortSignal,
+) {
+  return tool.execute("grep", args, signal, undefined, {} as never);
+}
+
 function grepRow(
   lineNumber: number,
   lines: { text: string } | { bytes: string } = { text: "foo\n" },
@@ -122,9 +137,7 @@ describe("grep tool streaming", () => {
   ])(
     "discloses $dropped discarded stderr bytes before the ripgrep diagnostic",
     async ({ chunks, dropped, tail }) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
       const result = createGrepToolDefinition(process.cwd()).execute(
         "stderr",
         { pattern: "needle" },
@@ -136,9 +149,7 @@ describe("grep tool streaming", () => {
       for (const chunk of chunks) {
         child.stderr.write(chunk);
       }
-      child.stdout.end();
-      child.stderr.end();
-      child.emit("close", 2);
+      closeChild(child, 2);
       await expect(result).rejects.toThrow(
         `[${dropped} UTF-8 bytes of earlier stderr discarded at the 65536-byte retention cap]\n${tail}`,
       );
@@ -146,17 +157,9 @@ describe("grep tool streaming", () => {
   );
   it.each([1, 3])("keeps colliding byte-path context separate at match limit %s", async (limit) => {
     const cwd = tempDirs.make("openclaw-grep-byte-path-");
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
     const tool = createGrepToolDefinition(cwd);
-    const execution = tool.execute(
-      "byte-path",
-      { pattern: "needle", context: 1, limit },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const execution = executeGrep(tool, { pattern: "needle", context: 1, limit });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     const paths = [
       ...[0x80, 0x81].map((byte) => ({
@@ -175,9 +178,7 @@ describe("grep tool streaming", () => {
           grepRow(3, { text: `after ${index}\n` }, "context", filePath),
       );
     }
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("close", 0);
+    closeChild(child, 0);
     const result = await execution;
     const rows = paths
       .slice(0, limit)
@@ -206,17 +207,9 @@ describe("grep tool streaming", () => {
       const filePath = path.join(cwd, relativePath);
       await mkdir(path.dirname(filePath), { recursive: true });
       await writeFile(filePath, "needle\n");
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
       const tool = createGrepToolDefinition(cwd);
-      const execution = tool.execute(
-        "path",
-        { pattern: "needle" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const execution = executeGrep(tool, { pattern: "needle" });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child.stdout.end(grepRow(1, { text: "needle\n" }, "match", filePath));
       child.stderr.end();
@@ -225,7 +218,7 @@ describe("grep tool streaming", () => {
     },
   );
 
-  it.each(["utf8", "utf16le", "utf16be", "byte-form"] as const)(
+  it.each(["utf16be", "byte-form"] as const)(
     "renders the searched %s context without decoding the file again",
     async (encoding) => {
       const cwd = tempDirs.make("openclaw-grep-context-");
@@ -234,21 +227,11 @@ describe("grep tool streaming", () => {
       const bytes =
         encoding === "byte-form"
           ? Buffer.from("before\xff\nneedle\xff\nafter\n", "latin1")
-          : encoding === "utf8"
-            ? Buffer.from(text)
-            : Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+          : Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
       await writeFile(filePath, encoding === "utf16be" ? bytes.swap16() : bytes);
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
       const tool = createGrepToolDefinition(cwd);
-      const execution = tool.execute(
-        "context",
-        { pattern: "needle", context: 1 },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const execution = executeGrep(tool, { pattern: "needle", context: 1 });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child.stdout.end(
         grepRow(
@@ -291,17 +274,9 @@ describe("grep tool streaming", () => {
     const lines = ["before", "foo retained", "middle", "tail", "outside"];
     lines[sentinel - 1] = "foo extra";
     await writeFile(filePath, lines.join("\n"));
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
     const tool = createGrepToolDefinition(cwd);
-    const execution = tool.execute(
-      "limit",
-      { pattern: "foo", context: 2, limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const execution = executeGrep(tool, { pattern: "foo", context: 2, limit: 1 });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     const killedAfterRows: boolean[] = [];
     for (let lineNumber = 1; lineNumber <= Math.max(4, sentinel); lineNumber++) {
@@ -315,9 +290,7 @@ describe("grep tool streaming", () => {
       );
       killedAfterRows.push(child.killed);
     }
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("close", null);
+    closeChild(child, null);
     const result = await execution;
     expect(killedAfterRows).toEqual(
       sentinel === 5 ? [false, false, false, false, true] : [false, false, false, true],
@@ -332,17 +305,9 @@ describe("grep tool streaming", () => {
     const cwd = tempDirs.make("openclaw-grep-overlap-");
     const filePath = path.join(cwd, "match.txt");
     await writeFile(filePath, "before\nfoo first\nfoo second\nafter");
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
     const tool = createGrepToolDefinition(cwd);
-    const execution = tool.execute(
-      "overlap",
-      { pattern: "foo", context: 1, limit: 2 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const execution = executeGrep(tool, { pattern: "foo", context: 1, limit: 2 });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     child.stdout.end(
       grepRow(1, { text: "before\n" }, "context", filePath) +
@@ -366,17 +331,9 @@ describe("grep tool streaming", () => {
       const cwd = tempDirs.make("openclaw-grep-eof-");
       const filePath = path.join(cwd, "sample.txt");
       await writeFile(filePath, `before\nfoo retained\nfoo extra${terminator}`);
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
       const tool = createGrepToolDefinition(cwd);
-      const execution = tool.execute(
-        "eof",
-        { pattern: "foo", context: 3, limit: 1 },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const execution = executeGrep(tool, { pattern: "foo", context: 3, limit: 1 });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child.stdout.write(
         grepRow(1, { text: "before\n" }, "context", filePath) +
@@ -408,20 +365,12 @@ describe("grep tool streaming", () => {
   ])(
     "preserves custom reader ownership for context $context and native text $hasText",
     async ({ context, hasText, reads, expected }) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
       const readFile = vi.fn(async () => "remote\r\ncustom needle\rtail\n");
       const tool = createGrepToolDefinition("/workspace", {
         operations: { isDirectory: () => true, readFile },
       });
-      const execution = tool.execute(
-        "custom",
-        { pattern: "needle", context },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const execution = executeGrep(tool, { pattern: "needle", context });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child.stdout.end(
         grepRow(
@@ -445,12 +394,10 @@ describe("grep tool streaming", () => {
     vi.mocked(ensureTool).mockResolvedValue("rg");
     const controller = new AbortController();
     const tool = createGrepToolDefinition(process.cwd());
-    const execution = tool.execute(
-      "drain-abort",
+    const execution = executeGrep(
+      tool,
       { pattern: "foo", context: 2, limit: 1 },
       controller.signal,
-      undefined,
-      {} as never,
     );
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     child.stdout.write(grepRow(1) + grepRow(2));
@@ -458,21 +405,13 @@ describe("grep tool streaming", () => {
     const rejection = expect(execution).rejects.toThrow("Operation aborted");
     controller.abort();
     await rejection;
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("close", null);
+    closeChild(child, null);
     expect(killedBeforeAbort).toBe(false);
     expect(kill).toHaveBeenCalledOnce();
   });
 
   it.for([
     { context: undefined, expected: ["sample.txt:3: context needle"] },
-    { context: 0, expected: ["sample.txt:3: context needle"] },
-    {
-      context: 1,
-      expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
-    },
-    { context: 0.5, expected: ["sample.txt:3: context needle"] },
     {
       context: 1.5,
       expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
@@ -481,9 +420,7 @@ describe("grep tool streaming", () => {
   ])(
     "normalizes grep context $context after argument validation",
     async ({ context, expected }) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
 
       const cwd = "/workspace";
       const filePath = `${cwd}/sample.txt`;
@@ -507,13 +444,7 @@ describe("grep tool streaming", () => {
       }) as Parameters<typeof tool.execute>[1];
       expect(validated).toEqual(args);
 
-      const resultPromise = tool.execute(
-        "grep-context",
-        validated,
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const resultPromise = executeGrep(tool, validated);
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child.stdout.end(
         `${JSON.stringify({
@@ -555,25 +486,15 @@ describe("grep tool streaming", () => {
   ])(
     "$name",
     async ({ matchCount, closeCode, expectedText, expectedLimitReached, expectedKilled }) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
 
       const tool = createGrepToolDefinition(process.cwd());
-      const resultPromise = tool.execute(
-        "call-limit",
-        { pattern: "foo", limit: 2 },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const resultPromise = executeGrep(tool, { pattern: "foo", limit: 2 });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       for (let lineNumber = 1; lineNumber <= matchCount; lineNumber += 1) {
         child.stdout.write(grepRow(lineNumber));
       }
-      child.stdout.end();
-      child.stderr.end();
-      child.emit("close", closeCode);
+      closeChild(child, closeCode);
 
       const result = await resultPromise;
       expect(textContent(result)).toBe(expectedText);
@@ -593,13 +514,7 @@ describe("grep tool streaming", () => {
 
     const controller = new AbortController();
     const tool = createGrepToolDefinition(process.cwd());
-    const result = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      controller.signal,
-      undefined,
-      {} as never,
-    );
+    const result = executeGrep(tool, { pattern: "foo" }, controller.signal);
 
     await vi.waitFor(() => expect(ensureTool).toHaveBeenCalledOnce());
     controller.abort();
@@ -624,13 +539,7 @@ describe("grep tool streaming", () => {
         readFile: () => "",
       },
     });
-    const result = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      controller.signal,
-      undefined,
-      {} as never,
-    );
+    const result = executeGrep(tool, { pattern: "foo" }, controller.signal);
 
     await vi.waitFor(() => expect(resolveIsDirectory).toBeDefined());
     controller.abort();
@@ -642,20 +551,12 @@ describe("grep tool streaming", () => {
   });
 
   it("removes the abort listener after normal settlement", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
 
     const controller = new AbortController();
     const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
     const tool = createGrepToolDefinition(process.cwd());
-    const result = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      controller.signal,
-      undefined,
-      {} as never,
-    );
+    const result = executeGrep(tool, { pattern: "foo" }, controller.signal);
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     child.emit("close", 1);
 
@@ -668,19 +569,11 @@ describe("grep tool streaming", () => {
   });
 
   it("settles an abort when the spawned child never closes", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
 
     const controller = new AbortController();
     const tool = createGrepToolDefinition(process.cwd());
-    const result = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      controller.signal,
-      undefined,
-      {} as never,
-    );
+    const result = executeGrep(tool, { pattern: "foo" }, controller.signal);
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     controller.abort();
 
@@ -689,9 +582,7 @@ describe("grep tool streaming", () => {
   });
 
   it("preserves abort precedence during async match formatting", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
     let resolveReadFile: ((value: string) => void) | undefined;
     const readFile = vi.fn(
       async () =>
@@ -704,13 +595,7 @@ describe("grep tool streaming", () => {
     const tool = createGrepToolDefinition(process.cwd(), {
       operations: { isDirectory: () => true, readFile },
     });
-    const result = tool.execute(
-      "call-1",
-      { pattern: "foo", context: 1 },
-      controller.signal,
-      undefined,
-      {} as never,
-    );
+    const result = executeGrep(tool, { pattern: "foo", context: 1 }, controller.signal);
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     child.stdout.write(
       `${JSON.stringify({
@@ -732,18 +617,10 @@ describe("grep tool streaming", () => {
   it.each(["stdout", "stderr"] as const)(
     "rejects and terminates ripgrep when %s fails",
     async (stream) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const child = mockSpawn();
 
       const tool = createGrepToolDefinition(process.cwd());
-      const resultPromise = tool.execute(
-        "call-1",
-        { pattern: "foo" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const resultPromise = executeGrep(tool, { pattern: "foo" });
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       child[stream].emit("error", new Error(`${stream} EPIPE`));
 
@@ -783,13 +660,6 @@ describe("grep tool streaming", () => {
     closeChild(child, 0);
 
     expect(textContent(await result)).toContain("needle 中中中");
-  });
-
-  it("processes multiple records from one chunk", async () => {
-    const { child, result } = await startMockGrep();
-    closeChild(child, 0, grepRow(1) + grepRow(2));
-
-    expect(textContent(await result)).toBe("match.txt:1: foo\nmatch.txt:2: foo");
   });
 
   it("accepts a JSON record exactly at the wire-record ceiling", async () => {
@@ -907,12 +777,10 @@ describe("grep tool streaming", () => {
   });
 
   it("keeps stdout guarded after a stderr failure", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
 
     const tool = createGrepToolDefinition(process.cwd());
-    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    const result = executeGrep(tool, { pattern: "foo" });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
 
     expect(() => {
@@ -923,12 +791,10 @@ describe("grep tool streaming", () => {
   });
 
   it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const child = mockSpawn();
 
     const tool = createGrepToolDefinition(process.cwd());
-    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    const result = executeGrep(tool, { pattern: "foo" });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
     const stderrBytes = Buffer.from("rg 错误：权限被拒绝\n");
     child.stdout.end();

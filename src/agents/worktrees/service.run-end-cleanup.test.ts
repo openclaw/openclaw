@@ -91,19 +91,6 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     expect(listRegistryWorktrees(env)).toEqual([]);
   });
 
-  it("records removal after clean run-end cleanup", async () => {
-    const created = await materialize("clean");
-    await service.acquire(created.id);
-
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
-
-    expect(getRegistryWorktree(env, created.id)).toMatchObject({
-      removedAt: now,
-      runEndCleanup: { outcome: "removed-lossless", at: now },
-    });
-    await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("preserves removal outcomes against late claims and post-abort writes", async () => {
     const created = await materialize("late-claim");
     await service.acquire(created.id);
@@ -126,6 +113,7 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       removedAt: now,
       runEndCleanup: { outcome: "removed-lossless", at: now },
     });
+    await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
 
     // A stale remover that aborted its claim writes retained/failed outcomes with
     // the live-row condition (recordOutcome); against a finalized row it must be

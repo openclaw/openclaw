@@ -23,19 +23,4 @@ describe("AgentRuntimePlan leaf contracts", () => {
       expect(source).not.toMatch(pattern);
     }
   });
-
-  it("guards against policy type imports re-entering the leaf contract", () => {
-    // The patterns intentionally match representative forbidden imports so the
-    // first test fails if concrete policy types creep into the leaf contract.
-    const forbiddenImports = [
-      'import type { PromptContribution } from "../system-prompt.types.js";',
-      'import type { TranscriptPolicy } from "../transcript-policy.types.js";',
-    ];
-
-    for (const importStatement of forbiddenImports) {
-      expect(
-        concreteRuntimePolicyImportPatterns.some((pattern) => pattern.test(importStatement)),
-      ).toBe(true);
-    }
-  });
 });

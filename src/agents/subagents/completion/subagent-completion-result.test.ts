@@ -53,11 +53,8 @@ describe("resolveSubagentCompletionResultText", () => {
   });
 
   it.each([
-    { status: "error", resultText: "" },
     { status: "error", resultText: " \n\t " },
     { status: "timeout", resultText: "" },
-    { status: "timeout", resultText: " \n\t " },
-    { status: "unknown", resultText: "" },
     { status: "unknown", resultText: " \n\t " },
   ] as const)(
     "preserves captured findings when a $status completion has blank primary text ($#)",

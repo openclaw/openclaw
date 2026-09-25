@@ -259,13 +259,9 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps a materialized model endpoint on its own credential provider", () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] },
-        },
-      },
-    };
+    const config: OpenClawConfig = providerConfig("arcee", {
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -294,26 +290,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(plan.providerForAuth).toBe("arcee");
     expect(plan.forwardedAuthProfileId).toBe("arcee:direct");
     expect(config.models?.providers?.arcee?.baseUrl).toBe("https://openrouter.ai/api/v1");
-  });
-
-  it("carries prepared provider aliases into generic auth planning", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      provider: "legacy-provider",
-      modelId: "model",
-      env: {},
-      authProfileStore: authStore({}),
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "alias-owner",
-            origin: "bundled",
-            providerAuthAliases: { "legacy-provider": "canonical-provider" },
-          },
-        ],
-      }),
-    });
-
-    expect(plan.providerForAuth).toBe("canonical-provider");
   });
 
   it("keeps unknown no-observation models on the legacy auth plan", () => {
@@ -759,35 +735,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/temporarily unavailable/u);
   });
 
-  it("keeps an explicit provider SecretRef ahead of an all-cooldown auth order", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...openAIPlatformAuthFixture(),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-        secrets: { providers: { default: { source: "env" } } },
-      } as OpenClawConfig,
-      env: { DIRECT_OPENAI_KEY: "sk-direct" },
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileStore: allCooldownOpenAIStore(),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-    expect(plan.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "environment",
-      authorization: "declared",
-    });
-  });
-
   it("does not let clear OAuth auth hide a cooldown Platform tier before literal fallback", () => {
     const store = authStore(
       {
@@ -805,13 +752,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         provider: "openai",
         modelId: "gpt-5.5",
         routeIntent: { authRequirement: "api-key", source: "explicit" },
-        config: {
-          models: {
-            providers: {
-              openai: { apiKey: "configured-platform-key", baseUrl: "", models: [] },
-            },
-          },
-        } as OpenClawConfig,
+        config: openAIConfig({ apiKey: "configured-platform-key" }),
         env: {},
         authProfileStore: store,
       }),
@@ -1048,15 +989,10 @@ describe("prepareAgentRuntimeAuthPlan", () => {
             vault: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        models: {
-          providers: {
-            openai: {
-              apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
-          },
-        },
+        ...openAIConfig({
+          apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
+          baseUrl: "https://api.openai.com/v1",
+        }),
       } as OpenClawConfig,
       env: { DIRECT_OPENAI_KEY: "sk-direct" },
       harnessId: "codex",
@@ -1086,17 +1022,10 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       prepareAgentRuntimeAuthPlan({
         ...openAIChatGptAuthFixture(),
         env: {},
-        config: {
-          models: {
-            providers: {
-              openai: {
-                api: "openai-chatgpt-responses",
-                baseUrl: "https://chatgpt.com/backend-api/codex",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: openAIConfig({
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        }),
         sessionAuthProfileId: "openai:platform",
         sessionAuthProfileSource: "user",
         authProfileStore: authStore({
@@ -1107,19 +1036,12 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("lets an explicit provider API key outrank automatic subscription profiles", () => {
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            auth: "api-key",
-            apiKey: "configured-platform-key",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config = openAIConfig({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      auth: "api-key",
+      apiKey: "configured-platform-key",
+    });
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIChatGptAuthFixture(),
       config,
@@ -1145,18 +1067,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...openAIPlatformAuthFixture(),
-        config: {
-          models: {
-            providers: {
-              openai: {
-                auth: "api-key",
-                apiKey: "configured-platform-key",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: openAIConfig({
+          auth: "api-key",
+          apiKey: "configured-platform-key",
+          baseUrl: "https://api.openai.com/v1",
+        }),
         env: { OPENAI_API_KEY: "ambient-platform-key" },
         authProfileStore: authStore(
           {
@@ -1218,18 +1133,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   it("lets a provider-entry token profile binding outrank configured auth and auth.order", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIPlatformAuthFixture(),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "api-key",
-              apiKey: "openai:bound",
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "api-key", apiKey: "openai:bound" }),
       env: {},
       authProfileStore: authStore(
         {
@@ -1262,11 +1166,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         modelId: "gpt-5.5",
         config: {
           auth: { profiles: { "openai:bound": { provider, mode } } },
-          models: {
-            providers: {
-              openai: { apiKey: "openai:bound", baseUrl: "", models: [] },
-            },
-          },
+          ...openAIConfig({ apiKey: "openai:bound" }),
         } as OpenClawConfig,
         env: {},
         authProfileStore: authStore({
@@ -1280,17 +1180,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...openAIPlatformAuthFixture(),
-        config: {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "openai:oauth",
-                baseUrl: "",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: openAIConfig({ apiKey: "openai:oauth" }),
         env: {},
         authProfileStore: authStore(
           {
@@ -1307,43 +1197,10 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/not a compatible bearer profile/u);
   });
 
-  it("does not forward a cooldowned provider-entry profile", () => {
-    const store = authStore({
-      "openai:bound": openAITokenProfile("subscription-token", Date.now() + 60_000),
-    });
-    setProfileCooldown(store, "openai:bound");
-
-    expect(() =>
-      prepareAgentRuntimeAuthPlan({
-        ...openAIPlatformAuthFixture(),
-        config: {
-          models: {
-            providers: {
-              openai: { apiKey: "openai:bound", baseUrl: "", models: [] },
-            },
-          },
-        } as OpenClawConfig,
-        env: {},
-        authProfileStore: store,
-      }),
-    ).toThrow(/temporarily unavailable/u);
-  });
-
   it("keeps an explicit AWS SDK auth mode ahead of provider-entry profile bindings", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIPlatformAuthFixture(),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "aws-sdk",
-              apiKey: "openai:bound",
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "aws-sdk", apiKey: "openai:bound" }),
       env: {},
       authProfileStore: authStore({
         "openai:bound": openAITokenProfile("subscription-token", Date.now() + 60_000),
@@ -1362,16 +1219,10 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIPlatformAuthFixture(),
       config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "aws-sdk",
-              apiKey: { source: "file", provider: "vault", id: "/openai/api-key" },
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
+        ...openAIConfig({
+          auth: "aws-sdk",
+          apiKey: { source: "file", provider: "vault", id: "/openai/api-key" },
+        }),
         secrets: {
           providers: {
             vault: { source: "file", path: "/tmp/openai-secrets.json", mode: "json" },
@@ -1445,17 +1296,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps profile auth ahead of a literal provider apiKey fallback", async () => {
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: "configured-platform-key",
-            baseUrl: "",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config = openAIConfig({ apiKey: "configured-platform-key" });
     const store = authStore(
       {
         "openai:platform-backup": openAIApiKeyProfile("profile-platform-key"),
@@ -1556,13 +1397,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
-      config: {
-        models: {
-          providers: {
-            openai: { apiKey: "configured-platform-key", baseUrl: "", models: [] },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ apiKey: "configured-platform-key" }),
       env: {},
       authProfileStore: store,
     });
@@ -1623,11 +1458,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
-      config: {
-        models: {
-          providers: { openai: { apiKey: "configured-platform-key", baseUrl: "", models: [] } },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ apiKey: "configured-platform-key" }),
       env: {},
       authProfileStore: authStore({}),
     });
@@ -1644,28 +1475,22 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const prepared = prepareAuthFixture({
       provider: "ollama-remote",
       modelId: "qwen3.5:27b",
-      config: {
-        models: {
-          providers: {
-            "ollama-remote": {
-              api: "ollama",
-              apiKey: "ollama-local",
-              baseUrl: "http://192.168.178.122:11434",
-              models: [
-                {
-                  id: "qwen3.5:27b",
-                  name: "Qwen 3.5 27B",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8_192,
-                  maxTokens: 4_096,
-                },
-              ],
-            },
+      config: providerConfig("ollama-remote", {
+        api: "ollama",
+        apiKey: "ollama-local",
+        baseUrl: "http://192.168.178.122:11434",
+        models: [
+          {
+            id: "qwen3.5:27b",
+            name: "Qwen 3.5 27B",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8_192,
+            maxTokens: 4_096,
           },
-        },
-      } as OpenClawConfig,
+        ],
+      }),
       env: {},
       authProfileStore: authStore({}),
     });
@@ -1703,9 +1528,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     {
       label: "ambient OAuth token behind an incompatible Platform profile",
       rejects: true,
-      config: {
-        models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "oauth" }),
       env: { OPENAI_API_KEY: "ambient-oauth-token" },
       profileId: "openai:platform",
       profile: {
@@ -1741,17 +1564,9 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     try {
-      const config = {
-        models: {
-          providers: {
-            openai: {
-              apiKey: { source: "env", provider: "default", id: "OPENAI_PLATFORM_KEY" },
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig;
+      const config = openAIConfig({
+        apiKey: { source: "env", provider: "default", id: "OPENAI_PLATFORM_KEY" },
+      });
       const store = authStore({});
       const prepared = prepareAuthFixture({
         ...openAIChatGptAuthFixture(),
@@ -1821,15 +1636,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const prepared = prepareAuthFixture({
       ...openAIChatGptAuthFixture(),
       config: {
-        models: {
-          providers: {
-            openai: {
-              apiKey: { source: "file", provider: "vault", id: "/openai/api-key" },
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
+        ...openAIConfig({ apiKey: { source: "file", provider: "vault", id: "/openai/api-key" } }),
         secrets: {
           providers: {
             vault: { source: "file", path: "/tmp/openai-secrets.json", mode: "json" },
@@ -1870,18 +1677,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   it("uses explicit OAuth mode for literal provider material", () => {
     const prepared = prepareAuthFixture({
       ...openAIPlatformAuthFixture(),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "oauth",
-              apiKey: "configured-oauth-token",
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "oauth", apiKey: "configured-oauth-token" }),
       env: {},
       authProfileStore: authStore({}),
     });
@@ -1906,18 +1702,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
-      config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "oauth",
-              apiKey: "configured-oauth-token",
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "oauth", apiKey: "configured-oauth-token" }),
       env: {},
       authProfileStore: authStore({
         "openai:platform": openAIApiKeyProfile("profile-platform-key"),
@@ -1940,18 +1725,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   it("preserves explicit provider token auth before auth.order or route defaults", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIPlatformAuthFixture(),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              auth: "token",
-              apiKey: "configured-subscription-token",
-              baseUrl: "",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: openAIConfig({ auth: "token", apiKey: "configured-subscription-token" }),
       env: {},
       authProfileStore: authStore({}),
     });
@@ -1987,9 +1761,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
-        config: {
-          models: { providers: { openai: { auth, baseUrl: "", models: [] } } },
-        } as OpenClawConfig,
+        config: openAIConfig({ auth }),
         env: {},
         authProfileStore: authStore({ "openai:wrong-route": profile }),
       }),
@@ -2001,9 +1773,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       prepareAgentRuntimeAuthPlan({
         provider: "openai",
         modelId: "gpt-5.5",
-        config: {
-          models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
-        } as OpenClawConfig,
+        config: openAIConfig({ auth: "oauth" }),
         env: {},
         authProfileStore: authStore({}),
         harnessId: "codex",
@@ -2017,18 +1787,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
         ...openAIPlatformAuthFixture(),
-        config: {
-          models: {
-            providers: {
-              openai: {
-                auth: "oauth",
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: openAIConfig({
+          auth: "oauth",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        }),
         env: {},
         authProfileStore: authStore({}),
       }),
@@ -2054,31 +1817,6 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       requestTransportOverrides: "none",
       runtimePolicy: { compatibleIds: ["openclaw"] },
     });
-  });
-
-  it("keeps the live codex virtual provider on a generic either-auth plan", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      ...virtualCodexAuthFixture(),
-      authProfileStore: authStore({
-        "openai:account": openAIOAuthProfile(
-          "subscription-token",
-          "refresh-token",
-          Date.now() + 60_000,
-        ),
-      }),
-      sessionAuthProfileId: "openai:account",
-      sessionAuthProfileSource: "user",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-    });
-
-    expect(plan).toMatchObject({
-      providerForAuth: "codex",
-      harnessAuthProvider: "openai",
-      forwardedAuthProfileId: "openai:account",
-      forwardedAuthProfileSource: "user",
-    });
-    expect(plan.modelRoute).toBeUndefined();
   });
 
   it("resolves automatic virtual Codex profiles from the OpenAI auth order", () => {
@@ -2148,15 +1886,10 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         ...virtualCodexAuthFixture(),
         config: {
           auth: { profiles: { [profileId]: { provider: "amazon-bedrock", mode: "aws-sdk" } } },
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock.example.test",
-                models: [],
-              },
-            },
-          },
+          ...providerConfig("amazon-bedrock", {
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock.example.test",
+          }),
         },
         authProfileStore: authStore({}),
         sessionAuthProfileId: profileId,

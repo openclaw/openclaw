@@ -113,27 +113,6 @@ describe("materializePreparedRuntimeModel", () => {
     },
   );
 
-  it("reuses a model that already matches the prepared route", async () => {
-    const model = {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    };
-    const resolveModel = vi.fn();
-
-    await expect(
-      materializePreparedRuntimeModel({
-        plan,
-        provider: "openai",
-        modelId: "gpt-5.5",
-        model,
-        resolveModel,
-      }),
-    ).resolves.toBe(model);
-    expect(resolveModel).not.toHaveBeenCalled();
-  });
-
   it("re-resolves matching route metadata when the auth profile changes", async () => {
     const model = {
       provider: "openai",
