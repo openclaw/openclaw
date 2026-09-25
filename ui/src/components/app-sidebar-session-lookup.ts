@@ -4,6 +4,7 @@ import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { findCatalogSessionHovercardRow } from "./app-sidebar-session-catalogs.ts";
 import {
   findProjectedSidebarSession,
+  findSidebarSessionInTree,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type {
@@ -54,16 +55,7 @@ export function findSidebarHovercardRow(
   projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {
   // The rendered tree owns folded descendant attention; a flat row loses it.
-  const pending = [...projectedRows];
-  let projected: SidebarRecentSession | undefined;
-  while (pending.length > 0) {
-    const row = pending.pop()!;
-    if (row.key === sessionKey) {
-      projected = row;
-      break;
-    }
-    pending.push(...row.children);
-  }
+  const projected = findSidebarSessionInTree(projectedRows, (row) => row.key === sessionKey);
   const navigationState = source.getSessionNavigationState();
   const child = findActiveSidebarLineageRow(source.sessionData, sessionKey);
   const liveRow =
