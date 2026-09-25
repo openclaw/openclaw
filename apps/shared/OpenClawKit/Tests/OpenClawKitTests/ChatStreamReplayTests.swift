@@ -417,9 +417,22 @@ struct ChatStreamReplayTests {
         // Native math labels expose rendered content without global accessibility or focus state.
         func expectRendered(_ expected: [String]) {
             host.layoutSubtreeIfNeeded()
-            let labels = Self.mathLabels(in: host)
-            #expect(labels.map { $0.latex ?? "" } == expected)
-            #expect(labels.allSatisfy { $0.error == nil })
+            // Subview order is stacking order, not the vertical order seen by the reader.
+            let rendered = Self.mathLabels(in: host).map { label in
+                (label: label, frame: label.convert(label.bounds, to: host))
+            }.sorted { lhs, rhs in
+                host.isFlipped ? lhs.frame.minY < rhs.frame.minY : lhs.frame.maxY > rhs.frame.maxY
+            }
+            #expect(rendered.map { $0.label.latex } == expected)
+            #expect(rendered.allSatisfy {
+                $0.label.error == nil && $0.frame.width > 0 && $0.frame.height > 0 &&
+                    host.bounds.contains($0.frame)
+            })
+            #expect(zip(rendered, rendered.dropFirst()).allSatisfy { first, second in
+                host.isFlipped
+                    ? first.frame.maxY <= second.frame.minY
+                    : first.frame.minY >= second.frame.maxY
+            })
         }
 
         host.layoutSubtreeIfNeeded()
