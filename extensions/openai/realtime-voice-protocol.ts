@@ -137,6 +137,7 @@ export abstract class OpenAIRealtimeProtocol {
           instructions: cfg.instructions,
           interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
           language: cfg.language,
+          transcriptionPrompt: cfg.transcriptionPrompt,
           model: cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
           noiseReduction: null,
           prefixPaddingMs: cfg.prefixPaddingMs,

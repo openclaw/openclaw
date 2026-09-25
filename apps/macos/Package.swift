@@ -1,7 +1,12 @@
 // swift-tools-version: 6.3
 // Package manifest for the OpenClaw macOS companion (menu bar app + IPC library).
 
+import Foundation
 import PackageDescription
+
+/// Prepared by scripts/build-mac-aec.sh; source and archives remain outside version control.
+let audioAECInstall = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .appendingPathComponent(".build/aec/install").path
 
 let package = Package(
     name: "OpenClaw",
@@ -26,6 +31,25 @@ let package = Package(
         .package(path: "../swabble"),
     ],
     targets: [
+        .target(
+            name: "OpenClawAudioAECNative",
+            path: "Sources/OpenClawAudioAECNative",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .define("WEBRTC_MAC"),
+                .define("WEBRTC_POSIX"),
+                .define("WEBRTC_LIBRARY_IMPL"),
+                .unsafeFlags([
+                    "-I", "\(audioAECInstall)/include/webrtc-audio-processing-2",
+                    "-I", "\(audioAECInstall)/include",
+                ]),
+            ],
+            linkerSettings: [
+                .unsafeFlags(["\(audioAECInstall)/lib/libOpenClawWebRTCAEC.a"]),
+                .linkedLibrary("c++"),
+                .linkedFramework("Foundation"),
+                .linkedFramework("CoreFoundation"),
+            ]),
         .target(
             name: "OpenClawCameraPTZNative",
             path: "Sources/OpenClawCameraPTZNative",
@@ -56,6 +80,7 @@ let package = Package(
                 "OpenClawIPC",
                 "OpenClawDiscovery",
                 "OpenClawCameraPTZNative",
+                "OpenClawAudioAECNative",
                 .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
@@ -113,4 +138,5 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),
             ]),
-    ])
+    ],
+    cxxLanguageStandard: .cxx17)

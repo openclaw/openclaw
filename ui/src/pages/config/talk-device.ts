@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import {
@@ -17,6 +18,54 @@ const pendingDeviceLocales = new WeakMap<
   NativeDeviceSettingsCapability,
   Partial<DeviceLocaleSelection>
 >();
+const pendingStopPhrases = new WeakMap<NativeDeviceSettingsCapability, { text: string }>();
+
+function renderStopPhrases(capability: NativeDeviceSettingsCapability, phrases: string[]) {
+  const save = (text: string | null) => {
+    const edit = { text: text ?? pendingStopPhrases.get(capability)?.text ?? phrases.join("\n") };
+    pendingStopPhrases.set(capability, edit);
+    capability.set(
+      "voice.talkStopPhrases",
+      text === null
+        ? null
+        : text
+            .split(/\r?\n/)
+            .map((phrase) => phrase.trim())
+            .filter(Boolean),
+      () => {
+        // An older native reply must not overwrite a newer edit or reset.
+        if (pendingStopPhrases.get(capability) === edit) {
+          pendingStopPhrases.delete(capability);
+        }
+      },
+    );
+  };
+  return renderSettingsRow({
+    title: t("configPage.deviceTalk.talkStopPhrases"),
+    description: t("configPage.deviceTalk.talkStopPhrasesHint"),
+    stacked: true,
+    control: html`
+      <textarea
+        class="settings-input"
+        aria-label=${t("configPage.deviceTalk.talkStopPhrases")}
+        rows="3"
+        .value=${live(pendingStopPhrases.get(capability)?.text ?? phrases.join("\n"))}
+        @input=${(event: Event) => {
+          // SAFETY: The listener is attached directly to this textarea.
+          const textarea = event.currentTarget as HTMLTextAreaElement;
+          pendingStopPhrases.set(capability, { text: textarea.value });
+        }}
+        @change=${(event: Event) => {
+          // SAFETY: The listener is attached directly to this textarea.
+          save((event.currentTarget as HTMLTextAreaElement).value);
+        }}
+      ></textarea>
+      <button class="btn btn--sm" type="button" @click=${() => save(null)}>
+        ${t("configPage.deviceTalk.resetTalkStopPhrases")}
+      </button>
+    `,
+  });
+}
 
 function deviceLocaleSelection(
   capability: NativeDeviceSettingsCapability,
@@ -198,6 +247,9 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
             onChange: (value) => capability.set(`voice.${key}`, value),
           });
     }),
+    voice.talkStopPhrases === undefined
+      ? nothing
+      : renderStopPhrases(capability, voice.talkStopPhrases),
     microphone
       ? renderSettingsSelectRow({
           title: t("configPage.deviceTalk.microphone"),

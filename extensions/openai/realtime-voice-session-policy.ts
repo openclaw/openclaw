@@ -408,6 +408,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
   language?: string;
+  transcriptionPrompt?: string;
   model: string;
   noiseReduction: { type: "near_field" } | null;
   prefixPaddingMs?: number;
@@ -432,6 +433,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
         transcription: {
           model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
           ...(params.language ? { language: params.language } : {}),
+          ...(params.transcriptionPrompt ? { prompt: params.transcriptionPrompt } : {}),
         },
         turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
           autoRespondToAudio: params.autoRespondToAudio,

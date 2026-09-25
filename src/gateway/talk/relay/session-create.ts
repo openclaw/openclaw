@@ -222,6 +222,7 @@ export function createTalkRealtimeRelaySession(
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
     language: params.language,
+    ...(params.transcriptionPrompt ? { transcriptionPrompt: params.transcriptionPrompt } : {}),
     autoRespondToAudio: params.forceAgentConsultOnFinalTranscript !== true,
     interruptResponseOnInputAudio: params.forceAgentConsultOnFinalTranscript !== true,
     tools: params.tools,
@@ -372,11 +373,10 @@ export function createTalkRealtimeRelaySession(
       }
       const responseId = outcome.responseId ?? outputOwnership.responseId;
       const disposition = outputOwnership.finish(responseId);
-      if (disposition === "ignore") {
-        return;
-      }
       if (disposition === "cancelled") {
         currentOutputItemId = undefined;
+      }
+      if (disposition === "ignore" || disposition === "cancelled") {
         return;
       }
       const terminalTalkEvent = harness.talk.recentEvents.at(-1);

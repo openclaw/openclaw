@@ -5762,6 +5762,23 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Setup Python for native audio dependency
+        if: hashFiles('scripts/build-mac-aec.sh') != ''
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare native audio dependency
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/build-mac-aec.sh ]]; then
+            brew install cmake ninja pkgconf
+            /bin/bash scripts/build-mac-aec.sh
+          elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+            echo "Current CI targets must provide scripts/build-mac-aec.sh." >&2
+            exit 1
+          fi
+
       - name: Native state schema version contract
         if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
@@ -5804,6 +5821,10 @@ jobs:
           [[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]] || exit 1
           echo "::warning::SwiftPM did not produce complete Sparkle metadata; resetting once before retry."
           swift package --package-path apps/macos reset
+          # reset also removes the native dependency under .build/aec.
+          if [[ -f scripts/build-mac-aec.sh ]]; then
+            /bin/bash scripts/build-mac-aec.sh
+          fi
           swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)

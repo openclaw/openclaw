@@ -52,6 +52,7 @@ public enum RealtimeTalkPCM16Encoder {
 @MainActor
 public protocol RealtimeTalkAudioCapturing: AnyObject {
     var suppressesInputDuringOutput: Bool { get }
+    var usesServerVADForBargeIn: Bool { get }
 
     func start(
         targetSampleRate: Double,
@@ -59,6 +60,12 @@ public protocol RealtimeTalkAudioCapturing: AnyObject {
         onFailure: @escaping @MainActor (String) -> Void) throws
 
     func stop()
+}
+
+extension RealtimeTalkAudioCapturing {
+    public var usesServerVADForBargeIn: Bool {
+        false
+    }
 }
 
 public struct RealtimeTalkRelayTransport: Sendable {
@@ -123,53 +130,6 @@ public enum RealtimeTalkRelayTermination: Equatable, Sendable {
     case outputPlaybackOverflow
 }
 
-private enum RealtimeAudioSendOutcome {
-    case sent, inactive, saturated, failed(String)
-}
-
-private actor RealtimeAudioSender {
-    private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
-    private var relaySessionId: String?
-    private var pendingSends = 0
-    private let maxPendingSends = 4
-
-    init(
-        relaySessionId: String,
-        request: @escaping @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data)
-    {
-        self.relaySessionId = relaySessionId
-        self.request = request
-    }
-
-    func close() {
-        self.relaySessionId = nil
-    }
-
-    func send(_ data: Data, timestampMs: Double) async -> RealtimeAudioSendOutcome {
-        guard !Task.isCancelled, let relaySessionId else { return .inactive }
-        guard self.pendingSends < self.maxPendingSends else { return .saturated }
-        self.pendingSends += 1
-        defer { self.pendingSends -= 1 }
-        // The Gateway carries this straight into the provider's media timeline, and OpenAI rejects
-        // a `conversation.item.truncate` whose `audio_end_ms` is not an integer -- a fractional
-        // timestamp here kills the session on the first barge-in.
-        let payload: [String: AnyCodable] = [
-            "sessionId": AnyCodable(relaySessionId),
-            "audioBase64": AnyCodable(data.base64EncodedString()),
-            "timestamp": AnyCodable(timestampMs.rounded()),
-        ]
-        do {
-            try Task.checkCancellation()
-            let response = try await self.request("talk.session.appendAudio", payload, 8000)
-            try Task.checkCancellation()
-            _ = try JSONDecoder().decode(TalkSessionOkResult.self, from: response)
-            return .sent
-        } catch {
-            return Task.isCancelled ? .inactive : .failed(error.localizedDescription)
-        }
-    }
-}
-
 @MainActor
 public final class RealtimeTalkRelaySession {
     private static let agentControlToolName = "openclaw_agent_control"
@@ -179,6 +139,8 @@ public final class RealtimeTalkRelaySession {
         public let provider: String?
         public let model: String?
         public let voice: String?
+        public let localStopPhrases: [String]?
+        public let speechLocaleID: String?
         public let supportsVoiceSelection: Bool
         public let voiceChangeId: String?
 
@@ -187,6 +149,8 @@ public final class RealtimeTalkRelaySession {
             provider: String?,
             model: String?,
             voice: String?,
+            localStopPhrases: [String]? = nil,
+            speechLocaleID: String? = nil,
             supportsVoiceSelection: Bool = false,
             voiceChangeId: String? = nil)
         {
@@ -194,6 +158,8 @@ public final class RealtimeTalkRelaySession {
             self.provider = provider
             self.model = model
             self.voice = voice
+            self.localStopPhrases = localStopPhrases
+            self.speechLocaleID = speechLocaleID
             self.supportsVoiceSelection = supportsVoiceSelection
             self.voiceChangeId = voiceChangeId
         }
@@ -357,7 +323,7 @@ public final class RealtimeTalkRelaySession {
         }
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
         do {
-            let result = try await self.createRelaySession()
+            let result = try await self.createRelaySession(lifecycleGeneration: lifecycleGeneration)
             let createdRelaySessionId = self.nonEmpty(result.relaysessionid)
             let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
             if statusAfterCreate != .current {
@@ -516,7 +482,7 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
-    private func createRelaySession() async throws -> TalkSessionCreateResult {
+    private func createRelaySession(lifecycleGeneration: UInt64) async throws -> TalkSessionCreateResult {
         var payload: [String: AnyCodable] = [
             "sessionKey": AnyCodable(self.options.sessionKey),
             "mode": AnyCodable("realtime"),
@@ -531,6 +497,44 @@ public final class RealtimeTalkRelaySession {
         }
         if let voice = self.nonEmpty(self.options.voice) {
             payload["voice"] = AnyCodable(voice)
+        }
+        let language = TalkConfigParsing.explicitRealtimeTranscriptionLanguage(self.options.speechLocaleID)
+        if let language {
+            payload["language"] = AnyCodable(language)
+        }
+        // Requested language is not an acknowledgement that the provider applied it.
+        self.logger.info("talk realtime transcription requestedLanguage=\(language ?? "automatic", privacy: .public)")
+        if self.options.provider == "openai", self.options.model == "gpt-realtime-2.1",
+           let phrases = self.options.localStopPhrases, RealtimeTalkTranscriptionHints.accepts(phrases)
+        {
+            // This transport belongs to the same physical socket as session creation.
+            // Older gateways and failed discovery retain the existing create request.
+            let catalog = try? await self.transport.request(
+                "talk.catalog",
+                ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-realtime-2.1")],
+                3000)
+            switch await self.lifecycleStatus(lifecycleGeneration) {
+            case .current: break
+            case .cancelledLocally: throw CancellationError()
+            case .routeLost: throw Self.gatewayRouteLostError()
+            }
+            if let startupIssue {
+                throw Self.startupFailureError(startupIssue)
+            }
+            let supported = catalog.map { RealtimeTalkTranscriptionHints.isSupported(catalog: $0) } ?? false
+            self.logger.info(
+                """
+                talk realtime transcription hints catalogAvailable=\(catalog != nil, privacy: .public) \
+                supported=\(supported, privacy: .public) \
+                sentPhraseCount=\(supported ? phrases.count : 0, privacy: .public)
+                """)
+            if supported {
+                payload["transcriptionHints"] = AnyCodable([
+                    "version": AnyCodable(1),
+                    "kind": AnyCodable("local-stop-phrases"),
+                    "phrases": AnyCodable(phrases),
+                ])
+            }
         }
         if self.options.supportsVoiceSelection {
             payload["capabilities"] = AnyCodable(["voice-selection"])
@@ -1473,7 +1477,9 @@ extension RealtimeTalkRelaySession {
                     timestampMs: timestampMs)
                 return nil
             }
-            if rms >= Self.bargeInRmsThreshold {
+            // Echo-controlled duplex must deliver the triggering speech to server VAD.
+            // Local cancellation fences microphone input while the turn is retired.
+            if !self.audioCapture.usesServerVADForBargeIn, rms >= Self.bargeInRmsThreshold {
                 self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
             }
         }
@@ -1632,6 +1638,11 @@ extension RealtimeTalkRelaySession {
     // periphery:ignore - package tests start the pump to observe capture failure handling.
     func _test_startMicrophonePump() throws {
         try self.startMicrophonePump(lifecycleGeneration: self.lifecycleGeneration)
+    }
+
+    // periphery:ignore - callback-driven tests join sends after capture retirement clears ownership.
+    func _test_pendingMicrophoneSends() -> [Task<Void, Never>] {
+        Array(self.audioSendTasks.values)
     }
 }
 #endif

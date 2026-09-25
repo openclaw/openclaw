@@ -22,6 +22,8 @@ private final class RealtimePCMPlaybackBackend {
     private(set) var completions: [@Sendable () -> Void] = []
     private(set) var activeCount = 0
     private(set) var maxActiveCount = 0
+    private(set) var stopCount = 0
+    private let drains = RealtimeRelayTestSignal<@Sendable () -> Void>()
     private var completedCallbacks = 0
     private var scheduledWaiters: [UUID: Waiter] = [:]
     private var completionWaiters: [UUID: Waiter] = [:]
@@ -48,7 +50,16 @@ private final class RealtimePCMPlaybackBackend {
     }
 
     func stop() {
+        self.stopCount += 1
         self.activeCount = 0
+    }
+
+    func scheduleDrain(sampleRate _: Double, completion: @escaping @Sendable () -> Void) throws {
+        self.drains.send(completion)
+    }
+
+    func nextDrain() async throws -> @Sendable () -> Void {
+        try await self.drains.next("terminal playback drain")
     }
 
     func complete(at index: Int = 0) {
@@ -146,6 +157,7 @@ private func makeRealtimePCMPlayer(
     RealtimePCMStreamingAudioPlayer(
         preparePlayback: backend.prepare,
         scheduleFrame: backend.schedule,
+        scheduleDrain: backend.scheduleDrain,
         stopPlayback: backend.stop,
         playbackTime: { nil })
 }
@@ -168,6 +180,7 @@ struct RealtimePCMStreamingAudioPlayerTests {
         let player = RealtimePCMStreamingAudioPlayer(
             preparePlayback: { _ in throw RealtimePCMPlaybackFailure() },
             scheduleFrame: { _, _, _ in },
+            scheduleDrain: { _, _ in Issue.record("failed prepare must not schedule a drain") },
             stopPlayback: {},
             playbackTime: { nil })
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
@@ -179,10 +192,17 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(result.interruptedAt == nil)
     }
 
-    @Test func `schedule failure returns unfinished playback`() async throws {
+    @Test(arguments: [false, true])
+    func `frame or drain scheduling failure returns unfinished playback`(failDrain: Bool) async throws {
         let player = RealtimePCMStreamingAudioPlayer(
             preparePlayback: { _ in },
-            scheduleFrame: { _, _, _ in throw RealtimePCMPlaybackFailure() },
+            scheduleFrame: { _, _, _ in
+                if !failDrain { throw RealtimePCMPlaybackFailure() }
+            },
+            scheduleDrain: { _, _ in
+                #expect(failDrain)
+                throw RealtimePCMPlaybackFailure()
+            },
             stopPlayback: {},
             playbackTime: { nil })
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
@@ -231,6 +251,9 @@ struct RealtimePCMStreamingAudioPlayerTests {
         for _ in 0..<3 {
             backend.complete()
         }
+        let drain = try await backend.nextDrain()
+        #expect(probe.results.isEmpty)
+        drain()
         try await waitForPlayback(playback, label: "five-frame playback")
         #expect(probe.results.count == 1)
         #expect(probe.results.first?.finished == true)
@@ -239,7 +262,7 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(backend.scheduledFrames.allSatisfy { $0.count == self.frameBytes })
     }
 
-    @Test func `playback finishes only after input and every scheduled frame complete`() async throws {
+    @Test func `consumed frames release data but only terminal drain finishes playback`() async throws {
         let backend = RealtimePCMPlaybackBackend()
         let player = makeRealtimePCMPlayer(backend: backend)
         let probe = RealtimePCMPlaybackResultProbe()
@@ -259,13 +282,19 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(backend.completions.count == 1)
         #expect(probe.results.isEmpty)
         backend.complete()
+        try await backend.waitForCompletionCallbacks(2)
+        let drain = try await backend.nextDrain()
+        #expect(probe.results.isEmpty)
+        #expect(backend.stopCount == 1)
+        drain()
         try await waitForPlayback(playback, label: "completed input playback")
         #expect(probe.results.count == 1)
         #expect(probe.results.first?.finished == true)
         #expect(probe.results.first?.interruptedAt == nil)
     }
 
-    @Test func `stop restart ignores stale buffer completions`() async throws {
+    @Test(arguments: [false, true])
+    func `stop restart ignores stale consumption and drain completions`(staleDrain: Bool) async throws {
         let backend = RealtimePCMPlaybackBackend()
         let player = makeRealtimePCMPlayer(backend: backend)
         let (firstStream, firstContinuation) = AsyncThrowingStream<Data, Error>.makeStream()
@@ -276,7 +305,14 @@ struct RealtimePCMStreamingAudioPlayerTests {
         }
         firstContinuation.yield(Data(repeating: 1, count: self.frameBytes))
         try await backend.waitForScheduledFrames(1)
-        let staleCompletion = backend.takeCompletion()
+        let staleCompletion: @Sendable () -> Void
+        if staleDrain {
+            firstContinuation.finish()
+            staleCompletion = try await backend.nextDrain()
+            _ = backend.takeCompletion()
+        } else {
+            staleCompletion = backend.takeCompletion()
+        }
 
         _ = player.stop()
         try await waitForPlayback(firstPlayback, label: "stopped A playback")
@@ -295,7 +331,7 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(probe.results.isEmpty)
 
         staleCompletion()
-        try await backend.waitForCompletionCallbacks(1)
+        if !staleDrain { try await backend.waitForCompletionCallbacks(1) }
         #expect(backend.scheduledFrames.count == 4)
         #expect(backend.completions.count == 3)
         #expect(firstProbe.results.map(\.finished) == [false])
@@ -311,6 +347,8 @@ struct RealtimePCMStreamingAudioPlayerTests {
         for _ in 0..<3 {
             backend.complete()
         }
+        let drain = try await backend.nextDrain()
+        drain()
         try await waitForPlayback(secondPlayback, label: "replacement B playback")
         #expect(probe.results.count == 1)
         #expect(probe.results.first?.finished == true)
@@ -335,6 +373,26 @@ struct RealtimePCMStreamingAudioPlayerTests {
 
         #expect(probe.results.count == 1)
         #expect(probe.results.first?.finished == false)
+    }
+
+    @Test(arguments: [false, true])
+    func `empty input finishes without frame or drain scheduling`(includeEmptyChunk: Bool) async throws {
+        let player = RealtimePCMStreamingAudioPlayer(
+            preparePlayback: { _ in },
+            scheduleFrame: { _, _, _ in Issue.record("empty input must not schedule audio") },
+            scheduleDrain: { _, _ in Issue.record("empty input must not schedule a drain") },
+            stopPlayback: {},
+            playbackTime: { nil })
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        if includeEmptyChunk { continuation.yield(Data()) }
+        continuation.finish()
+        let probe = RealtimePCMPlaybackResultProbe()
+        let playback = Task {
+            await probe.record(player.play(stream: stream, sampleRate: self.sampleRate))
+        }
+        try await waitForPlayback(playback, label: "empty playback")
+        #expect(probe.results.map(\.finished) == [true])
+        #expect(probe.results.first?.interruptedAt == nil)
     }
 }
 #endif

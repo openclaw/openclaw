@@ -133,6 +133,7 @@ extension TalkModeRuntime {
             return
         }
         var nativeFallbackStatus: String?
+        var nativeFallbackRecoverySuggestion: String?
         if self.macOSRealtimeRelayOptIn, !bypassRealtime {
             let fallbackRecognitionGeneration = recognitionGeneration
             let fallbackRealtimeRelayGeneration = realtimeRelayGeneration &+ 1
@@ -163,9 +164,14 @@ extension TalkModeRuntime {
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")
                 nativeFallbackStatus = String(localized: "Realtime unavailable — using native speech")
+                nativeFallbackRecoverySuggestion = (error as? MacRealtimeTalkInputChannels.MappingError)?
+                    .recoverySuggestion
             }
         }
-        await self.startNativeFallback(generation: gen, status: nativeFallbackStatus)
+        await self.startNativeFallback(
+            generation: gen,
+            status: nativeFallbackStatus,
+            recoverySuggestion: nativeFallbackRecoverySuggestion)
     }
 
     func consumePendingRealtimeRelayStart() -> Bool {
@@ -176,7 +182,11 @@ extension TalkModeRuntime {
             self.macOSRealtimeRelayOptIn
     }
 
-    private func startNativeFallback(generation: Int, status: String? = nil) async {
+    private func startNativeFallback(
+        generation: Int,
+        status: String? = nil,
+        recoverySuggestion: String? = nil) async
+    {
         let relayGeneration = realtimeRelayGeneration
         let recognitionStarted = await startRecognition(lifecycleGeneration: generation)
         guard await self.commitNativeFallback(
@@ -184,7 +194,8 @@ extension TalkModeRuntime {
             lifecycleGeneration: generation,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
-            status: status)
+            status: status,
+            recoverySuggestion: recoverySuggestion)
         else { return }
         guard recognitionStarted else { return }
         startAudioInputObserver()
@@ -196,7 +207,8 @@ extension TalkModeRuntime {
         lifecycleGeneration: Int,
         recognitionGeneration: Int,
         relayGeneration: UInt64,
-        status: String?) async -> Bool
+        status: String?,
+        recoverySuggestion: String? = nil) async -> Bool
     {
         let ownsFallback = {
             self.canCommitRecognitionStart(
@@ -208,32 +220,34 @@ extension TalkModeRuntime {
         guard ownsFallback() else { return false }
         phase = recognitionStarted ? .listening : .idle
         return await self.projectRealtimeRelay(relayGeneration, nil) {
-            if recognitionStarted, let status {
-                TalkModeController.shared.updatePartialTranscript(status)
-            } else if !recognitionStarted {
-                TalkModeController.shared.updatePartialTranscript(
-                    String(localized: "Realtime unavailable — native speech could not start"))
+            if let message = Self.nativeFallbackStatus(
+                recognitionStarted: recognitionStarted,
+                status: status,
+                recoverySuggestion: recoverySuggestion)
+            {
+                TalkModeController.shared.updatePartialTranscript(message)
             }
             TalkModeController.shared.updatePhase(recognitionStarted ? .listening : .idle)
         }
     }
 
+    nonisolated static func nativeFallbackStatus(
+        recognitionStarted: Bool,
+        status: String?,
+        recoverySuggestion: String?) -> String?
+    {
+        let status = recognitionStarted
+            ? status
+            : String(localized: "Realtime unavailable — native speech could not start")
+        return status.map { [$0, recoverySuggestion].compactMap(\.self).joined(separator: " ") }
+    }
+
     func inputDeviceSelectionDidChange() async {
-        if let realtimeSession {
+        if realtimeSession != nil {
             guard isEnabled, !isPaused else { return }
-            let relayGeneration = realtimeRelayGeneration
-            do {
-                try await MainActor.run {
-                    try realtimeSession.setInputPaused(true)
-                    try realtimeSession.setInputPaused(false)
-                }
-            } catch {
-                logger.error(
-                    "talk realtime input restart failed: \(error.localizedDescription, privacy: .public)")
-                await self.handleRealtimeInputRestartFailure(
-                    error.localizedDescription,
-                    relayGeneration: relayGeneration)
-            }
+            // Capture and playback share the graph. A microphone change must
+            // retire its whole relay instead of stopping a still-owned player.
+            await self.realtimeRelayPreferenceDidChange()
             return
         }
         guard isEnabled, !isPaused, phase == .listening else { return }
@@ -391,9 +405,13 @@ extension TalkModeRuntime {
         guard isCurrent(lifecycleGeneration), !isPaused,
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
-        let activeSessionKey = await MainActor.run {
-            WebChatManager.shared.activeSessionKey
+        let (activeSessionKey, stopPhrases) = await MainActor.run {
+            (WebChatManager.shared.activeSessionKey, AppStateStore.shared.talkStopPhrases)
         }
+        guard isCurrent(lifecycleGeneration), !self.isPaused,
+              realtimeRelayGeneration == relayGeneration,
+              realtimeRelayStartGeneration == relayGeneration
+        else { throw CancellationError() }
         let sessionKey: String = if let activeSessionKey {
             activeSessionKey
         } else {
@@ -403,7 +421,9 @@ extension TalkModeRuntime {
             sessionKey: sessionKey,
             provider: realtimeProvider,
             model: realtimeModelId,
-            voice: realtimeSpeakerVoice)
+            voice: realtimeSpeakerVoice,
+            localStopPhrases: stopPhrases,
+            speechLocaleID: self.speechLocaleID)
         #if DEBUG
         let audioCaptureProvider = self.realtimeAudioCaptureProvider
         #endif
@@ -417,7 +437,8 @@ extension TalkModeRuntime {
                 transport: bootstrap.transport,
                 options: options,
                 audioCapture: audioCapture,
-                pcmPlayer: RealtimePCMStreamingAudioPlayer(),
+                pcmPlayer: (audioCapture as? MacRealtimeTalkAudioCapture)?
+                    .pcmPlayer ?? RealtimePCMStreamingAudioPlayer(),
                 onStatus: { [weak self] status in
                     Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
                 },
@@ -656,6 +677,15 @@ extension TalkModeRuntime {
         _ transcript: RealtimeTalkTranscript,
         relayGeneration: UInt64) async
     {
+        if transcript.isFinal, transcript.role == "user" {
+            let current = self.realtimeSession != nil && self.realtimeRelayGeneration == relayGeneration
+            self.logger.info(
+                """
+                talk realtime final user transcript current=\(current, privacy: .public) \
+                enabled=\(self.isEnabled, privacy: .public) paused=\(self.isPaused, privacy: .public) \
+                cancelled=\(Task.isCancelled, privacy: .public) chars=\(transcript.text.count, privacy: .public)
+                """)
+        }
         guard let session = realtimeSession,
               ownsRealtimeRelay(relayGeneration, session),
               isEnabled,
@@ -664,6 +694,13 @@ extension TalkModeRuntime {
         let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard transcript.role == "user" else { return }
+        let owner = self.transcriptOwner
+        if await self.handleLocalTalkExitCommand(
+            text,
+            isFinal: transcript.isFinal,
+            lifecycleGeneration: owner.lifecycle)
+        { return }
+        guard self.ownsTranscript(owner), self.ownsRealtimeRelay(relayGeneration, session) else { return }
         if transcript.isFinal {
             phase = .thinking
             _ = await self.projectRealtimeRelay(relayGeneration, session) {

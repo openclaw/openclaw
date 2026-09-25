@@ -7,8 +7,11 @@ import type {
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+import { buildOpenAIRealtimeGaSessionPolicy } from "./realtime-voice-session-policy.js";
 
 const mocks = await vi.hoisted(async () => {
   const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
@@ -289,6 +292,64 @@ describe("OpenAI realtime voice bridge connection", () => {
     },
   );
 
+  it("scopes transcription context to one GA session without changing its other policy", async () => {
+    const transcriptionPrompt =
+      'Possible literal phrases in this conversation: ["end talking","Arrête 🌍"]. Transcribe only speech that is present, including surrounding words.';
+    const sessions = [];
+    for (const prompt of [undefined, transcriptionPrompt, undefined]) {
+      const bridge = createNativeBridge({
+        language: "de",
+        instructions: "Keep the assistant instructions unchanged.",
+        transcriptionPrompt: prompt,
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge, sessions.length);
+      openSocket(socket);
+      sessions.push(requireSession(socket));
+      emitSessionUpdated(socket);
+      await connecting;
+      await bridge.close();
+    }
+    const [baseline, hinted, following] = sessions;
+    expect(following).toEqual(baseline);
+    expect(requireNestedRecord(hinted, ["audio", "input", "transcription"])).toEqual({
+      model: "gpt-4o-mini-transcribe",
+      language: "de",
+      prompt: transcriptionPrompt,
+    });
+    const withoutPrompt = structuredClone(hinted);
+    delete requireNestedRecord(withoutPrompt, ["audio", "input", "transcription"]).prompt;
+    expect(withoutPrompt).toEqual(baseline);
+  });
+
+  it("keeps an authoritative prebuilt GA policy unchanged when context is supplied", async () => {
+    const gaSessionPolicy = buildOpenAIRealtimeGaSessionPolicy({
+      model: "gpt-realtime-2.1",
+      voice: "cedar",
+      noiseReduction: { type: "near_field" },
+      language: "de",
+    });
+    const original = structuredClone(gaSessionPolicy);
+    const bridge = new OpenAIRealtimeBridge(
+      {
+        providerConfig: {},
+        apiKey: "test-api-key-test",
+        gaSessionPolicy,
+        transcriptionPrompt: "This context must not override the prebuilt policy.",
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        logger: { warn: vi.fn() },
+      },
+      openAIRealtimeHost,
+    );
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    expect(requireSession(socket)).toEqual(original);
+    expect(gaSessionPolicy).toEqual(original);
+    emitSessionUpdated(socket);
+    await connecting;
+    bridge.close();
+  });
+
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const onReady = vi.fn();
     const bridge = createNativeBridge({
@@ -559,6 +620,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
     const bridge = createNativeBridge({
+      transcriptionPrompt: "This context must not enter the Azure payload.",
       providerConfig: {
         apiKey: "test-api-key-test",
         azureEndpoint: "https://example.openai.azure.com/",

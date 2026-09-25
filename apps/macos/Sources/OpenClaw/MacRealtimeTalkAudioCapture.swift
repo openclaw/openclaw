@@ -10,26 +10,48 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.realtime.capture")
     private let selectedInputUID: @MainActor () -> String?
-    private let deliveryGate = TalkGenerationDeliveryGate()
+    private var deliveryGate = TalkGenerationDeliveryGate()
+    private var captureRouteState: MacRealtimeTalkCaptureRouteState?
 
-    private var audioEngine: AVAudioEngine?
-    private var inputNode: AVAudioInputNode?
+    private var graph: MacRealtimeTalkAudioGraph?
+    private var configurationObserver: NSObjectProtocol?
+    lazy var pcmPlayer = RealtimePCMStreamingAudioPlayer(
+        preparePlayback: { [weak self] sampleRate in
+            guard let graph = self?.graph else { throw MacRealtimeTalkAudioCaptureError.inputUnavailable }
+            try graph.preparePlayback(sampleRate: sampleRate)
+        },
+        scheduleFrame: { [weak self] data, _, completion in
+            guard let graph = self?.graph else { throw MacRealtimeTalkAudioCaptureError.inputUnavailable }
+            try graph.schedule(data, completion: completion)
+        },
+        scheduleDrain: { [weak self] _, completion in
+            guard let graph = self?.graph else { throw MacRealtimeTalkAudioCaptureError.inputUnavailable }
+            try graph.schedule(
+                Data(repeating: 0, count: MemoryLayout<Int16>.size),
+                callbackType: .dataPlayedBack,
+                completion: completion)
+        },
+        stopPlayback: { [weak self] in self?.graph?.player.stop() },
+        playbackTime: { [weak self] in self?.graph?.playbackTime })
     private var audioInputObserver: AudioInputDeviceObserver?
     private var audioOutputObserver: MacRealtimeTalkOutputRouteObserver?
     private var activeInputResolution: AudioInputDeviceResolution?
-    private var targetSampleRate: Double?
-    private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
     private var onFailure: (@MainActor (String) -> Void)?
     private var tapInstalled = false
-    private var suppressInputDuringOutput = true
     private var outputRouteDecisionState = MacRealtimeTalkOutputRouteDecisionState()
     private var outputRouteObservationGeneration: UInt64 = 0
     #if DEBUG
     private var testOutputRouteCallbackHandled: (@Sendable () -> Void)?
     #endif
 
+    var usesServerVADForBargeIn: Bool {
+        self.outputRouteDecisionState.inputPolicy(hasEchoControl: self.graph?.hasEchoControl == true)
+            .usesServerVADForBargeIn
+    }
+
     var suppressesInputDuringOutput: Bool {
-        self.suppressInputDuringOutput
+        self.outputRouteDecisionState.inputPolicy(hasEchoControl: self.graph?.hasEchoControl == true)
+            .suppressesInputDuringOutput
     }
 
     init(selectedInputUID: @escaping @MainActor () -> String? = {
@@ -52,8 +74,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         }
 
         self.stop()
-        self.targetSampleRate = targetSampleRate
-        self.onAudio = onAudio
         self.onFailure = onFailure
         self.startOutputRouteObserver()
         do {
@@ -73,8 +93,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.audioInputObserver = nil
         self.retireOutputRouteObserver()
         self.teardownEngine()
-        self.targetSampleRate = nil
-        self.onAudio = nil
         self.onFailure = nil
     }
 
@@ -89,70 +107,90 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
             throw MacRealtimeTalkAudioCaptureError.inputUnavailable
         }
 
-        do {
-            try self.configureEngine(
-                selection: selection,
-                targetSampleRate: targetSampleRate,
-                onAudio: onAudio,
-                enableVoiceProcessing: true)
-        } catch {
-            self.logger.warning(
-                "realtime processed input setup failed; retrying without voice processing: " +
-                    "\(error.localizedDescription, privacy: .public)")
-            self.deliveryGate.deactivate()
-            self.teardownEngine()
-            try self.configureEngine(
-                selection: selection,
-                targetSampleRate: targetSampleRate,
-                onAudio: onAudio,
-                enableVoiceProcessing: false)
-        }
+        try self.configureEngine(selection: selection, targetSampleRate: targetSampleRate, onAudio: onAudio)
     }
 
     private func configureEngine(
         selection: AudioInputDeviceResolution,
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
-        enableVoiceProcessing: Bool) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
     {
-        let engine = AVAudioEngine()
-        self.audioEngine = engine
-        let input = engine.inputNode
-        self.inputNode = input
-
-        if enableVoiceProcessing {
-            try input.setVoiceProcessingEnabled(true)
-        }
-
-        let activeResolution = AudioInputDeviceObserver.bindSelectedInputIfNeeded(
-            selection, to: input, logger: self.logger, context: "realtime")
-        guard activeResolution.resolvedUID != nil else {
+        let graph = try MacRealtimeTalkAudioGraph(
+            sampleRate: targetSampleRate,
+            inputProcessingMode: self.captureRouteState?.mode ?? .echoControlled)
+        self.graph = graph
+        let engine = graph.engine
+        let input = graph.input
+        // The shared I/O graph already uses the system default. Rebinding it
+        // unnecessarily can disturb playback before echo capture starts.
+        let activeResolution = selection.resolvedUID == AudioInputDeviceObserver.defaultInputDeviceUID()
+            ? selection
+            : AudioInputDeviceObserver.bindSelectedInputIfNeeded(
+                selection, to: input, logger: self.logger, context: "realtime")
+        guard let selectedUID = activeResolution.resolvedUID else {
             throw MacRealtimeTalkAudioCaptureError.inputUnavailable
         }
-
         let format = input.outputFormat(forBus: 0)
-        guard format.commonFormat == .pcmFormatFloat32,
-              !format.isInterleaved,
-              format.channelCount > 0,
-              format.sampleRate > 0
+        guard format.commonFormat == .pcmFormatFloat32, !format.isInterleaved,
+              format.channelCount > 0, format.sampleRate > 0
         else {
             throw MacRealtimeTalkAudioCaptureError.invalidInputFormat
         }
-
-        let deliveryToken = self.deliveryGate.activate()
+        let inputChannels = try MacRealtimeTalkInputChannels.resolve(input: input, selectedInputUID: selectedUID)
+        guard let deliveryToken = self.captureRouteState?.activate(for: graph.inputProcessingMode) else {
+            throw MacRealtimeTalkAudioCaptureError.inputUnavailable
+        }
+        let engineID = ObjectIdentifier(engine)
+        let pipeline = try MacRealtimeTalkEchoPipeline(
+            inputProcessingMode: graph.inputProcessingMode,
+            targetSampleRate: targetSampleRate,
+            deliveryGate: self.deliveryGate,
+            deliveryToken: deliveryToken,
+            onAudio: onAudio,
+            onFailure: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, self.graph.map({ ObjectIdentifier($0.engine) }) == engineID else { return }
+                    self
+                        .failCapture(
+                            String(localized: "Realtime echo control lost its playback reference. Reconnecting…"))
+                }
+            })
+        graph.echoPipeline = pipeline
         input.installTap(
             onBus: 0,
             bufferSize: Self.frameBufferSize,
             format: format,
-            block: MacRealtimeTalkTapHandlerFactory.make(
-                targetSampleRate: targetSampleRate,
-                deliveryGate: self.deliveryGate,
-                deliveryToken: deliveryToken,
-                onAudio: onAudio))
+            block: pipeline.makeTap(channels: inputChannels, isRender: false))
         self.tapInstalled = true
+        if graph.inputProcessingMode == .echoControlled {
+            let renderFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+            engine.mainMixerNode.installTap(
+                onBus: 0,
+                bufferSize: Self.frameBufferSize,
+                format: renderFormat,
+                block: pipeline.makeTap(channels: 0..<Int(renderFormat.channelCount), isRender: true))
+            graph.renderTapInstalled = true
+        }
         engine.prepare()
         try engine.start()
+        guard try MacRealtimeTalkInputChannels.resolve(input: input, selectedInputUID: selectedUID) == inputChannels
+        else {
+            throw MacRealtimeTalkInputChannels.MappingError.unsupportedChannelMap
+        }
         self.activeInputResolution = activeResolution
+        if graph.inputProcessingMode == .echoControlled {
+            self.logger.info("realtime shared audio started; waiting for software echo reference")
+        } else {
+            self.logger.info("realtime shared audio started with isolated headphone input")
+        }
+        self.configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.graph.map({ ObjectIdentifier($0.engine) }) == engineID else { return }
+                self.failCapture(String(localized: "Realtime audio route changed. Reconnecting…"))
+            }
+        }
     }
 
     private func startDeviceObserver() {
@@ -168,7 +206,10 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private func startOutputRouteObserver() {
         let observer = MacRealtimeTalkOutputRouteObserver()
         let onChange = self.replaceOutputRouteObserver(observer)
-        observer.start(onChange: onChange)
+        let initialRoute = observer.start(onChange: onChange)
+        // Listener installation can poison an otherwise isolated route. Use the
+        // observed result synchronously before graph construction starts I/O.
+        self.updateOutputRoute(initialRoute)
     }
 
     private func replaceOutputRouteObserver(
@@ -176,12 +217,19 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     {
         self.outputRouteObservationGeneration &+= 1
         let generation = self.outputRouteObservationGeneration
+        self.deliveryGate.deactivate()
+        self.deliveryGate = TalkGenerationDeliveryGate()
+        let routeState = MacRealtimeTalkCaptureRouteState(deliveryGate: self.deliveryGate)
+        self.captureRouteState = routeState
         self.audioOutputObserver = observer
         #if DEBUG
         let onHandled = self.testOutputRouteCallbackHandled
         self.testOutputRouteCallbackHandled = nil
         #endif
         return { [weak self, observerID = ObjectIdentifier(observer)] route in
+            // Close this capture's gate on the observer's queue before an async
+            // MainActor hop can let headphone input escape onto a speaker route.
+            routeState.update(route: route)
             Task { @MainActor [weak self] in
                 #if DEBUG
                 defer { onHandled?() }
@@ -199,19 +247,21 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.outputRouteObservationGeneration &+= 1
         self.audioOutputObserver?.stop()
         self.audioOutputObserver = nil
-        self.suppressInputDuringOutput = true
+        self.captureRouteState = nil
         self.outputRouteDecisionState.reset()
     }
 
     private func updateOutputRoute(_ route: MacRealtimeTalkOutputRoute?) {
         guard let decision = self.outputRouteDecisionState.update(route: route) else { return }
-        self.suppressInputDuringOutput = decision.suppressesInputDuringOutput
         self.logger.info(
             "realtime output route decision \(decision.redactedDescription, privacy: .public)")
+        if let graph, graph.inputProcessingMode != decision.inputProcessingMode {
+            self.failCapture(String(localized: "Realtime audio route changed. Reconnecting…"))
+        }
     }
 
     private func audioInputDevicesDidChange() {
-        guard let targetSampleRate, let onAudio else { return }
+        guard self.graph != nil else { return }
         let desiredResolution = AudioInputDeviceObserver.resolveSelection(self.selectedInputUID())
         guard desiredResolution != self.activeInputResolution ||
             self.activeInputResolution?.shouldRestart(
@@ -219,36 +269,29 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
                 defaultUID: AudioInputDeviceObserver.defaultInputDeviceUID()) == true
         else { return }
 
-        self.logger.warning("realtime active/default input changed; restarting capture")
-        self.restartCaptureAfterInputChange {
-            try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
-        }
+        // Capture and playback share I/O. A microphone-only restart would stop
+        // the player beneath an active relay output; retire the whole session.
+        self.failCapture(String(localized: "Realtime audio route changed. Reconnecting…"))
     }
 
-    private func restartCaptureAfterInputChange(_ restart: () throws -> Void) {
-        self.deliveryGate.deactivate()
-        self.teardownEngine()
-        do {
-            try restart()
-        } catch {
-            self.logger.error(
-                "realtime input restart failed: \(error.localizedDescription, privacy: .public)")
-            let onFailure = self.onFailure
-            self.stop()
-            onFailure?(String(
-                format: String(localized: "Realtime microphone became unavailable: %@"),
-                error.localizedDescription))
-        }
+    private func failCapture(_ message: String) {
+        let onFailure = self.onFailure
+        self.stop()
+        onFailure?(message)
     }
 
     private func teardownEngine() {
-        if self.tapInstalled, let inputNode {
-            inputNode.removeTap(onBus: 0)
+        if let observer = self.configurationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            self.configurationObserver = nil
+        }
+        if self.tapInstalled, let graph {
+            graph.input.removeTap(onBus: 0)
         }
         self.tapInstalled = false
-        self.audioEngine?.stop()
-        self.audioEngine = nil
-        inputNode = nil
+        _ = self.pcmPlayer.stop()
+        self.graph?.stop()
+        self.graph = nil
         self.activeInputResolution = nil
     }
 
@@ -295,6 +338,10 @@ struct MacRealtimeTalkOutputRouteDecision: Equatable, Sendable {
     let transportType: UInt32?
     let effectiveKinds: [UInt32]
     let selectedDataSource: MacRealtimeTalkOutputDataSource?
+
+    var inputProcessingMode: MacRealtimeTalkInputProcessingMode {
+        self.suppressesInputDuringOutput ? .echoControlled : .isolatedHeadphones
+    }
 
     var redactedDescription: String {
         let transport = self.transportType.map(MacRealtimeTalkFourCC.describe) ?? "unavailable"
@@ -407,8 +454,53 @@ enum MacRealtimeTalkOutputRoutePolicy {
     }
 }
 
+/// Each observation owns one capture gate; a retired observer cannot close its successor.
+final class MacRealtimeTalkCaptureRouteState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let deliveryGate: TalkGenerationDeliveryGate
+    private var observedMode: MacRealtimeTalkInputProcessingMode?
+    private var retired = false
+
+    init(deliveryGate: TalkGenerationDeliveryGate) {
+        self.deliveryGate = deliveryGate
+    }
+
+    var mode: MacRealtimeTalkInputProcessingMode {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.observedMode ?? .echoControlled
+    }
+
+    func activate(for mode: MacRealtimeTalkInputProcessingMode) -> UInt64? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard !self.retired, self.observedMode == mode else { return nil }
+        return self.deliveryGate.activate()
+    }
+
+    func update(route: MacRealtimeTalkOutputRoute?) {
+        let next = MacRealtimeTalkOutputRoutePolicy.decision(for: route).inputProcessingMode
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let previous = self.observedMode, previous != next {
+            self.retired = true
+            self.deliveryGate.deactivate()
+        }
+        self.observedMode = next
+    }
+}
+
 struct MacRealtimeTalkOutputRouteDecisionState {
     private(set) var current: MacRealtimeTalkOutputRouteDecision?
+
+    func inputPolicy(hasEchoControl: Bool)
+        -> (suppressesInputDuringOutput: Bool, usesServerVADForBargeIn: Bool)
+    {
+        let needsEchoControl = self.current?.suppressesInputDuringOutput ?? true
+        // Isolated headphones retain local interruption even when the gateway
+        // disables server VAD interruption for forced agent consultation.
+        return (needsEchoControl && !hasEchoControl, needsEchoControl && hasEchoControl)
+    }
 
     mutating func update(route: MacRealtimeTalkOutputRoute?) -> MacRealtimeTalkOutputRouteDecision? {
         let next = MacRealtimeTalkOutputRoutePolicy.decision(for: route)
@@ -482,11 +574,13 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
     private var defaultOutputObservation: MacRealtimeTalkAudioPropertyObservation?
     private var dataSourceObservation: MacRealtimeTalkAudioPropertyObservation?
     private var warningReported = false
+    private var currentRouteSnapshot: MacRealtimeTalkOutputRoute?
 
-    func start(onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void) {
-        guard self.defaultOutputObservation == nil else { return }
+    @discardableResult
+    func start(onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void) -> MacRealtimeTalkOutputRoute? {
+        guard self.defaultOutputObservation == nil else { return self.currentRouteSnapshot }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.bindCurrentOutput(onChange: onChange)
+            _ = self?.bindCurrentOutput(onChange: onChange)
         }
         guard let observation = MacRealtimeTalkAudioPropertyObservation(
             objectID: AudioObjectID(kAudioObjectSystemObject),
@@ -495,11 +589,10 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
             listener: listener)
         else {
             self.reportWarningOnce("default-output-listener-failed")
-            onChange(nil)
-            return
+            return self.publish(nil, onChange: onChange)
         }
         self.defaultOutputObservation = observation
-        self.bindCurrentOutput(onChange: onChange)
+        return self.bindCurrentOutput(onChange: onChange)
     }
 
     func stop() {
@@ -507,41 +600,48 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
         self.defaultOutputObservation = nil
         self.dataSourceObservation?.stop()
         self.dataSourceObservation = nil
+        self.currentRouteSnapshot = nil
+    }
+
+    private func publish(
+        _ route: MacRealtimeTalkOutputRoute?,
+        onChange: @Sendable (MacRealtimeTalkOutputRoute?) -> Void) -> MacRealtimeTalkOutputRoute?
+    {
+        self.currentRouteSnapshot = route
+        onChange(route)
+        return route
     }
 
     private func bindCurrentOutput(
-        onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void)
+        onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void) -> MacRealtimeTalkOutputRoute?
     {
         self.dataSourceObservation?.stop()
         self.dataSourceObservation = nil
         guard let deviceID = Self.defaultOutputDeviceID() else {
             self.reportWarningOnce("default-output-read-failed")
-            onChange(nil)
-            return
+            return self.publish(nil, onChange: onChange)
         }
         guard let route = Self.currentRoute(deviceID: deviceID) else {
             self.reportWarningOnce("output-route-read-failed")
-            onChange(nil)
-            return
+            return self.publish(nil, onChange: onChange)
         }
         if route.selectedDataSource == .failed {
             self.reportWarningOnce("data-source-read-failed")
         }
         guard Self.hasDataSourceProperty(deviceID: deviceID) else {
-            onChange(route)
-            return
+            return self.publish(route, onChange: onChange)
         }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }
             guard let refreshedRoute = Self.currentRoute(deviceID: deviceID) else {
                 self.reportWarningOnce("output-route-read-failed")
-                onChange(nil)
+                _ = self.publish(nil, onChange: onChange)
                 return
             }
             if refreshedRoute.selectedDataSource == .failed {
                 self.reportWarningOnce("data-source-read-failed")
             }
-            onChange(refreshedRoute)
+            _ = self.publish(refreshedRoute, onChange: onChange)
         }
         guard let observation = MacRealtimeTalkAudioPropertyObservation(
             objectID: deviceID,
@@ -552,14 +652,13 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
             // A supported source can change without the device ID changing. If it cannot
             // be observed, poison the route so the suppression policy remains fail-closed.
             self.reportWarningOnce("data-source-listener-failed")
-            onChange(MacRealtimeTalkOutputRoute(
+            return self.publish(MacRealtimeTalkOutputRoute(
                 transportType: route.transportType,
                 terminalTypes: route.terminalTypes,
-                selectedDataSource: .failed))
-            return
+                selectedDataSource: .failed), onChange: onChange)
         }
         self.dataSourceObservation = observation
-        onChange(route)
+        return self.publish(route, onChange: onChange)
     }
 
     private static func currentRoute(deviceID: AudioObjectID) -> MacRealtimeTalkOutputRoute? {
@@ -738,12 +837,14 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
 enum MacRealtimeTalkAudioCaptureError: LocalizedError {
     case invalidTargetSampleRate
     case inputUnavailable
+    case outputUnavailable
     case invalidInputFormat
 
     var errorDescription: String? {
         switch self {
         case .invalidTargetSampleRate: String(localized: "Realtime Talk requested an invalid audio sample rate")
         case .inputUnavailable: String(localized: "Selected input and system default are unavailable")
+        case .outputUnavailable: String(localized: "Realtime Talk audio output is unavailable")
         case .invalidInputFormat: String(localized: "Selected audio input has no usable Float32 format")
         }
     }
@@ -770,30 +871,6 @@ enum MacRealtimeTalkAudioFrameEncoder {
     }
 }
 
-enum MacRealtimeTalkTapHandlerFactory {
-    /// AVAudioEngine invokes tap blocks on a realtime audio queue. Build the block from a
-    /// nonisolated context so Swift does not inherit MacRealtimeTalkAudioCapture's MainActor
-    /// executor and trap when Core Audio calls it off the main thread.
-    nonisolated static func make(
-        targetSampleRate: Double,
-        deliveryGate: TalkGenerationDeliveryGate,
-        deliveryToken: UInt64,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) -> AVAudioNodeTapBlock
-    {
-        { buffer, _ in
-            guard deliveryGate.isActive(deliveryToken) else { return }
-            let frame = MacRealtimeTalkAudioFrameEncoder.encode(
-                buffer: buffer,
-                targetSampleRate: targetSampleRate,
-                timestampMs: ProcessInfo.processInfo.systemUptime * 1000)
-            guard let frame else { return }
-            deliveryGate.deliver(ifActive: deliveryToken) {
-                onAudio(frame)
-            }
-        }
-    }
-}
-
 final class TalkGenerationDeliveryGate: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 0
@@ -812,6 +889,16 @@ final class TalkGenerationDeliveryGate: @unchecked Sendable {
         self.generation &+= 1
         self.active = false
         self.lock.unlock()
+    }
+
+    @discardableResult
+    func deactivate(ifActive generation: UInt64) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.active, self.generation == generation else { return false }
+        self.generation &+= 1
+        self.active = false
+        return true
     }
 
     func isActive(_ generation: UInt64) -> Bool {

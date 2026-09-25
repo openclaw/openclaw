@@ -4894,3 +4894,380 @@ describe("role-required Talk session creation", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("transcription command hints through registered Talk handlers", () => {
+  const phrases = ["stop talking", "end talking"];
+  const hints = { version: 1, kind: "local-stop-phrases", phrases };
+  const mac = {
+    connId: "hints-mac",
+    connect: {
+      role: "operator",
+      scopes: ["operator.talk"],
+      client: { id: "openclaw-macos", mode: "ui" },
+    },
+  };
+  let config: OpenClawConfig;
+  const provider = {
+    id: "openai",
+    label: "OpenAI",
+    defaultModel: "gpt-realtime-2.1",
+    isConfigured: () => true,
+    createBridge: vi.fn(),
+  };
+  const context = () => ({ getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } });
+  const createParams = {
+    sessionKey: "agent:main:main",
+    mode: "realtime",
+    transport: "gateway-relay",
+    brain: "agent-consult",
+    provider: "openai",
+    model: "gpt-realtime-2.1",
+    language: "en",
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          transport: "gateway-relay",
+          model: "gpt-realtime-2.1",
+          providers: { openai: { model: "gpt-realtime-2.1" } },
+        },
+      },
+    };
+    mocks.listSpeechProviders.mockReturnValue([]);
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([]);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(() => ({
+      provider,
+      providerConfig: { model: "gpt-realtime-2.1" },
+    }));
+    mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue(undefined);
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "hint-relay",
+      model: "gpt-realtime-2.1",
+      voice: "cedar",
+    });
+  });
+  it("advertises only to existing Mac operator UI and leaves other catalogs unchanged", async () => {
+    for (const client of [
+      mac,
+      { connId: "old" },
+      { ...mac, connect: { ...mac.connect, role: "node" } },
+      { ...mac, connect: { ...mac.connect, client: { id: "openclaw-ios", mode: "ui" } } },
+    ]) {
+      const respond = vi.fn();
+      await callTalkHandler("talk.catalog", { params: {}, client, respond, context: context() });
+      expectRespondOk(respond);
+      const result = mockCallArg(respond, 0, 1) as {
+        realtime: { providers: Array<Record<string, unknown>> };
+      };
+      const capability = result.realtime.providers[0]?.transcriptionCommandHints;
+      if (client === mac) {
+        expect(capability).toEqual({
+          version: 1,
+          kind: "local-stop-phrases",
+          mode: "realtime",
+          transport: "gateway-relay",
+          models: ["gpt-realtime-2.1"],
+          transcriptionModel: "gpt-4o-mini-transcribe",
+          maxPhrases: 8,
+          maxPhraseUtf16Units: 64,
+          maxTotalUtf16Units: 256,
+          maxPromptUtf8Bytes: 1024,
+        });
+      } else {
+        expect(capability).toBeUndefined();
+      }
+    }
+  });
+  it.each([
+    { model: "gpt-live-test" },
+    {
+      model: "gpt-realtime-2.1",
+      azureEndpoint: "https://example.invalid",
+      azureDeployment: "test",
+    },
+    { model: "gpt-realtime-2.1", gaSessionPolicy: {} },
+  ])("omits capability for an unreviewed catalog route (%#)", async (providerConfig) => {
+    config = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          transport: "gateway-relay",
+          providers: { openai: providerConfig },
+        },
+      },
+    };
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", { params: {}, client: mac, respond, context: context() });
+    expectRespondOk(respond);
+    expect(JSON.stringify(mockCallArg(respond, 0, 1))).not.toContain("transcriptionCommandHints");
+  });
+  it("uses the same provider default in catalog and create eligibility", async () => {
+    config = {
+      talk: {
+        realtime: { provider: "openai", transport: "gateway-relay", providers: { openai: {} } },
+      },
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({ provider, providerConfig: {} });
+    const catalog = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: {},
+      client: mac,
+      respond: catalog,
+      context: context(),
+    });
+    expectRespondOk(catalog);
+    expect(JSON.stringify(mockCallArg(catalog, 0, 1))).toContain("transcriptionCommandHints");
+    const { model: _model, ...params } = createParams;
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...params, transcriptionHints: hints },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession).transcriptionPrompt).toContain(
+      JSON.stringify(phrases),
+    );
+  });
+  it.each([
+    { configuredModel: "gpt-live-test", requestedModel: "gpt-realtime-2.1", supported: true },
+    { configuredModel: "gpt-realtime-2.1", requestedModel: "gpt-live-test", supported: false },
+  ])("advertises hints for the requested catalog model (%#)", async (testCase) => {
+    config = {
+      talk: {
+        realtime: {
+          provider: "openai",
+          transport: "gateway-relay",
+          model: testCase.configuredModel,
+          providers: { openai: { model: testCase.configuredModel } },
+        },
+      },
+    };
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: { provider: "openai", model: testCase.requestedModel },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    const result = mockCallArg(respond, 0, 1) as {
+      realtime: { providers: Array<Record<string, unknown>> };
+    };
+    expect(Boolean(result.realtime.providers[0]?.transcriptionCommandHints)).toBe(
+      testCase.supported,
+    );
+    expect(config.talk?.realtime?.model).toBe(testCase.configuredModel);
+  });
+  it("does not advertise hints for a context-resolved GPT-Live default", async () => {
+    config = {
+      talk: {
+        realtime: { provider: "openai", transport: "gateway-relay", providers: { openai: {} } },
+      },
+    };
+    const resolvedProvider = {
+      ...provider,
+      resolveConfig: () => ({ model: "gpt-live-test" }),
+    };
+    mocks.listRealtimeVoiceProviders.mockReturnValue([resolvedProvider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: resolvedProvider,
+      providerConfig: { model: "gpt-live-test" },
+    });
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", { params: {}, client: mac, respond, context: context() });
+    expectRespondOk(respond);
+    const result = mockCallArg(respond, 0, 1) as {
+      realtime: { providers: Array<Record<string, unknown>> };
+    };
+    expect(result.realtime.providers[0]?.defaultModel).toBe("gpt-live-test");
+    expect(result.realtime.providers[0]?.transcriptionCommandHints).toBeUndefined();
+  });
+  it("advertises for a requested OpenAI provider without changing the configured provider", async () => {
+    config = {
+      talk: {
+        realtime: {
+          provider: "other",
+          transport: "gateway-relay",
+          providers: { other: {}, openai: { model: "gpt-realtime-2.1" } },
+        },
+      },
+    };
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: { provider: "openai", model: "gpt-realtime-2.1" },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(JSON.stringify(mockCallArg(respond, 0, 1))).toContain("transcriptionCommandHints");
+    expect(config.talk?.realtime?.provider).toBe("other");
+  });
+  it("omits hints when session creation resolves an omitted model to GPT-Live", async () => {
+    config = {
+      talk: {
+        realtime: { provider: "openai", transport: "gateway-relay", providers: { openai: {} } },
+      },
+    };
+    const capabilities = { handlesAgentConsult: true, supportsToolCalls: false };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { model: "gpt-live-test" },
+      capabilities,
+    });
+    const { model: _model, ...params } = createParams;
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...params, transcriptionHints: hints },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    const launch = mockCallArg(mocks.createTalkRealtimeRelaySession);
+    expect(launch).not.toHaveProperty("transcriptionPrompt");
+    expect(launch.capabilities).toEqual(capabilities);
+    expect(launch.controlSource).toBe("delegation");
+  });
+  it("preserves Unicode bounds and rejects one-unit overflow at the handler", async () => {
+    const exact = Array.from({ length: 4 }, (_, i) => String(i) + "😀".repeat(31) + "z");
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, transcriptionHints: { ...hints, phrases: exact } },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession).transcriptionPrompt).toContain(
+      JSON.stringify(exact),
+    );
+    mocks.createTalkRealtimeRelaySession.mockClear();
+    const rejected = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, transcriptionHints: { ...hints, phrases: [...exact, "x"] } },
+      client: mac,
+      respond: rejected,
+      context: context(),
+    });
+    expectRespondError(rejected, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Invalid transcription command hints",
+    });
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+  });
+  it("never forwards hints to a different provider", async () => {
+    const other = { ...provider, id: "other" };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: other,
+      providerConfig: { model: "gpt-realtime-2.1" },
+    });
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, provider: "other", transcriptionHints: hints },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession)).not.toHaveProperty(
+      "transcriptionPrompt",
+    );
+  });
+  it("carries literal custom hints only for the opted-in session, preserving ordinary requests", async () => {
+    for (const transcriptionHints of [undefined, hints, { ...hints, phrases: [] }, undefined]) {
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: { ...createParams, ...(transcriptionHints ? { transcriptionHints } : {}) },
+        client: mac,
+        respond,
+        context: context(),
+      });
+      expectRespondOk(respond);
+      const launch = mocks.createTalkRealtimeRelaySession.mock.calls.at(-1)?.[0];
+      if (transcriptionHints === hints) {
+        expect(launch.transcriptionPrompt).toBe(
+          'Possible literal phrases in this conversation: ["stop talking","end talking"]. Transcribe only speech that is present, including surrounding words.',
+        );
+      } else {
+        expect(launch).not.toHaveProperty("transcriptionPrompt");
+      }
+      expect(launch.language).toBe("en");
+      expect(launch.model).toBe("gpt-realtime-2.1");
+      expect(launch.instructions).not.toContain("stop talking");
+      expect(JSON.stringify(mockCallArg(respond, 0, 1))).not.toContain("stop talking");
+    }
+  });
+  it.each([
+    null,
+    { ...hints, version: 2 },
+    { ...hints, phrases: ["end\ntalking"] },
+    { ...hints, phrases: ["x".repeat(65)] },
+    { ...hints, phrases: Array(5).fill("x".repeat(64)) },
+    { ...hints, phrases: ["\ud800"] },
+    { ...hints, "private-extra-field": "private phrase" },
+  ])(
+    "rejects malformed hints before any provider or session work (%#)",
+    async (transcriptionHints) => {
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: { ...createParams, transcriptionHints },
+        client: mac,
+        respond,
+        context: context(),
+      });
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Invalid transcription command hints",
+      });
+      expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+      expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
+      expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    { id: "openclaw-ios", mode: "ui" },
+    { id: "openclaw-macos", mode: "node" },
+  ])("does not forward hints for another existing caller (%#)", async (clientInfo) => {
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, transcriptionHints: hints },
+      client: { ...mac, connect: { ...mac.connect, client: clientInfo } },
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession)).not.toHaveProperty(
+      "transcriptionPrompt",
+    );
+  });
+  it.each([
+    { model: "gpt-live-test" },
+    {
+      model: "gpt-realtime-2.1",
+      azureEndpoint: "https://example.invalid",
+      azureDeployment: "test",
+    },
+  ])("rechecks resolved provider configuration at create time (%#)", async (providerConfig) => {
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({ provider, providerConfig });
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, model: providerConfig.model, transcriptionHints: hints },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession)).not.toHaveProperty(
+      "transcriptionPrompt",
+    );
+  });
+});

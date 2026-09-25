@@ -378,6 +378,13 @@ describe("native device settings wire contract", () => {
     ["missing voice wakeEnabled", { voice: { supported: true } }],
     ["missing voice supported", { voice: { wakeEnabled: false } }],
     ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
+    ...[null, "finish chat", ["finish chat", 1]].map(
+      (talkStopPhrases) =>
+        [
+          "Talk stop phrases",
+          { voice: { supported: true, wakeEnabled: false, talkStopPhrases } },
+        ] as const,
+    ),
     [
       "location",
       {
@@ -485,6 +492,8 @@ describe("native device settings wire contract", () => {
     capability?.set("voice.microphone", null);
     capability?.set("browser.cookieSync.domains", ["example.com"]);
     capability?.set("voice.locale.primary", "de-DE");
+    capability?.set("voice.talkStopPhrases", []);
+    capability?.set("voice.talkStopPhrases", null);
     capability?.requestPermission("microphone");
     capability?.openSystemSettings("accessibility");
     capability?.openPanel("quick-chat-shortcut");
@@ -496,6 +505,8 @@ describe("native device settings wire contract", () => {
       { type: "set", key: "voice.microphone", value: null },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },
       { type: "set", key: "voice.locale.primary", value: "de-DE" },
+      { type: "set", key: "voice.talkStopPhrases", value: [] },
+      { type: "set", key: "voice.talkStopPhrases", value: null },
       { type: "request-permission", id: "microphone" },
       { type: "open-system-settings", id: "accessibility" },
       { type: "open", panel: "quick-chat-shortcut" },

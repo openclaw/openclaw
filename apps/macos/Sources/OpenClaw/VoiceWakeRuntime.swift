@@ -33,6 +33,7 @@ actor VoiceWakeRuntime {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionGeneration: Int = 0 // drop stale callbacks after restarts
+    private var refreshGeneration: Int = 0 // latest settings request or microphone handoff
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
     private var captureStartedAt: Date?
@@ -56,7 +57,6 @@ actor VoiceWakeRuntime {
     private var lastTranscript: String?
     private var lastTranscriptAt: Date?
     private var preDetectTask: Task<Void, Never>?
-    private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
 
     /// Tunables
@@ -105,8 +105,10 @@ actor VoiceWakeRuntime {
     }
 
     func refresh(state: AppState) async {
+        self.refreshGeneration &+= 1
+        let generation = self.refreshGeneration
         let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
-            let enabled = state.swabbleEnabled
+            let enabled = state.swabbleEnabled && !state.talkEnabled
             let config = RuntimeConfig(
                 triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
@@ -117,6 +119,9 @@ actor VoiceWakeRuntime {
             return (enabled, config)
         }
 
+        // A newer settings request or Talk/PTT handoff retires this snapshot.
+        // Recognition restarts must not discard a newer pending settings request.
+        guard generation == self.refreshGeneration else { return }
         guard voiceWakeSupported, snapshot.0 else {
             self.stop()
             return
@@ -129,8 +134,6 @@ actor VoiceWakeRuntime {
         }
 
         let config = snapshot.1
-
-        if self.isStarting { return }
 
         if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
             return
@@ -146,13 +149,10 @@ actor VoiceWakeRuntime {
         }
 
         self.stop()
-        await self.start(with: config)
+        self.start(with: config)
     }
 
-    private func start(with config: RuntimeConfig) async {
-        if self.isStarting { return }
-        self.isStarting = true
-        defer { self.isStarting = false }
+    private func start(with config: RuntimeConfig) {
         do {
             self.recognitionGeneration &+= 1
             let generation = self.recognitionGeneration
@@ -725,11 +725,15 @@ actor VoiceWakeRuntime {
         let current = self.currentConfig
         self.stop(dismissOverlay: false, cancelScheduledRestart: false)
         if let current {
-            Task { await self.start(with: current) }
+            self.start(with: current)
         }
     }
 
-    private func restartRecognizerIfIdleAndOverlayHidden() async {
+    private func restartRecognizerIfIdleAndOverlayHidden() {
+        guard !Task.isCancelled else { return }
+        // Retire the timer and restart in one actor turn, so pause cannot lose
+        // the cancellation handle before the queued restart acquires audio.
+        self.scheduledRestartTask = nil
         if self.isCapturing { return }
         self.restartRecognizer()
     }
@@ -740,13 +744,8 @@ actor VoiceWakeRuntime {
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
             guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: nanos) else { return }
             guard let self else { return }
-            await self.consumeScheduledRestart()
             await self.restartRecognizerIfIdleAndOverlayHidden()
         }
-    }
-
-    private func consumeScheduledRestart() {
-        self.scheduledRestartTask = nil
     }
 
     func applyPushToTalkCooldown() {
@@ -754,6 +753,7 @@ actor VoiceWakeRuntime {
     }
 
     func pauseForPushToTalk() {
+        self.refreshGeneration &+= 1
         self.stop(dismissOverlay: false)
     }
 

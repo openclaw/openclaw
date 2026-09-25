@@ -324,6 +324,7 @@ if (actual.version !== version || actual.commit !== commit || actual.builtAt !==
 NODE
 
 node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
+/bin/bash "$ROOT_DIR/scripts/build-mac-aec.sh" "${BUILD_ARCHS[@]}"
 
 # pnpm build owns the Control UI and content-checked build stamps as well.
 # Private Swift and worker staging must stay outside the published dist tree.
@@ -351,6 +352,10 @@ echo "📦 Assembling replacement app bundle"
 mkdir -p "$APP_ROOT/Contents/MacOS"
 mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
+AEC_RESOURCES="$APP_ROOT/Contents/Resources/OpenClawAudioAEC"
+mkdir -p "$AEC_RESOURCES"
+cp -R "$ROOT_DIR/apps/macos/.build/aec/licenses" "$AEC_RESOURCES/licenses"
+cp "$ROOT_DIR/apps/macos/.build/aec/provenance.json" "$AEC_RESOURCES/provenance.json"
 
 echo "📄 Copying Info.plist template"
 INFO_PLIST_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/Info.plist"

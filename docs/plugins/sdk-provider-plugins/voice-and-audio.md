@@ -168,6 +168,15 @@ Register each capability inside `register(api)` alongside your existing
     GPT-Live owns agent delegation and interruption but does not support
     host-enforced wake-name gating, even though GA OpenAI Realtime does.
 
+    Gateway bridge requests may include optional `transcriptionPrompt`, containing
+    bounded, host-validated context for the current session's transcription service.
+    Keep it separate from assistant instructions and do not persist it across
+    sessions. The OpenAI GA adapter forwards it as `audio.input.transcription.prompt`;
+    Azure and prebuilt session policies retain their existing payloads. Mac local-stop
+    hints use the explicit `talk.catalog` capability and per-session request, while
+    callers that omit hints retain the existing transcription configuration. A hint
+    does not authorize a local command or guarantee recognition accuracy.
+
     ```typescript
     api.registerRealtimeVoiceProvider({
       id: "acme-ai",

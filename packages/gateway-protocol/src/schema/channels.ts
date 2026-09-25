@@ -300,6 +300,14 @@ export const TalkSessionCreateParamsSchema = closedObject({
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   language: Type.Optional(Type.String({ pattern: "^[a-z]{2}$" })),
+  transcriptionHints: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      kind: Type.Literal("local-stop-phrases"),
+      // The session handler also checks UTF-16 and aggregate/content limits.
+      phrases: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 8 }),
+    }),
+  ),
   vadThreshold: Type.Optional(Type.Number()),
   silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
   prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -403,6 +411,20 @@ const TalkCatalogProviderSchema = closedObject({
   supportsToolCalls: Type.Optional(Type.Boolean()),
   supportsVideoFrames: Type.Optional(Type.Boolean()),
   supportsSessionResumption: Type.Optional(Type.Boolean()),
+  transcriptionCommandHints: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      kind: Type.Literal("local-stop-phrases"),
+      mode: Type.Literal("realtime"),
+      transport: Type.Literal("gateway-relay"),
+      models: Type.Array(Type.Literal("gpt-realtime-2.1"), { minItems: 1, maxItems: 1 }),
+      transcriptionModel: Type.Literal("gpt-4o-mini-transcribe"),
+      maxPhrases: Type.Literal(8),
+      maxPhraseUtf16Units: Type.Literal(64),
+      maxTotalUtf16Units: Type.Literal(256),
+      maxPromptUtf8Bytes: Type.Literal(1024),
+    }),
+  ),
 });
 
 /** Active provider plus all candidates for a Talk capability family. */

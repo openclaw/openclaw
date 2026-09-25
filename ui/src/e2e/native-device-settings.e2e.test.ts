@@ -75,6 +75,98 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("edits and resets local Talk stop phrases without Gateway admin scope", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("native-talk-stop-phrases");
+    await suite.withPage(
+      { viewport: { width: 1280, height: 1200 }, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        delete snapshot.voice.talkStopPhrases;
+        await installDeviceSettingsBridge(page, snapshot);
+        const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/talk`);
+        const phrases = page.getByRole("textbox", { name: "Stop phrases", exact: true });
+        await page.getByRole("switch", { name: "Shift to stop", exact: true }).waitFor();
+        expect(await phrases.count()).toBe(0);
+        await page.screenshot({
+          path: path.join(artifactDir, "00-unsupported-host.png"),
+          animations: "disabled",
+        });
+        snapshot.voice.talkStopPhrases = ["stop talking", "end talking"];
+        await page.evaluate((next: NativeDeviceSettingsSnapshot) => {
+          (window as DeviceSettingsTestWindow)["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"] = next;
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-device-settings-changed", { detail: next }),
+          );
+        }, snapshot);
+        await expect.poll(() => phrases.inputValue()).toBe("stop talking\nend talking");
+        await phrases.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "01-defaults.png"),
+          animations: "disabled",
+        });
+        const messages = () =>
+          page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+
+        await phrases.fill("finish chat\n終了");
+        await phrases.press("Tab");
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "voice.talkStopPhrases",
+          value: ["finish chat", "終了"],
+        });
+        // A prior save may settle while the next edit is still being typed.
+        await phrases.fill("newer phrase");
+        snapshot.voice.talkStopPhrases = ["finish chat", "終了"];
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => phrases.inputValue()).toBe("newer phrase");
+        await phrases.press("Tab");
+        await expect
+          .poll(messages)
+          .toContainEqual({ type: "set", key: "voice.talkStopPhrases", value: ["newer phrase"] });
+        snapshot.voice.talkStopPhrases = ["newer phrase"];
+        await replyToDeviceSetting(page, snapshot);
+        await page.screenshot({
+          path: path.join(artifactDir, "02-custom.png"),
+          animations: "disabled",
+        });
+
+        await phrases.fill("rejected phrase");
+        await phrases.press("Tab");
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "voice.talkStopPhrases",
+          value: ["rejected phrase"],
+        });
+        // A rejected edit returns the unchanged native snapshot; the field must reflect it.
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => phrases.inputValue()).toBe("newer phrase");
+
+        await phrases.fill("");
+        await phrases.press("Tab");
+        await expect
+          .poll(messages)
+          .toContainEqual({ type: "set", key: "voice.talkStopPhrases", value: [] });
+        snapshot.voice.talkStopPhrases = [];
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => phrases.inputValue()).toBe("");
+        await page.getByRole("button", { name: "Reset stop phrases", exact: true }).click();
+        await expect
+          .poll(messages)
+          .toContainEqual({ type: "set", key: "voice.talkStopPhrases", value: null });
+        snapshot.voice.talkStopPhrases = ["stop talking", "end talking"];
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => phrases.inputValue()).toBe("stop talking\nend talking");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await gateway.getRequests("voicewake.set")).toHaveLength(0);
+        await page.screenshot({
+          path: path.join(artifactDir, "03-reset.png"),
+          animations: "disabled",
+        });
+      },
+    );
+  });
+
   it("shows the desktop companion setting and reconciles native sharing changes", async () => {
     const artifactDir = createControlUiE2eArtifactDir("tauri-desktop-sharing");
     await suite.withPage(
@@ -354,6 +446,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/talk`);
         const triggers = page.getByRole("textbox", { name: "Trigger words", exact: true });
         await expect.poll(() => triggers.inputValue()).toBe("openclaw");
+        expect(await page.getByRole("textbox", { name: "Stop phrases", exact: true }).count()).toBe(
+          0,
+        );
         await triggers.fill("first phrase");
         await gateway.waitForRequest("voicewake.set");
         expect(await triggers.isEnabled()).toBe(true);

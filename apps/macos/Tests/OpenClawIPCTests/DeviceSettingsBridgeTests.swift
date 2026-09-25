@@ -78,6 +78,9 @@ struct DeviceSettingsBridgeTests {
             ("voice.locale.primary", "en-US", .set(.localePrimary, .string("en-US"))),
             ("voice.locale.additional", ["de-DE"], .set(.localeAdditional, .strings(["de-DE"]))),
             ("voice.locale.additional", [String](), .set(.localeAdditional, .strings([]))),
+            ("voice.talkStopPhrases", ["finish chat"], .set(.talkStopPhrases, .strings(["finish chat"]))),
+            ("voice.talkStopPhrases", [String](), .set(.talkStopPhrases, .strings([]))),
+            ("voice.talkStopPhrases", NSNull(), .set(.talkStopPhrases, .null)),
         ]
         for (key, value, expected) in cases {
             #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == expected)
@@ -114,6 +117,8 @@ struct DeviceSettingsBridgeTests {
             ("browser.cookieSync.domains", ["example.test", 1]),
             ("voice.locale.additional", "en-US"),
             ("voice.locale.additional", ["en-US", NSNull()]),
+            ("voice.talkStopPhrases", "finish chat"),
+            ("voice.talkStopPhrases", ["finish chat", NSNull()]),
             ("voice.microphone", ["fixture-mic"]),
             ("voice.locale.primary", ["en-US"]),
             ("browser.cookieSync.targetProfile", ["work"]),
@@ -125,6 +130,7 @@ struct DeviceSettingsBridgeTests {
             "app.appearance", "app.iconStyle",
             "capabilities.computerControlProvider", "permissions.location.mode", "browser.cookieSync.domains",
             "browser.cookieSync.targetProfile", "voice.microphone", "voice.locale.primary", "voice.locale.additional",
+            "voice.talkStopPhrases",
         ]
         #expect(Set(DeviceSettingKey.allCases.map(\.rawValue)) == Set(Self.toggleKeys.map(\.0) + typedKeys))
         let invalidScalars: [Any] = [true, NSNumber(value: 1)]
@@ -132,7 +138,7 @@ struct DeviceSettingsBridgeTests {
             for value in invalidScalars {
                 #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == nil)
             }
-            if key != "voice.microphone" {
+            if key != "voice.microphone", key != "voice.talkStopPhrases" {
                 #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": NSNull()]) == nil)
             }
             #expect(DeviceSettingsRequest(body: ["type": "set", "key": key]) == nil)

@@ -82,29 +82,137 @@ struct MacRealtimeTalkAudioCaptureTests {
         #expect(deliveries == 2)
         #expect(!gate.isActive(first))
         #expect(gate.isActive(second))
+        #expect(!gate.deactivate(ifActive: first))
+        #expect(gate.isActive(second))
+        #expect(gate.deactivate(ifActive: second))
+        #expect(!gate.isActive(second))
     }
 
-    @Test func `tap handler can run on a realtime audio queue`() throws {
+    @Test func `echo taps process a coalesced frame off the main actor`() throws {
         let buffer = try makeFloatBuffer(
-            sampleRate: 48000,
-            channels: [[0, 0.5, -0.5, 0]])
+            sampleRate: 48000, channels: [[Float](repeating: 0, count: 4800)])
         let gate = TalkGenerationDeliveryGate()
         let token = gate.activate()
         let sink = RealtimeTalkFrameSink()
-        let handler = SendableTapHandler(MacRealtimeTalkTapHandlerFactory.make(
+        let finished = DispatchSemaphore(value: 0)
+        let pipeline = try MacRealtimeTalkEchoPipeline(
             targetSampleRate: 24000,
             deliveryGate: gate,
             deliveryToken: token,
-            onAudio: { sink.append($0) }))
-        let finished = DispatchSemaphore(value: 0)
-
-        DispatchQueue(label: "talk.realtime.tap-test").async {
-            handler(buffer, AVAudioTime(sampleTime: 0, atRate: 48000))
-            finished.signal()
+            onAudio: { sink.append($0)
+                finished.signal()
+            },
+            onFailure: { finished.signal() })
+        defer { pipeline.stop()
+            gate.deactivate()
         }
-
+        let mic = SendableTapHandler(pipeline.makeTap(channels: 0..<1, isRender: false))
+        let render = SendableTapHandler(pipeline.makeTap(channels: 0..<1, isRender: true))
+        DispatchQueue(label: "talk.realtime.tap-test").async {
+            mic(buffer, AVAudioTime(hostTime: 1_000_000))
+            render(buffer, AVAudioTime(hostTime: 1_000_000))
+        }
         #expect(finished.wait(timeout: .now() + 2) == .success)
         #expect(sink.count == 1)
+        #expect(pipeline.isHealthy)
+    }
+
+    @Test(arguments: [44100.0, 48000.0])
+    func `isolated headphone capture preserves selected PCM without a render reference`(sampleRate: Double) throws {
+        let selected = (0..<960).map { Float(sin(Double($0) * 0.13) * 0.25) }
+        let buffer = try self.makeFloatBuffer(
+            sampleRate: sampleRate,
+            channels: [[Float](repeating: 0.9, count: selected.count), selected])
+        let expectedBuffer = try self.makeFloatBuffer(sampleRate: sampleRate, channels: [selected])
+        let time = AVAudioTime(hostTime: 1_000_000)
+        let timestamp = AVAudioTime.seconds(forHostTime: time.hostTime) * 1000
+        let expected = try #require(MacRealtimeTalkAudioFrameEncoder.encode(
+            buffer: expectedBuffer, targetSampleRate: 24000, timestampMs: timestamp))
+        let gate = TalkGenerationDeliveryGate()
+        let route = MacRealtimeTalkCaptureRouteState(deliveryGate: gate)
+        route.update(route: self.headphonesRoute())
+        let token = try #require(route.activate(for: .isolatedHeadphones))
+        let sink = RealtimeTalkFrameSink()
+        let finished = DispatchSemaphore(value: 0)
+        let pipeline = try MacRealtimeTalkEchoPipeline(
+            inputProcessingMode: route.mode,
+            targetSampleRate: 24000,
+            deliveryGate: gate,
+            deliveryToken: token,
+            onAudio: { sink.append($0)
+                finished.signal()
+            },
+            onFailure: { finished.signal() })
+        defer { gate.deactivate()
+            pipeline.stop()
+        }
+        pipeline.makeTap(channels: 1..<2, isRender: false)(buffer, time)
+        #expect(finished.wait(timeout: .now() + 2) == .success)
+        let frames = sink.snapshot()
+        #expect(frames.count == 1)
+        let frame = try #require(frames.first)
+        #expect(frame.data == expected.data)
+        #expect(frame.timestampMs == expected.timestampMs)
+        #expect(frame.rms == expected.rms)
+        #expect(pipeline.isHealthy)
+    }
+
+    @Test func `capture mode change closes delivery synchronously and never reopens the old generation`() throws {
+        let gate = TalkGenerationDeliveryGate()
+        let state = MacRealtimeTalkCaptureRouteState(deliveryGate: gate)
+        state.update(route: self.headphonesRoute())
+        #expect(state.mode == .isolatedHeadphones)
+        let token = try #require(state.activate(for: .isolatedHeadphones))
+        var delivered = 0
+        state.update(route: self.headphonesRoute())
+        gate.deliver(ifActive: token) { delivered += 1 }
+        #expect(delivered == 1)
+
+        state.update(route: self.route(
+            transport: kAudioDeviceTransportTypeBuiltIn, terminals: [kAudioStreamTerminalTypeSpeaker]))
+        gate.deliver(ifActive: token) { delivered += 1 }
+        #expect(state.mode == .echoControlled)
+        #expect(!gate.isActive(token))
+        state.update(route: self.headphonesRoute())
+        gate.deliver(ifActive: token) { delivered += 1 }
+        #expect(delivered == 1)
+        #expect(state.activate(for: .isolatedHeadphones) == nil)
+
+        let replacementGate = TalkGenerationDeliveryGate()
+        let replacement = MacRealtimeTalkCaptureRouteState(deliveryGate: replacementGate)
+        replacement.update(route: self.headphonesRoute())
+        let replacementToken = try #require(replacement.activate(for: .isolatedHeadphones))
+        state.update(route: nil)
+        #expect(replacementGate.isActive(replacementToken))
+
+        let starting = MacRealtimeTalkCaptureRouteState(deliveryGate: TalkGenerationDeliveryGate())
+        starting.update(route: self.headphonesRoute())
+        let plannedMode = starting.mode
+        starting.update(route: nil)
+        starting.update(route: self.headphonesRoute())
+        #expect(starting.activate(for: plannedMode) == nil)
+    }
+
+    @Test func `unobserved or poisoned routes cannot select raw capture`() {
+        let routes: [MacRealtimeTalkOutputRoute?] = [
+            nil,
+            self.route(transport: kAudioDeviceTransportTypeAggregate, terminals: [kAudioStreamTerminalTypeHeadphones]),
+            self.route(transport: kAudioDeviceTransportTypeVirtual, terminals: [kAudioStreamTerminalTypeHeadphones]),
+            self.route(
+                transport: kAudioDeviceTransportTypeBuiltIn,
+                terminals: [kAudioStreamTerminalTypeHeadphones],
+                source: .failed),
+        ]
+        for route in routes {
+            let gate = TalkGenerationDeliveryGate()
+            let state = MacRealtimeTalkCaptureRouteState(deliveryGate: gate)
+            #expect(state.mode == .echoControlled)
+            state.update(route: route)
+            #expect(state.mode == .echoControlled)
+            let token = gate.activate()
+            state.update(route: self.headphonesRoute())
+            #expect(!gate.isActive(token))
+        }
     }
 
     @Test @MainActor func `capture rejects invalid target sample rate before touching hardware`() {
@@ -167,6 +275,48 @@ struct MacRealtimeTalkAudioCaptureTests {
             #expect(!decision.suppressesInputDuringOutput)
             #expect(decision.reason == .isolatedHeadphones)
         }
+    }
+
+    @Test(arguments: [false, true])
+    func `echo processing preserves local headphone interruption without server VAD`(healthy: Bool) {
+        for transport in [
+            kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB,
+            kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE,
+        ] {
+            var state = MacRealtimeTalkOutputRouteDecisionState()
+            _ = state.update(route: self.route(
+                transport: transport, terminals: [kAudioStreamTerminalTypeHeadphones]))
+            let policy = state.inputPolicy(hasEchoControl: healthy)
+            #expect(!policy.suppressesInputDuringOutput)
+            // A force-agent-consult gateway does not clear output on speech_started.
+            // Existing isolated-output cancellation must remain client-owned.
+            #expect(!policy.usesServerVADForBargeIn)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `speaker and uncertain routes require live echo control before sending input`(healthy: Bool) {
+        let routes: [MacRealtimeTalkOutputRoute?] = [
+            nil,
+            self.route(transport: kAudioDeviceTransportTypeBuiltIn, terminals: [kAudioStreamTerminalTypeSpeaker]),
+            self.route(transport: kAudioDeviceTransportTypeAggregate, terminals: [kAudioStreamTerminalTypeSpeaker]),
+            self.route(transport: kAudioDeviceTransportTypeUSB, terminals: []),
+            self.route(
+                transport: kAudioDeviceTransportTypeBluetooth,
+                terminals: [kAudioStreamTerminalTypeHeadphones],
+                source: .failed),
+        ]
+        var state = MacRealtimeTalkOutputRouteDecisionState()
+        for route in routes {
+            _ = state.update(route: self.headphonesRoute())
+            _ = state.update(route: route)
+            let policy = state.inputPolicy(hasEchoControl: healthy)
+            #expect(policy.suppressesInputDuringOutput == !healthy)
+            #expect(policy.usesServerVADForBargeIn == healthy)
+        }
+        state.reset()
+        #expect(state.inputPolicy(hasEchoControl: false).suppressesInputDuringOutput)
+        #expect(!state.inputPolicy(hasEchoControl: false).usesServerVADForBargeIn)
     }
 
     @Test func `non allowlisted transports fail closed even with headphone metadata`() {
@@ -378,6 +528,12 @@ private final class RealtimeTalkFrameSink: @unchecked Sendable {
         self.lock.lock()
         defer { self.lock.unlock() }
         return self.frames.count
+    }
+
+    func snapshot() -> [RealtimeTalkAudioFrame] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.frames
     }
 
     func append(_ frame: RealtimeTalkAudioFrame) {

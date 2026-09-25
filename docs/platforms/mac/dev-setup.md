@@ -14,6 +14,9 @@ the Xcode requirements below.
 
 ## Prerequisites
 
+- **Python 3.12+, CMake, Ninja, and pkg-config** for the native acoustic echo
+  canceller. Ensure `python3`, `cmake`, `ninja`, and `pkg-config` are on `PATH`,
+  and that `python3` selects Python 3.12 or newer.
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
@@ -41,6 +44,22 @@ pnpm install
 Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
 default and fails if none is available. Ad-hoc signing is an explicit opt-in;
 it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
+
+Packaging automatically runs `scripts/build-mac-aec.sh` to prepare the native
+echo canceller for each requested architecture. It downloads checksum-pinned
+WebRTC Audio Processing, Abseil, and Meson dependencies into
+`apps/macos/.build/aec`; the first preparation needs network access.
+
+Before invoking `swift build` directly for `apps/macos`, prepare these
+dependencies from the repository root:
+
+```bash
+/bin/bash scripts/build-mac-aec.sh
+```
+
+The default is the host architecture. Pass `arm64 x86_64` to prepare both
+architectures for a universal build. Repeat preparation after deleting the
+Swift build directory, including with `swift package reset`.
 
 Packaging builds the JavaScript runtime and Control UI, then provisions a
 private Node worker from the canonical package artifact for every requested

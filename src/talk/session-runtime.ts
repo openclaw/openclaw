@@ -74,6 +74,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   language?: string;
+  transcriptionPrompt?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
@@ -248,6 +249,7 @@ export function createRealtimeVoiceBridgeSession(
     audioFormat: params.audioFormat,
     instructions: params.instructions,
     language: params.language,
+    ...(params.transcriptionPrompt ? { transcriptionPrompt: params.transcriptionPrompt } : {}),
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,

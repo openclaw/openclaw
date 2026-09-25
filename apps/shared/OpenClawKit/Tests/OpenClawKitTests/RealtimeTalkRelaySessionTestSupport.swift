@@ -245,6 +245,7 @@ final class IndexedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
 @MainActor
 final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     var suppressesInputDuringOutput = false
+    var usesServerVADForBargeIn = false
     private(set) var isStarted = false
     private(set) var startCount = 0
     private(set) var stopCount = 0

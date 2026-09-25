@@ -38,6 +38,21 @@ private actor SimpleTaskOperationProbe {
 }
 
 struct SimpleTaskSupportTests {
+    @Test func `already cancelled polling does not sleep or start another operation`() async {
+        let operation = SimpleTaskOperationProbe()
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            if await SimpleTaskSupport.waitForNextOperation(interval: 60, sleep: { _ in
+                await operation.recordCall("sleep")
+            }) {
+                await operation.recordCall("poll")
+            }
+        }
+        await task.value
+
+        #expect(await operation.calls().isEmpty)
+    }
+
     @Test
     @MainActor
     func `cancelling during sleep does not run another operation`() async {

@@ -98,7 +98,7 @@ private final class RuntimeTestSignal<Value: Sendable>: @unchecked Sendable {
 }
 
 @MainActor
-private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
+final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
     let suppressesInputDuringOutput = false
     var startError: Error?
     var onStart: (() -> Void)?
@@ -119,19 +119,34 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
     func stop() {}
 }
 
-private actor RuntimeTestRelayRequestLog {
+actor RuntimeTestRelayRequestLog {
     private var methods: [String] = []
     private var sessionIds: [String?] = []
+    private var hintPhrases: [[String]?] = []
+    private var languages: [String?] = []
     private nonisolated let changed = RuntimeTestSignal<Void>()
 
     func record(method: String, params: [String: AnyCodable]?) {
         self.methods.append(method)
         self.sessionIds.append(params?["sessionId"]?.stringValue)
+        if method == "talk.session.create" {
+            self.languages.append(params?["language"]?.stringValue)
+            self.hintPhrases.append(params?["transcriptionHints"]?.dictionaryValue?["phrases"]?
+                .arrayValue?.compactMap(\.stringValue))
+        }
         self.changed.send(())
     }
 
     func snapshot() -> (methods: [String], sessionIds: [String?]) {
         (self.methods, self.sessionIds)
+    }
+
+    func createdLanguages() -> [String?] {
+        self.languages
+    }
+
+    func createdHintPhrases() -> [[String]?] {
+        self.hintPhrases
     }
 
     func waitForCount(_ count: Int) async throws {
@@ -192,7 +207,7 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
     }
 }
 
-private actor RuntimeContinuationBarrier {
+actor RuntimeContinuationBarrier {
     private var entered = false
     private var released = false
     private nonisolated let enteredSignal = RuntimeTestSignal<Void>()
@@ -239,7 +254,7 @@ private func waitForRuntimeBarrier(
     }
 }
 
-private final class RuntimeCommitProbe: @unchecked Sendable {
+final class RuntimeCommitProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedValues: [String] = []
 
@@ -278,7 +293,27 @@ private struct RuntimeConditionTimeout: Error, CustomStringConvertible {
     }
 }
 
-private func waitForRuntimeCondition(
+private func deliverTranscriptWithBlockedPreferences(
+    runtime: isolated TalkModeRuntime,
+    replacement: String,
+    generation: UInt64,
+    entered: RuntimeTestSignal<Void>) async
+{
+    entered.send(())
+    if replacement == "native recognition" {
+        _ = await runtime.handleLocalTalkExitCommand(
+            "stop talking", isFinal: true, lifecycleGeneration: runtime.lifecycleGeneration)
+    } else {
+        await runtime.handleRealtimeTranscript(
+            .init(
+                role: "user",
+                text: replacement == "relay retirement" ? "stop talking" : "ordinary speech",
+                isFinal: true),
+            relayGeneration: generation)
+    }
+}
+
+func waitForRuntimeCondition(
     _ operation: String,
     condition: @escaping @Sendable () async -> Bool) async throws
 {
@@ -318,7 +353,8 @@ private func makeRuntimeTestRealtimeSession(
 
 private func makeRuntimeTestConfigSnapshot(
     sessionKey: String = "main",
-    realtimeModel: String = "gpt-realtime-2") -> ConfigSnapshot
+    realtimeModel: String = "gpt-realtime-2",
+    speechLocaleID: String? = nil) -> ConfigSnapshot
 {
     ConfigSnapshot(
         path: nil,
@@ -330,6 +366,7 @@ private func makeRuntimeTestConfigSnapshot(
         config: [
             "session": AnyCodable(["mainKey": AnyCodable(sessionKey)]),
             "talk": AnyCodable([
+                "speechLocale": AnyCodable(speechLocaleID),
                 "realtime": AnyCodable([
                     "provider": AnyCodable("openai"),
                     "providers": AnyCodable([
@@ -357,14 +394,18 @@ private func makeRuntimeTestCatalogData() throws -> Data {
         ]))
 }
 
-private func makeRuntimeTestBootstrap(
+func makeRuntimeTestBootstrap(
     requests: RuntimeTestRelayRequestLog = RuntimeTestRelayRequestLog(),
     createBarrier: RuntimeContinuationBarrier? = nil,
     probe: RuntimeCommitProbe? = nil,
     sessionKey: String = "main",
-    realtimeModel: String = "gpt-realtime-2") throws -> GatewayConnection.RealtimeTalkBootstrap
+    realtimeModel: String = "gpt-realtime-2",
+    catalog: Data? = nil,
+    speechLocaleID: String? = nil,
+    eventChannel: (stream: AsyncStream<EventFrame>, continuation: AsyncStream<EventFrame>.Continuation)? = nil) throws
+    -> GatewayConnection.RealtimeTalkBootstrap
 {
-    let events = AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(8))
+    let events = eventChannel ?? AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(8))
     let result = TalkSessionCreateResult(
         sessionid: "talk-session",
         mode: AnyCodable("realtime"),
@@ -376,6 +417,7 @@ private func makeRuntimeTestBootstrap(
         subscribeServerEvents: { _ in events.stream },
         request: { method, params, _ in
             await requests.record(method: method, params: params)
+            if method == "talk.catalog", let catalog { return catalog }
             if method == "talk.session.create" {
                 probe?.record("start")
                 if let createBarrier {
@@ -405,11 +447,12 @@ private func makeRuntimeTestBootstrap(
         transport: transport,
         configSnapshot: makeRuntimeTestConfigSnapshot(
             sessionKey: sessionKey,
-            realtimeModel: realtimeModel),
+            realtimeModel: realtimeModel,
+            speechLocaleID: speechLocaleID),
         sessionKey: sessionKey)
 }
 
-private actor RuntimeTestBootstrapSequence {
+actor RuntimeTestBootstrapSequence {
     private var bootstraps: [GatewayConnection.RealtimeTalkBootstrap]
     private let firstBarrier: RuntimeContinuationBarrier?
     private var count = 0
@@ -552,7 +595,7 @@ struct TalkModeRuntimeSpeechTests {
 
     @Test(arguments: ["audio failure", "selected microphone", "unpause"])
     @MainActor
-    func `capture failures close the old relay and start a replacement microphone`(source: String) async throws {
+    func `capture failure or selected microphone change replaces the whole relay`(source: String) async throws {
         try await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: true]) {
             let previousRelayPreference = AppStateStore.shared.talkRealtimeRelayEnabled
             AppStateStore.shared.talkRealtimeRelayEnabled = true
@@ -590,7 +633,9 @@ struct TalkModeRuntimeSpeechTests {
                 await runtime.handleRealtimeTermination(.remoteClose(reason: "stale"), relayGeneration: generation &- 1)
                 #expect(await runtime.realtimeSession === session)
                 #expect(await requests.snapshot().methods.isEmpty)
-                audioCapture.startError = RuntimeTestAudioCaptureError.inputUnavailable
+                if source != "selected microphone" {
+                    audioCapture.startError = RuntimeTestAudioCaptureError.inputUnavailable
+                }
                 switch source {
                 case "audio failure":
                     await runtime.handleRealtimeTermination(
@@ -612,7 +657,7 @@ struct TalkModeRuntimeSpeechTests {
                 recordRecovery("awaiting microphone signal")
                 _ = try await recoveryStarted.next("replacement realtime microphone")
                 #expect(recoveryCapture.startCount == 1)
-                #expect(await runtime.rapidRealtimeRestartCount == 1)
+                #expect(await runtime.rapidRealtimeRestartCount == (source == "selected microphone" ? 0 : 1))
                 #expect(await recoveryRequests.snapshot().methods == ["talk.session.create", "talk.catalog"])
                 let replacement = try #require(await runtime.realtimeSession)
                 #expect(replacement !== session)
@@ -1177,7 +1222,11 @@ struct TalkModeRuntimeSpeechTests {
         sessionB.stop()
     }
 
-    @Test @MainActor func `current relay failure owner can transition to native fallback`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `current relay failure owner can transition to native fallback`(aggregateInput: Bool) async throws {
+        let recovery = aggregateInput
+            ? MacRealtimeTalkInputChannels.MappingError.aggregateInputSelected.recoverySuggestion
+            : nil
         let runtime = TalkModeRuntime()
         let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
         let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
@@ -1189,13 +1238,21 @@ struct TalkModeRuntimeSpeechTests {
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
-            status: "native"))
-        #expect(TalkModeController.shared.partialTranscript == "native")
+            status: "native",
+            recoverySuggestion: recovery))
+        let expected = ["native", recovery].compactMap(\.self).joined(separator: " ")
+        #expect(TalkModeController.shared.partialTranscript == expected)
+        #expect(await runtime.phase == .listening)
+        #expect(TalkModeController.shared.phase == .listening)
 
         await runtime.setEnabled(false)
     }
 
-    @Test @MainActor func `failed native fallback start publishes terminal status`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `failed native fallback start publishes terminal status`(aggregateInput: Bool) async throws {
+        let recovery = aggregateInput
+            ? MacRealtimeTalkInputChannels.MappingError.aggregateInputSelected.recoverySuggestion
+            : nil
         let runtime = TalkModeRuntime()
         let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
         let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
@@ -1207,11 +1264,13 @@ struct TalkModeRuntimeSpeechTests {
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
-            status: "unused"))
+            status: "unused",
+            recoverySuggestion: recovery))
         #expect(await runtime.phase == .idle)
         #expect(TalkModeController.shared.phase == .idle)
-        #expect(TalkModeController.shared.partialTranscript ==
-            String(localized: "Realtime unavailable — native speech could not start"))
+        let expected = [String(localized: "Realtime unavailable — native speech could not start"), recovery]
+            .compactMap(\.self).joined(separator: " ")
+        #expect(TalkModeController.shared.partialTranscript == expected)
 
         await runtime.setEnabled(false)
     }
@@ -1353,5 +1412,298 @@ struct TalkModeRuntimeSpeechTests {
         #expect(params["normalize"]?.value as? String == "auto")
         #expect(params["language"]?.value as? String == "en")
         #expect(params["latencyTier"]?.value as? Int == 3)
+    }
+}
+
+extension TalkModeRuntimeSpeechTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `aggregate input recovery remains visible after native fallback`(recognitionStarted: Bool) async throws {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration))
+        let relayGeneration = await runtime.realtimeRelayGeneration
+        let suggestion = try #require(MacRealtimeTalkInputChannels.MappingError.aggregateInputSelected
+            .recoverySuggestion)
+
+        #expect(await runtime.commitNativeFallback(
+            recognitionStarted: recognitionStarted,
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionGeneration: recognitionGeneration,
+            relayGeneration: relayGeneration,
+            status: "native",
+            recoverySuggestion: suggestion))
+        #expect(TalkModeController.shared.partialTranscript.hasSuffix(suggestion))
+        if !recognitionStarted {
+            #expect(TalkModeController.shared.partialTranscript.hasPrefix(
+                String(localized: "Realtime unavailable — native speech could not start")))
+        }
+        await runtime.setEnabled(false)
+    }
+
+    @Test(arguments: ["native recognition", "relay retirement", "relay reconfiguration"])
+    func `preference suspension rejects stale commands and transcripts`(replacement: String) async throws {
+        let runtime = TalkModeRuntime()
+        let session = await MainActor.run {
+            makeRuntimeTestRealtimeSession(player: RuntimeTestPCMPlayer())
+        }
+        let generation: UInt64
+        if replacement == "native recognition" {
+            _ = await runtime._test_prepareEnabledLifecycle()
+            generation = await runtime.realtimeRelayGeneration
+        } else {
+            generation = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        }
+        let lifecycle = await runtime.lifecycleGeneration
+        let entered = RuntimeTestSignal<Void>()
+        let mainBlocked = RuntimeTestSignal<Void>()
+        let releaseMain = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            mainBlocked.send(())
+            _ = releaseMain.wait(timeout: .now() + 5)
+        }
+        _ = try await mainBlocked.next("preference MainActor blocker")
+        let transcript = Task {
+            await deliverTranscriptWithBlockedPreferences(
+                runtime: runtime, replacement: replacement, generation: generation, entered: entered)
+        }
+        var retirement: Task<Void, Never>?
+        do {
+            _ = try await entered.next("isolated transcript admission")
+            // A fresh actor turn can run only after the isolated delivery has
+            // reached its blocked MainActor preference read.
+            #expect(await runtime.lifecycleGeneration == lifecycle)
+            if replacement == "native recognition" {
+                _ = try #require(await runtime.beginRecognitionAttempt(lifecycleGeneration: lifecycle))
+            } else if replacement == "relay retirement" {
+                retirement = Task { await runtime.stop() }
+                try await waitForRuntimeCondition("relay retired during preference read") {
+                    await runtime.realtimeSession == nil
+                }
+                #expect(await runtime.lifecycleGeneration == lifecycle)
+            } else {
+                _ = await runtime.beginRealtimeReconfiguration()
+            }
+            releaseMain.signal()
+            await transcript.value
+            await retirement?.value
+            #expect(await runtime.isEnabled)
+            #expect(await runtime.phase == .idle)
+        } catch {
+            releaseMain.signal()
+            await transcript.value
+            await retirement?.value
+            await runtime.setEnabled(false)
+            throw error
+        }
+        await runtime.setEnabled(false)
+        await MainActor.run { session.stop() }
+    }
+
+    @Test(arguments: ["stop talking", "end talking", "Please stop talking.", " END TALKING, please! "])
+    @MainActor
+    func `final user stop commands close the relay and disable Talk locally`(text: String) async throws {
+        try #require(AppStateStore.shared.isPreview)
+        let previousEnabled = AppStateStore.shared.talkEnabled
+        AppStateStore.shared.talkEnabled = true
+        defer { AppStateStore.shared.talkEnabled = previousEnabled }
+        let requests = RuntimeTestRelayRequestLog()
+        let runtime = TalkModeRuntime()
+        let session = makeRecordingRelaySession(requests: requests, audioCapture: RuntimeTestAudioCapture())
+        let generation = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime.handleRealtimeTranscript(
+            .init(role: "user", text: text, isFinal: true),
+            relayGeneration: generation)
+
+        #expect(!AppStateStore.shared.talkEnabled)
+        #expect(await runtime.isEnabled == false)
+        #expect(await runtime.realtimeSession == nil)
+        #expect(await runtime.phase == .idle)
+        await runtime.handleRealtimeSpeakingChanged(true, relayGeneration: generation)
+        #expect(await runtime.phase == .idle)
+        do {
+            #expect(try await waitForRelayClose(requests) == ["talk.session.close"])
+        } catch {
+            await runtime.setEnabled(false)
+            throw error
+        }
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `only current unpaused explicit final user commands end Talk`() async throws {
+        try #require(AppStateStore.shared.isPreview)
+        let previousEnabled = AppStateStore.shared.talkEnabled
+        AppStateStore.shared.talkEnabled = true
+        defer { AppStateStore.shared.talkEnabled = previousEnabled }
+        let requests = RuntimeTestRelayRequestLog()
+        let runtime = TalkModeRuntime()
+        let session = makeRecordingRelaySession(requests: requests, audioCapture: RuntimeTestAudioCapture())
+        let generation = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        let ignored: [RealtimeTalkTranscript] = [
+            .init(role: "user", text: "stop talking", isFinal: false),
+            .init(role: "assistant", text: "end talking", isFinal: true),
+            .init(role: "user", text: "don't stop talking", isFinal: true),
+            .init(role: "user", text: "please do not end talking", isFinal: true),
+            .init(role: "user", text: "say stop talking", isFinal: true),
+            .init(role: "user", text: "stop talking about the weather", isFinal: true),
+            .init(role: "user", text: "\"stop talking\"", isFinal: true),
+            .init(role: "user", text: "‘end talking’", isFinal: true),
+            .init(role: "user", text: "goodbye", isFinal: true),
+            .init(role: "user", text: "   ", isFinal: true),
+        ]
+        for transcript in ignored {
+            await runtime.handleRealtimeTranscript(transcript, relayGeneration: generation)
+            #expect(AppStateStore.shared.talkEnabled)
+            #expect(await requests.snapshot().methods.isEmpty)
+        }
+        await runtime.handleRealtimeTranscript(
+            .init(role: "user", text: "stop talking", isFinal: true),
+            relayGeneration: generation &- 1)
+        await runtime.setPaused(true)
+        await runtime.handleRealtimeTranscript(
+            .init(role: "user", text: "end talking", isFinal: true),
+            relayGeneration: generation)
+        #expect(AppStateStore.shared.talkEnabled)
+        #expect(await requests.snapshot().methods.isEmpty)
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `live stop preference edits replace defaults and empty disables local exit`() async throws {
+        try #require(AppStateStore.shared.isPreview)
+        let previous = AppStateStore.shared.talkStopPhrases
+        defer { AppStateStore.shared.talkStopPhrases = previous }
+        let runtime = TalkModeRuntime()
+        let generation = await runtime._test_prepareEnabledLifecycle()
+        AppStateStore.shared.talkStopPhrases = []
+        #expect(await runtime.handleLocalTalkExitCommand(
+            "stop talking", isFinal: true, lifecycleGeneration: generation) == false)
+        AppStateStore.shared.talkStopPhrases = ["conversation finished"]
+        #expect(await runtime.handleLocalTalkExitCommand(
+            "end talking", isFinal: true, lifecycleGeneration: generation) == false)
+        #expect(await runtime.handleLocalTalkExitCommand(
+            "conversation finished", isFinal: false, lifecycleGeneration: generation) == false)
+        #expect(await runtime.isEnabled)
+        #expect(await runtime.handleLocalTalkExitCommand(
+            "conversation finished", isFinal: true, lifecycleGeneration: generation))
+        #expect(await runtime.isEnabled == false)
+    }
+
+    @Test(arguments: ["stop talking", "end talking"])
+    @MainActor
+    func `native committed stop command retires recognition through the shared exit owner`(text: String) async throws {
+        try #require(AppStateStore.shared.isPreview)
+        let previousEnabled = AppStateStore.shared.talkEnabled
+        AppStateStore.shared.talkEnabled = true
+        defer { AppStateStore.shared.talkEnabled = previousEnabled }
+        let runtime = TalkModeRuntime()
+        let generation = await runtime._test_prepareEnabledLifecycle()
+        let recognition = try #require(await runtime.beginRecognitionAttempt(lifecycleGeneration: generation))
+
+        #expect(await runtime
+            .handleLocalTalkExitCommand(text, isFinal: false, lifecycleGeneration: generation) == false)
+        #expect(await runtime.isEnabled)
+        #expect(AppStateStore.shared.talkEnabled)
+        #expect(await runtime.handleLocalTalkExitCommand(text, isFinal: true, lifecycleGeneration: generation))
+
+        #expect(await runtime.isEnabled == false)
+        #expect(await runtime.phase == .idle)
+        #expect(await runtime.realtimeSession == nil)
+        #expect(!AppStateStore.shared.talkEnabled)
+        #expect(await runtime.canCommitRecognitionStart(
+            lifecycleGeneration: generation,
+            recognitionAttempt: recognition) == false)
+    }
+
+    @Test func `spoken exit cleanup cannot disable a native successor`() async throws {
+        let previousEnabled = await MainActor.run { AppStateStore.shared.talkEnabled }
+        try await MainActor.run {
+            try #require(AppStateStore.shared.isPreview)
+            AppStateStore.shared.talkEnabled = true
+        }
+        let runtime = TalkModeRuntime()
+        let stopEntered = RuntimeTestSignal<Void>()
+        let releaseStop = DispatchSemaphore(value: 0)
+        let session = await MainActor.run {
+            makeRuntimeTestRealtimeSession(player: RuntimeTestPCMPlayer(onStop: {
+                stopEntered.send(())
+                _ = releaseStop.wait(timeout: .now() + 5)
+            }))
+        }
+        _ = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        let generation = await runtime.lifecycleGeneration
+        let exit = Task {
+            await runtime.handleLocalTalkExitCommand("stop talking", isFinal: true, lifecycleGeneration: generation)
+        }
+        do {
+            _ = try await stopEntered.next("spoken exit playback retirement")
+            #expect(await runtime.isEnabled == false)
+            #expect(await runtime.realtimeSession == nil)
+            let successor = await runtime._test_prepareEnabledLifecycle()
+            releaseStop.signal()
+            #expect(await exit.value)
+            #expect(await runtime.isCurrent(successor))
+            #expect(await MainActor.run { AppStateStore.shared.talkEnabled })
+        } catch {
+            releaseStop.signal()
+            _ = await exit.value
+            await runtime.setEnabled(false)
+            await MainActor.run { AppStateStore.shared.talkEnabled = previousEnabled }
+            throw error
+        }
+        await runtime.setEnabled(false)
+        await MainActor.run { AppStateStore.shared.talkEnabled = previousEnabled }
+    }
+}
+
+extension TalkModeRuntimeSpeechTests {
+    @Test(arguments: ["current", "disabled", "replaced", "cancelled"])
+    @MainActor func `classic playback admission rejects retired or cancelled work`(_ state: String) async throws {
+        let runtime = TalkModeRuntime()
+        let generation = await runtime._test_prepareEnabledLifecycle()
+        if state == "disabled" {
+            await runtime.setEnabled(false)
+        } else if state == "replaced" {
+            _ = await runtime._test_prepareEnabledLifecycle()
+        }
+        let probe = RuntimeCommitProbe()
+        let playback = Task { @MainActor in
+            do {
+                return try await runtime.performCurrentPlayback(generation: generation) {
+                    probe.record("play")
+                    return true
+                }
+            } catch is CancellationError {
+                return false
+            }
+        }
+        if state == "cancelled" { playback.cancel() }
+        #expect(try await playback.value == (state == "current"))
+        #expect(probe.values() == (state == "current" ? ["play"] : []))
+    }
+
+    @Test func `classic playback completion cannot commit over a successor`() async throws {
+        let runtime = TalkModeRuntime()
+        let generation = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let playback = Task { @MainActor in
+            do {
+                _ = try await runtime.performCurrentPlayback(generation: generation) {
+                    try await barrier.wait()
+                    return true
+                }
+                probe.record("completion")
+                return true
+            } catch {
+                return false
+            }
+        }
+        try await waitForRuntimeBarrier(barrier, cleaningUp: playback)
+        let successor = await runtime._test_prepareEnabledLifecycle()
+        await barrier.release()
+        #expect(await playback.value == false)
+        #expect(probe.values().isEmpty)
+        #expect(await runtime.isCurrent(successor))
     }
 }

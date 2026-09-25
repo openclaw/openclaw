@@ -1141,6 +1141,10 @@ const enSettings = {
       wakeTriggersTalkMode: "Wake triggers Talk Mode",
       pushToTalkEnabled: "Hold Right Option to talk",
       talkShiftToStopEnabled: "Shift to stop",
+      talkStopPhrases: "Stop phrases",
+      talkStopPhrasesHint:
+        "One phrase per line. Say a whole phrase to turn off Talk Mode on this Mac. Changes save when you leave the field. Clear the list to disable spoken stop commands; Voice Wake stays available.",
+      resetTalkStopPhrases: "Reset stop phrases",
       talkPhaseSoundsEnabled: "Phase sounds",
       realtimeRelayEnabled: "Use realtime Gateway relay",
       realtimeRelayHint:

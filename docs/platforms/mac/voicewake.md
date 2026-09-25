@@ -32,8 +32,9 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 
 ## Lifecycle invariants
 
-- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening, except during an active push-to-talk capture.
-- Overlay dismissal, including manual dismiss via the X button, always resumes the recognizer: `VoiceSessionCoordinator.overlayDidDismiss` calls `VoiceWakeRuntime.refresh(state:)` on every dismiss path. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
+- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening while Talk Mode and push-to-talk capture are inactive.
+- Overlay dismissal, including manual dismiss via the X button, requests a refresh: `VoiceSessionCoordinator.overlayDidDismiss` calls `VoiceWakeRuntime.refresh(state:)` on every dismiss path. The refresh resumes listening only if Voice Wake is still enabled and no newer Talk or capture session owns the microphone. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
+- A [spoken Talk stop phrase](/nodes/talk/macos-relay#spoken-stop-phrases-macos) ends Talk Mode without disabling Voice Wake. A stale shutdown or refresh cannot restart wake listening over a newer Talk session.
 
 ## Push-to-talk specifics
 
@@ -58,6 +59,7 @@ voice settings. Microphone and speech permissions are under
 - Trigger words are Gateway settings on the **Talk** page and remain editable in a regular browser. The Mac's wake runtime uses the Primary Gateway's trigger words; opening another Gateway window does not retarget that runtime.
 - If a selected microphone disconnects, the voice runtime temporarily uses the system default and retains the selection for when it returns.
 - Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Shift-to-stop, and realtime relay.
+- **Stop phrases**: enter one phrase per line for ending native or realtime Talk by voice, then leave the field to save on this Mac. Defaults are `stop talking` and `end talking`. Custom entries replace them; clearing the field and leaving it saves an empty list and disables spoken exit. **Reset stop phrases** restores the Mac's defaults. These are separate from wake trigger words. See [matching behavior](/nodes/talk/macos-relay#spoken-stop-phrases-macos).
 
 ## Forwarding behavior
 

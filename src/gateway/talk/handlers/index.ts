@@ -74,7 +74,7 @@ import { getVoiceProviderConfig, providerMatchesId } from "../../../tts/voice-mo
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../../operator-scopes.js";
 import { respondUnavailable } from "../../server-methods/response.js";
 import { inferSpeechMimeType } from "../../server-methods/speech-mime.js";
-import type { GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { formatForLog } from "../../ws-log.js";
 import {
@@ -84,6 +84,10 @@ import {
   listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "../session-config.js";
+import {
+  supportsTalkTranscriptionCommandHints,
+  TALK_TRANSCRIPTION_COMMAND_HINTS,
+} from "../transcription-command-hints.js";
 import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 import { talkVoiceHandlers } from "./voice.js";
@@ -251,7 +255,11 @@ function buildTalkTtsConfig(
   };
 }
 
-function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
+function buildTalkCatalog(
+  config: OpenClawConfig,
+  params: TalkCatalogParams,
+  client: GatewayClient | null,
+) {
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
@@ -468,6 +476,18 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         }
         if (provider.voices) {
           entry.voices = [...provider.voices];
+        }
+        if (
+          entry.configured &&
+          supportsTalkTranscriptionCommandHints(client, {
+            mode: "realtime",
+            transport: realtimeConfig.transport ?? "webrtc",
+            providerId: provider.id,
+            providerConfig,
+            model: provider.defaultModel,
+          })
+        ) {
+          entry.transcriptionCommandHints = TALK_TRANSCRIPTION_COMMAND_HINTS;
         }
         if (capabilities?.voices) {
           entry.activeVoices = [...capabilities.voices];
@@ -852,14 +872,14 @@ export const talkHandlers: GatewayRequestHandlers = {
   ...talkVoiceHandlers,
   ...talkSessionHandlers,
   ...talkClientHandlers,
-  "talk.catalog": async ({ params, respond, context }) => {
+  "talk.catalog": async ({ params, respond, context, client }) => {
     const catalogParams = params ?? {};
     if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
       return;
     }
 
     try {
-      respond(true, buildTalkCatalog(context.getRuntimeConfig(), catalogParams), undefined);
+      respond(true, buildTalkCatalog(context.getRuntimeConfig(), catalogParams, client), undefined);
     } catch (err) {
       respond(
         false,

@@ -65,6 +65,12 @@ import {
 } from "../session-registry.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
+  buildTalkCommandTranscriptionPrompt,
+  INVALID_TALK_TRANSCRIPTION_HINTS,
+  parseTalkTranscriptionHintPhrases,
+  supportsTalkTranscriptionCommandHints,
+} from "../transcription-command-hints.js";
+import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
@@ -147,6 +153,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     sessionMutationAuthorization,
     sessionMutationCommitGuard,
   }) => {
+    let hintPhrases: string[] | undefined;
+    try {
+      hintPhrases = parseTalkTranscriptionHintPhrases(params.transcriptionHints);
+    } catch {
+      respondInvalidRequest(respond, INVALID_TALK_TRANSCRIPTION_HINTS);
+      return;
+    }
     if (
       !assertValidParams(params, validateTalkSessionCreateParams, "talk.session.create", respond)
     ) {
@@ -325,6 +338,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const capabilities = resolution.capabilities;
         const controlSource =
           capabilities?.handlesAgentConsult === true ? "delegation" : "transcript";
+        const hintRoute = {
+          mode,
+          transport,
+          providerId: resolution.provider.id,
+          providerConfig: relayLaunch.providerConfig,
+          model: launchOptions.model ?? resolution.provider.defaultModel,
+        };
+        const transcriptionPrompt = supportsTalkTranscriptionCommandHints(client, hintRoute)
+          ? buildTalkCommandTranscriptionPrompt(hintPhrases)
+          : undefined;
         const providerInstructions = await resolveTalkRealtimeProviderInstructions({
           config: runtimeConfig,
           agentId,
@@ -390,6 +413,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           sessionTarget: target,
           voice: launchOptions.voice,
           language: normalizeOptionalLowercaseString(params.language),
+          ...(transcriptionPrompt && supportsTalkTranscriptionCommandHints(client, hintRoute)
+            ? { transcriptionPrompt }
+            : {}),
           forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,
         });
         rememberUnifiedTalkSession(session.relaySessionId, {

@@ -692,6 +692,39 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
+  it("forwards session transcription context through the real relay bridge request without leaking to the next session", () => {
+    const requests: RealtimeVoiceBridgeCreateRequest[] = [];
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      requests.push(request);
+      return makeRelayTransport();
+    };
+    for (const transcriptionPrompt of ["Synthetic literal stop context", undefined]) {
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "hints-bridge",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:main",
+        transcriptionPrompt,
+      });
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "hints-bridge",
+      });
+    }
+    expect(requests[0]?.transcriptionPrompt).toBe("Synthetic literal stop context");
+    expect(requests[0]?.instructions).toBe("brief");
+    expect(requests[1]).not.toHaveProperty("transcriptionPrompt");
+  });
+
   it("rejects a consult when its relay is replaced during startup", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider = createIdleRelayProvider();

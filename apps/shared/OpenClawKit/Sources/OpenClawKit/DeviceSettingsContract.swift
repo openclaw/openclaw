@@ -42,6 +42,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case pushToTalkEnabled = "voice.pushToTalkEnabled"
     case talkPhaseSoundsEnabled = "voice.talkPhaseSoundsEnabled"
     case talkShiftToStopEnabled = "voice.talkShiftToStopEnabled"
+    case talkStopPhrases = "voice.talkStopPhrases"
     case realtimeRelayEnabled = "voice.realtimeRelayEnabled"
     case triggerChime = "voice.triggerChime"
     case sendChime = "voice.sendChime"
@@ -51,7 +52,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case automaticUpdates = "updates.automatic"
 
     private enum ValueType {
-        case boolean, string, strings, nullableString, provider, location, iconStyle, appearance
+        case boolean, string, strings, nullableString, nullableStrings, provider, location, iconStyle, appearance
     }
 
     private var valueType: ValueType {
@@ -63,21 +64,23 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
         case .cookieSyncTargetProfile, .localePrimary: .string
         case .cookieSyncDomains, .localeAdditional: .strings
         case .microphone: .nullableString
+        case .talkStopPhrases: .nullableStrings
         default: .boolean
         }
     }
 
     public func value(from raw: Any) -> DeviceSettingValue? {
+        if raw is NSNull, self.valueType == .nullableString || self.valueType == .nullableStrings {
+            return .null
+        }
         switch self.valueType {
         case .boolean:
             // WKWebView bridges both numbers and booleans as NSNumber. A numeric 0/1 is not a toggle.
             guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
             return .boolean(number.boolValue)
-        case .strings:
+        case .strings, .nullableStrings:
             guard let values = raw as? [String] else { return nil }
             return .strings(values)
-        case .nullableString where raw is NSNull:
-            return .null
         case .string, .nullableString, .provider, .location, .iconStyle, .appearance:
             guard let value = raw as? String else { return nil }
             if self.valueType == .provider, !["peekaboo", "cua"].contains(value) { return nil }
@@ -475,6 +478,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let pushToTalkEnabled: Bool?
         public let talkPhaseSoundsEnabled: Bool?
         public let talkShiftToStopEnabled: Bool?
+        public let talkStopPhrases: [String]?
         public let realtimeRelayEnabled: Bool?
         public let triggerChime: Bool?
         public let sendChime: Bool?
@@ -492,6 +496,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             pushToTalkEnabled: Bool? = nil,
             talkPhaseSoundsEnabled: Bool? = nil,
             talkShiftToStopEnabled: Bool? = nil,
+            talkStopPhrases: [String]? = nil,
             realtimeRelayEnabled: Bool? = nil,
             triggerChime: Bool? = nil,
             sendChime: Bool? = nil,
@@ -508,6 +513,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.pushToTalkEnabled = pushToTalkEnabled
             self.talkPhaseSoundsEnabled = talkPhaseSoundsEnabled
             self.talkShiftToStopEnabled = talkShiftToStopEnabled
+            self.talkStopPhrases = talkStopPhrases
             self.realtimeRelayEnabled = realtimeRelayEnabled
             self.triggerChime = triggerChime
             self.sendChime = sendChime

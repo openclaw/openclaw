@@ -125,8 +125,14 @@ extension DashboardWindowController {
                 let available = Set(VoiceWakeDeviceOptions.locales().map(\.id))
                 guard values.allSatisfy(available.contains) else { return }
                 state.voiceWakeAdditionalLocaleIDs = values
+            } else if key == .talkStopPhrases {
+                state.talkStopPhrases = values
             }
         case (_, .null):
+            if key == .talkStopPhrases {
+                AppStateStore.shared.talkStopPhrases = defaultTalkStopPhrases
+                return
+            }
             guard key == .microphone else { return }
             AppStateStore.shared.voiceWakeMicName = ""
             AppStateStore.shared.voiceWakeMicID = ""

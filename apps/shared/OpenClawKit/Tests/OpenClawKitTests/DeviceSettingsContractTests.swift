@@ -31,6 +31,24 @@ struct DeviceSettingsContractTests {
         ])
     }
 
+    @Test func `spoken stop settings distinguish unsupported disabled custom and reset`() throws {
+        for phrases in [[String](), ["finish chat", "終了"]] {
+            let request = DeviceSettingsRequest(body: ["type": "set", "key": "voice.talkStopPhrases", "value": phrases])
+            #expect(request == .set(.talkStopPhrases, .strings(phrases)))
+            let voice = DeviceSettingsSnapshot.Voice(supported: true, wakeEnabled: false, talkStopPhrases: phrases)
+            let encoded = try #require(JSONSerialization
+                .jsonObject(with: JSONEncoder().encode(voice)) as? [String: Any])
+            #expect(encoded["talkStopPhrases"] as? [String] == phrases)
+        }
+        #expect(DeviceSettingsRequest(body: ["type": "set", "key": "voice.talkStopPhrases", "value": NSNull()]) ==
+            .set(.talkStopPhrases, .null))
+        let invalidValues: [Any] = [true, "finish chat", ["finish chat", 1] as [Any]]
+        for invalid in invalidValues {
+            #expect(DeviceSettingsRequest(body: ["type": "set", "key": "voice.talkStopPhrases", "value": invalid]) ==
+                nil)
+        }
+    }
+
     @Test func `Chrome extension setup accepts only the exact action payload`() {
         for action in ChromeExtensionSetupAction.allCases {
             #expect(DeviceSettingsRequest(body: [

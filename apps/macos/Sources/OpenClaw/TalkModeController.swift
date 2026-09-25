@@ -9,6 +9,7 @@ final class TalkModeController {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.controller")
     private static let transcriptLimit = 20
+    private var enableGeneration: UInt64 = 0
 
     private(set) var phase: TalkModePhase = .idle
     private(set) var isPaused: Bool = false
@@ -16,19 +17,16 @@ final class TalkModeController {
     private(set) var partialTranscript: String = ""
     private(set) var recentTranscripts: [String] = []
 
-    /// Meters streamed PCM speech so the orb waveform follows the audible
-    /// envelope instead of a synthetic pulse.
-    @ObservationIgnored private lazy var playbackEnvelope = PCMPlaybackEnvelope { [weak self] level in
-        self?.updateSpeakingLevel(level)
-    }
-
     func setEnabled(_ enabled: Bool) async {
+        self.enableGeneration &+= 1
+        let generation = self.enableGeneration
         self.logger.info("talk enabled=\(enabled)")
         if enabled {
             self.partialTranscript = ""
             self.recentTranscripts = []
             TalkOverlayController.shared.present()
             await VoiceWakeRuntime.shared.pauseForPushToTalk()
+            guard generation == self.enableGeneration else { return }
         } else {
             TalkOverlayController.shared.dismiss()
         }
@@ -37,11 +35,12 @@ final class TalkModeController {
         let pttEnabled = !enabled && AppStateStore.shared.voicePushToTalkEnabled
         VoicePushToTalkHotkey.shared.setEnabled(pttEnabled)
         await TalkModeRuntime.shared.setEnabled(enabled)
+        guard generation == self.enableGeneration else { return }
         // Resume voice wake listener *after* TalkMode audio is fully torn down.
         // Check swabbleEnabled (not voiceWakeTriggersTalkMode) so the paused wake listener
         // resumes even if the user toggled "Trigger Talk Mode" off during the session.
         if !enabled, AppStateStore.shared.swabbleEnabled {
-            Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
+            await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared)
         }
     }
 
@@ -119,19 +118,6 @@ final class TalkModeController {
         }
     }
 
-    /// Passes streamed PCM speech through to the player while feeding the
-    /// playback envelope; call `endSpeechMetering` once playback returns.
-    func meteredSpeechStream(
-        _ stream: AsyncThrowingStream<Data, Error>,
-        sampleRate: Double) -> AsyncThrowingStream<Data, Error>
-    {
-        self.playbackEnvelope.metering(stream, sampleRate: sampleRate)
-    }
-
-    func endSpeechMetering() {
-        self.playbackEnvelope.cancel()
-    }
-
     func setPaused(_ paused: Bool) {
         guard self.isPaused != paused else { return }
         self.logger.info("talk paused=\(paused)")
@@ -148,6 +134,13 @@ final class TalkModeController {
 
     func stopSpeaking(reason: TalkStopReason = .userTap) {
         Task { await TalkModeRuntime.shared.stopSpeaking(reason: reason) }
+    }
+
+    func confirmSpokenExit() {
+        // Command feedback is independent of optional listening/thinking/speaking
+        // sounds. The command owner has already stopped capture and playback.
+        SoundEffectPlayer.play(SoundEffectPlayer.sound(named: "Purr"))
+        self.logger.info("talk local stop confirmation requested")
     }
 
     func exitTalkMode() {

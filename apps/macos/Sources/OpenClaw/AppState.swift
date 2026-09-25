@@ -244,6 +244,14 @@ final class AppState {
         didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
     }
 
+    var talkStopPhrases: [String] {
+        didSet {
+            self.ifNotPreview {
+                AppDefaults.standard.set(self.talkStopPhrases, forKey: talkStopPhrasesKey)
+            }
+        }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -492,6 +500,8 @@ final class AppState {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = AppDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        self.talkStopPhrases = AppDefaults.standard
+            .stringArray(forKey: talkStopPhrasesKey) ?? defaultTalkStopPhrases
         self.voiceWakeTriggerChime = Self.loadChime(
             key: voiceWakeTriggerChimeKey,
             fallback: .system(name: "Glass"))
@@ -1110,25 +1120,6 @@ extension AppState {
         // an older authorization even while its requesting document remains open.
         guard !Task.isCancelled, generation == self.locationModeGeneration, requestIsCurrent() else { return }
         AppDefaults.standard.set(mode.rawValue, forKey: locationModeKey)
-    }
-
-    func setTalkEnabled(_ enabled: Bool) async {
-        self.talkEnabled = enabled && voiceWakeSupported
-        guard !self.isPreview else { return }
-
-        if !self.talkEnabled {
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
-        }
-
-        if PermissionManager.voiceWakePermissionsGranted() {
-            await GatewayConnection.shared.talkMode(enabled: true, phase: "enabled")
-            return
-        }
-
-        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
-        self.talkEnabled = granted
-        await GatewayConnection.shared.talkMode(enabled: granted, phase: granted ? "enabled" : "denied")
     }
 
     // MARK: - Global wake words sync (Gateway-owned)

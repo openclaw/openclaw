@@ -7,9 +7,10 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     static let frameDurationSeconds = 0.020
     static let maxScheduledBuffers = 3
 
-    typealias Completion = @Sendable () -> Void
+    public typealias Completion = @Sendable () -> Void
     private let preparePlayback: (Double) throws -> Void
     private let scheduleFrame: (Data, Double, @escaping Completion) throws -> Void
+    private let scheduleDrain: (Double, @escaping Completion) throws -> Void
     private let stopPlayback: () -> Void
     private let playbackTime: () -> Double?
 
@@ -19,13 +20,36 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     private var slotWaiters: [CheckedContinuation<Bool, Never>] = []
     private var playbackContinuation: CheckedContinuation<StreamingPlaybackResult, Never>?
     private var inputTask: Task<Void, Never>?
-    private var inputFinished = false
 
     public convenience init() {
         let engine = AVAudioEngine()
         let node = AVAudioPlayerNode()
         engine.attach(node)
         var format: AVAudioFormat?
+        func schedule(
+            _ data: Data,
+            callbackType: AVAudioPlayerNodeCompletionCallbackType,
+            completion: @escaping Completion) throws
+        {
+            guard let format else {
+                throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
+            }
+            let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+                  let channel = buffer.int16ChannelData?[0]
+            else {
+                throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
+            }
+            buffer.frameLength = frames
+            data.copyBytes(
+                to: UnsafeMutableRawBufferPointer(
+                    start: channel,
+                    count: data.count))
+            node.scheduleBuffer(
+                buffer,
+                completionCallbackType: callbackType)
+            { _ in completion() }
+        }
         self.init(
             preparePlayback: { sampleRate in
                 node.stop()
@@ -46,24 +70,13 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 node.play()
             },
             scheduleFrame: { data, _, completion in
-                guard let format else {
-                    throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
-                }
-                let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-                      let channel = buffer.int16ChannelData?[0]
-                else {
-                    throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
-                }
-                buffer.frameLength = frames
-                data.copyBytes(
-                    to: UnsafeMutableRawBufferPointer(
-                        start: channel,
-                        count: data.count))
-                node.scheduleBuffer(
-                    buffer,
-                    completionCallbackType: .dataPlayedBack)
-                { _ in completion() }
+                try schedule(data, callbackType: .dataConsumed, completion: completion)
+            },
+            scheduleDrain: { _, completion in
+                try schedule(
+                    Data(repeating: 0, count: MemoryLayout<Int16>.size),
+                    callbackType: .dataPlayedBack,
+                    completion: completion)
             },
             stopPlayback: {
                 node.stop()
@@ -77,14 +90,20 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
             })
     }
 
-    init(
+    /// A duplex audio owner can supply playback on its capture engine. Ending a
+    /// response must then stop only its player node, not the shared I/O engine.
+    /// Frame completion releases consumed data; drain completion must acknowledge
+    /// audible playback of all previously scheduled frames.
+    public init(
         preparePlayback: @escaping (Double) throws -> Void,
         scheduleFrame: @escaping (Data, Double, @escaping Completion) throws -> Void,
+        scheduleDrain: @escaping (Double, @escaping Completion) throws -> Void,
         stopPlayback: @escaping () -> Void,
         playbackTime: @escaping () -> Double?)
     {
         self.preparePlayback = preparePlayback
         self.scheduleFrame = scheduleFrame
+        self.scheduleDrain = scheduleDrain
         self.stopPlayback = stopPlayback
         self.playbackTime = playbackTime
     }
@@ -117,7 +136,6 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         self.generation &+= 1
         self.inputTask?.cancel()
         self.inputTask = nil
-        self.inputFinished = false
         self.scheduledBufferIDs.removeAll()
         let waiters = self.slotWaiters
         self.slotWaiters.removeAll()
@@ -142,9 +160,11 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
             MemoryLayout<Int16>.size,
             Int((sampleRate * Self.frameDurationSeconds).rounded()) * MemoryLayout<Int16>.size)
         var pending = Data()
+        var hasAudio = false
         do {
             for try await chunk in stream {
                 try Task.checkCancellation()
+                hasAudio = hasAudio || !chunk.isEmpty
                 pending.append(chunk)
                 while pending.count >= frameBytes {
                     let frame = Data(pending.prefix(frameBytes))
@@ -165,8 +185,17 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 else { return }
             }
             guard self.generation == generation else { return }
-            self.inputFinished = true
-            self.finishIfDrained(generation: generation)
+            guard hasAudio else {
+                self.finish(generation: generation, finished: true)
+                return
+            }
+            // Refill on consumption, but acknowledge completion only after a
+            // terminal silent sample and all preceding audio reach the device.
+            try self.scheduleDrain(sampleRate) { [weak self] in
+                Task { @MainActor in
+                    self?.finish(generation: generation, finished: true)
+                }
+            }
         } catch {
             self.finish(generation: generation, finished: false)
         }
@@ -206,12 +235,6 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         if !self.slotWaiters.isEmpty {
             self.slotWaiters.removeFirst().resume(returning: true)
         }
-        self.finishIfDrained(generation: generation)
-    }
-
-    private func finishIfDrained(generation: UInt64) {
-        guard self.inputFinished, self.scheduledBufferIDs.isEmpty else { return }
-        self.finish(generation: generation, finished: true)
     }
 
     private func finish(generation: UInt64, finished: Bool) {
@@ -225,7 +248,6 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
             waiter.resume(returning: false)
         }
         self.inputTask = nil
-        self.inputFinished = false
         let continuation = self.playbackContinuation
         self.playbackContinuation = nil
         self.stopPlayback()

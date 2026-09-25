@@ -101,9 +101,13 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
 }
 
 describe("scripts/build-and-run-mac.sh", () => {
-  it.each(["pnpm", "corepack"])(
-    "prepares the Apple resource bundle before SwiftPM with %s",
-    (runner) => {
+  it.each([
+    { runner: "pnpm", aecExitCode: 0 },
+    { runner: "corepack", aecExitCode: 0 },
+    { runner: "pnpm", aecExitCode: 17 },
+  ])(
+    "prepares native dependencies before SwiftPM with $runner (AEC exit $aecExitCode)",
+    ({ runner, aecExitCode }) => {
       const root = tempDirs.make("openclaw-mac-mermaid-test-");
       const binDir = join(root, "bin");
       mkdirSync(binDir);
@@ -124,6 +128,17 @@ describe("scripts/build-and-run-mac.sh", () => {
       );
       mkdirSync(resources, { recursive: true });
       writeFileSync(join(resources, "stale.js"), "stale");
+      const aecMarker = join(root, "aec-prepared");
+      writeFileSync(
+        join(root, "scripts/build-mac-aec.sh"),
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          '[[ "$#" == 0 ]]',
+          'printf "ready" > "$OPENCLAW_TEST_AEC_MARKER"',
+          `exit ${aecExitCode}`,
+        ].join("\n"),
+      );
       symlinkSync(process.execPath, join(binDir, "node"));
       symlinkSync("/bin/bash", join(binDir, "bash"));
       symlinkSync("/usr/bin/dirname", join(binDir, "dirname"));
@@ -150,6 +165,7 @@ describe("scripts/build-and-run-mac.sh", () => {
             `const resources = ${JSON.stringify(resources)};`,
             'assert.equal(readFileSync(`${resources}/index.html`, "utf8"), "offline diagram");',
             "assert.equal(existsSync(`${resources}/stale.js`), false);",
+            `assert.equal(readFileSync(${JSON.stringify(aecMarker)}, "utf8"), "ready");`,
             `writeFileSync(${JSON.stringify(join(root, "prepared-before-swift"))}, "ready");`,
             "process.exit(23);",
           ],
@@ -166,13 +182,18 @@ describe("scripts/build-and-run-mac.sh", () => {
           ...process.env,
           npm_execpath: "",
           OPENCLAW_MAC_RUN_LOG: join(root, "launch.log"),
+          OPENCLAW_TEST_AEC_MARKER: aecMarker,
           PATH: binDir,
         },
       });
 
       // The fake compiler stops the real entrypoint before any app cleanup or launch.
-      expect(result.status, result.stderr).toBe(23);
-      expect(existsSync(join(root, "prepared-before-swift"))).toBe(true);
+      expect(result.status, result.stderr).toBe(aecExitCode || 23);
+      expect(existsSync(aecMarker)).toBe(true);
+      expect(existsSync(join(root, "prepared-before-swift"))).toBe(aecExitCode === 0);
+      expect(result.stdout).not.toContain("Stopping existing");
+      expect(result.stdout).not.toContain("Launching");
+      expect(existsSync(join(root, "launch.log"))).toBe(false);
     },
   );
 

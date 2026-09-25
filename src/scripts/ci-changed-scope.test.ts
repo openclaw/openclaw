@@ -475,6 +475,7 @@ describe("detectChangedScope", () => {
   });
 
   it.each([
+    "scripts/build-mac-aec.sh",
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",

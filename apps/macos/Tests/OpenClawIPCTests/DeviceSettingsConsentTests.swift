@@ -72,6 +72,9 @@ struct DeviceSettingsConsentTests {
             (.microphone, NSNull()),
             (.localePrimary, "en-US"),
             (.localeAdditional, ["de-DE"]),
+            (.talkStopPhrases, ["finish chat"]),
+            (.talkStopPhrases, [String]()),
+            (.talkStopPhrases, NSNull()),
         ]
         for (key, raw) in settings {
             #expect(try self.consent(key, raw: raw) == nil)

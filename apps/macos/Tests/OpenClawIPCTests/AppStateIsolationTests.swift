@@ -9,6 +9,38 @@ import XCTest
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `Talk upgrade preserves saved phrases and existing voice preferences`() async throws {
+        // This suite runs only in the disposable named-profile native test owner.
+        try #require(AppProfile.current.isActive)
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        for saved: [String]? in [nil, [], ["finish chat", "会話を終了"]] {
+            var defaults: [String: Any?] = [
+                talkEnabledKey: false,
+                swabbleEnabledKey: false,
+                talkRealtimeRelayEnabledKey: true,
+                talkPhaseSoundsEnabledKey: false,
+                talkShiftToStopEnabledKey: false,
+            ]
+            defaults.updateValue(saved, forKey: talkStopPhrasesKey)
+            await TestIsolation.withIsolatedState(
+                env: ["OPENCLAW_CONFIG_PATH": configPath], defaults: defaults)
+            {
+                for _ in 0..<2 {
+                    let state = AppState(preview: true)
+                    #expect(state.talkStopPhrases == (saved ?? defaultTalkStopPhrases))
+                    #expect(AppDefaults.standard.stringArray(forKey: talkStopPhrasesKey) == saved)
+                    #expect(state.talkRealtimeRelayEnabled)
+                    #expect(!state.talkPhaseSoundsEnabled)
+                    #expect(!state.talkShiftToStopEnabled)
+                    #expect(!state.talkEnabled)
+                    #expect(!state.swabbleEnabled)
+                }
+            }
+        }
+    }
+
+    @Test
     func `automatic recovery preserves a named profile port ownership failure`() async throws {
         try #require(AppProfile.current.isActive)
         let configPath = TestIsolation.tempConfigPath()

@@ -234,6 +234,9 @@ prepare_swift_package_root() {
   SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"
   mkdir -p "$SWIFT_PACKAGE_ROOT"
   cp "$ROOT_DIR/apps/macos/Package.swift" "$SWIFT_PACKAGE_ROOT/Package.swift"
+  # The copied manifest resolves its prepared native library relative to itself.
+  mkdir -p "$SWIFT_PACKAGE_ROOT/.build"
+  ln -s "$ROOT_DIR/apps/macos/.build/aec" "$SWIFT_PACKAGE_ROOT/.build/aec"
   cp "$ROOT_DIR/apps/macos/Package.resolved" "$SWIFT_PACKAGE_LOCK_BASELINE"
   cp "$SWIFT_PACKAGE_LOCK_BASELINE" "$SWIFT_PACKAGE_ROOT/Package.resolved"
   chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"

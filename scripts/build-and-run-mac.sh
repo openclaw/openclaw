@@ -65,6 +65,7 @@ stop_existing_local_app() {
 
 printf "\n▶️  Building $PRODUCT (debug, build path: $BUILD_PATH)\n"
 node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
+/bin/bash "$ROOT_DIR/scripts/build-mac-aec.sh"
 swift build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
 swift build -c debug --product openclaw-mac --build-path "$BUILD_PATH"
 

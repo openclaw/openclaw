@@ -7,6 +7,7 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import { closeIdleSqliteCoordinators } from "../infra/sqlite-coordinator.js";
 import {
   captureStateDatabaseCoordinatorRuntime,
   withStateDatabaseCoordinatorRuntimeDirectory,
@@ -397,6 +398,8 @@ export async function createOpenClawTestState(
       cleanup: () =>
         (cleanupPromise ??= Promise.resolve().then(async () => {
           await state.restoreEnv();
+          // Released coordinator handles can still pin this temporary home on Windows.
+          closeIdleSqliteCoordinators(root);
           await removeRoot();
         })),
     };
