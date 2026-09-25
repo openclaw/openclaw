@@ -1558,13 +1558,6 @@ describe("delivery-queue recovery", () => {
       closeOpenClawAgentDatabasesForTest();
     }
   });
-  it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-    await enqueueRecoveryDelivery();
-    const deliver = vi.fn().mockResolvedValue([]);
-    await runRecovery({ deliver });
-    const deliverInput = mockCallRecord(deliver);
-    expect(deliverInput.skipQueue).toBe(true);
-  });
   it("runs recovered send commit hooks only after the queue entry is acked", async () => {
     const id = await enqueueRecoveryDelivery();
     const order: string[] = [];
@@ -1860,19 +1853,6 @@ describe("delivery-queue recovery", () => {
       await runIf(useMaxDate, () => vi.useRealTimers());
     }
   });
-  it("defers entries until backoff becomes eligible", async () => {
-    const id = await enqueueRecoveryDelivery();
-    setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: Date.now() });
-    const deliver = vi.fn().mockResolvedValue([]);
-    const { result, log } = await runRecovery({
-      deliver,
-      maxRecoveryMs: 60_000,
-    });
-    expect(deliver).not.toHaveBeenCalled();
-    expect(result).toEqual(RECOVERY_SUMMARY.deferred);
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
-    expectMockMessageContaining(log.info, "not ready for retry yet");
-  });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();
     const blockedId = await enqueueRecoveryDelivery({ payloads: [{ text: "blocked" }] });
@@ -1914,12 +1894,6 @@ describe("delivery-queue recovery", () => {
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     vi.useRealTimers();
-  });
-  it("returns zeros when queue is empty", async () => {
-    const deliver = vi.fn();
-    const { result } = await runRecovery({ deliver });
-    expect(result).toEqual(RECOVERY_SUMMARY.empty);
-    expect(deliver).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

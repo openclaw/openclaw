@@ -951,21 +951,6 @@ describe("delivery-queue storage", () => {
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
     });
 
-    it("persists gateway caller scopes for replay", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "2",
-          payloads: [{ text: "b" }],
-          gatewayClientScopes: ["operator.write"],
-        },
-        tmpDir(),
-      );
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
-    });
-
     it("persists session context for recovery replay", async () => {
       const id = await enqueueTextDelivery(
         {

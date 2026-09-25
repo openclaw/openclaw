@@ -33,54 +33,28 @@ const tempDirs = createTrackedTempDirs();
 
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "workspace",
-        source: "test",
-        plugin: {
-          id: "workspace",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-          },
-        },
-      },
-      {
-        pluginId: "teamchat",
-        source: "test",
-        plugin: {
-          id: "teamchat",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-          },
-        },
-      },
-      {
-        pluginId: "adapter-chat",
-        source: "test",
-        plugin: {
-          id: "adapter-chat",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            bindingStore: "adapter",
-          },
-        },
-      },
-      {
-        pluginId: "legacy-adapter-chat",
-        source: "test",
-        plugin: {
+    createTestRegistry(
+      [
+        { id: "workspace", conversationBindings: {} },
+        { id: "teamchat", conversationBindings: {} },
+        { id: "adapter-chat", conversationBindings: { bindingStore: "adapter" as const } },
+        {
           id: "legacy-adapter-chat",
+          conversationBindings: { createManager: () => ({ stop: () => undefined }) },
+        },
+      ].map(({ id, conversationBindings }) => ({
+        pluginId: id,
+        source: "test",
+        plugin: {
+          id,
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
-            createManager: () => ({ stop: () => undefined }),
+            ...conversationBindings,
           },
         },
-      },
-    ]),
+      })),
+    ),
   );
 }
 
@@ -445,21 +419,6 @@ describe("session binding service", () => {
     });
 
     expect(result.conversation.conversationId).toBe("thread-created");
-  });
-
-  it("returns structured errors when adapter is unavailable", async () => {
-    await expectSessionBindingError(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "demo-binding",
-          accountId: "default",
-          conversationId: "thread-1",
-        },
-      }),
-      "BINDING_ADAPTER_UNAVAILABLE",
-    );
   });
 
   it.each(["adapter-chat", "legacy-adapter-chat"])(

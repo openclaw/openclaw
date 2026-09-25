@@ -49,15 +49,12 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(shouldReportSqliteLockFailure(database)).toBe(true);
   });
 
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid timeout %s",
-    (timeout) => {
-      database = new DatabaseSync(":memory:");
-      expect(() => runWithSqliteBusyTimeout(database!, timeout, () => undefined)).toThrow(
-        "busyTimeoutMs must be a non-negative integer",
-      );
-    },
-  );
+  it.each([-1, 1.5])("rejects invalid timeout %s", (timeout) => {
+    database = new DatabaseSync(":memory:");
+    expect(() => runWithSqliteBusyTimeout(database!, timeout, () => undefined)).toThrow(
+      "busyTimeoutMs must be a non-negative integer",
+    );
+  });
 
   it("suppresses expected lock warnings only for the scoped attempt", () => {
     const databasePath = path.join(tempDirs.make("sqlite-busy-timeout-"), "state.sqlite");

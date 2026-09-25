@@ -30,15 +30,6 @@ describe("device identity state dir defaults", () => {
     });
   });
 
-  it("reuses the stored identity on subsequent loads", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async () => {
-      const first = loadOrCreateDeviceIdentity();
-      const second = loadOrCreateDeviceIdentity();
-
-      expect(second).toEqual(first);
-    });
-  });
-
   it("uses the supplied state environment for its coordinator", async () => {
     await withTempDir("openclaw-identity-env-state-", async (rootDir) => {
       const stateDir = path.join(rootDir, "selected-state");

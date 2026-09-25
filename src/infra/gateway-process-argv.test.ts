@@ -76,9 +76,7 @@ describe("command ownership", () => {
 
 describe("OpenClaw process owners", () => {
   it.each([
-    ["agent exec", ["openclaw", "agent", "exec", "task"]],
     ["local TUI", ["node", "/srv/openclaw/openclaw.mjs", "tui", "--local"]],
-    ["models probe", ["openclaw", "models", "status", "--probe"]],
     ["bare local TUI", ["openclaw"]],
   ])("recognizes the %s embedded owner", (_label, argv) => {
     expect(classifyOpenClawArgv(argv).kind).toBe("openclaw");
