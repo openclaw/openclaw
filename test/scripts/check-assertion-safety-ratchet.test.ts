@@ -195,6 +195,34 @@ describe("check-assertion-safety-ratchet", () => {
     ).toEqual(new Map([["src/example.ts", 2]]));
   });
 
+  it("rejects assertion baseline growth when no merge base is available", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-disconnected-",);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "");
+    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = value as string;\n");
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "release base"]]) {
+      git(root, args);
+    }
+    git(root, ["branch", "-m", "release"]);
+
+    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "src/example.ts\t1\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "grow release baseline"]);
+
+    git(root, ["checkout", "--orphan", "main"]);
+    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "");
+    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "disconnected main"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["checkout", "release"]);
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root)).toBe(1);
+  });
+
   it("compares an explicit moving base at the branch fork", () => {
     const root = tempDirs.make("openclaw-assertion-safety-diverged-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
