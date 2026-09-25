@@ -7271,6 +7271,7 @@ jobs:
     name: Seal full release child evidence
     needs:
       - preflight
+      - check-plan
       - security-fast
       - build-artifacts
       - control-ui-performance
