@@ -7,6 +7,11 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayShutdownCleanupAdmission,
+} from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,6 +28,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import {
   makeContextParams,
   makeCronState,
+  makeDeviceClient,
   makeGatewayClient,
   type RequestRuntime,
 } from "./server-request-context.test-support.js";
@@ -36,15 +42,32 @@ vi.mock("./server/health-state.js", () => ({
   incrementPresenceVersion: vi.fn(() => 1),
 }));
 
-function makeDeviceClient(connId: string, deviceId: string, role = "primary") {
-  return {
-    connId,
-    connect: { device: { id: deviceId }, role },
-    socket: { close: vi.fn() },
-  };
-}
-
 describe("createGatewayRequestContext", () => {
+  it("tracks shutdown cleanup chain executions into the caller scope after connection work drains", async () => {
+    // The close sequence drains received connection work before the gateway
+    // close step runs plugin-service cleanup. Owner-bound cleanup RPCs dispatched
+    // from the shutdown cleanup chain must not land in the drained scope.
+    const connectionWork = new AsyncWorkScope();
+    await connectionWork.drain();
+    const context = createGatewayRequestContext(
+      makeContextParams({
+        connectionWork: { track: (run) => connectionWork.track(run) },
+      }),
+    );
+    await expect(context.trackExecution(() => Promise.resolve("external"))).rejects.toThrow(
+      "Async work scope is closed",
+    );
+    try {
+      await expect(
+        runWithGatewayShutdownCleanupAdmission(() =>
+          context.trackExecution(() => Promise.resolve("cleanup")),
+        ),
+      ).resolves.toBe("cleanup");
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("prepares every recipient before the real merge's first notification and contains resolution failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const source = ensureProfileForEmail("event-source@example.test");

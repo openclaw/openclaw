@@ -20,6 +20,7 @@ import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-err
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { runWithGatewayShutdownCleanupAdmission } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -433,7 +434,13 @@ async function closeGatewayResources(
     if (params.pluginServices) {
       const cleanup = cleanupWork.track(() =>
         Promise.resolve().then(async () => {
-          const result = await params.pluginServices!.stop();
+          // Restart draining fences ordinary request roots before close begins.
+          // Service stops keep a shutdown-owned cleanup root so owner-bound
+          // transport cleanup (browser departure, call end, transcript
+          // finalization) stays admissible while external requests remain closed.
+          const result = await runWithGatewayShutdownCleanupAdmission(() =>
+            params.pluginServices!.stop(),
+          );
           if (result?.errors.length) {
             recordShutdownWarning(warnings, "plugin-services");
           }

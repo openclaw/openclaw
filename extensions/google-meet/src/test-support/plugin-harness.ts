@@ -14,6 +14,8 @@ import type {
 import type { GoogleMeetRuntime } from "../runtime.js";
 import { MEET_URL } from "./fixtures.test-helpers.js";
 
+type GoogleMeetTestPluginService = Parameters<OpenClawPluginApi["registerService"]>[0];
+
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
 };
@@ -87,6 +89,7 @@ export function setupGoogleMeetPlugin(
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
   const nodeInvokePolicies: unknown[] = [];
+  const services: GoogleMeetTestPluginService[] = [];
   const nodesList = vi.fn(
     async () =>
       options.nodesListResult ?? {
@@ -204,6 +207,7 @@ export function setupGoogleMeetPlugin(
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
     registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
+    registerService: (service: GoogleMeetTestPluginService) => services.push(service),
   });
   const originalPlatform = process.platform;
   Object.defineProperty(process, "platform", {
@@ -224,6 +228,7 @@ export function setupGoogleMeetPlugin(
     nodesInvoke,
     nodeHostCommands,
     nodeInvokePolicies,
+    services,
     gatewayRequest,
   };
 }

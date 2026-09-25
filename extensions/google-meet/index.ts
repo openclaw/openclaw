@@ -1,4 +1,5 @@
 // Google Meet plugin entrypoint registers its OpenClaw integration.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -31,7 +32,14 @@ export default definePluginEntry({
   configSchema: googleMeetConfigSchema,
   register(api: OpenClawPluginApi) {
     const config = googleMeetConfigSchema.parse(api.pluginConfig);
-    const ensureRuntime = createGoogleMeetRuntimeAccessor({ api, config });
+    const runtimeAccessor = createGoogleMeetRuntimeAccessor({ api, config });
+    // Mirror the accessor cache so gateway shutdown can drain only an already
+    // initialized runtime instead of instantiating one just to find no sessions.
+    let initializedRuntime: ReturnType<typeof runtimeAccessor> | undefined;
+    const ensureRuntime = async () => {
+      initializedRuntime ??= runtimeAccessor();
+      return await initializedRuntime;
+    };
     const registerGatewayMethod = (
       method: string,
       handler: (options: GatewayRequestHandlerOptions) => Promise<void>,
@@ -372,6 +380,38 @@ export default definePluginEntry({
       },
     });
     api.registerNodeInvokePolicy(createLazyGoogleMeetNodeInvokePolicy(config));
+
+    // Gateway restart must not orphan active captures: drain them through the same
+    // leave path as an explicit `googlemeet.leave` so durable transcripts finalize
+    // (stoppedAt + summary) and transports/browser tabs are released before exit.
+    api.registerService({
+      id: "google-meet",
+      start: () => {},
+      stop: async () => {
+        const pendingRuntime = initializedRuntime;
+        if (!pendingRuntime) {
+          return;
+        }
+        let runtime: Awaited<typeof pendingRuntime>;
+        try {
+          runtime = await pendingRuntime;
+        } catch {
+          return;
+        }
+        for (const session of runtime.list()) {
+          if (session.state !== "active") {
+            continue;
+          }
+          try {
+            await runtime.leave(session.id);
+          } catch (err) {
+            api.logger.warn(
+              `[google-meet] gateway shutdown failed to leave session ${session.id}: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+      },
+    });
 
     api.registerCli(
       async ({ program }) => {

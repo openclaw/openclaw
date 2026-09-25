@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isInsideGatewayShutdownCleanupChain } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
@@ -40,7 +41,16 @@ export class GatewayRequestEntryLifetime {
     const assertOpen = () => {
       // Shutdown may still issue node cleanup commands. Only their exact pending
       // invoke can enter until transports close; pairing and settlement still revalidate.
-      if (released || this.sealed || (this.signal.aborted && !isPendingNodeCompletion(options))) {
+      // The close sequence's own cleanup chains (plugin-service stops draining
+      // transports) also stay admissible until entries seal; they arrive through
+      // the shutdown-owned cleanup root, never from external callers.
+      if (
+        released ||
+        this.sealed ||
+        (this.signal.aborted &&
+          !isPendingNodeCompletion(options) &&
+          !isInsideGatewayShutdownCleanupChain())
+      ) {
         throw new Error("Gateway request entry is closed");
       }
     };

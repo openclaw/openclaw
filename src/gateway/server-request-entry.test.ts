@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayShutdownCleanupAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -365,6 +366,45 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     } finally {
       registry.unregister(node.connId);
       await settled;
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("admits shutdown-owned cleanup RPCs through request entry after the close prelude", async () => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { cleaned: true }));
+    const methodRegistry = createGatewayMethodRegistry([
+      {
+        name: "test.cleanup",
+        owner: { kind: "aux", area: "entry-test" },
+        scope: "operator.admin",
+        handler,
+      },
+    ]);
+    const options = {
+      client: createOperatorWsClient(),
+      context: kernel.gatewayRequestContext,
+      methodRegistry,
+    };
+    // Real restart ordering: draining fences ordinary roots, then the close
+    // prelude aborts request entry before plugin-service cleanup begins.
+    await kernel.beginClosePrelude();
+    markGatewayRestartDraining();
+    try {
+      await expect(dispatchGatewayRequestInProcessRaw("test.cleanup", {}, options)).rejects.toThrow(
+        /closed|draining/i,
+      );
+      expect(handler).not.toHaveBeenCalled();
+      const result = await runWithGatewayShutdownCleanupAdmission(() =>
+        dispatchGatewayRequestInProcessRaw("test.cleanup", {}, options),
+      );
+      expect(result).toMatchObject({ ok: true, payload: { cleaned: true } });
+      expect(handler).toHaveBeenCalledOnce();
+      // External requests stay fenced before, during, and after cleanup.
+      await expect(dispatchGatewayRequestInProcessRaw("test.cleanup", {}, options)).rejects.toThrow(
+        /closed|draining/i,
+      );
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
       resetGatewayWorkAdmission();
     }
   });

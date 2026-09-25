@@ -1,3 +1,6 @@
+/**
+ * Shared fixtures for gateway request-context construction tests.
+ */
 import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -189,5 +192,13 @@ export function makeGatewayClient(params: {
     socket: { close: vi.fn(), readyState: 1 },
     ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
     ...(params.invalidated ? { invalidated: true } : {}),
+  };
+}
+
+export function makeDeviceClient(connId: string, deviceId: string, role = "primary") {
+  return {
+    connId,
+    connect: { device: { id: deviceId }, role },
+    socket: { close: vi.fn() },
   };
 }
