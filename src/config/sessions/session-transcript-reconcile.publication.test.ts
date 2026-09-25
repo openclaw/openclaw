@@ -1,9 +1,18 @@
+import { renameSync, statSync } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type {
+  SqliteWorkerOperations,
+  SqliteWorkerStore,
+} from "../../infra/sqlite-worker-contract.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { captureAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -220,6 +229,135 @@ it("publishes the session change only after finalization commits", async () => {
     stop();
   }
 }, 30_000);
+
+it("delivers a committed finalization before close permits a physical successor", async () => {
+  const { options, scope, database } = await fixture();
+  const originalFile = statSync(database.path, { bigint: true });
+  const committed = createDeferred();
+  const deliver = createDeferred();
+  const events: string[] = [];
+  const notifications: unknown[] = [];
+  const stop = sessionChanges.subscribe((change) => {
+    if (
+      "sessionKey" in change &&
+      change.sessionKey === scope.sessionKey &&
+      change.storePath === database.path
+    ) {
+      events.push("notification");
+      notifications.push({
+        originalFile: statSync(database.path, { bigint: true }).ino === originalFile.ino,
+        originalOpen: database.db.isOpen,
+        state: database.db.isOpen
+          ? database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get()
+          : undefined,
+      });
+    }
+  });
+  const runOperation = workerStore.runSqliteWorkerStoreOperation;
+  let held = false;
+  const operationSpy = vi
+    .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+    .mockImplementation(
+      <Operations extends SqliteWorkerOperations, T>(
+        target: SqliteWorkerStore<Operations>,
+        operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+        stateContext?: Parameters<typeof runOperation>[2],
+        assertCurrent?: Parameters<typeof runOperation>[3],
+        createAdmission?: Parameters<typeof runOperation>[4],
+        requireStateLifecycle?: Parameters<typeof runOperation>[5],
+      ) =>
+        runOperation(
+          target,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const result = await worker.execute(command, commandOptions);
+                if (
+                  !held &&
+                  command.type === "database.domain.execute" &&
+                  isRecord(command.input) &&
+                  isRecord(command.input.command) &&
+                  command.input.command.type === "finalize"
+                ) {
+                  held = true;
+                  expect(result).toEqual({ finalized: true, sessionKey: scope.sessionKey });
+                  events.push("committed");
+                  committed.resolve();
+                  await deliver.promise;
+                }
+                return result;
+              },
+            }),
+          stateContext,
+          assertCurrent,
+          createAdmission,
+          requireStateLifecycle,
+        ),
+    );
+  let reconciliation: ReturnType<typeof reconcileSessionTranscriptIndexes> | undefined;
+  let closing: Promise<boolean> | undefined;
+  let replacing: Promise<typeof database> | undefined;
+  try {
+    reconciliation = reconcileSessionTranscriptIndexes(options);
+    await Promise.race([
+      committed.promise,
+      reconciliation.then(() => {
+        throw new Error("Reconciliation finished without holding its native finalizer reply");
+      }),
+    ]);
+    expect(
+      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
+    ).toEqual({ needs_rebuild: 0 });
+    expect(
+      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
+    ).toEqual([{ message_id: "message-0", text: "projection message 0" }]);
+    expect(notifications).toEqual([]);
+    closing = closeOpenClawAgentDatabaseByPathAsync(database.path).then((closed) => {
+      expect(closed).toBe(true);
+      events.push("closed");
+      return closed;
+    });
+    replacing = closing.then(async () => {
+      renameSync(database.path, `${database.path}.retired`);
+      const successor = openOpenClawAgentDatabase(options);
+      expect(statSync(successor.path, { bigint: true }).ino).not.toBe(originalFile.ino);
+      events.push("replaced");
+      await persistSessionTranscriptTurn(
+        { ...options, sessionId: "successor", sessionKey: "agent:main:successor" },
+        {
+          messages: [
+            { eventId: "successor-message", message: { role: "user", content: "successor" } },
+          ],
+          touchSessionEntry: false,
+        },
+      );
+      await waitForSessionTranscriptIndexReconcile(options);
+      return successor;
+    });
+    expect(
+      captureAgentDatabaseCloseFence({ agentId: options.agentId, path: database.path }),
+    ).toBeDefined();
+    expect(database.db.isOpen).toBe(true);
+    expect(events).toEqual(["committed"]);
+    deliver.resolve();
+    await expect(reconciliation).resolves.toEqual({ reconciledSessions: 1 });
+    const successor = await replacing;
+    expect(events).toEqual(["committed", "notification", "closed", "replaced"]);
+    expect(notifications).toEqual([
+      { originalFile: true, originalOpen: true, state: { needs_rebuild: 0 } },
+    ]);
+    expect(database.db.isOpen).toBe(false);
+    expect(readTranscriptEventRows(successor, scope.sessionId)).toEqual([]);
+    expect(
+      successor.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
+    ).toEqual([{ message_id: "successor-message", text: "successor" }]);
+  } finally {
+    deliver.resolve();
+    await Promise.allSettled([reconciliation, closing, replacing]);
+    stop();
+    operationSpy.mockRestore();
+  }
+});
 
 it("refuses a retired scheduled owner and permits an explicit fresh repair", async () => {
   const { options } = await fixture();
