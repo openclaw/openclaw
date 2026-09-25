@@ -301,6 +301,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
   "src/audit/audit-events.test.ts",
