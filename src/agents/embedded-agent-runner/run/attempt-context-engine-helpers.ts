@@ -176,10 +176,6 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   return findLatestCurrentAttemptUsageSnapshot(params);
 }
 
-function parsePromptCacheTouchTimestamp(value: unknown): number | null {
-  return parseDateFirstTimestampMs(value) ?? null;
-}
-
 /**
  * Resolves the effective prompt-cache touch timestamp for the current assistant
  * turn. Cache-read/write usage is required before an assistant timestamp can
@@ -197,9 +193,7 @@ export function resolvePromptCacheTouchTimestamp(params: {
     return params.fallbackLastCacheTouchAt ?? null;
   }
   return (
-    parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
-    params.fallbackLastCacheTouchAt ??
-    null
+    parseDateFirstTimestampMs(params.assistantTimestamp) ?? params.fallbackLastCacheTouchAt ?? null
   );
 }
 

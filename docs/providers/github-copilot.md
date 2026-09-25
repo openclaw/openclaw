@@ -156,6 +156,10 @@ it forces a fresh login so the token is scoped to the domain being written to
 config. Re-running login for the *same* domain still offers to reuse the current
 token. Switching back to public `github.com` clears the persisted
 `githubDomain` so config returns to the default.
+
+Agents share Copilot credentials only when their normalized, supported tenant
+scopes match; Doctor preserves credentials for different tenants, so authenticate
+each affected agent for its intended tenant instead of deleting its local credential.
 </Note>
 
 <Note>
