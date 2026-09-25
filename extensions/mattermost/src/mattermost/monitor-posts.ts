@@ -320,12 +320,14 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       requireMention: shouldRequireMention || oncharEnabled,
       implicitMentionKinds: implicitMentionKindWhen("bot_thread_participant", threadAlreadyEngaged),
     });
+    const botThreadMentionRequired = isBotOwnedThread && requireMentionInBotThreads === true;
     const mentionDecision = resolveMattermostInboundMentionDecision({
       cfg,
       accountId: account.accountId,
       kind,
       requireMention: botThreadPolicy.requireMention,
-      canDetectMention: canDetectMention || oncharEnabled,
+      // Explicit bot-thread requirements stay closed when no mention detector is available.
+      canDetectMention: canDetectMention || oncharEnabled || botThreadMentionRequired,
       wasMentioned: wasMentioned || oncharTriggered,
       implicitMentionKinds: botThreadPolicy.implicitMentionKinds,
       allowTextCommands,
@@ -354,7 +356,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         reason: "no mention",
         target: channelId,
         onceKey: JSON.stringify([account.accountId, channelId]),
-        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].${botThreadMentionRequired ? "requireMentionInBotThreads" : "requireMention"}=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
       recordPendingHistory();
       return;

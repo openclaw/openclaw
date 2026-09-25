@@ -28,7 +28,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     hasParticipation.mockReset().mockResolvedValue(false);
   });
 
-  function setup(config: Partial<MattermostAccountConfig> = {}) {
+  function setup(config: Partial<MattermostAccountConfig> = {}, botUsername = "bot") {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -42,6 +42,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     };
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     const core = createPluginRuntimeMock();
+    core.channel.mentions.buildMentionRegexes = () => [];
     core.channel.groups.resolveRequireMention = resolveChannelGroupRequireMention;
     core.channel.routing.resolveAgentRoute = () => ({
       agentId: "main",
@@ -73,7 +74,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
       core,
       client: { request },
       botUserId: "bot",
-      botUsername: "bot",
+      botUsername,
       groupPolicy: account.config.groupPolicy ?? "open",
       pairing: { readAllowFromStore: async () => [] },
       resources: {
@@ -174,6 +175,19 @@ describe("Mattermost bot-owned thread mention policy", () => {
       expect(f.request).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { name: "strict bot thread", setting: true, owner: "bot", admitted: false },
+    { name: "omitted setting", setting: undefined, owner: "bot", admitted: true },
+    { name: "another author's thread", setting: true, owner: "someone-else", admitted: true },
+  ])("handles missing mention detectors for $name", async ({ setting, owner, admitted }) => {
+    const f = setup({ requireMentionInBotThreads: setting }, "");
+    f.root.user_id = owner;
+
+    await f.receive();
+
+    expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  });
 
   it.each([
     { kind: "another author's root", patch: { user_id: "someone-else" } },

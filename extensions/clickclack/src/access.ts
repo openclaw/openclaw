@@ -15,7 +15,7 @@ import {
   type ResolvedAgentRoute,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
-import { listClickClackAccountIds, resolveClickClackAccountConfig } from "./accounts.js";
+import { isClickClackAccountCurrent, resolveClickClackAccountConfig } from "./accounts.js";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { resolveClickClackGroupPolicy } from "./group-policy.js";
 import { createClickClackClient } from "./http-client.js";
@@ -208,6 +208,7 @@ async function resolvePreparedInboundRoute(params: {
  */
 export type ClickClackInboundAccess = {
   shouldDispatch: boolean;
+  isCurrent: () => boolean;
   commandAuthorized: boolean;
   /** Whether the resolved group policy required a direct mention. */
   requireMention?: boolean;
@@ -236,6 +237,13 @@ export async function resolveClickClackInboundAccess(params: {
     channelId: params.message.channel_id,
   });
   const rootPolicyConfigured = initialGroupPolicy.requireMentionInBotThreads !== undefined;
+  const isCurrent = () =>
+    !rootPolicyConfigured ||
+    isClickClackAccountCurrent({
+      // SAFETY: Account identity validation only reads the host-validated current config.
+      cfg: runtime.config.current() as CoreConfig,
+      account: params.account,
+    });
   const isBotOwnedThread = rootPolicyConfigured && (await isClickClackBotOwnedThread(params));
   // SAFETY: These legacy policy readers do not mutate the host-validated, frozen config.
   const routeConfig = rootPolicyConfigured
@@ -256,13 +264,6 @@ export async function resolveClickClackInboundAccess(params: {
   const accountPolicy = rootPolicyConfigured
     ? resolveClickClackAccountConfig(cfg, params.account.accountId)
     : params.account;
-  const accountAvailable =
-    !rootPolicyConfigured ||
-    (Boolean(cfg.channels?.clickclack) &&
-      listClickClackAccountIds(cfg).includes(params.account.accountId) &&
-      cfg.channels?.clickclack?.enabled !== false &&
-      accountPolicy.enabled !== false &&
-      Boolean(accountPolicy.baseUrl?.trim() && accountPolicy.workspace?.trim()));
   const effectiveGroupPolicy = resolveClickClackGroupPolicy({
     account: accountPolicy,
     channelId: params.message.channel_id,
@@ -286,12 +287,10 @@ export async function resolveClickClackInboundAccess(params: {
     agentId: preparedRoute.route.agentId,
     channelId: params.message.channel_id,
   });
-  if (
-    !accountAvailable ||
-    (params.message.kind !== undefined && params.message.kind !== "message")
-  ) {
+  if (!isCurrent() || (params.message.kind !== undefined && params.message.kind !== "message")) {
     return {
       shouldDispatch: false,
+      isCurrent,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -317,6 +316,7 @@ export async function resolveClickClackInboundAccess(params: {
   if (!botMentionAllowed) {
     return {
       shouldDispatch: false,
+      isCurrent,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -390,7 +390,9 @@ export async function resolveClickClackInboundAccess(params: {
   });
 
   return {
-    shouldDispatch: !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    shouldDispatch:
+      isCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    isCurrent,
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,

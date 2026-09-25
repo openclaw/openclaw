@@ -50,7 +50,7 @@ export {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordCommandAuthorized,
   resolveDiscordGuildEntry,
-  resolveDiscordMentionPolicy,
+  resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./src/monitor/allow-list.js";
