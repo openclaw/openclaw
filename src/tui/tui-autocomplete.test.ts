@@ -22,11 +22,11 @@ describe("createTuiAutocompleteProvider", () => {
 
   it("uses the provisioned file finder for attachment completion", async () => {
     const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
-    const fdPath = join(fixture, "fd");
-    await writeFile(fdPath, "#!/bin/sh\nprintf 'nested/needle.txt\\n'\n");
-    await chmod(fdPath, 0o755);
-
     try {
+      const fdPath = join(fixture, "fd");
+      await writeFile(fdPath, "#!/bin/sh\nprintf 'nested/needle.txt\\n'\n");
+      await chmod(fdPath, 0o755);
+
       const provider = createTuiAutocompleteProvider([], fixture, fdPath);
       const suggestions = await provider.getSuggestions(["@needle"], 0, 7, {
         signal: new AbortController().signal,
@@ -43,11 +43,11 @@ describe("createTuiAutocompleteProvider", () => {
 
   it("supports quoted attachment prefixes", async () => {
     const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
-    const fdPath = join(fixture, "fd");
-    await writeFile(fdPath, "#!/bin/sh\nprintf 'needle file.txt\\n'\n");
-    await chmod(fdPath, 0o755);
-
     try {
+      const fdPath = join(fixture, "fd");
+      await writeFile(fdPath, "#!/bin/sh\nprintf 'needle file.txt\\n'\n");
+      await chmod(fdPath, 0o755);
+
       const provider = createTuiAutocompleteProvider([], fixture, fdPath);
       const suggestions = await provider.getSuggestions(['@"needle'], 0, 8, {
         signal: new AbortController().signal,
@@ -61,11 +61,11 @@ describe("createTuiAutocompleteProvider", () => {
 
   it("omits terminal-unsafe paths while preserving safe Unicode paths", async () => {
     const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
-    const fdPath = join(fixture, "fd");
-    await writeFile(fdPath, "#!/bin/sh\nprintf 'raw\\033value.txt\\nمرحبا-東京.txt\\n'\n");
-    await chmod(fdPath, 0o755);
-
     try {
+      const fdPath = join(fixture, "fd");
+      await writeFile(fdPath, "#!/bin/sh\nprintf 'raw\\033value.txt\\nمرحبا-東京.txt\\n'\n");
+      await chmod(fdPath, 0o755);
+
       const provider = createTuiAutocompleteProvider([], fixture, fdPath);
       const suggestions = await provider.getSuggestions(["@"], 0, 1, {
         signal: new AbortController().signal,

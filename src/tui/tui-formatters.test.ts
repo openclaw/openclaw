@@ -27,7 +27,6 @@ describe("resolveFinalAssistantText", () => {
     expect(rendered).toBe(
       "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
     );
-    expect(rendered).not.toContain("<html>");
   });
 });
 
@@ -333,7 +332,6 @@ describe("extractTextFromMessage", () => {
   ])("renders a terminal-safe assistant $name summary", ({ block, expected }) => {
     const text = extractTextFromMessage({ role: "assistant", content: [block] });
     expect(text).toBe(expected);
-    expect(text).not.toMatch(/secret|file:|operator|passwd|private/i);
   });
 
   it("renders canonical and legacy assistant media without exposing references", () => {
@@ -715,7 +713,6 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
-    expect(sanitized).not.toContain("苦难 者");
   });
 
   it.each<[name: string, input: string]>([
@@ -725,7 +722,7 @@ describe("sanitizeRenderableText", () => {
     ],
     [
       "preserves long filesystem paths verbatim for copy safety",
-      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt",
+      "/Users/example/projects/example-project-with-a-long-directory-name-for-terminal-copy-safety-regression-checks/README.md",
     ],
     [
       "preserves long urls verbatim for copy safety",
@@ -908,7 +905,6 @@ describe("Markdown display safety", () => {
     const sanitized = sanitizeTerminalControlsAndBinary(input);
 
     expect(sanitized).toBe("# مرحبا\n> שלום");
-    expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
   });
 
   it("isolates rendered RTL lines without changing visible width", () => {

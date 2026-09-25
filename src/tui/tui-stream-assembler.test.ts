@@ -115,7 +115,6 @@ describe("TuiStreamAssembler", () => {
     expect(finalText).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(finalText).toContain("█ ▄");
     expect(finalText).not.toContain("\u001b[47m");
-    expect(finalText).not.toBe("(no output)");
   });
 
   it("falls back to event error message when final payload has no renderable text", () => {

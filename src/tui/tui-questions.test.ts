@@ -9,6 +9,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 
 const UP = "\x1b[A";
@@ -39,16 +40,6 @@ function questionRecord(overrides: Partial<QuestionRecord> = {}): QuestionRecord
     ],
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((done, fail) => {
-    resolve = done;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
 }
 
 const controllers: Array<ReturnType<typeof createTuiQuestionController>> = [];

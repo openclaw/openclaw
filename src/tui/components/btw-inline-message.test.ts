@@ -34,7 +34,6 @@ describe("btw inline message", () => {
     let raw = lines.join("\n");
     let rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: \u2067first question مرحبا שלום\u2069");
-    expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("first café");
     expect(rendered).toContain("second body");
     expect(lines[1]).not.toMatch(/[\r\n\t]/u);
@@ -51,7 +50,6 @@ describe("btw inline message", () => {
     raw = lines.join("\n");
     rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: \u2067next question שלום مرحبا\u2069");
-    expect(rendered).toContain("שלום مرحبا");
     expect(rendered).toContain("next 東京");
     expect(rendered).not.toContain("first question");
     expect(rendered).not.toContain("first café");
@@ -92,7 +90,6 @@ describe("btw inline message", () => {
     const raw = message.render(100).join("\n");
     const rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: \u2067why failed? مرحبا שלום\u2069");
-    expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("retry **plain** safely café");
     expect(raw).not.toContain(questionAttack);
     expect(raw).not.toContain(errorAttack);

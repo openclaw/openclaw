@@ -38,8 +38,11 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", agentId: "default" }],
     };
     const first = await acquireAgentRunPreparedModelRuntime(input);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    await first[Symbol.asyncDispose]();
+    try {
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    } finally {
+      await first[Symbol.asyncDispose]();
+    }
     const second = await acquireAgentRunPreparedModelRuntime(input);
     await second[Symbol.asyncDispose]();
 

@@ -349,6 +349,7 @@ describe("addOsc8Hyperlinks", () => {
     const result = addOsc8Hyperlinks(lines, new Set([fullUrl]));
 
     // All three lines should have OSC 8 wrapping
+    expect(result).toHaveLength(3);
     for (const line of result) {
       expect(line).toContain(`\x1b]8;;${fullUrl}\x07`);
       expect(line).toContain(`\x1b]8;;\x07`);

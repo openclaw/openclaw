@@ -121,6 +121,7 @@ describe("ChatLog", () => {
       "ToolExecutionComponent",
       "AssistantMessageComponent",
     ]);
+    expect(rendered).toContain("Before the tool.");
     expect(rendered.indexOf("Before the tool.")).toBeLessThan(rendered.indexOf("Read File"));
     expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("After the tool."));
   });
@@ -162,11 +163,13 @@ describe("ChatLog", () => {
       "ToolExecutionComponent",
       "AssistantMessageComponent",
     ]);
+    expect(rendered).toContain("Read File");
     expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Revised answer."));
 
     chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.\n\nNext segment.", "run-1");
 
     const continued = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(continued).toContain("Read File");
     expect(continued.indexOf("Read File")).toBeLessThan(continued.indexOf("Next segment."));
     expect(continued.split("Revised answer.")).toHaveLength(2);
   });
@@ -189,6 +192,7 @@ describe("ChatLog", () => {
       "ToolExecutionComponent",
       "AssistantMessageComponent",
     ]);
+    expect(rendered).toContain("Read File");
     expect(rendered.lastIndexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
   });
 
@@ -245,6 +249,7 @@ describe("ChatLog", () => {
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered.split("Before the tool.")).toHaveLength(2);
+    expect(rendered).toContain("Read File");
     expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
   });
 
@@ -426,6 +431,7 @@ describe("ChatLog", () => {
     });
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Sent from the other client.");
     expect(rendered.indexOf("Sent from the other client.")).toBeLessThan(
       rendered.indexOf("Already streaming."),
     );
@@ -521,6 +527,7 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("Read File");
     expect(rendered).toContain("newer-notice-0");
     expect(rendered).toContain("Current streaming reply.");
+    expect(rendered).toContain("Current authoritative prompt.");
     expect(rendered.indexOf("Current authoritative prompt.")).toBeLessThan(
       rendered.indexOf("Current streaming reply."),
     );
@@ -767,6 +774,7 @@ describe("ChatLog", () => {
       let rendered = normalizeTestText(chatLog.render(120).join("\n"));
       expect(chatLog.children).toHaveLength(capacity);
       expect(rendered).toContain("Visible partial tool output.");
+      expect(rendered).toContain("Delayed prompt during active tool.");
       expect(rendered.indexOf("Delayed prompt during active tool.")).toBeLessThan(
         rendered.indexOf("Running reply segment 0."),
       );

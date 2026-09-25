@@ -36,6 +36,7 @@ describe("ChatLog run state", () => {
     });
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Completed first reply.");
     expect(rendered.indexOf("Completed first reply.")).toBeLessThan(
       rendered.indexOf("Delayed second prompt."),
     );
@@ -61,6 +62,7 @@ describe("ChatLog run state", () => {
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(chatLog.children).toHaveLength(20);
     expect(rendered).not.toContain("Previous completed reply.");
+    expect(rendered).toContain("Delayed replacement prompt.");
     expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
       rendered.indexOf("Replacement completed reply."),
     );
@@ -83,6 +85,7 @@ describe("ChatLog run state", () => {
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(chatLog.children).toHaveLength(20);
     expect(rendered).not.toContain("Evicted completed reply.");
+    expect(rendered).toContain("Delayed active prompt.");
     expect(rendered.indexOf("Delayed active prompt.")).toBeLessThan(
       rendered.indexOf("Surviving streamed reply."),
     );
@@ -167,6 +170,7 @@ describe("ChatLog run state", () => {
     expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
 
     const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("queued hello");
     expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
     // The row is now addressable by the gateway-assigned runId.
     expect(chatLog.dropPendingUser("r-accepted")).toBe(true);

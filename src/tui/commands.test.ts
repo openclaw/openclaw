@@ -228,9 +228,9 @@ describe("getSlashCommands", () => {
   it("only advertises shared commands that local mode can route", () => {
     const names = getSlashCommands({ local: true }).map((command) => command.name);
 
-    expect(names).toEqual(
-      expect.not.arrayContaining(["commands", "status", "compact", "context", "tools"]),
-    );
+    for (const name of ["commands", "status", "compact", "context", "tools"]) {
+      expect(names).not.toContain(name);
+    }
     expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t"]));
   });
 });

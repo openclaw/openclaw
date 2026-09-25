@@ -133,7 +133,6 @@ describe("markdownTheme", () => {
 describe("theme", () => {
   it("keeps assistant text in terminal default foreground", () => {
     expect(tuiTheme.assistantText("hello")).toBe("hello");
-    expect(stripAnsi(tuiTheme.assistantText("hello"))).toBe("hello");
   });
 });
 
