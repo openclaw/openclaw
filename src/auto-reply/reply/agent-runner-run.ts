@@ -173,7 +173,7 @@ export async function runReplyAgent(
     followupRun.operatorAuthority?.assertCurrent();
   };
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
-  let restartRecoveryEntry = activeSessionEntry;
+  let restartRecoveryEntry: typeof activeSessionEntry;
   try {
     restartRecoveryEntry =
       sessionKey && storePath
