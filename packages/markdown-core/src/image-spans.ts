@@ -5,6 +5,8 @@ export type MarkdownImageSpan = {
   start: number;
   end: number;
   destination: string;
+  alt: string;
+  title?: string;
 };
 
 type ImageScanEnvironment = {
@@ -64,10 +66,13 @@ export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
       if (token.meta?.label) {
         return;
       }
+      const title = token.attrGet("title");
       images.push({
         start: sourceOffset(start),
         end: sourceOffset(state.pos),
         destination: String(expectDefined(token.attrGet("src"), "Markdown image destination")),
+        alt: token.content,
+        ...(title ? { title: String(title) } : {}),
       });
     },
   };

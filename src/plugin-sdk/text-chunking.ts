@@ -10,6 +10,11 @@ export {
 } from "../../packages/markdown-core/src/chunk-text.js";
 /** Quote-aware HTML tag tokens for exact post-render projections. */
 export { tokenizeHtmlTags } from "../../packages/markdown-core/src/html-tags.js";
+/** Parser-owned inline image sources and labels for channel media rendering. */
+export {
+  findMarkdownImageSpans,
+  type MarkdownImageSpan,
+} from "../../packages/markdown-core/src/image-spans.js";
 /** Static outbound formatting capabilities declared by a channel plugin. */
 export { FormatCapabilityProfile } from "../../packages/markdown-core/src/format-capabilities.js";
 

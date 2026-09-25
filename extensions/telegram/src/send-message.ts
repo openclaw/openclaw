@@ -19,6 +19,7 @@ import {
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
+import { resolveTelegramRichLocalMedia, type TelegramRichLocalMedia } from "./rich-local-media.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
   logTelegramOutboundSendOk,
@@ -81,6 +82,8 @@ export async function sendMessageTelegram(
     });
     const deliveryResults: TelegramSendResult[] = [];
     let finalMediaBatch = true;
+    let richTextResult: TelegramSendResult | undefined;
+    const degradedVoiceSources = new Set<string>();
     const reportDelivery = async (
       messageId: string | number,
       deliveredChatId: string | number,
@@ -134,7 +137,7 @@ export async function sendMessageTelegram(
         plan?.cursor.invalidate();
       }
     };
-    const mediaUrls = (opts.mediaUrls?.length ? opts.mediaUrls : [opts.mediaUrl ?? ""])
+    let mediaUrls = (opts.mediaUrls?.length ? opts.mediaUrls : [opts.mediaUrl ?? ""])
       .map((url) => url.trim())
       .filter(Boolean);
     const mediaMaxBytes =
@@ -286,7 +289,7 @@ export async function sendMessageTelegram(
       );
       const mediaPlan = prepareTelegramOutboundMedia({
         media,
-        text: index === 0 ? text : "",
+        text: index === 0 && !richTextResult ? text : "",
         textMode,
         tableMode,
         forceDocument: opts.forceDocument,
@@ -302,7 +305,7 @@ export async function sendMessageTelegram(
         media,
         plan: mediaPlan,
         forceDocument: opts.forceDocument,
-        asVoice: opts.asVoice,
+        asVoice: opts.asVoice || degradedVoiceSources.has(mediaUrl),
         sendImageAsPhoto,
       });
       return { index, media, mediaPlan, mediaSender, documentSender };
@@ -313,7 +316,7 @@ export async function sendMessageTelegram(
     ): Promise<TelegramSendResult> => {
       const first = batch[0];
       const { media, mediaPlan, mediaSender, documentSender } = first;
-      const batchReplyMarkup = first.index === 0 ? replyMarkup : undefined;
+      const batchReplyMarkup = first.index === 0 && !richTextResult ? replyMarkup : undefined;
       finalMediaBatch = first.index + batch.length === mediaUrls.length;
       const { htmlCaption, plainCaption, followUpText } = mediaPlan;
       // If text exceeds Telegram's caption limit, send media without caption
@@ -382,6 +385,7 @@ export async function sendMessageTelegram(
           mediaSender.label === "voice" &&
           isTelegramVoiceMessagesForbiddenError(error) &&
           first.index === 0 &&
+          !richTextResult &&
           text.trim()
         ) {
           logVerbose(
@@ -563,6 +567,52 @@ export async function sendMessageTelegram(
           };
     };
 
+    if (
+      useRichMessages &&
+      opts.forceDocument !== true &&
+      opts.asVoice !== true &&
+      opts.asVideoNote !== true &&
+      text.trim()
+    ) {
+      const local = await resolveTelegramRichLocalMedia({
+        text,
+        mediaUrls,
+        tableMode,
+        skipEntityDetection: account.config.linkPreview === false,
+        maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
+        mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
+      });
+      if (local.media.length > 0) {
+        const degraded: TelegramRichLocalMedia[] = [];
+        finalMediaBatch = local.unconsumedMediaUrls.length === 0;
+        richTextResult = await sendChunkedText(local.text, "text send", {
+          richLocalMedia: local.media,
+          onRichLocalMediaDegraded: (media) => {
+            degraded.push(...media);
+            finalMediaBatch = false;
+            for (const entry of media) {
+              if (entry.media.type === "voice_note") {
+                degradedVoiceSources.add(entry.source);
+              }
+            }
+          },
+        });
+        recordChannelActivity({
+          channel: "telegram",
+          accountId: account.accountId,
+          direction: "outbound",
+        });
+        // The shared media owner retains batching, cancellation and partial
+        // receipts for remaining attachments or rejected rich uploads.
+        mediaUrls = [...degraded.map((entry) => entry.source), ...local.unconsumedMediaUrls];
+        if (mediaUrls.length === 0) {
+          return richTextResult;
+        }
+      }
+    }
+
     if (mediaUrls.length > 0) {
       if (opts.asVideoNote && mediaUrls.length !== 1) {
         throw new Error("Telegram video notes require exactly one media attachment.");
@@ -573,11 +623,12 @@ export async function sendMessageTelegram(
           prepare: prepareMedia,
           // Telegram albums cannot carry inline controls. Preserve the first
           // attachment's keyboard through the existing singleton path.
-          canGroup: (item) => !replyMarkup && item.mediaSender.label === "photo",
+          canGroup: (item) =>
+            (!replyMarkup || Boolean(richTextResult)) && item.mediaSender.label === "photo",
         })) {
           const result = await sendMediaBatch(batch);
           if (batch[0].index + batch.length === mediaUrls.length) {
-            if (mediaUrls.length === 1) {
+            if (mediaUrls.length === 1 && !richTextResult) {
               return result;
             }
             const receipt = buildMediaReceipt();

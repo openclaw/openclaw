@@ -34,6 +34,53 @@ describe("telegram actions contract", () => {
     }
   });
 
+  it.each([
+    {
+      richMessages: undefined as boolean | undefined,
+      expectedMarkup: "markdown",
+      expectedOn: false,
+    },
+    {
+      richMessages: false as boolean | undefined,
+      expectedMarkup: "markdown",
+      expectedOn: false,
+    },
+    {
+      richMessages: true as boolean | undefined,
+      expectedMarkup: "markdown_telegram_rich",
+      expectedOn: true,
+    },
+  ])(
+    "returns inbound formatting hints for richMessages=$richMessages",
+    ({ richMessages, expectedMarkup, expectedOn }) => {
+      const hints = telegramPlugin.agentPrompt?.inboundFormattingHints?.({
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "test-token-placeholder",
+              richMessages,
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(hints?.text_markup).toBe(expectedMarkup);
+      if (expectedOn) {
+        expect(hints?.rules.join(" ")).toContain("Telegram rich ON");
+        expect(hints?.rules.join(" ")).toContain("Bot API 10.3 blocks");
+        expect(hints?.rules.join(" ")).toContain("<details><summary>");
+        expect(hints?.rules.join(" ")).toContain("Not MarkdownV2/parse_mode");
+        expect(hints?.rules.join(" ")).toContain(
+          "Media src: https URL or absolute local path under the allowed media roots",
+        );
+      } else {
+        expect(hints?.rules.join(" ")).toContain("Telegram rich OFF");
+        expect(hints?.rules.join(" ")).toContain("richMessages");
+        expect(hints?.rules.join(" ")).not.toContain("Telegram rich ON");
+      }
+    },
+  );
+
   it("keeps root and selected-account action gates distinct", () => {
     const cfg: OpenClawConfig = {
       channels: {
