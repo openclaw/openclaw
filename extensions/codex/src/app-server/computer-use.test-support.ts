@@ -1,5 +1,6 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
+import { CODEX_COMPUTER_USE_NODE_REPL_PROBE } from "./computer-use-node-repl.js";
 import type { CodexComputerUseRequest } from "./computer-use-readiness.js";
 import type { CodexComputerUseStatus } from "./computer-use.js";
 
@@ -48,10 +49,13 @@ export function createComputerUseRequest(params: {
   pluginName?: string;
   mcpServerName?: string;
   mcpTools?: readonly string[];
+  pluginMcpServers?: readonly string[];
+  marketplaceName?: string;
   nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
   liveTestResultErrors?: number;
+  liveTestText?: string;
   reloadFailures?: number;
   mcpToolsAvailable?: boolean;
   remoteMarketplace?: {
@@ -70,7 +74,8 @@ export function createComputerUseRequest(params: {
   const pluginName = params.pluginName ?? "computer-use";
   const mcpServerName = params.mcpServerName ?? "computer-use";
   const mcpTools = params.mcpTools ?? ["list_apps"];
-  const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
+  const marketplaceName =
+    params.remoteMarketplace?.name ?? params.marketplaceName ?? "desktop-tools";
   const marketplacePath = params.remoteMarketplace
     ? null
     : `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`;
@@ -145,7 +150,7 @@ export function createComputerUseRequest(params: {
           description: "Control desktop apps.",
           skills: [],
           apps: [],
-          mcpServers: [mcpServerName],
+          mcpServers: params.pluginMcpServers ?? [mcpServerName],
         },
       };
     }
@@ -212,7 +217,15 @@ export function createComputerUseRequest(params: {
         threadId: `computer-use-probe-thread-${threadStartCalls}`,
         server: mcpServerName,
         tool,
-        arguments: tool === "js" ? { code: "await cua.getState();" } : {},
+        arguments:
+          tool === "js"
+            ? {
+                code:
+                  mcpServerName === "node_repl"
+                    ? CODEX_COMPUTER_USE_NODE_REPL_PROBE
+                    : "await cua.getState();",
+              }
+            : {},
       });
       if (liveTestFailures > 0) {
         liveTestFailures -= 1;
@@ -222,7 +235,14 @@ export function createComputerUseRequest(params: {
         liveTestResultErrors -= 1;
         return { content: [{ type: "text", text: `${tool} failed` }], isError: true };
       }
-      return { content: [{ type: "text", text: "[]" }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: params.liveTestText ?? (mcpServerName === "node_repl" ? '{"appCount":0}' : "[]"),
+          },
+        ],
+      };
     }
     if (method === "thread/unsubscribe") {
       expect(requestParams).toEqual({ threadId: `computer-use-probe-thread-${threadStartCalls}` });

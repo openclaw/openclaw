@@ -609,6 +609,40 @@ default-disabled check resolves the platform-native executable and requires the
 exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
 macOS desktop-owned app-servers.
 
+### Selected desktop runtime updates
+
+On macOS, explicit plugin installation, `openclaw plugins update codex`, and
+`openclaw update` also maintain the desktop distribution when managed Codex
+routes select it. This check runs even when the plugin package itself is
+unchanged. Ordinary Doctor runs and conversation startup do not download desktop
+updates. Dry runs and update rehearsals do not change the host's desktop runtime.
+
+The updater downloads the latest official distribution, verifies its Apple/OpenAI
+signatures, and checks the selected models and required Computer Use bridge in a
+disposable Codex home. Validation does not copy credentials, submit model turns,
+or perform desktop input. An incompatible candidate leaves the previous selection
+intact and produces an actionable warning; OpenClaw does not downgrade a newer
+installed build.
+
+Verified distributions live in immutable directories under
+`~/Library/Application Support/OpenClaw/Codex/versions`. Retained Codex plugin state
+in OpenClaw's SQLite database selects the concrete executable, marketplace, and
+native service together. Activation uses compare-and-set so a concurrent update
+cannot overwrite a newer selection. The
+updater does not replace `/Applications/ChatGPT.app` or `/Applications/Codex.app`.
+Existing conversations retain their original files and generation; new clients
+select the verified distribution after the normal plugin reload/generation handoff.
+The update report identifies the retained previous runtime for recovery. Previous
+distributions are not automatically deleted.
+
+Custom executables, remote servers, and custom native Computer Use integrations
+remain operator-owned. `autoInstall: false` does not authorize writes to native
+service or marketplace state. If the retained native marketplace does not resolve
+to the candidate's exact plugin source, the update keeps the previous runtime and
+reports that manual validation is required. Supported validation uses a disposable
+copy of the retained service, and startup wiring is process-local. The package-only Codex runtime still
+uses OpenClaw's tested package pin rather than resolving npm `latest` on each turn.
+
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually
 honored or returned for a completed request. `/codex binding` reports the

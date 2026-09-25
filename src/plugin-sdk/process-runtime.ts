@@ -1,5 +1,11 @@
 // Public process helpers for plugins that spawn or probe local commands.
 
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
+import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
+
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 export { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 export { splitCommandArgs } from "../utils/shell-argv.js";
@@ -15,6 +21,12 @@ export {
   type SpawnResult,
 } from "../process/exec.js";
 export { withCommandProcessScope } from "../process/exec-spawn.js";
+// Keep construction and recognition on the same canonical cleanup contract.
+export const commandProcessCleanup = Object.freeze({
+  Error: CommandProcessCleanupError,
+  isUncertain: hasCommandProcessCleanupError,
+  runOutsideScope: runOutsideCommandProcessScope,
+});
 export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";

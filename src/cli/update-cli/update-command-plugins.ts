@@ -518,6 +518,27 @@ async function updatePluginsAfterCoreUpdateWithLease(
     params.assertCurrent?.();
   }
 
+  const { runPluginRuntimeMaintenance } = await import("../../plugins/runtime-maintenance.js");
+  const runtimeWarnings = await withPluginLifecycleLease(
+    { assertCurrent: params.assertCurrent },
+    async (lease) =>
+      await runPluginRuntimeMaintenance({
+        operation: "update",
+        config: withoutPluginInstallRecords(pluginConfig),
+        env: convergenceEnv,
+        runtime,
+        signal: lease.signal,
+        assertCurrent: () => lease.assertOwned(),
+      }),
+  );
+  warnings.push(
+    ...runtimeWarnings.map((message) => ({
+      reason: "plugin-runtime-maintenance",
+      message,
+      guidance: ["Retry the named plugin update after resolving its runtime warning."],
+    })),
+  );
+
   for (const notice of clawHubTrustNotices) {
     if (warnings.some((warning) => warning.reason.includes(notice))) {
       continue;

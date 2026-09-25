@@ -29,6 +29,7 @@ import {
   type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
+import { bindCodexComputerUseNodeReplClient } from "./computer-use-node-repl.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import {
@@ -316,6 +317,7 @@ export class CodexAppServerClient {
     try {
       await createStdioTransport(startOptions, process.env, assertCurrent, (child) => {
         client = new CodexAppServerClient(child);
+        bindCodexComputerUseNodeReplClient(client, startOptions);
       });
       return client;
     } catch (error) {

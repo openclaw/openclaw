@@ -148,12 +148,22 @@ describe("Codex desktop generation owner", () => {
     });
   });
 
-  it("watches stable application roots for recursive artifact updates", () => {
-    const fixture = candidate("/Applications", "ChatGPT.app");
-    expect(resolveMacOSDesktopGenerationWatchPaths([fixture])).toEqual([
-      "/Applications",
-      fixture.appBundlePath,
-    ]);
+  it("watches application roots and rearms the managed root after first installation", async () => {
+    await withTempDir("openclaw-codex-watch-paths-", async (root) => {
+      const fixture = candidate("/Applications", "ChatGPT.app");
+      const managedRoot = path.join(root, "managed");
+      expect(resolveMacOSDesktopGenerationWatchPaths([fixture], managedRoot)).toEqual([
+        "/Applications",
+        root,
+        fixture.appBundlePath,
+      ]);
+      await fs.mkdir(managedRoot);
+      expect(resolveMacOSDesktopGenerationWatchPaths([fixture], managedRoot)).toEqual([
+        "/Applications",
+        managedRoot,
+        fixture.appBundlePath,
+      ]);
+    });
   });
 });
 

@@ -9,13 +9,61 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
-const mocks = vi.hoisted(() => ({ convergence: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  convergence: vi.fn(),
+  runtimeMaintenance: vi.fn(async () => [] as string[]),
+}));
 vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence: mocks.convergence,
+}));
+vi.mock("../../plugins/runtime-maintenance.js", () => ({
+  runPluginRuntimeMaintenance: mocks.runtimeMaintenance,
 }));
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("maintains selected runtimes when post-core packages are unchanged and records warnings", async () => {
+  await withOpenClawTestState({ label: "updater-runtime-maintenance" }, async (state) => {
+    const cfg = { plugins: { enabled: false } };
+    await state.writeConfig(cfg);
+    await seedInstalledPluginIndex({}, { config: cfg, env: state.env });
+    mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
+      config: candidate,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    }));
+    mocks.runtimeMaintenance.mockResolvedValueOnce([
+      "Runtime candidate is incompatible; retained working version.",
+    ]);
+    const result = await updatePluginsAfterCoreUpdate({
+      root: state.root,
+      channel: "stable",
+      configSnapshot: await readConfigFileSnapshot(),
+      configWriteOptions: {},
+      pluginInstallRecords: {},
+      timeoutMs: 1_000,
+      json: true,
+    });
+    expect(result.changed).toBe(false);
+    expect(result.status).toBe("warning");
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ reason: "plugin-runtime-maintenance" }),
+    );
+    expect(mocks.runtimeMaintenance).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        operation: "update",
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
+      }),
+    );
+  });
+});
 
 describe("updater plugin commit cancellation", () => {
   it.each(["index", "config", "config-failed"] as const)(

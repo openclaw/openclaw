@@ -222,6 +222,8 @@ async function resolveOfficialManagedInstallSpec(params: {
 }
 
 type ManagedPluginSourceInstallParams = {
+  /** Explicit management installs opt in; automatic provisioning leaves this absent. */
+  runtimeMaintenance?: import("./runtime-maintenance.js").PluginRuntimeMaintenanceAuthority;
   request: ManagedPluginSourceInstallRequest;
   snapshot: ConfigSnapshotForInstallPersist;
   enable?: boolean;
@@ -241,7 +243,7 @@ type ManagedPluginSourceInstallParams = {
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  "request" | "snapshot" | "acknowledgeCapabilities" | "enable"
+  "request" | "snapshot" | "acknowledgeCapabilities" | "enable" | "runtimeMaintenance"
 > & {
   /** The enclosing Claw coordinator owns its package lease and adoption record. */
   clawManaged?: boolean;

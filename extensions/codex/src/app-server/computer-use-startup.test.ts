@@ -74,7 +74,7 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
       await fs.cp(pluginRoot, cachePath, { recursive: true });
       await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
 
-      vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue([
+      const desktopCandidates: desktopPaths.MacOSDesktopCodexAppPathCandidate[] = [
         {
           appName: "ChatGPT.app",
           appBundlePath,
@@ -82,7 +82,10 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
           bundledMarketplacePath: marketplace,
           computerUseServiceAppPaths: [sourceService],
         },
-      ]);
+      ];
+      vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue(
+        desktopCandidates,
+      );
       vi.spyOn(service, "resolveCodexComputerUseServiceAppSourcePath").mockImplementation(
         (params) =>
           resolveServiceSource({
@@ -116,6 +119,9 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
       });
       vi.spyOn(generation, "waitForCodexDesktopGeneration").mockImplementation(() => owner.wait());
       vi.spyOn(generation, "isCodexDesktopGenerationCurrent").mockImplementation(owner.isCurrent);
+      vi.spyOn(generation, "readCodexDesktopGenerationCandidates").mockImplementation(
+        (candidate) => (owner.isCurrent(candidate) ? desktopCandidates : undefined),
+      );
       const copy = fs.cp.bind(fs);
       vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
         await copy(...args);

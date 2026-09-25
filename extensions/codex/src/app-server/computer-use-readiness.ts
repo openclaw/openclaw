@@ -6,6 +6,12 @@ import {
 } from "./attempt-client-cleanup.js";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  CODEX_COMPUTER_USE_NODE_REPL_PROBE,
+  CODEX_COMPUTER_USE_NODE_REPL_SERVER,
+  hasCodexComputerUseNodeReplOwnership,
+  isCodexComputerUseNodeReplClient,
+} from "./computer-use-node-repl.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type { CodexThreadStartResponse, JsonValue } from "./protocol.js";
@@ -97,13 +103,22 @@ export async function runCodexComputerUseLiveTest(params: {
   const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
-  const probe = resolveComputerUseLiveTestProbe(params.tools);
+  const usesOfficialNativeBridge =
+    params.config.mcpServerName === CODEX_COMPUTER_USE_NODE_REPL_SERVER &&
+    isCodexComputerUseNodeReplClient(params.client);
+  const probe = resolveComputerUseLiveTestProbe(params.tools, usesOfficialNativeBridge);
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
     let outcome:
       | { ok: true; liveTest: CodexComputerUseLiveTestStatus }
       | { ok: false; error: unknown };
     try {
+      const assertNativeBridgeOwned = async () => {
+        if (usesOfficialNativeBridge && !(await hasCodexComputerUseNodeReplOwnership(params))) {
+          throw new Error("Computer Use node_repl is not the admitted official desktop bridge");
+        }
+      };
+      await assertNativeBridgeOwned();
       const thread = await params.request<CodexThreadStartResponse>(
         "thread/start",
         {
@@ -116,6 +131,7 @@ export async function runCodexComputerUseLiveTest(params: {
         },
       );
       threadId = thread.thread.id;
+      await assertNativeBridgeOwned();
       const toolResult = await params.request<CodexMcpToolCallResult>(
         "mcpServer/tool/call",
         {
@@ -132,6 +148,9 @@ export async function runCodexComputerUseLiveTest(params: {
         throw new Error(
           `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
         );
+      }
+      if (usesOfficialNativeBridge && !hasComputerUseAppCount(toolResult)) {
+        throw new Error("Computer Use node_repl readiness returned no valid application count");
       }
       outcome = {
         ok: true,
@@ -193,10 +212,33 @@ export async function runCodexComputerUseLiveTest(params: {
   };
 }
 
-function resolveComputerUseLiveTestProbe(tools: readonly string[] | undefined): {
+function hasComputerUseAppCount(result: CodexMcpToolCallResult): boolean {
+  return result.content.some((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || typeof item.text !== "string") {
+      return false;
+    }
+    try {
+      const value: unknown = JSON.parse(item.text);
+      if (!value || typeof value !== "object" || !("appCount" in value)) {
+        return false;
+      }
+      return Number.isSafeInteger(value.appCount) && Number(value.appCount) >= 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function resolveComputerUseLiveTestProbe(
+  tools: readonly string[] | undefined,
+  usesOfficialNativeBridge: boolean,
+): {
   tool: string;
   arguments: Record<string, JsonValue>;
 } {
+  if (usesOfficialNativeBridge && tools?.includes("js")) {
+    return { tool: "js", arguments: { code: CODEX_COMPUTER_USE_NODE_REPL_PROBE } };
+  }
   if (
     tools?.includes(COMPUTER_USE_UNIFIED_JS_TOOL) &&
     !tools.includes(COMPUTER_USE_LIST_APPS_TOOL)

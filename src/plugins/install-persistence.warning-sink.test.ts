@@ -14,6 +14,11 @@ import {
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
+const runtimeMaintenance = vi.hoisted(() => vi.fn(async () => [] as string[]));
+vi.mock("./runtime-maintenance.js", () => ({
+  runPluginRuntimeMaintenance: runtimeMaintenance,
+}));
+
 const snapshot = {
   config: {},
   baseHash: "config-1",
@@ -29,7 +34,48 @@ const install = {
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    runtimeMaintenance.mockReset().mockResolvedValue([]);
   });
+
+  it.each([false, true])(
+    "only explicit installs maintain runtimes before activation (explicit=%s)",
+    async (explicit) => {
+      const { persistPluginInstall } = await import("./install-persistence.js");
+      const order: string[] = [];
+      const warn = vi.fn();
+      runtimeMaintenance.mockImplementation(async () => {
+        expect(configWriteMock).toHaveBeenCalledOnce();
+        order.push("maintain");
+        return ["Kept previous runtime; candidate is incompatible."];
+      });
+      await persistPluginInstall({
+        snapshot,
+        pluginId: "workboard",
+        install,
+        persistenceLogger: { warn },
+        ...(explicit
+          ? {
+              runtimeMaintenance: {
+                operation: "install" as const,
+                signal: new AbortController().signal,
+                assertCurrent: () => {},
+              },
+            }
+          : {}),
+        applyRuntime: async () => {
+          order.push("activate");
+          return { operationId: "test", generation: 1, pluginIds: ["workboard"] };
+        },
+      });
+      expect(order).toEqual(explicit ? ["maintain", "activate"] : ["activate"]);
+      if (explicit) {
+        expect(runtimeMaintenance).toHaveBeenCalledWith(
+          expect.objectContaining({ pluginIds: ["workboard"] }),
+        );
+        expect(warn).toHaveBeenCalledWith("Kept previous runtime; candidate is incompatible.");
+      }
+    },
+  );
 
   it("delivers deferred source cleanup warnings to the live batch consumer", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");

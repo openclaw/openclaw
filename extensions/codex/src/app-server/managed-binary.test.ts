@@ -2,14 +2,21 @@
 import { access, chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { closeOpenClawStateDatabaseByPathAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import { resolveSelectedMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
   setManagedCodexPluginRoot,
 } from "./managed-binary.js";
+import {
+  observeCodexManagedDesktopSelection,
+  publishCodexManagedDesktopSelection,
+  resolveCodexManagedDesktopAppPath,
+} from "./managed-desktop-installation.js";
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
@@ -61,7 +68,66 @@ describe("managed Codex app-server binary", () => {
   });
   afterEach(async () => {
     setManagedCodexPluginRoot(undefined);
+    await closeOpenClawStateDatabaseByPathAsync(
+      path.join(root, "state", "state", "openclaw.sqlite"),
+    );
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("observes committed managed selection while an acquired generation keeps its pinned candidate", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const managedRoot = path.join(root, "managed");
+    const authority = {
+      root: managedRoot,
+      env,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    };
+    const first = { version: 1 as const, appName: "ChatGPT.app" as const, generation: "old" };
+    const second = { ...first, generation: "new" };
+    const oldCommand = path.join(
+      resolveCodexManagedDesktopAppPath(first, managedRoot),
+      "Contents/Resources/codex",
+    );
+    const newCommand = path.join(
+      resolveCodexManagedDesktopAppPath(second, managedRoot),
+      "Contents/Resources/codex",
+    );
+    await writeExecutable(oldCommand);
+    await writeExecutable(newCommand);
+    await writePackageLauncher(root);
+    const missing = await observeCodexManagedDesktopSelection(authority);
+    await publishCodexManagedDesktopSelection({
+      ...authority,
+      selection: first,
+      expectedComparison: missing.comparison,
+    });
+    const pinned = await resolveSelectedMacOSDesktopCodexAppPathCandidates("darwin", managedRoot, {
+      env,
+    });
+    const before = await observeCodexManagedDesktopSelection(authority);
+    await publishCodexManagedDesktopSelection({
+      ...authority,
+      selection: second,
+      expectedComparison: before.comparison,
+    });
+    const options = { env, platform: "darwin" as const, pluginRoot: root, managedRoot };
+    expect(
+      (
+        await resolveManagedCodexAppServerStartOptions(
+          startOptions("managed", "desktop-first"),
+          options,
+        )
+      ).command,
+    ).toBe(newCommand);
+    expect(
+      (
+        await resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
+          ...options,
+          desktopCandidates: pinned,
+        })
+      ).command,
+    ).toBe(oldCommand);
   });
 
   it.each([

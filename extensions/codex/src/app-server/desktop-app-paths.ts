@@ -1,6 +1,12 @@
 /** Shared path candidates for Codex's macOS desktop app bundle. */
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
+import { assertNoSymlinkParentsSync } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isCodexManagedDesktopAppPath,
+  readCodexManagedDesktopSelection,
+  type CodexManagedDesktopStateOptions,
+} from "./managed-desktop-installation.js";
 
 export type MacOSDesktopCodexAppPathCandidate = {
   appName: "ChatGPT.app" | "Codex.app";
@@ -33,10 +39,82 @@ const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPath
   },
 ] as const;
 
+/** Pure standard templates; no durable state is loaded during registration. */
 export function resolveMacOSDesktopCodexAppPathCandidates(
   platform: NodeJS.Platform = process.platform,
 ): readonly MacOSDesktopCodexAppPathCandidate[] {
   return platform === "darwin" ? MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES : [];
+}
+
+/** Unpinned runtime discovery observes foreign SQLite commits through the read worker. */
+export async function resolveSelectedMacOSDesktopCodexAppPathCandidates(
+  platform: NodeJS.Platform = process.platform,
+  managedRoot?: string,
+  options: CodexManagedDesktopStateOptions = {},
+): Promise<readonly MacOSDesktopCodexAppPathCandidate[]> {
+  if (platform !== "darwin") {
+    return [];
+  }
+  const managed = await readCodexManagedDesktopSelection(managedRoot, options);
+  return managed
+    ? [
+        candidateAtPath(managed.selection.appName, managed.appBundlePath),
+        ...MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES,
+      ]
+    : MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES;
+}
+
+/** Historical owned generations remain valid sources for already-admitted clients. */
+export function resolveMacOSDesktopCodexAppPathCandidateForBundle(
+  appBundlePath: string,
+  params: { platform?: NodeJS.Platform; managedRoot?: string } = {},
+): MacOSDesktopCodexAppPathCandidate | undefined {
+  if ((params.platform ?? process.platform) !== "darwin") {
+    return undefined;
+  }
+  const standard = MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.find(
+    (candidate) => candidate.appBundlePath === appBundlePath,
+  );
+  if (standard) {
+    try {
+      assertNoSymlinkParentsSync({
+        rootDir: "/Applications",
+        targetPath: path.dirname(standard.appServerCommandPath),
+        requireDirectories: true,
+        allowMissing: false,
+      });
+      return lstatSync(standard.appServerCommandPath).isFile() ? standard : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const template = MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.find(
+    (candidate) => candidate.appName === path.basename(appBundlePath),
+  );
+  return template && isCodexManagedDesktopAppPath(appBundlePath, params.managedRoot)
+    ? candidateAtPath(template.appName, appBundlePath)
+    : undefined;
+}
+
+function candidateAtPath(
+  appName: "ChatGPT.app" | "Codex.app",
+  appBundlePath: string,
+): MacOSDesktopCodexAppPathCandidate {
+  const standard = MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.find(
+    (candidate) => candidate.appName === appName,
+  );
+  if (!standard) {
+    throw new Error("Unsupported Codex desktop app name.");
+  }
+  const relocate = (filePath: string) =>
+    path.join(appBundlePath, path.relative(standard.appBundlePath, filePath));
+  return {
+    appName,
+    appBundlePath,
+    appServerCommandPath: relocate(standard.appServerCommandPath),
+    bundledMarketplacePath: relocate(standard.bundledMarketplacePath),
+    computerUseServiceAppPaths: standard.computerUseServiceAppPaths.map(relocate),
+  };
 }
 
 export function resolveMacOSDesktopCodexAppServerCommandCandidates(
@@ -64,14 +142,17 @@ export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
   }
   const candidates = resolveMacOSDesktopCodexAppPathCandidates(platform);
   const matchingCandidate = appServerCommand
-    ? candidates.find(
-        (candidate) =>
-          path.resolve(candidate.appServerCommandPath) === path.resolve(appServerCommand),
-      )
+    ? (candidates.find((candidate) => candidate.appServerCommandPath === appServerCommand) ??
+      resolveMacOSDesktopCodexAppPathCandidateForBundle(
+        path.dirname(path.dirname(path.dirname(appServerCommand))),
+        { platform },
+      ))
     : undefined;
-  const orderedCandidates = matchingCandidate
-    ? [matchingCandidate, ...candidates.filter((candidate) => candidate !== matchingCandidate)]
-    : candidates;
+  const matchesCommand = matchingCandidate?.appServerCommandPath === appServerCommand;
+  const orderedCandidates =
+    matchingCandidate && matchesCommand
+      ? [matchingCandidate, ...candidates.filter((candidate) => candidate !== matchingCandidate)]
+      : candidates;
   return [
     ...new Set(orderedCandidates.flatMap((candidate) => candidate.computerUseServiceAppPaths)),
   ];

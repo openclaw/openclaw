@@ -39,6 +39,11 @@ import {
 import { registerPluginsCli } from "./plugins-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
+const runtimeMaintenance = vi.hoisted(() => vi.fn(async () => [] as string[]));
+vi.mock("../plugins/runtime-maintenance.js", () => ({
+  runPluginRuntimeMaintenance: runtimeMaintenance,
+}));
+
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const { set: setTty, restore: restoreTty } = createCliTtyMock();
 
@@ -272,6 +277,7 @@ async function expectSkippedClawHubPluginUpdate(params: {
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    runtimeMaintenance.mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -299,6 +305,34 @@ describe("plugins cli update", () => {
     expect(helpText).toContain("security.installPolicy");
     expect(helpText).toMatch(/blocks and\s+failures remain terminal/u);
   });
+
+  it.each([false, true])(
+    "maintains an unchanged selected runtime unless dry-run=%s",
+    async (dryRun) => {
+      primeUpdateConfigSnapshot({ config: {} });
+      setInstalledPluginIndexInstallRecords({
+        alpha: { source: "npm", spec: "@acme/alpha", installPath: "/tmp/alpha" },
+      });
+      primePluginUpdate({}, [{ pluginId: "alpha", status: "unchanged", message: "Current." }]);
+      runtimeMaintenance.mockResolvedValue([
+        "Retained working runtime; candidate was incompatible.",
+      ]);
+      await runPluginsCommand(["plugins", "update", "alpha", ...(dryRun ? ["--dry-run"] : [])]);
+      if (dryRun) {
+        expect(runtimeMaintenance).not.toHaveBeenCalled();
+      } else {
+        expect(runtimeMaintenance).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            operation: "update",
+            pluginIds: ["alpha"],
+            assertCurrent: expect.any(Function),
+          }),
+        );
+        expect(pluginsCliRuntimeLogs.join("\n")).toContain("candidate was incompatible");
+      }
+      expect(configWriteMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;

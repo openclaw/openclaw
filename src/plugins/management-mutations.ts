@@ -73,7 +73,7 @@ type ManagedPluginMutationOptions = {
 
 function withManagedPluginMutation<T>(
   params: ManagedPluginMutationOptions,
-  run: (beforePersistentApply: () => void) => Promise<T>,
+  run: (beforePersistentApply: () => void, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return withPluginLifecycleLease(
     { env: params.env ?? process.env, signal: params.signal },
@@ -84,7 +84,10 @@ function withManagedPluginMutation<T>(
         params.beforePersistentApply?.();
       };
       beforePersistentApply();
-      return run(beforePersistentApply);
+      return run(
+        beforePersistentApply,
+        params.signal ? AbortSignal.any([params.signal, lease.signal]) : lease.signal,
+      );
     },
   );
 }
@@ -128,7 +131,7 @@ export async function installManagedPlugin(
   }
   const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply, signal) => {
     const performInstall = async () => {
       const configuredClawHubUrl = env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL;
       const useHostedCatalog =
@@ -185,6 +188,11 @@ export async function installManagedPlugin(
         applyRuntime: captured?.applyRuntime,
         deferRuntime: params.deferRuntime,
         beforePersistentApply,
+        runtimeMaintenance: {
+          operation: "install",
+          signal,
+          assertCurrent: beforePersistentApply,
+        },
         request,
         enable: params.request.enable,
         snapshot,

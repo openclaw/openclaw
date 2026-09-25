@@ -90,6 +90,31 @@ settlement receipts, output delivery, expiry, and cancellation. Missing or
 disabled executors fail explicitly; the host never substitutes a less isolated
 executor.
 
+## Explicit runtime maintenance
+
+Plugins with `doctorHealthChecks: true` can export
+`createPluginRuntimeMaintenanceChecksV1(context)` from a light
+`doctor-health-api` artifact. Import `PluginRuntimeMaintenanceContextV1` and
+`HealthCheck` from `openclaw/plugin-sdk/health`. Return isolated detect/repair
+checks without registering them globally.
+
+OpenClaw invokes this factory only for enabled bundled or verified official
+owners during explicit plugin installation, plugin updates, and post-core
+plugin updates. Unchanged package versions still receive runtime maintenance.
+Ordinary Doctor, automatic missing-plugin provisioning, dry runs, update
+rehearsals, and agent turn acquisition do not run these checks.
+
+The context supplies `operation`, the installed `pluginRoot`, an `AbortSignal`,
+and `assertCurrent()`. Revalidate after awaited work and immediately before
+publishing changes. The capability closes when maintenance finishes. Plugins
+must retain the previous working runtime when validation fails, report a
+skipped or failed repair with an actionable reason, and join their subprocesses
+before returning. Maintenance does not write plugin configuration.
+
+Native validation must confirm process cleanup before publishing or deleting its
+artifacts. For OpenClaw's bundled implementations, see the separate
+[bundled runtime cleanup guidance](/plugins/sdk-runtime/config-and-utilities#bundled-runtime-cleanup).
+
 ## MCP subprocess runtime
 
 **Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:

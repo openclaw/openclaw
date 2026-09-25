@@ -680,6 +680,26 @@ async function runPluginUpdateCommandUnlocked(
       }
     }
 
+    if (!params.opts.dryRun) {
+      if (!lease) {
+        throw new Error("Plugin runtime maintenance requires the update lifecycle lease");
+      }
+      const { runPluginRuntimeMaintenance } = await import("../plugins/runtime-maintenance.js");
+      const maintainedOwners = pluginResult.outcomes
+        .filter((outcome) => outcome.status === "updated" || outcome.status === "unchanged")
+        .map((outcome) => outcome.pluginId);
+      const warnings = await runPluginRuntimeMaintenance({
+        operation: "update",
+        config: withoutPluginInstallRecords(hookResult.config),
+        pluginIds: maintainedOwners.flatMap((id) => packagePluginIds[id] ?? [id]),
+        signal: lease.signal,
+        assertCurrent: () => lease.assertOwned(),
+      });
+      for (const warning of warnings) {
+        logger.warn(warning);
+      }
+    }
+
     const outcomeSummary = logPluginUpdateOutcomes({
       outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
       log: defaultRuntime.log,

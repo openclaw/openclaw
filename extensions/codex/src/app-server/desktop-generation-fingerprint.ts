@@ -1,24 +1,26 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
+  resolveSelectedMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
+import { resolveCodexManagedDesktopRoot } from "./managed-desktop-installation.js";
 
 const MAX_COMPUTER_USE_PLUGIN_TREE_ENTRIES = 4_096;
 
 /** Fingerprints every desktop candidate that can own a managed fallback artifact. */
 export async function readMacOSDesktopGenerationFingerprint(
-  candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
-    "darwin",
-  ),
+  candidates?: readonly MacOSDesktopCodexAppPathCandidate[],
 ): Promise<string> {
+  const selectedCandidates =
+    candidates ?? (await resolveSelectedMacOSDesktopCodexAppPathCandidates("darwin"));
   const entries: string[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of selectedCandidates) {
     const command = await statFingerprint(candidate.appServerCommandPath);
     entries.push(`candidate:${candidate.appName}:${candidate.appServerCommandPath}:${command}`);
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
@@ -61,8 +63,16 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
     "darwin",
   ),
+  managedRoot = resolveCodexManagedDesktopRoot(),
 ): string[] {
   const watched = new Set<string>(["/Applications"]);
+  // Observe resource changes, not SQLite commits. Unpinned acquisitions refresh
+  // the selection through the worker; no database files are watched.
+  let managedWatchRoot = managedRoot;
+  while (!existsSync(managedWatchRoot) && path.dirname(managedWatchRoot) !== managedWatchRoot) {
+    managedWatchRoot = path.dirname(managedWatchRoot);
+  }
+  watched.add(managedWatchRoot);
   for (const candidate of candidates) {
     watched.add(candidate.appBundlePath);
   }

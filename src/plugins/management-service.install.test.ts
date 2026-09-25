@@ -266,6 +266,11 @@ describe("managed plugin installation", () => {
       expect(mocks.persistInstall).toHaveBeenCalledWith(
         expect.objectContaining({
           install: expect.objectContaining({ source: absent ? "clawhub" : "npm" }),
+          runtimeMaintenance: {
+            operation: "install",
+            signal: expect.any(AbortSignal),
+            assertCurrent: expect.any(Function),
+          },
         }),
       );
     },

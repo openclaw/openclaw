@@ -408,7 +408,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
-      4572,
+      // +1: versioned explicit runtime-maintenance authority for plugin-owned health checks.
+      4573,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

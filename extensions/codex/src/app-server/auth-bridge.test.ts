@@ -265,6 +265,14 @@ vi.mock("./desktop-app-paths.js", async (importOriginal) => {
     ...actual,
     resolveMacOSDesktopCodexAppPathCandidates: (platform?: NodeJS.Platform) =>
       actual.resolveMacOSDesktopCodexAppPathCandidates(platform ?? "darwin"),
+    resolveMacOSDesktopCodexAppPathCandidateForBundle: (
+      bundle: string,
+      params: Parameters<typeof actual.resolveMacOSDesktopCodexAppPathCandidateForBundle>[1] = {},
+    ) =>
+      actual.resolveMacOSDesktopCodexAppPathCandidateForBundle(bundle, {
+        ...params,
+        platform: params.platform ?? "darwin",
+      }),
   };
 });
 
@@ -605,6 +613,45 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
       expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps artifacts bound to an admitted retained desktop command", async () => {
+    await withTempDir("openclaw-codex-retained-artifacts-", async (home) => {
+      const homedir = vi.spyOn(os, "homedir").mockReturnValue(home);
+      try {
+        const app = path.join(
+          home,
+          "Library/Application Support/OpenClaw/Codex/versions/retained/ChatGPT.app",
+        );
+        const command = path.join(app, "Contents/Resources/codex");
+        await fs.mkdir(path.dirname(command), { recursive: true, mode: 0o700 });
+        await fs.writeFile(command, "retained executable fixture", { mode: 0o700 });
+        computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(
+          path.join(app, "Contents/Resources/plugins/openai-bundled"),
+        );
+        await reconcileCodexComputerUseStartArtifacts({
+          startOptions: createStartOptions({ command }),
+          agentDir: path.join(home, "agent"),
+          pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        });
+        expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(
+          expect.objectContaining({
+            appServerCommand: command,
+            sourceAppCandidates: expect.arrayContaining([
+              path.join(
+                app,
+                "Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
+              ),
+            ]),
+          }),
+        );
+        expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+          expect.objectContaining({ appServerCommand: command }),
+        );
+      } finally {
+        homedir.mockRestore();
+      }
     });
   });
 

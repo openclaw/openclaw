@@ -304,3 +304,23 @@ accepts only untrusted events that pass `include`/`exclude`. Event payload field
 cannot override the dispatcher's trust metadata. Accepted events retain their
 individual frozen copies; this filter does not change diagnostic collection or
 queue behavior.
+
+## Bundled runtime cleanup
+
+The following helpers belong to OpenClaw's bundled/private-local runtime surface.
+`openclaw/plugin-sdk/process-runtime` is not a typed public package entrypoint for
+external plugins. The public maintenance lifecycle contract remains on
+[`openclaw/plugin-sdk/health`](/plugins/sdk-entrypoints#explicit-runtime-maintenance).
+
+Native validation must confirm process cleanup before publishing or deleting its
+artifacts. The process runtime exposes `commandProcessCleanup.Error` and
+`commandProcessCleanup.isUncertain` for uncertain settlement. Preserve this error
+across catch boundaries and retain affected artifacts; `withCommandProcessScope`
+carries it to the enclosing operation even when a health runner converts the
+immediate failure into a diagnostic.
+
+Process helpers run in the operation's command scope. After canceled work has
+settled, use `commandProcessCleanup.runOutsideScope` from the same private-local
+subpath for bounded, awaited cleanup such as detaching a staged disk image. This
+only removes inherited cancellation; it does not authorize publication or new
+installation work.

@@ -9,7 +9,13 @@ import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
-import { resolveMacOSDesktopCodexAppServerCommandCandidates } from "./desktop-app-paths.js";
+import {
+  resolveMacOSDesktopCodexAppPathCandidateForBundle,
+  resolveMacOSDesktopCodexAppServerCommandCandidates,
+  resolveSelectedMacOSDesktopCodexAppPathCandidates,
+  type MacOSDesktopCodexAppPathCandidate,
+} from "./desktop-app-paths.js";
+import type { CodexManagedDesktopStateOptions } from "./managed-desktop-installation.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 // Registration and lazy runtime artifacts can load separate module copies.
@@ -19,7 +25,10 @@ const registeredCodexPlugin = resolveGlobalSingleton<{ root?: string }>(
   () => ({}),
 );
 
-type ResolveManagedCodexAppServerOptions = {
+type ResolveManagedCodexAppServerOptions = CodexManagedDesktopStateOptions & {
+  managedRoot?: string;
+  /** Supplied only by the lifecycle generation acquired for this startup. */
+  desktopCandidates?: readonly MacOSDesktopCodexAppPathCandidate[];
   platform?: NodeJS.Platform;
   pluginRoot?: string;
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
@@ -53,10 +62,11 @@ export async function resolveManagedCodexAppServerStartOptions(
     );
   }
   const platform = options.platform ?? process.platform;
-  const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
+  const candidateCommandPaths = await resolveManagedCodexAppServerCommandCandidates(
     pluginRoot,
     platform,
     startOptions.managedCommandOrder ?? "package-first",
+    options,
   );
   const pathExists = options.pathExists ?? commandPathExists;
   const commandPaths = await findManagedCodexAppServerCommandPaths({
@@ -130,12 +140,14 @@ export function isManagedCodexDesktopCommand(
   command: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  return (
-    platform === "darwin" &&
-    resolveMacOSDesktopCodexAppServerCommandCandidates(platform).some(
-      (candidate) => candidate === command,
-    )
+  if (resolveMacOSDesktopCodexAppServerCommandCandidates(platform).includes(command)) {
+    return true;
+  }
+  const candidate = resolveMacOSDesktopCodexAppPathCandidateForBundle(
+    path.dirname(path.dirname(path.dirname(command))),
+    { platform },
   );
+  return candidate?.appServerCommandPath === command;
 }
 
 function resolveManagedCodexPackageRootForCommand(
@@ -207,17 +219,25 @@ function resolvePackageJsonFromRoot(packageName: string, root: string): string |
   }
 }
 
-function resolveManagedCodexAppServerCommandCandidates(
+async function resolveManagedCodexAppServerCommandCandidates(
   pluginRoot: string,
   platform: NodeJS.Platform,
   managedCommandOrder: CodexManagedCommandOrder,
-): string[] {
+  options: ResolveManagedCodexAppServerOptions,
+): Promise<string[]> {
   const packageCommand = resolveManagedCodexPackageEntrypoint(pluginRoot);
   const packageCommandPaths = packageCommand ? [packageCommand] : [];
   if (managedCommandOrder === "package-only") {
     return packageCommandPaths;
   }
-  const desktopCommandPaths = resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
+  const desktopCommandPaths = (
+    options.desktopCandidates ??
+    (await resolveSelectedMacOSDesktopCodexAppPathCandidates(
+      platform,
+      options.managedRoot,
+      options,
+    ))
+  ).map((candidate) => candidate.appServerCommandPath);
   // Ordinary turns must honor the pinned package version. Computer Use opts
   // into the desktop app owner because its macOS TCC permissions live there.
   return managedCommandOrder === "desktop-first"

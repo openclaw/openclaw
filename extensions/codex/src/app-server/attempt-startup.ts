@@ -324,18 +324,14 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
-            let computerUseTools: string[] = [];
-            try {
-              const computerUseStatus = await ensureCodexComputerUse({
-                client: activeStartupClient,
-                pluginConfig: params.pluginConfig,
-                config: params.config,
-                agentDir: params.agentDir,
-                timeoutMs: params.appServer.requestTimeoutMs,
-                signal: startupAbandonController.signal,
-              });
-              computerUseTools = computerUseStatus.tools;
-            } catch (error) {
+            const { tools, mcpServerName } = await ensureCodexComputerUse({
+              client: activeStartupClient,
+              pluginConfig: params.pluginConfig,
+              config: params.config,
+              agentDir: params.agentDir,
+              timeoutMs: params.appServer.requestTimeoutMs,
+              signal: startupAbandonController.signal,
+            }).catch((error: unknown) => {
               if (
                 startupAbandonController.signal.aborted ||
                 isCodexAppServerStartSelectionChangedError(error)
@@ -346,7 +342,7 @@ export async function startCodexAttemptThread(params: {
                 `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
                 { cause: error, scope: "harness" },
               );
-            }
+            });
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
@@ -567,8 +563,8 @@ export async function startCodexAttemptThread(params: {
               startupSandboxEnvironmentAcquired = false;
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,
-                config: params.computerUseConfig,
-                tools: computerUseTools,
+                config: { ...params.computerUseConfig, mcpServerName },
+                tools,
               });
               startupAttemptSucceeded = true;
               return {

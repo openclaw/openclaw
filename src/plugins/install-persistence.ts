@@ -192,6 +192,8 @@ function resolveReplacedManagedInstallRemoval(params: {
 }
 
 export async function persistPluginInstall(params: {
+  runtimeMaintenance?: import("./runtime-maintenance.js").PluginRuntimeMaintenanceAuthority;
+  env?: NodeJS.ProcessEnv;
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
@@ -408,6 +410,19 @@ export async function persistPluginInstall(params: {
         source?.assertSourceCurrent,
       );
       refreshManagedPluginMetadata({ config: next });
+      if (params.runtimeMaintenance) {
+        const { runPluginRuntimeMaintenance } = await import("./runtime-maintenance.js");
+        const warnings = await runPluginRuntimeMaintenance({
+          ...params.runtimeMaintenance,
+          config: next,
+          pluginIds: enabledPluginIds,
+          env: params.env,
+          runtime,
+        });
+        for (const warning of warnings) {
+          warn(warning, warning);
+        }
+      }
       // Publish and drain the previous generation before removing its source files.
       await params.applyRuntime?.({
         config: next,

@@ -68,6 +68,7 @@ import {
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
 import {
+  resolveMacOSDesktopCodexAppPathCandidateForBundle,
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
@@ -567,11 +568,23 @@ async function reconcileCodexComputerUseStartArtifactsOnce(params: {
   } else {
     await fs.mkdir(codexHome, { recursive: true });
   }
-  const desktopCandidates = resolveMacOSDesktopCodexAppPathCandidates();
-  const exactDesktopCandidate = desktopCandidates.find(
-    (candidate) =>
-      path.resolve(candidate.appServerCommandPath) === path.resolve(params.startOptions.command),
+  const standardCandidates = resolveMacOSDesktopCodexAppPathCandidates();
+  const command = path.resolve(params.startOptions.command);
+  const retainedCandidate = resolveMacOSDesktopCodexAppPathCandidateForBundle(
+    path.resolve(command, "../../.."),
   );
+  const exactDesktopCandidate =
+    standardCandidates.find(
+      (candidate) => path.resolve(candidate.appServerCommandPath) === command,
+    ) ?? (retainedCandidate?.appServerCommandPath === command ? retainedCandidate : undefined);
+  // An admitted client can retain a prior immutable generation after selection
+  // changes. Its artifacts must follow its concrete command, not current state.
+  const desktopCandidates = exactDesktopCandidate
+    ? [
+        exactDesktopCandidate,
+        ...standardCandidates.filter((entry) => entry !== exactDesktopCandidate),
+      ]
+    : standardCandidates;
   const usesManagedBundledMarketplace =
     !computerUseConfig.marketplaceSource &&
     !computerUseConfig.marketplacePath &&

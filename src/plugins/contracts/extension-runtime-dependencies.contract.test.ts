@@ -2,8 +2,11 @@
 import fs from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { resolvePluginNpmRuntimeBuildPlan } from "../../../scripts/lib/plugin-npm-runtime-build.mts";
+import { visitModuleSpecifiers } from "../../../scripts/lib/ts-guard-utils.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -86,6 +89,9 @@ type PackageManifest = {
   };
 };
 const trackedFilesByRoot = new Map<string, readonly string[] | null>();
+const runtimeImportsByPath = new Map<string, string[]>();
+const parser = createNativeTypeScriptParser({ cwd: REPO_ROOT });
+afterAll(() => parser.close());
 
 function readPackageManifest(filePath: string): PackageManifest {
   return JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8")) as PackageManifest;
@@ -223,42 +229,136 @@ function packageNameForSpecifier(specifier: string): string | null {
   return specifier.split("/")[0] ?? null;
 }
 
-function isTypeOnlyClause(clause: string | undefined): boolean {
-  const trimmed = clause?.trim() ?? "";
-  if (trimmed.startsWith("type ")) {
-    return true;
-  }
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return false;
-  }
-  for (const part of trimmed.slice(1, -1).split(",")) {
-    const importName = part.trim();
-    if (importName.length > 0 && !importName.startsWith("type ")) {
-      return false;
+function collectRuntimeImportsFromSource(source: ts.SourceFile): string[] {
+  const imports = new Set<string>();
+  visitModuleSpecifiers(
+    source,
+    ({ node, specifier }) => {
+      // Inline `type` specifiers leave an empty runtime import/export under this
+      // repository's verbatimModuleSyntax setting. Only whole declarations erase.
+      if (
+        (ts.isImportDeclaration(node) &&
+          node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword) ||
+        (ts.isExportDeclaration(node) && node.isTypeOnly) ||
+        (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)
+      ) {
+        return;
+      }
+      const packageName = packageNameForSpecifier(specifier);
+      if (packageName) {
+        imports.add(packageName);
+      }
+    },
+    { includeCommonJs: true },
+  );
+  return [...imports].toSorted();
+}
+
+function cacheRuntimeImports(filePaths: readonly string[]): void {
+  const pending = [
+    ...new Set(filePaths.map((filePath) => path.resolve(REPO_ROOT, filePath))),
+  ].filter((filePath) => !runtimeImportsByPath.has(filePath));
+  // Amortize native snapshot reloads without retaining the entire extension AST corpus.
+  const batchSize = 32;
+  for (let offset = 0; offset < pending.length; offset += batchSize) {
+    const batch = pending.slice(offset, offset + batchSize).map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(fileName, "utf8"),
+    }));
+    for (const source of parser.parseSourceFiles(batch)) {
+      runtimeImportsByPath.set(
+        path.resolve(source.fileName),
+        collectRuntimeImportsFromSource(source),
+      );
     }
   }
-  return true;
 }
 
 function collectRuntimeImports(filePath: string): string[] {
-  const source = fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8");
-  const imports = new Set<string>();
-  const importRegex =
-    /(import|export)\s+([^'";]*?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/g;
-  let match: RegExpExecArray | null;
-  while ((match = importRegex.exec(source))) {
-    const clause = match[2];
-    const specifier = match[3] ?? match[4] ?? match[5];
-    if (!specifier || (match[1] && isTypeOnlyClause(clause))) {
-      continue;
-    }
-    const packageName = packageNameForSpecifier(specifier);
-    if (packageName) {
-      imports.add(packageName);
-    }
+  const absolutePath = path.resolve(REPO_ROOT, filePath);
+  cacheRuntimeImports([absolutePath]);
+  const imports = runtimeImportsByPath.get(absolutePath);
+  if (!imports) {
+    throw new Error(`Runtime import scan did not capture ${filePath}`);
   }
-  return [...imports].toSorted();
+  return imports;
 }
+
+describe("runtime import syntax", () => {
+  const importsFromText = (source: string, fileName = "runtime-import-fixture.ts") =>
+    collectRuntimeImportsFromSource(parser.parseSourceFile(fileName, source));
+
+  it("does not treat quoted external-runtime probe code as a plugin dependency", () => {
+    const source = 'const probe = `const sky = await import("@oai/sky");`;';
+    expect(importsFromText(source)).toEqual([]);
+    expect(importsFromText('const sky = await import("@oai/sky");')).toEqual(["@oai/sky"]);
+  });
+
+  it("ignores imports in strings, comments, regular expressions, template text, and JSX text", () => {
+    const source = [
+      '// import "comment-line";',
+      '/* require("comment-block"); export * from "comment-export"; */',
+      'const quoted = "import(\\"quoted\\")";',
+      'const regexp = /import\\("regexp"\\)/;',
+      'const template = `import("template-text") ${"require(\\"quoted-expression\\")"}`;',
+      'const jsx = <div>import("jsx-text")</div>;',
+    ].join("\n");
+    expect(importsFromText(source, "runtime-import-fixture.tsx")).toEqual([]);
+  });
+
+  it("retains actual static, dynamic, template-interpolation, and CommonJS package edges", () => {
+    const source = [
+      'import "side-effect";',
+      'import value from "static-import/subpath";',
+      'export { value } from "named-export";',
+      'export * from "star-export";',
+      'const dynamic = import("dynamic-import");',
+      "const literal = import(`literal-template`);",
+      'const cjs = require("commonjs/subpath");',
+      'import legacy = require("import-equals");',
+      'const interpolation = `quoted ${import("interpolated-import")}`;',
+      'const jsx = <div>{require("jsx-expression")}</div>;',
+    ].join("\n");
+    expect(importsFromText(source, "runtime-import-fixture.tsx")).toEqual([
+      "commonjs",
+      "dynamic-import",
+      "import-equals",
+      "interpolated-import",
+      "jsx-expression",
+      "literal-template",
+      "named-export",
+      "side-effect",
+      "star-export",
+      "static-import",
+    ]);
+  });
+
+  it("excludes erased type-only declarations but retains inline-type declaration side effects", () => {
+    const source = [
+      'import type Default from "type-default";',
+      'import type { Named } from "type-named";',
+      'export type { Named } from "type-export";',
+      'export type * from "type-star";',
+      'import type Legacy = require("type-equals");',
+      'type Dynamic = import("type-dynamic").Shape;',
+      'type Query = typeof import("type-query");',
+      'import { type Named } from "inline-type-import";',
+      'export { type Named } from "inline-type-export";',
+      'import { type Named, runtime } from "mixed-import";',
+      'export { type Named, runtime } from "mixed-export";',
+      'import {} from "empty-import";',
+      'export {} from "empty-export";',
+    ].join("\n");
+    expect(importsFromText(source)).toEqual([
+      "empty-export",
+      "empty-import",
+      "inline-type-export",
+      "inline-type-import",
+      "mixed-export",
+      "mixed-import",
+    ]);
+  });
+});
 
 function runtimeDependencyNames(manifest: PackageManifest): Set<string> {
   return new Set([
@@ -396,7 +496,9 @@ describe("extension runtime dependency manifests", () => {
         OPTIONAL_UNDECLARED_RUNTIME_IMPORTS.get(extensionDir) ?? new Set<string>();
       const missing = new Map<string, string[]>();
 
-      for (const filePath of listRuntimeFiles(extensionDir)) {
+      const runtimeFiles = listRuntimeFiles(extensionDir);
+      cacheRuntimeImports(runtimeFiles);
+      for (const filePath of runtimeFiles) {
         for (const packageName of collectRuntimeImports(filePath)) {
           if (
             packageName === "openclaw" ||
