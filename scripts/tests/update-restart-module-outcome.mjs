@@ -16,6 +16,7 @@ import {
   sliceUtf16Safe,
   truncateUtf16Safe,
 } from "../../packages/normalization-core/src/utf16-slice.ts";
+import { collectRestartImports } from "./update-restart-imports.mjs";
 import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -274,20 +275,7 @@ async function fixture({
     }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
-    const imports = new Map();
-    for (const match of code.matchAll(
-      /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
-    )) {
-      const names = match[1]
-        .split(",")
-        .map((s) => s.trim().split(/\s+as\s+/)[0])
-        .filter(Boolean);
-      imports.set(match[2], [...new Set([...(imports.get(match[2]) ?? []), ...names])]);
-    }
-    for (const match of code.matchAll(/import\s+(\w+)\s+from\s*["']([^"']+)["']/g)) {
-      imports.set(match[2], ["default"]);
-    }
-    requests.set(mod.identifier, imports);
+    requests.set(mod.identifier, collectRestartImports(code));
   }
   const external = new Map();
   for (const imports of requests.values()) {

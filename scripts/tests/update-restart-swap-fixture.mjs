@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
+import { collectRestartImports } from "./update-restart-imports.mjs";
 
 export async function createDiskSwap(sourceRoot, base) {
   const require = createRequire(path.join(sourceRoot, "package.json"));
@@ -52,6 +53,10 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/package-update-npm-root",
     "infra/package-update-local-overrides",
     "infra/package-update-swap-contract",
+    "infra/fs-safe-remove",
+    "infra/fs-safe-defaults",
+    "infra/mutation-authority",
+    "infra/errno",
     "infra/update-npm-prefix",
     "utils/absolute-deadline",
   ];
@@ -70,23 +75,11 @@ export async function createDiskSwap(sourceRoot, base) {
       path.basename(name) + ".js",
       new vm.SourceTextModule(code, { context, identifier: filename }),
     );
-    for (const match of code.matchAll(
-      /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
-    )) {
-      if (!external.has(match[2])) {
-        external.set(match[2], new Set());
+    for (const [specifier, names] of collectRestartImports(code)) {
+      if (!external.has(specifier)) {
+        external.set(specifier, new Set());
       }
-      match[1]
-        .split(",")
-        .map((s) => s.trim().split(/\s+as\s+/)[0])
-        .filter(Boolean)
-        .forEach((exportName) => external.get(match[2]).add(exportName));
-    }
-    for (const match of code.matchAll(/import\s+(\w+)\s+from\s*["']([^"']+)["']/g)) {
-      if (!external.has(match[2])) {
-        external.set(match[2], new Set());
-      }
-      external.get(match[2]).add("default");
+      names.forEach((exportName) => external.get(specifier).add(exportName));
     }
   }
   const stubs = new Map();
@@ -94,8 +87,12 @@ export async function createDiskSwap(sourceRoot, base) {
     if (modules.has(path.basename(specifier))) {
       continue;
     }
-    const names = [...namesSet];
-    const builtin = specifier.startsWith("node:") ? await import(specifier) : undefined;
+    const implementation = specifier.startsWith("node:")
+      ? await import(specifier)
+      : specifier.startsWith("@openclaw/fs-safe/")
+        ? await import(pathToFileURL(require.resolve(specifier)).href)
+        : undefined;
+    const names = implementation ? Object.keys(implementation) : [...namesSet];
     stubs.set(
       specifier,
       new vm.SyntheticModule(
@@ -104,8 +101,8 @@ export async function createDiskSwap(sourceRoot, base) {
           for (const name of names) {
             this.setExport(
               name,
-              builtin
-                ? builtin[name]
+              implementation
+                ? implementation[name]
                 : Object.hasOwn(values, name)
                   ? values[name]
                   : function () {
