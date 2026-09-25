@@ -30,6 +30,7 @@ describe("native completion database contention", () => {
     const list = runtime.listTaskRecords.getMockImplementation()!;
     let unavailable = true;
     const pending: Promise<void>[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
     const deliver = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
     const observed = vi
       .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
@@ -187,6 +188,7 @@ describe("native completion database contention", () => {
       let captured:
         | { delivery: CodexNativeSubagentCompletionDelivery; state: Attempt[0]; child: Attempt[1] }
         | undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
       const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
       const observed = vi
         .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")

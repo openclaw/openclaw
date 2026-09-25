@@ -162,6 +162,7 @@ describe("automatic native task history ownership", () => {
       const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
       const attemptStarted = createDeferred<void>();
       const attempts: Promise<void>[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
       const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
       const observeAttempt = vi
         .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")

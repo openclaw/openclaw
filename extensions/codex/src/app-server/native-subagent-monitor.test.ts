@@ -46,6 +46,7 @@ import type { JsonObject } from "./protocol.js";
 
 function observeCompletionAttempts() {
   const attempts = new Map<Promise<void>, string>();
+  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
   const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
   const observer = vi
     .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
@@ -142,7 +143,7 @@ describe("Native completion delivery settlement", () => {
           client,
           parent,
           register,
-          settle: attempts.settle,
+          settle: (runId) => attempts.settle(runId),
           readTask: (runId = "codex-thread:child-thread") =>
             database!
               .prepare(
