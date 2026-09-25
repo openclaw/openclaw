@@ -87,7 +87,7 @@ describe("tool failure reply delivery", () => {
   );
 
   it.each(["exec", "bash"])(
-    "delivers the real %s failure warning when the agent produced no answer",
+    "delivers the %s failure fallback when the agent produced no answer",
     async (toolName) => {
       const payloads = buildEmbeddedRunPayloads({
         assistantTexts: [],
@@ -102,7 +102,7 @@ describe("tool failure reply delivery", () => {
 
       expect(delivered).toEqual([
         expect.objectContaining({
-          text: `⚠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          text: `The ${toolName === "exec" ? "Exec" : "Bash"} step failed`,
           isError: true,
         }),
       ]);
