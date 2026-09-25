@@ -2307,6 +2307,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    expect(
+      bundled.some((shard) => {
+        if (!shard.shardName.startsWith("bundle-")) {
+          return false;
+        }
+        const patterns = new Set(shard.includePatterns);
+        return (
+          base.filter((owner) => owner.includePatterns?.some((pattern) => patterns.has(pattern)))
+            .length > 1
+        );
+      }),
+    ).toBe(true);
     const gatewayOwner = expectDefined(
       base.find((shard) => shard.shardName === "agentic-gateway-server-isolated"),
       "full Gateway owner",
@@ -2325,26 +2337,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(stripe.timeoutMinutes).toBe(gatewayOwner.timeoutMinutes);
       expect(stripe.planConcurrency).toBe(gatewayOwner.planConcurrency);
     }
-    expect(
-      bundled.some((shard) => {
-        if (!shard.shardName.startsWith("bundle-")) {
-          return false;
-        }
-        const patterns = new Set(shard.includePatterns);
-        return (
-          base.filter((owner) => owner.includePatterns?.some((pattern) => patterns.has(pattern)))
-            .length > 1
-        );
-      }),
-    ).toBe(true);
+    const gatewayPatterns = [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles];
     const basePatterns = base
-      .flatMap(
-        (shard) =>
-          shard.includePatterns ??
-          (shard === gatewayOwner
-            ? [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles]
-            : []),
-      )
+      .flatMap((shard) => shard.includePatterns ?? (shard === gatewayOwner ? gatewayPatterns : []))
       .toSorted((a, b) => a.localeCompare(b));
     const bundledPatterns = bundled
       .flatMap((shard) => shard.includePatterns ?? [])
