@@ -263,7 +263,8 @@ export function findDetachedTaskRun(params: DetachedTaskFindParams): DetachedTas
 export async function findDetachedTaskRunAsync(
   params: DetachedTaskFindParams,
 ): Promise<DetachedTaskFindResult> {
-  const owner = captureDetachedTaskRuntimeOwner();
+  // Reads of existing task rows follow the same owner as their settlement.
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
   try {
     owner.assertCurrent();
     if (owner.runtime?.findTaskRun) {

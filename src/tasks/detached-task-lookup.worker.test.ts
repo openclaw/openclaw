@@ -7,6 +7,14 @@ import type {
   SubagentRunRecord,
 } from "../agents/subagents/registry/subagent-registry.types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -29,6 +37,59 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetAgentEventsForTest({ preserveListeners: true });
 });
+
+it.each([
+  { gatewayA: "open", found: true },
+  { gatewayA: "closing", found: false },
+])(
+  "looks up a child's task from a replaced plugin generation only through its $gatewayA admitting Gateway",
+  async ({ gatewayA, found }) => {
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      const runId = "reload-lookup-run";
+      const sessionKey = "agent:main:subagent:reload-lookup";
+      const task = createTaskFixture("subagent", {
+        runId,
+        childSessionKey: sessionKey,
+        task: "Reload lookup proof",
+        notifyPolicy: "silent",
+      });
+      const spawning = createEmptyPluginRegistry();
+      setActivePluginRegistry(spawning);
+      const gateway = createPluginRegistryOwner(spawning);
+      try {
+        // Gateway A reloads; Gateway B is live and process-active but never succeeds A.
+        const successor = createEmptyPluginRegistry();
+        setActivePluginRegistry(successor);
+        gateway.publish(successor);
+        markPluginRegistryRetired(spawning);
+        const other = createEmptyPluginRegistry();
+        setActivePluginRegistry(other);
+        createPluginRegistryOwner(other);
+        if (gatewayA === "closing") {
+          await gateway.close();
+        }
+
+        const result = await withPluginRuntimeRegistryScope(spawning, () =>
+          findDetachedTaskRunAsync({
+            runId,
+            runtime: "subagent",
+            sessionKey,
+            createdAtOrAfter: task.createdAt,
+          }),
+        );
+
+        expect(result).toEqual(
+          found
+            ? { lookup: "available", task: expect.objectContaining({ taskId: task.taskId }) }
+            : { lookup: "unavailable" },
+        );
+      } finally {
+        resetPluginRuntimeStateForTest();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  },
+);
 
 it.each([
   "detached lookup",

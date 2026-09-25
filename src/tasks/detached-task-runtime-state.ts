@@ -19,9 +19,9 @@ export function getRegisteredDetachedTaskLifecycleRuntime():
 
 /**
  * Core work retains its scoped owner; plugin work follows its exact live instance.
- * Settlement of already-admitted work may move from a retired generation to its
- * admitting Gateway's current registry while core owns tasks in both. New work
- * never leaves its admitting scope.
+ * Settlement and lookup of already-admitted work may move from a retired
+ * generation to its admitting Gateway's current registry while core owns tasks
+ * in both. New work never leaves its admitting scope.
  */
 export function captureDetachedTaskRuntimeOwner(options?: { settlement?: boolean }): {
   runtime: DetachedTaskLifecycleRuntime | undefined;
