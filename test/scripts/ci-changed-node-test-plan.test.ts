@@ -416,6 +416,8 @@ describe("CI changed Node test plan", () => {
     "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/agents/agent-bundle-mcp-retention.test.ts",
+        "src/agents/mcp-stdio-client.cleanup.real.test.ts",
         "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
@@ -1611,7 +1613,7 @@ describe("CI changed Node test plan", () => {
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     ["packages/gateway-client/src/index.ts", true],
     ["pnpm-lock.yaml", true],
-    ["patches/@awesome.me__webawesome@3.12.0.patch", true],
+    ["patches/@awesome.me__webawesome@3.13.0.patch", true],
     [".npmrc", true],
     ["scripts/check-control-ui-performance-base.mts", true],
     ["scripts/lib/control-ui-i18n-config.ts", true],

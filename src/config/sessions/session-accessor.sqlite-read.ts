@@ -622,18 +622,6 @@ export async function hasSessionTranscriptMessage(
   });
 }
 
-/** Finds the newest transcript record accepted by the matcher without parsing older rows. */
-export async function findTranscriptEvent(
-  scope: SessionTranscriptReadScope,
-  match: (event: TranscriptEvent) => boolean,
-): Promise<{ event: TranscriptEvent } | undefined> {
-  return readRestoredSessionTranscript(scope, () => {
-    const resolved = resolveSqliteTranscriptReadScope(scope);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    return findTranscriptEventInDatabase(database, resolved.sessionId, match);
-  });
-}
-
 export function findTranscriptEventInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,

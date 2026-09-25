@@ -2,7 +2,6 @@
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
   patchSessionEntryCore,
   publishTranscriptUpdate,
@@ -13,6 +12,7 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -355,7 +355,7 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
   }
   // Existence probe: the newest-first matcher returns on the first record, so
   // this reads one transcript line instead of materializing the whole file.
-  const found = await findTranscriptEvent({ ...scope, sessionId }, () => true).catch(
+  const found = await findTranscriptEvent({ ...scope, sessionId }, { kind: "latest" }).catch(
     () => undefined,
   );
   return found !== undefined;

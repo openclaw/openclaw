@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,7 +9,6 @@ import type {
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import { redactSensitiveText } from "../../../logging/redact.js";
 import {

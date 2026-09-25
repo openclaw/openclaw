@@ -1,10 +1,10 @@
 import fs, { type BigIntStats } from "node:fs";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   hashFileDescriptorSync,
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,

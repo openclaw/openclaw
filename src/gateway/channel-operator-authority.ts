@@ -4,14 +4,14 @@ import {
   parseUserChannelAuthorizationReference,
   resolveUserChannelAuthorizationPolicy,
   resolveUserChannelIdentity,
-  type UserChannelAuthorization,
-  type UserChannelAuthorizationReference,
 } from "../state/user-channel-identities.js";
 import {
   authorizeCanonicalUserChannelIdentity,
   prepareUserChannelIdentityAuthority,
 } from "../state/user-channel-identity-operations.js";
 import type {
+  UserChannelAuthorization,
+  UserChannelAuthorizationReference,
   UserChannelIdentity,
   UserChannelIdentityAuthorityFacts,
 } from "../state/user-profiles.types.js";
