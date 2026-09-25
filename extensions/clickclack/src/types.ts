@@ -75,6 +75,21 @@ export type ResolvedClickClackAccount = {
   groups: Record<string, ClickClackGroupConfig>;
 };
 
+/**
+ * One running start of a ClickClack account. Background work it begins, such
+ * as forwarding question card answers, ends when its signal aborts.
+ */
+export type ClickClackAccountLifetime = {
+  cfg: CoreConfig;
+  account: ResolvedClickClackAccount;
+  abortSignal: AbortSignal;
+  /**
+   * Runs a callback in the account start's async context. Work that a turn's
+   * delivery schedules must not keep that turn's caller identity after it ends.
+   */
+  runInAccountContext: <T>(run: () => T) => T;
+};
+
 /** User object returned by the ClickClack API. */
 export type ClickClackUser = {
   id: string;
@@ -169,6 +184,68 @@ export type ClickClackMessage = {
     last_reply_at?: string;
     last_reply_author_ids: string[];
   };
+  /** Present on bot messages that carry a structured question. */
+  question?: ClickClackMessageQuestion;
+};
+
+/** One question in a ClickClack question card. */
+export type ClickClackQuestionItem = {
+  id: string;
+  header: string;
+  prompt: string;
+  url?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multi_select?: boolean;
+  allow_other?: boolean;
+};
+
+/** Question a bot attaches when it creates a message. */
+export type ClickClackQuestionSpec = {
+  external_id?: string;
+  expires_at: string;
+  allow_skip?: boolean;
+  items: ClickClackQuestionItem[];
+};
+
+export type ClickClackQuestionStatus =
+  | "open"
+  | "submitted"
+  | "answered"
+  | "cancelled"
+  | "expired"
+  | "failed";
+
+/** Question facet as the server reports it on a message. */
+export type ClickClackMessageQuestion = {
+  status: ClickClackQuestionStatus;
+  external_id?: string;
+  expires_at: string;
+  allow_skip: boolean;
+  items: ClickClackQuestionItem[];
+  response?: {
+    answers?: Record<string, string[]>;
+    skipped?: boolean;
+    source: "clickclack" | "external";
+    responder?: ClickClackUser;
+  };
+  note?: string;
+  version: number;
+};
+
+/** Outcome a bot records on one of its question cards. */
+export type ClickClackQuestionResolution = {
+  status: Exclude<ClickClackQuestionStatus, "submitted">;
+  note?: string;
+  expected_version?: number;
+};
+
+/** Unresolved question listed for a bot during reconciliation. */
+export type ClickClackBotQuestion = {
+  message_id: string;
+  external_id?: string;
+  status: "open" | "submitted";
+  expires_at: string;
+  version: number;
 };
 
 /** Realtime event envelope returned by ClickClack polling/websocket APIs. */
