@@ -260,7 +260,7 @@ describe("line-cap growth ratchet", () => {
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
-  it("preserves line-cap growth detection across earlier branch commits", () => {
+  it("rejects disconnected line-cap bases instead of guessing a merge", () => {
     const root = fixture(3);
     const target = path.join(root, "src/file.ts");
 
@@ -299,7 +299,9 @@ describe("line-cap growth ratchet", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
     expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining("src/file.ts: 3 -> 6 counted lines (cap 3)"),
+      expect.stringContaining(
+        "is disconnected from HEAD; no verified sync merge was found",
+      ),
     );
   });
 });
