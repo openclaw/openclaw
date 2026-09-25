@@ -25,12 +25,7 @@ import {
   type PendingFaceTimeDial,
 } from "./outbound-call.js";
 import { retainHelperResultPeers } from "./runtime-helper-results.js";
-import {
-  createManagedCall,
-  readCallUUID,
-  updateCallStatus,
-  type ActiveFaceTimeCall,
-} from "./runtime-state.js";
+import { ActiveFaceTimeCall, readCallUUID, updateCallStatus } from "./runtime-state.js";
 
 type CallControl = {
   activateCallTalk(call: ActiveFaceTimeCall, options: { unmute: boolean }): Promise<void>;
@@ -152,7 +147,7 @@ export function createFaceTimeCallEventHandler(params: {
       params.logger.warn("[facetime] ignored incoming call; another FaceTime bridge is active");
       return;
     }
-    const call = createManagedCall({
+    const call = new ActiveFaceTimeCall({
       callUUID,
       phase: "ringing",
       owner,
@@ -216,7 +211,7 @@ export function createFaceTimeCallEventHandler(params: {
         params.logger.warn("[facetime] ignored active call; another FaceTime bridge is active");
         return;
       }
-      call = createManagedCall({
+      call = new ActiveFaceTimeCall({
         callUUID,
         phase: "active",
         owner,
@@ -299,7 +294,7 @@ export function createFaceTimeCallEventHandler(params: {
         }
         let ringingCall = resolveEventCall(event);
         if (!ringingCall && params.calls.size === 0) {
-          ringingCall = createManagedCall({
+          ringingCall = new ActiveFaceTimeCall({
             callUUID,
             phase: "ringing",
             owner,

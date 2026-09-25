@@ -12,10 +12,6 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
 
-type BuildMediaLocalRootsOptions = {
-  preferredTmpDir?: string;
-};
-
 let cachedPreferredTmpDir: string | undefined;
 
 function resolveCanonicalRoot(root: string): string {
@@ -32,14 +28,10 @@ function resolveCachedPreferredTmpDir(): string {
 }
 
 /** Builds the baseline local media root allowlist from state/config directories. */
-function buildMediaLocalRoots(
-  stateDir: string,
-  configDir: string,
-  options: BuildMediaLocalRootsOptions = {},
-): string[] {
+function buildMediaLocalRoots(stateDir: string, configDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedConfigDir = path.resolve(configDir);
-  const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
+  const preferredTmpDir = resolveCachedPreferredTmpDir();
   return Array.from(
     new Set([
       preferredTmpDir,

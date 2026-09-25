@@ -21,11 +21,9 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
+import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
-import {
-  admitQueuedMessageForSession,
-  subscribeChatOutboxProjection,
-} from "../pages/chat/chat-queue.ts";
+import { admitQueuedMessageForSession } from "../pages/chat/chat-queue.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
@@ -250,7 +248,7 @@ describe("Control UI Gateway target lineage", () => {
       } as unknown as ApplicationContext;
       pane.applyGatewaySnapshot(gateway.snapshot);
       const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
-      const releaseOutbox = subscribeChatOutboxProjection(state);
+      const releaseOutbox = chatOutboxOwner(state).subscribe(state);
       const app = document.createElement("openclaw-app") as unknown as {
         runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
         synchronizeGateway: (gateway: ApplicationGateway) => void;

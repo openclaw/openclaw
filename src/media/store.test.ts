@@ -52,8 +52,8 @@ describe("media store", () => {
   }) {
     const mockKey = `./store.js?scope=retry-pruned-write-${params.segment}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let injectedEnoent = false;
-    vi.doMock("../infra/file-store.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
       return {
         ...actual,
         fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
@@ -89,15 +89,15 @@ describe("media store", () => {
       expect(injectedEnoent).toBe(true);
       expect(savedStat.isFile()).toBe(true);
     } finally {
-      vi.doUnmock("../infra/file-store.js");
+      vi.doUnmock("@openclaw/fs-safe/store");
     }
   }
 
   async function expectFailedBufferWriteCase() {
     const mockKey = `./store.js?scope=failed-buffer-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const attemptedRelPaths: string[] = [];
-    vi.doMock("../infra/file-store.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
       return {
         ...actual,
         fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
@@ -140,7 +140,7 @@ describe("media store", () => {
       expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
       expect(entries).toStrictEqual([]);
     } finally {
-      vi.doUnmock("../infra/file-store.js");
+      vi.doUnmock("@openclaw/fs-safe/store");
     }
   }
 

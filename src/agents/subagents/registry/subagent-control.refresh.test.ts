@@ -44,7 +44,7 @@ it("retains a captured child prefix when the next child's parent identity read f
       sessionKey,
       defaultSessionId: `${runId}-session`,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
       requesterSessionKey,
@@ -159,7 +159,7 @@ it.each([
         lifecycleRevision: `${runId}-revision`,
       });
       if (runId !== "g") {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId,
           childSessionKey: sessionKey,
           requesterSessionKey,
@@ -263,7 +263,7 @@ it.each([
       expect(subagentRuns.has("g")).toBe(false);
       // D, not the interrupted ancestor A, owns this accepted late registration.
       await admissionD.run(async () => {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: "g",
           childSessionKey: gKey,
           requesterSessionKey: dKey,

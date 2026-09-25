@@ -119,13 +119,15 @@ export function createTelegramEventBindings({
           accountId,
           conversationId: String(chatId),
           deliverTo: String(chatId),
-          route: resolveTelegramConversationRoute({
-            cfg: currentCfg,
-            accountId,
-            chatId,
-            isGroup: true,
-            threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
-          }).route,
+          route: (
+            await resolveTelegramConversationRoute({
+              cfg: currentCfg,
+              accountId,
+              chatId,
+              isGroup: true,
+              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+            })
+          ).route,
           inviterLabel,
           roomAllowed,
           resolveRoomContext: async () => {
@@ -262,7 +264,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const { route } = resolveTelegramConversationRoute({
+        const { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,

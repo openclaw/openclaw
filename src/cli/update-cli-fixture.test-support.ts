@@ -64,9 +64,9 @@ import {
 import {
   createCurrentProcessFreshDoctorFixture,
   createUpdateCliPackageFixtures,
+  writeGitUpdateResultFixture,
   writeJsonFixture,
   writeNpmPackageInstall,
-  writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -455,11 +455,9 @@ export function createUpdateCliFixture() {
   const setupManagedGitRootRefresh = async (reinspect = false) => {
     const { root, entrypoints } = setupUpdatedRootRefresh();
     const updatedEntrypoint = requireValue(entrypoints[0], "updated entrypoint");
-    await writeOpenClawPackageFixture(root, VERSION, { entryPath: updatedEntrypoint });
     mockOwnedGitService();
     mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        mode: "git",
+      await writeGitUpdateResultFixture({
         root,
         before: { sha: "old-managed-sha", version: "2026.4.26" },
         after: { sha: "new-managed-sha", version: VERSION },

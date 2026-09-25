@@ -25,7 +25,6 @@ import {
   resolveUiConversationIdentity,
   hasUiSessionDefaults,
 } from "../../lib/sessions/session-key.ts";
-// Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { normalizeChatComposerDraft } from "./composer-draft.ts";

@@ -212,7 +212,7 @@ export function createGatewaySubagentRuntime(
           "Plugin background completion requires a plugin identity and Gateway binding.",
         );
       }
-      const execution = prepareInProcessAgentExecution({
+      const execution = await prepareInProcessAgentExecution({
         agentId: params.agentId,
         pluginRuntimeOwnerId: pluginId,
         resolveGatewayContext,
