@@ -45,7 +45,6 @@ import {
 import { pushToolProgress } from "./bot-message-dispatch-progress.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
-  TelegramBufferedFinalSettlement,
   TelegramDispatchTurn as Turn,
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
@@ -139,7 +138,7 @@ function hasExecApprovalPayload(payload: ReplyPayload): boolean {
 export function createReplyState(): TelegramReplyStateSlice {
   return {
     reasoningStepState: createTelegramReasoningStepState(),
-    bufferedFinalSettlement: undefined as TelegramBufferedFinalSettlement | undefined,
+    bufferedFinalSettlement: undefined,
     sentBlockMediaUrls: new Set<string>(),
     splitReasoningOnNextStream: false,
   };

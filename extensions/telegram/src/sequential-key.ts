@@ -18,7 +18,6 @@ import {
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
-import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
 const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
@@ -73,15 +72,7 @@ function getTelegramMessageReactionSequentialKey(
   ) {
     return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post;
+  const msg = getTelegramSequentialMessage(ctx);
   const isForum = resolveTelegramMessageForumFlagHint({
     chatType: msg?.chat?.type,
     isForum: msg?.chat?.is_forum,
@@ -126,14 +117,6 @@ export function isTelegramReadOnlyControlLaneText(params: {
   return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
-function isTelegramActiveRunControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key);
-}
-
 export function isTelegramControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
@@ -146,10 +129,24 @@ export function isTelegramControlLaneText(params: {
   if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
-  if (isTelegramActiveRunControlLaneText(params)) {
-    return true;
-  }
-  return isTelegramReadOnlyControlLaneText(params);
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return (
+    key !== undefined &&
+    (TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key) || TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key))
+  );
+}
+
+function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Message | undefined {
+  return (
+    ctx.message ??
+    ctx.channelPost ??
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post
+  );
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
@@ -163,22 +160,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     const prepared = getPreparedTelegramPollAnswer(update);
     const entry = prepared?.entry;
     if (entry) {
-      return getTelegramPollAnswerSequentialKey(entry);
+      const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
+      return threadId == null
+        ? `telegram:${entry.chat.id}`
+        : `telegram:${entry.chat.id}:topic:${threadId}`;
     }
     // Missing historical registry entries do no work, but keep duplicate answers
     // for the same unknown poll together while the handler records the miss.
     return `telegram:poll:${pollId}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
-    ctx.update?.callback_query?.message;
+  const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
@@ -250,13 +241,6 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
-}
-
-function getTelegramPollAnswerSequentialKey(entry: TelegramPollRegistryEntry): string {
-  const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
-  return threadId == null
-    ? `telegram:${entry.chat.id}`
-    : `telegram:${entry.chat.id}:topic:${threadId}`;
 }
 
 export function getTelegramSequentialConstraints(

@@ -63,8 +63,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./telegram-media.runtime.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveRemoteMedia: async (params: { filePathHint?: string }) => ({
@@ -297,7 +297,7 @@ describe("Telegram durable ingress coalescing", () => {
     return resources;
   }
 
-  it("coalesces album members admitted a few milliseconds apart", async () => {
+  it("coalesces album members admitted across separate drain passes", async () => {
     const albumTimers = holdTelegramMediaTimeouts(40);
     const { monitor, telegramTransport } = await createMonitor();
     const first = photoUpdate({ updateId: 101, messageId: 1, caption: "Two photo album" });
@@ -307,9 +307,6 @@ describe("Telegram durable ingress coalescing", () => {
     try {
       await monitor.admit(first);
       await monitor.waitForIdle();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 5);
-      });
       await monitor.admit(second);
       await monitor.waitForIdle();
       const flush = resolveFlushTimerForDelay(albumTimers, 40);
@@ -331,12 +328,29 @@ describe("Telegram durable ingress coalescing", () => {
     await writeTelegramSpooledUpdate({ spoolDir, update: first });
     await writeTelegramSpooledUpdate({ spoolDir, update: second });
     const { monitor, telegramTransport } = await createMonitor();
+    const albumTimers = holdTelegramMediaTimeouts(40);
 
-    monitor.start();
-    await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [201, 202], monitor });
-
-    await monitor.stop();
-    await telegramTransport.close();
+    try {
+      monitor.start();
+      // Real state-worker admission must finish before the controlled album deadline.
+      await monitor.waitForIdle();
+      const queue = openTelegramIngressQueue(spoolDir);
+      expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
+        telegramQueueEventId(201),
+        telegramQueueEventId(202),
+      ]);
+      expect(downstreamTurns).not.toHaveBeenCalled();
+      const flush = resolveFlushTimerForDelay(albumTimers, 40);
+      if (!flush) {
+        throw new Error("Expected the replayed album's flush timer");
+      }
+      flush();
+      await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [201, 202], monitor });
+    } finally {
+      albumTimers.mockRestore();
+      await monitor.stop();
+      await telegramTransport.close();
+    }
   });
 
   it.each(["commit", "rollback"] as const)(

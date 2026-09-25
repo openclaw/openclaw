@@ -167,10 +167,6 @@ export class TelegramPollingSession {
     }
   }
 
-  #noteHealthyPollingCycle() {
-    resetTelegramRestartBackoffState(this.#restartBackoffState);
-  }
-
   async #waitBeforeRestart(
     buildLine: (delay: string) => string,
     opts: { stopTimedOut?: boolean } = {},
@@ -209,9 +205,6 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
-    if (!this.opts.config) {
-      return;
-    }
     this.#deliveryDrainInFlight = true;
     const accountId = normalizeTelegramAccountId(this.opts.accountId);
     const cfg = this.opts.config;
@@ -246,10 +239,6 @@ export class TelegramPollingSession {
     // as a recovery driver without reopening the drain on every long poll.
     this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
     this.#drainPendingDeliveriesAfterReconnect();
-  }
-
-  #rearmPendingDeliveryDrain() {
-    this.#nextDeliveryDrainAt = 0;
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
@@ -406,19 +395,8 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
-    const endCycle = () => {
-      abortMedia();
-    };
     const unsubscribe = worker.onMessage((message) => {
-      const ackSpooledUpdate = (
-        requestId: string,
-        result:
-          | { ok: true; updateId: number }
-          | {
-              ok: false;
-              message: string;
-            },
-      ): void => {
+      const ackSpooledUpdate: NonNullable<typeof worker.ackSpooledUpdate> = (requestId, result) => {
         try {
           worker.ackSpooledUpdate?.(requestId, result);
         } catch (err) {
@@ -439,7 +417,7 @@ export class TelegramPollingSession {
       if (message.type === "poll-success") {
         liveness.noteGetUpdatesSuccessCount(message.count, message.finishedAt);
         liveness.noteGetUpdatesFinished();
-        this.#noteHealthyPollingCycle();
+        resetTelegramRestartBackoffState(this.#restartBackoffState);
         if (!restartRequested) {
           this.#status.noteReady(message.finishedAt);
         }
@@ -448,7 +426,7 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "poll-error") {
-        this.#rearmPendingDeliveryDrain();
+        this.#nextDeliveryDrainAt = 0;
         const retryAfterMs =
           message.errorCode === 429 &&
           message.retryAfterMs !== undefined &&
@@ -513,7 +491,7 @@ export class TelegramPollingSession {
       }
     });
     const stopOnAbort = () => {
-      endCycle();
+      abortMedia();
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -536,7 +514,7 @@ export class TelegramPollingSession {
         return;
       }
       restartRequested = true;
-      endCycle();
+      abortMedia();
       void stopWorker();
       if (!forceCycleTimer) {
         forceCycleTimer = setTimeout(() => {
@@ -573,12 +551,12 @@ export class TelegramPollingSession {
       try {
         await Promise.race([worker.task(), forceCyclePromise]);
         clearForceCycleTimer();
-        endCycle();
+        abortMedia();
       } catch (err) {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
         }
-        endCycle();
+        abortMedia();
         // The worker only issues getUpdates, so a 409 is always a duplicate
         // poller (or stale webhook) conflict. Re-clear the webhook, rotate
         // the transport (#69787), and
@@ -637,7 +615,7 @@ export class TelegramPollingSession {
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
-      endCycle();
+      abortMedia();
       await stopWorker();
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.

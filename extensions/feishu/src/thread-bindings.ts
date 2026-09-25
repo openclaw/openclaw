@@ -1,5 +1,4 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Feishu plugin module implements thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
@@ -211,14 +210,9 @@ export function createFeishuThreadBindingManager(params: {
         conversationId: normalizedConversationId,
         parentConversationId:
           normalizeOptionalString(parentConversationId) ?? existingLocal?.parentConversationId,
-        deliveryTo:
-          typeof metadata?.deliveryTo === "string" && metadata.deliveryTo.trim()
-            ? metadata.deliveryTo.trim()
-            : existingLocal?.deliveryTo,
+        deliveryTo: normalizeOptionalString(metadata?.deliveryTo) ?? existingLocal?.deliveryTo,
         deliveryThreadId:
-          typeof metadata?.deliveryThreadId === "string" && metadata.deliveryThreadId.trim()
-            ? metadata.deliveryThreadId.trim()
-            : existingLocal?.deliveryThreadId,
+          normalizeOptionalString(metadata?.deliveryThreadId) ?? existingLocal?.deliveryThreadId,
         targetKind: storedTargetKind,
         targetSessionKey: normalizedTargetSessionKey,
         agentId:
