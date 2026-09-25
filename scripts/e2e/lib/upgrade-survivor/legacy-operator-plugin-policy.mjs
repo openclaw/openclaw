@@ -61,7 +61,13 @@ function seedSolePluginPolicy(sourceArtifacts, baselineVersion) {
       },
     },
     agents: { defaults: { workspace: path.join(process.env.OPENCLAW_STATE_DIR, "workspace") } },
-    plugins: { allow: ["webhooks"], deny: ["webhooks"], entries: { webhooks: specimen.entry } },
+    plugins: {
+      allow: ["webhooks"],
+      deny: ["webhooks", "device-pair"],
+      slots: { memory: "memory-core" },
+      entries: { webhooks: specimen.entry },
+    },
+    channels: { telegram: { enabled: true } },
     hooks: specimen.hooks,
   };
   for (const [key, value] of Object.entries(expected)) {
@@ -74,42 +80,112 @@ function seedSolePluginPolicy(sourceArtifacts, baselineVersion) {
     "published CLI changed sole allowlist input",
   );
   assert.deepEqual(authored.hooks, expected.hooks);
+  assert.deepEqual(authored.channels, expected.channels);
   cli(["config", "validate", "--json"], "baseline-validation");
   writeJson(artifact("specimen.json"), {
     baselineVersion,
     plugins: authored.plugins,
+    channels: authored.channels,
     hooks: authored.hooks,
   });
 }
 
-export function assertSolePluginPolicy(config, specimen) {
-  assert.equal(
+export function assertSolePluginPolicy(config, specimen, baseline) {
+  assert.notEqual(
     config.plugins?.enabled,
     false,
-    "retiring the sole allowed plugin enabled other plugins",
+    "retirement disabled permitted channel or slot plugins",
+  );
+  assert.deepEqual(
+    config.plugins?.allow?.toSorted(),
+    baseline.enabledPlugins,
+    "retirement changed the effective plugin allowlist",
   );
   assert.equal(config.plugins?.entries?.webhooks, undefined, "retired plugin entry remains");
   assert(!config.plugins?.allow?.includes("webhooks"), "retired allow reference remains");
   assert(!config.plugins?.deny?.includes("webhooks"), "retired deny reference remains");
+  assert(config.plugins?.deny?.includes("device-pair"), "unrelated plugin denial was removed");
+  assert.equal(
+    config.channels?.telegram?.enabled,
+    true,
+    "configured Telegram channel was disabled",
+  );
+  assert.equal(
+    config.plugins?.slots?.memory,
+    specimen.plugins.slots.memory,
+    "selected memory slot changed",
+  );
   assert.deepEqual(config.hooks, specimen.hooks, "ordinary hooks changed in the sole-policy probe");
 }
 
-export function assertInactivePluginRuntimes(inventory) {
-  assert(Array.isArray(inventory.plugins), "candidate Gateway omitted plugin runtime inventory");
+export function readEnabledPolicyPlugins(inventory) {
+  assert(Array.isArray(inventory.plugins), "Gateway omitted plugin inventory");
+  for (const id of ["telegram", "memory-core", "device-pair"]) {
+    const records = inventory.plugins.filter((plugin) => plugin.id === id);
+    assert.equal(records.length, 1, `Gateway omitted or duplicated installed plugin ${id}`);
+    assert.equal(records[0].installed, true, `policy plugin ${id} is not installed`);
+    assert.equal(
+      records[0].enabled,
+      id !== "device-pair",
+      `plugin ${id} has the wrong activation policy`,
+    );
+  }
+  const enabled = inventory.plugins
+    .filter((plugin) => plugin.enabled === true)
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   assert(
-    inventory.plugins.some((plugin) => plugin.id === "device-pair"),
-    "candidate inventory lacks surviving plugin",
+    enabled.every((id) => typeof id === "string" && id.length > 0),
+    "invalid enabled plugin identity",
+  );
+  assert.equal(new Set(enabled).size, enabled.length, "ambiguous enabled plugin inventory");
+  assert(!enabled.includes("webhooks"), "denied Webhooks plugin was enabled");
+  return enabled;
+}
+
+export function assertPreservedPluginActivation(inventory, baseline) {
+  assert.deepEqual(
+    readEnabledPolicyPlugins(inventory),
+    baseline.enabledPlugins,
+    "candidate widened or lost plugin activation",
   );
   assert(
     !inventory.plugins.some((plugin) => plugin.id === "webhooks"),
     "candidate still discovers Webhooks",
   );
+  const active = [];
   for (const plugin of inventory.plugins) {
     assert(
-      ["disabled", "unloaded"].includes(plugin.runtime?.state),
-      `candidate activated plugin ${plugin.id}`,
+      ["active", "disabled", "unloaded"].includes(plugin.runtime?.state),
+      `candidate plugin runtime failed or is unknown: ${plugin.id}`,
     );
+    if (plugin.runtime.state === "active") {
+      assert(
+        baseline.enabledPlugins.includes(plugin.id),
+        `candidate activated forbidden plugin ${plugin.id}`,
+      );
+      active.push(plugin.id);
+    }
   }
+  return active.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+function gatewayInventory(label) {
+  return cliJson(
+    [
+      "gateway",
+      "call",
+      "plugins.list",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      process.env.GATEWAY_AUTH_TOKEN_REF,
+      "--params",
+      "{}",
+      "--json",
+    ],
+    label,
+  );
 }
 
 async function run(mode, expectedVersion) {
@@ -120,27 +196,30 @@ async function run(mode, expectedVersion) {
     "isolated update installed a different candidate",
   );
   const config = readJson(process.env.OPENCLAW_CONFIG_PATH);
-  assertSolePluginPolicy(config, specimen);
+  if (mode === "baseline") {
+    assert.equal(expectedVersion, specimen.baselineVersion);
+    assert.deepEqual(
+      config.plugins,
+      specimen.plugins,
+      "baseline policy changed before observation",
+    );
+    // The published 9.2 RPC exposes policy eligibility; runtime.state is a later addition.
+    const enabledPlugins = readEnabledPolicyPlugins(gatewayInventory("baseline-runtime"));
+    writeJson(artifact("baseline-activation.json"), {
+      baselineVersion: expectedVersion,
+      enabledPlugins,
+    });
+    return;
+  }
+  const baseline = readJson(artifact("baseline-activation.json"));
+  assert.equal(baseline.baselineVersion, specimen.baselineVersion);
+  assertSolePluginPolicy(config, specimen, baseline);
   const validation = cliJson(["config", "validate", "--json"], `${mode}-validation`);
   assert.equal(validation.valid, true);
   assert.deepEqual(validation.warnings, []);
   if (mode === "live") {
-    const inventory = cliJson(
-      [
-        "gateway",
-        "call",
-        "plugins.list",
-        "--url",
-        "ws://127.0.0.1:18789",
-        "--token",
-        process.env.GATEWAY_AUTH_TOKEN_REF,
-        "--params",
-        "{}",
-        "--json",
-      ],
-      "candidate-runtime",
-    );
-    assertInactivePluginRuntimes(inventory);
+    const inventory = gatewayInventory("candidate-runtime");
+    const activePlugins = assertPreservedPluginActivation(inventory, baseline);
     // Unauthorized hook traffic proves the preserved core route without scheduling a turn.
     const response = await fetch(`http://127.0.0.1:18789${specimen.hooks.path}/wake`, {
       method: "POST",
@@ -153,8 +232,12 @@ async function run(mode, expectedVersion) {
       baselineVersion: specimen.baselineVersion,
       candidateVersion: expectedVersion,
       oldAllowlist: specimen.plugins.allow,
-      pluginsDisabled: true,
-      activePlugins: [],
+      baselineEnabledPlugins: baseline.enabledPlugins,
+      candidateEnabledPlugins: readEnabledPolicyPlugins(inventory),
+      activePlugins,
+      configuredChannelPlugin: "telegram",
+      selectedMemoryPlugin: "memory-core",
+      deniedPlugins: ["device-pair"],
       ordinaryHooksPreserved: true,
       hooksSha256: digest(config.hooks),
       hookUnauthorizedStatus: response.status,
@@ -170,7 +253,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     assert.equal(installedVersion(), args[0]);
   } else {
     assert(
-      ["post-update", "live"].includes(mode) && args.length === 1,
+      ["baseline", "post-update", "live"].includes(mode) && args.length === 1,
       "invalid policy proof mode",
     );
     await run(mode, args[0]);

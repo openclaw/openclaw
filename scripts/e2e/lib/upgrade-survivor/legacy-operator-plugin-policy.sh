@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# The ordinary legacy scenario retains its provider-backed turns. This separate
-# prefix runs the published updater against a policy that intentionally disables them.
+# The separate prefix tests restrictive plugin policy while the main scenario
+# retains its provider-backed turns.
 legacy_operator_plugin_policy() (
   trap - EXIT ERR HUP INT TERM
   local mode="$1" source_artifacts="$ARTIFACT_ROOT" source_prefix="$npm_config_prefix"
@@ -54,12 +54,17 @@ legacy_operator_plugin_policy() (
     return 1
   }
   node scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs driver "$baseline_version"
+  GATEWAY_LOG="$ARTIFACT_ROOT/baseline-gateway.log"
+  start_gateway
+  node scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs baseline "$baseline_version"
+  stop_gateway
   update_candidate
   [ "$update_outcome" = "success" ] && [ "$update_repair_required" = "0" ] || {
     echo "Sole-plugin policy update required additional repair" >&2
     return 1
   }
   node scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs post-update "$candidate_version"
+  GATEWAY_LOG="$ARTIFACT_ROOT/gateway.log"
   start_gateway
   node scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs live "$candidate_version"
   stop_gateway
