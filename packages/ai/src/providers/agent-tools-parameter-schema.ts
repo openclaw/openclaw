@@ -10,6 +10,15 @@ import {
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
+import { normalizeOpenApiSchemaKeywords } from "./agent-tools-openapi-keywords.js";
+import {
+  createCircularToolSchemaError,
+  SCHEMA_ARRAY_KEYS,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_OBJECT_KEYS,
+  setOwnSchemaProperty,
+} from "./agent-tools-schema-keys.js";
+import { inlineLocalToolSchemaRefs } from "./agent-tools-schema-refs.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
@@ -111,14 +120,64 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
     : Array.isArray(record.oneOf)
       ? record.oneOf
       : null;
-  if (variants) {
-    const values = variants.flatMap((variant) => {
-      const extracted = extractEnumValues(variant);
-      return extracted ?? [];
-    });
-    return values.length > 0 ? values : undefined;
+  if (!variants) {
+    return undefined;
   }
-  return undefined;
+  // Variant chains are external input and can nest deeper than the call stack, so expansion
+  // runs depth-first on an explicit stack (#141306). Leave markers bound cyclic object graphs
+  // the way the call stack bounded them before.
+  type Pending = { kind: "visit"; node: unknown } | { kind: "leave"; node: object };
+  const ancestors = new Set<object>();
+  const values: unknown[] = [];
+  const pending: Pending[] = [];
+  for (let index = variants.length - 1; index >= 0; index -= 1) {
+    pending.push({ kind: "visit", node: variants[index] });
+  }
+  let current: Pending | undefined;
+  while ((current = pending.pop()) !== undefined) {
+    if (current.kind === "leave") {
+      ancestors.delete(current.node);
+      continue;
+    }
+    const node = current.node;
+    // Arrays contribute nothing here (no enum/const/composition keys), so the record guard
+    // skipping them matches the recursion, which read the same missing keys as undefined.
+    if (!isSchemaRecord(node)) {
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
+    if (Array.isArray(node.enum)) {
+      // Append per entry: spreading the enum into push arguments reintroduces the engine's
+      // argument-count limit on wide enums, which the original flatMap did not hit.
+      for (const enumValue of node.enum) {
+        values.push(enumValue);
+      }
+      ancestors.delete(node);
+      continue;
+    }
+    if ("const" in node) {
+      values.push(node.const);
+      ancestors.delete(node);
+      continue;
+    }
+    const childVariants = Array.isArray(node.anyOf)
+      ? node.anyOf
+      : Array.isArray(node.oneOf)
+        ? node.oneOf
+        : null;
+    if (!childVariants) {
+      ancestors.delete(node);
+      continue;
+    }
+    pending.push({ kind: "leave", node });
+    for (let index = childVariants.length - 1; index >= 0; index -= 1) {
+      pending.push({ kind: "visit", node: childVariants[index] });
+    }
+  }
+  return values.length > 0 ? values : undefined;
 }
 
 function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
@@ -158,15 +217,6 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 type FlattenableVariantKey = "anyOf" | "oneOf";
 type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
-
-function setOwnSchemaProperty(target: Record<string, unknown>, key: string, value: unknown): void {
-  Object.defineProperty(target, key, {
-    value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
-}
 
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
@@ -235,456 +285,284 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
 
 type ArrayItemsMode = "add" | "omit" | "normalize";
 
-function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unknown {
-  if (Array.isArray(schema)) {
-    // Only omission descends through a malformed array used as a schema node.
-    // Addition visits direct tuple/composition entries through normalizeValue below.
-    if (mode === "add") {
-      return schema;
-    }
-    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit"));
-    return entries.some((entry, index) => entry !== schema[index]) ? entries : schema;
-  }
-  if (!isSchemaRecord(schema)) {
-    return schema;
-  }
-
-  const missingItems = mode !== "omit" && schema.type === "array" && schema.items === undefined;
-  let changed = missingItems;
-  const normalized: Record<string, unknown> = { ...schema };
-  if (missingItems) {
-    if (mode === "add") {
-      normalized.items = {};
-    } else {
-      // The former add-then-omit flow also removed an explicitly undefined items key.
-      delete normalized.items;
-    }
-  }
-  const allowsArray =
-    schema.type === "array" || (Array.isArray(schema.type) && schema.type.includes("array"));
-  const normalizeValue = (value: unknown, valueMode: ArrayItemsMode): unknown => {
-    if (!Array.isArray(value)) {
-      return normalizeArraySchemaItems(value, valueMode);
-    }
-    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode));
-    return entries.some((entry, index) => entry !== value[index]) ? entries : value;
-  };
-  for (const [key, value] of Object.entries(normalized)) {
-    if (
-      mode !== "add" &&
-      key === "items" &&
-      allowsArray &&
-      isSchemaRecord(value) &&
-      isTrulyEmptySchema(value)
-    ) {
-      delete normalized.items;
-      changed = true;
-      continue;
-    }
-    let next = value;
-    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-      const entries = Object.entries(value);
-      for (const entry of entries) {
-        entry[1] = normalizeArraySchemaItems(entry[1], mode);
-      }
-      if (entries.some(([entryKey, entry]) => entry !== value[entryKey])) {
-        next = Object.fromEntries(entries);
-      }
-    } else if (SCHEMA_OBJECT_KEYS.has(key) || SCHEMA_ARRAY_KEYS.has(key)) {
-      // Addition historically accepts a schema object in a composition slot;
-      // omission only traverses composition arrays. Keep that malformed-input boundary.
-      const valueMode = SCHEMA_OBJECT_KEYS.has(key) || Array.isArray(value) ? mode : "add";
-      if (valueMode === mode || mode !== "omit") {
-        next = normalizeValue(value, valueMode);
-      }
-    }
-    if (next !== value) {
-      setOwnSchemaProperty(normalized, key, next);
-      changed = true;
-    }
-  }
-  return changed ? normalized : schema;
-}
-
-type SchemaDefs = {
-  $defs: Map<string, unknown>;
-  definitions: Map<string, unknown>;
+// Tool schemas are external input and can nest far deeper than the call stack, so this walker
+// runs an explicit task stack instead of recursing (#141306). A visit task either resolves a
+// leaf immediately or pushes one assemble task plus a visit task per child; the assemble task
+// only runs after every child has written its result back, mirroring the original recursion.
+type ArrayItemsVisitTask = {
+  kind: "visit";
+  node: unknown;
+  mode: ArrayItemsMode;
+  assign: (value: unknown) => void;
 };
 
-function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknown>): void {
-  for (const key of ["title", "description", "default"] as const) {
-    if (key in from && from[key] !== undefined) {
-      to[key] = from[key];
-    }
-  }
-}
+type ArrayItemsAssembleArrayTask = {
+  kind: "assemble-array";
+  node: object;
+  assign: (value: unknown) => void;
+  entries: unknown[];
+  changed: boolean;
+};
 
-function extendSchemaDefs(
-  defs: SchemaDefs | undefined,
-  schema: Record<string, unknown>,
-): SchemaDefs | undefined {
-  const defsEntry =
-    schema.$defs && typeof schema.$defs === "object" && !Array.isArray(schema.$defs)
-      ? (schema.$defs as Record<string, unknown>)
-      : undefined;
-  const legacyDefsEntry =
-    schema.definitions &&
-    typeof schema.definitions === "object" &&
-    !Array.isArray(schema.definitions)
-      ? (schema.definitions as Record<string, unknown>)
-      : undefined;
-
-  if (!defsEntry && !legacyDefsEntry) {
-    return defs;
-  }
-
-  const next: SchemaDefs = defs
-    ? {
-        $defs: new Map(defs.$defs),
-        definitions: new Map(defs.definitions),
+type ArrayItemsAssembleRecordTask = {
+  kind: "assemble-record";
+  node: object;
+  assign: (value: unknown) => void;
+  // Shallow copy of the source record with the missing-items adjustment already applied.
+  normalized: Record<string, unknown>;
+  changed: boolean;
+  // Plan entries in source order; child results write back through the entry.
+  plan: Array<
+    | { kind: "keep" }
+    | { kind: "drop-items" }
+    | {
+        kind: "map";
+        key: string;
+        source: Record<string, unknown>;
+        entries: Array<[string, unknown]>;
+        mapChanged: boolean;
       }
-    : {
-        $defs: new Map<string, unknown>(),
-        definitions: new Map<string, unknown>(),
-      };
-  if (defsEntry) {
-    for (const [key, value] of Object.entries(defsEntry)) {
-      next.$defs.set(key, value);
-    }
-  }
-  if (legacyDefsEntry) {
-    for (const [key, value] of Object.entries(legacyDefsEntry)) {
-      next.definitions.set(key, value);
-    }
-  }
-  return next;
-}
-
-function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
-}
-
-function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
-  let current = value;
-  for (const segment of segments) {
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    const key = decodeJsonPointerSegment(segment);
-    if (Array.isArray(current)) {
-      const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
-      if (index < 0 || index >= current.length) {
-        return undefined;
+    | {
+        kind: "value";
+        key: string;
+        source: unknown[];
+        // One child per array entry (composition list).
+        childResults: unknown[];
+        childrenAreArrayEntries: true;
       }
-      current = current[index];
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    if (!Object.hasOwn(record, key)) {
-      return undefined;
-    }
-    current = record[key];
-  }
-  return current;
-}
-
-function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  if (!ref.startsWith("#/")) {
-    return undefined;
-  }
-  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
-}
-
-const SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-
-const SCHEMA_OBJECT_KEYS = new Set([
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-]);
-
-const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
-
-const SCHEMA_LITERAL_KEYS = new Set(["const", "default", "enum", "examples"]);
-
-function tryResolveLocalRef(
-  ref: string,
-  defs: SchemaDefs | undefined,
-  rootDocument: unknown,
-): unknown {
-  const match = ref.match(/^#\/(\$defs|definitions)\/([^/]+)(?:\/(.*))?$/);
-  if (match && defs) {
-    const namespace = match[1] === "$defs" ? defs.$defs : defs.definitions;
-    const name = decodeJsonPointerSegment(match[2] ?? "");
-    const resolved = name ? namespace.get(name) : undefined;
-    if (resolved !== undefined) {
-      const remainingPath = match[3] ? match[3].split("/") : [];
-      return resolveJsonPointerPath(resolved, remainingPath);
-    }
-  }
-  return resolveLocalJsonPointer(rootDocument, ref);
-}
-
-function inlineLocalSchemaRefsWithDefs(
-  schema: unknown,
-  defs: SchemaDefs | undefined,
-  refStack: Set<string> | undefined,
-  state: { unresolvedLocalRefs: boolean },
-  rootDocument: unknown,
-): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map((entry) =>
-      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument),
-    );
-  }
-
-  const obj = schema as Record<string, unknown>;
-  const nextDefs = extendSchemaDefs(defs, obj);
-  const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
-
-  if (refValue) {
-    if (refStack?.has(refValue)) {
-      return {};
-    }
-    const resolved = tryResolveLocalRef(refValue, nextDefs, rootDocument);
-    if (resolved === undefined) {
-      if (refValue.startsWith("#/")) {
-        state.unresolvedLocalRefs = true;
+    | {
+        kind: "value";
+        key: string;
+        source: unknown;
+        // Single child (non-array value).
+        childResults: unknown[];
+        childrenAreArrayEntries: false;
       }
-      return { ...obj };
-    }
-    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
-    nextRefStack.add(refValue);
-    const inlined = inlineLocalSchemaRefsWithDefs(
-      resolved,
-      nextDefs,
-      nextRefStack,
-      state,
-      rootDocument,
-    );
-    if (!inlined || typeof inlined !== "object" || Array.isArray(inlined)) {
-      return inlined;
-    }
-    const result: Record<string, unknown> = { ...(inlined as Record<string, unknown>) };
-    copySchemaMeta(obj, result);
-    if (obj.nullable === true) {
-      result.nullable = true;
-    }
-    return result;
-  }
+  >;
+};
 
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (key === "$defs" || key === "definitions" || key === "components") {
-      continue;
-    }
-    if (SCHEMA_LITERAL_KEYS.has(key)) {
-      setOwnSchemaProperty(result, key, value);
-      continue;
-    }
-    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-      const entries = Object.entries(value);
-      for (const entry of entries) {
-        entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
-      }
-      setOwnSchemaProperty(result, key, Object.fromEntries(entries));
-      continue;
-    }
-    if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
-      );
-      continue;
-    }
-    if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
-        ),
-      );
-      continue;
-    }
-    setOwnSchemaProperty(result, key, value);
-  }
-  if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
-    }
-  }
-  return result;
-}
+type ArrayItemsTask =
+  | ArrayItemsVisitTask
+  | ArrayItemsAssembleArrayTask
+  | ArrayItemsAssembleRecordTask;
 
-/** Inline local $ref pointers so providers receive self-contained tool schemas. */
-function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
-  if (!schema || typeof schema !== "object") {
-    return schema as TSchema;
-  }
-  const schemaRecord = schema as Record<string, unknown>;
-  return inlineLocalSchemaRefsWithDefs(
-    schema,
-    Array.isArray(schema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
-    undefined,
+function normalizeArraySchemaItems(root: unknown, mode: ArrayItemsMode): unknown {
+  let rootResult: unknown = root;
+  // Recursion previously bounded cyclic object graphs via the call stack; the explicit stack
+  // removes that implicit guard, so the walk tracks the nodes on its current path instead.
+  const ancestors = new Set<object>();
+  const tasks: ArrayItemsTask[] = [
     {
-      unresolvedLocalRefs: false,
+      kind: "visit",
+      node: root,
+      mode,
+      assign: (value) => {
+        rootResult = value;
+      },
     },
-    schema,
-  ) as TSchema;
-}
-
-const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
-  "discriminator",
-  "externalDocs",
-  "readOnly",
-  "writeOnly",
-  "xml",
-  "example",
-]);
-
-function appendNullSchemaType(type: unknown): unknown {
-  if (type === "null") {
-    return type;
-  }
-  if (typeof type === "string") {
-    return [type, "null"];
-  }
-  if (Array.isArray(type)) {
-    return type.includes("null") ? type : [...type, "null"];
-  }
-  return type;
-}
-
-function isNullSchemaLike(schema: unknown): boolean {
-  if (!isSchemaRecord(schema)) {
-    return false;
-  }
-  if (schema.type === "null") {
-    return true;
-  }
-  if (Array.isArray(schema.type) && schema.type.includes("null")) {
-    return true;
-  }
-  if ("const" in schema && schema.const === null) {
-    return true;
-  }
-  return Array.isArray(schema.enum) && schema.enum.includes(null);
-}
-
-function hasOpenApiComposition(schema: Record<string, unknown>): boolean {
-  return ["allOf", "anyOf", "oneOf"].some((key) => Array.isArray(schema[key]));
-}
-
-function schemaCompositionAlreadyAllowsNull(schema: Record<string, unknown>): boolean {
-  return (
-    (Array.isArray(schema.anyOf) && schema.anyOf.some(isNullSchemaLike)) ||
-    (Array.isArray(schema.oneOf) && schema.oneOf.some(isNullSchemaLike))
-  );
-}
-
-function wrapNullableComposedSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  if (schemaCompositionAlreadyAllowsNull(schema)) {
-    return schema;
-  }
-  const wrapped: Record<string, unknown> = {
-    anyOf: [schema, { type: "null" }],
-  };
-  copySchemaMeta(schema, wrapped);
-  return wrapped;
-}
-
-function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeOpenApiSchemaKeywords(entry);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!isSchemaRecord(schema)) {
-    return schema;
-  }
-
-  let changed = false;
-  const nullable = schema.nullable === true;
-  const entries = Object.entries(schema);
-  let normalized: Record<string, unknown> | undefined;
-  for (const [key, value] of entries) {
-    if (key === "nullable" || OPENAPI_SCHEMA_ANNOTATION_KEYS.has(key)) {
-      normalized ??= Object.fromEntries(entries);
-      delete normalized[key];
-      changed = true;
+  ];
+  let task: ArrayItemsTask | undefined;
+  while ((task = tasks.pop()) !== undefined) {
+    if (task.kind === "assemble-array") {
+      ancestors.delete(task.node);
+      task.assign(task.changed ? task.entries : task.node);
       continue;
     }
-    if (SCHEMA_LITERAL_KEYS.has(key) || key === "components") {
-      continue;
-    }
-    let next = value;
-    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-      let mapChanged = false;
-      const mapEntries = Object.entries(value);
-      for (const entry of mapEntries) {
-        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1]);
-        mapChanged ||= nextEntry !== entry[1];
-        entry[1] = nextEntry;
+    if (task.kind === "assemble-record") {
+      ancestors.delete(task.node);
+      const { normalized, plan } = task;
+      let changed = task.changed;
+      for (const entry of plan) {
+        if (entry.kind === "keep") {
+          continue;
+        }
+        if (entry.kind === "drop-items") {
+          delete normalized.items;
+          changed = true;
+          continue;
+        }
+        if (entry.kind === "map") {
+          if (entry.mapChanged) {
+            setOwnSchemaProperty(normalized, entry.key, Object.fromEntries(entry.entries));
+            changed = true;
+          }
+          continue;
+        }
+        const next = entry.childrenAreArrayEntries
+          ? entry.childResults.some((result, index) => result !== entry.source[index])
+            ? entry.childResults
+            : entry.source
+          : entry.childResults[0];
+        if (next !== entry.source) {
+          setOwnSchemaProperty(normalized, entry.key, next);
+          changed = true;
+        }
       }
-      next = mapChanged ? Object.fromEntries(mapEntries) : value;
-    } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      next = normalizeOpenApiSchemaKeywords(value);
-    } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const nextEntries = value.map(normalizeOpenApiSchemaKeywords);
-      // A changed sibling also exposes these composition-array copies.
-      (normalized ??= Object.fromEntries(entries))[key] = nextEntries;
-      changed ||= nextEntries.some((entry, index) => entry !== value[index]);
+      task.assign(changed ? normalized : task.node);
       continue;
     }
-    if (next !== value) {
-      (normalized ??= Object.fromEntries(entries))[key] = next;
-      changed = true;
+    const { node, mode: taskMode, assign } = task;
+    if (Array.isArray(node)) {
+      // Only omission descends through a malformed array used as a schema node.
+      // Addition visits direct tuple/composition entries through the record plan below.
+      if (taskMode === "add") {
+        assign(node);
+        continue;
+      }
+      if (ancestors.has(node)) {
+        throw createCircularToolSchemaError();
+      }
+      ancestors.add(node);
+      const assemble: ArrayItemsAssembleArrayTask = {
+        kind: "assemble-array",
+        node,
+        assign,
+        entries: Array.from({ length: node.length }),
+        changed: false,
+      };
+      tasks.push(assemble);
+      for (let index = node.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: node[slot],
+          mode: "omit",
+          assign: (value) => {
+            assemble.changed ||= value !== node[slot];
+            assemble.entries[slot] = value;
+          },
+        });
+      }
+      continue;
     }
-  }
+    if (!isSchemaRecord(node)) {
+      assign(node);
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
 
-  if (nullable) {
-    normalized ??= Object.fromEntries(entries);
-    if (hasOpenApiComposition(normalized)) {
-      return wrapNullableComposedSchema(normalized);
-    }
-    if ("type" in normalized) {
-      const nextType = appendNullSchemaType(normalized.type);
-      if (nextType !== normalized.type) {
-        normalized.type = nextType;
+    const schema = node;
+    const missingItems =
+      taskMode !== "omit" && schema.type === "array" && schema.items === undefined;
+    const normalized: Record<string, unknown> = { ...schema };
+    if (missingItems) {
+      if (taskMode === "add") {
+        normalized.items = {};
+      } else {
+        // The former add-then-omit flow also removed an explicitly undefined items key.
+        delete normalized.items;
       }
     }
-    if (Array.isArray(normalized.enum) && !normalized.enum.includes(null)) {
-      normalized.enum = [...normalized.enum, null];
+    const allowsArray =
+      schema.type === "array" || (Array.isArray(schema.type) && schema.type.includes("array"));
+
+    const assemble: ArrayItemsAssembleRecordTask = {
+      kind: "assemble-record",
+      node: schema,
+      assign,
+      normalized,
+      changed: missingItems,
+      plan: [],
+    };
+    const children: ArrayItemsVisitTask[] = [];
+    for (const [key, value] of Object.entries(normalized)) {
+      if (
+        taskMode !== "add" &&
+        key === "items" &&
+        allowsArray &&
+        isSchemaRecord(value) &&
+        isTrulyEmptySchema(value)
+      ) {
+        assemble.plan.push({ kind: "drop-items" });
+        continue;
+      }
+      if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+        const mapEntry: Extract<ArrayItemsAssembleRecordTask["plan"][number], { kind: "map" }> = {
+          kind: "map",
+          key,
+          source: value,
+          entries: [],
+          mapChanged: false,
+        };
+        assemble.plan.push(mapEntry);
+        for (const [childKey, childValue] of Object.entries(value)) {
+          children.push({
+            kind: "visit",
+            node: childValue,
+            mode: taskMode,
+            assign: (childResult) => {
+              mapEntry.mapChanged ||= childResult !== childValue;
+              mapEntry.entries.push([childKey, childResult]);
+            },
+          });
+        }
+        continue;
+      }
+      if (SCHEMA_OBJECT_KEYS.has(key) || SCHEMA_ARRAY_KEYS.has(key)) {
+        // Addition historically accepts a schema object in a composition slot;
+        // omission only traverses composition arrays. Keep that malformed-input boundary.
+        const valueMode = SCHEMA_OBJECT_KEYS.has(key) || Array.isArray(value) ? taskMode : "add";
+        if (valueMode === taskMode || taskMode !== "omit") {
+          if (Array.isArray(value)) {
+            const planEntry: Extract<
+              ArrayItemsAssembleRecordTask["plan"][number],
+              { kind: "value" }
+            > = {
+              kind: "value",
+              key,
+              source: value,
+              childResults: Array.from({ length: value.length }),
+              childrenAreArrayEntries: true,
+            };
+            assemble.plan.push(planEntry);
+            value.forEach((entry, index) => {
+              children.push({
+                kind: "visit",
+                node: entry,
+                mode: valueMode,
+                assign: (childResult) => {
+                  planEntry.childResults[index] = childResult;
+                },
+              });
+            });
+          } else {
+            const planEntry: Extract<
+              ArrayItemsAssembleRecordTask["plan"][number],
+              { kind: "value" }
+            > = {
+              kind: "value",
+              key,
+              source: value,
+              childResults: [undefined],
+              childrenAreArrayEntries: false,
+            };
+            assemble.plan.push(planEntry);
+            children.push({
+              kind: "visit",
+              node: value,
+              mode: valueMode,
+              assign: (childResult) => {
+                planEntry.childResults[0] = childResult;
+              },
+            });
+          }
+          continue;
+        }
+      }
+      assemble.plan.push({ kind: "keep" });
+    }
+    tasks.push(assemble);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (child) {
+        tasks.push(child);
+      }
     }
   }
-
-  return changed || nullable ? (normalized ?? schema) : schema;
+  return rootResult;
 }
 
 function normalizeToolParameterSchemaUncached(
@@ -867,5 +745,3 @@ export function normalizeToolParameterSchema(
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
