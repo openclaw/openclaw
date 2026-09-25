@@ -105,7 +105,7 @@ async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCode
             }
             if (
               isRecord(response) &&
-              response._tag === "SessionNotFoundError" &&
+              response["_tag"] === "SessionNotFoundError" &&
               response.sessionID === threadId
             ) {
               return undefined;
