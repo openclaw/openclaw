@@ -542,7 +542,36 @@ describe("release fast lane label", () => {
     ]);
   });
 
-  it("shows admission at the gate while preserving all 32 lane results", () => {
+  it("declines fork heads before any reduced check can reach the aggregate gate", () => {
+    const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    // The manifest fixture "declines fork heads on the canonical base" in
+    // ci-workflow-planning.test.ts proves the outputs; this pins the inputs it relies on.
+    expect(manifestStep.env.OPENCLAW_CI_REPOSITORY).toBe("${{ github.repository }}");
+    expect(manifestStep.env.OPENCLAW_CI_HEAD_REPOSITORY).toBe(
+      "${{ github.event.pull_request.head.repo.full_name }}",
+    );
+    const admission = manifestStep.run.match(/const releaseFastLaneScope = [^;]*;/su)?.[0];
+    expect(admission).toContain(
+      'eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull',
+    );
+    // Reduced selection only ever reaches the gate through preflight outputs.
+    const gate = workflow.jobs["ci-gate"];
+    expect(gate.needs[0]).toBe("preflight");
+    const rows: string[] = gate.steps
+      .find((candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes")
+      .env.JOB_RESULTS.trim()
+      .split("\n");
+    for (const row of rows) {
+      const selected = row.slice(row.indexOf("|") + 1);
+      expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
+      expect(selected).not.toContain("release_fast_lane");
+    }
+  });
+
+  it("shows admission at the gate while preserving every lane result", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     const step = gate.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
@@ -554,7 +583,6 @@ describe("release fast lane label", () => {
       ),
     ).toBe(true);
     const rows: string[] = step.env.JOB_RESULTS.trim().split("\n");
-    expect(rows).toHaveLength(32);
     expect(rows.map((row) => row.split("=")[0])).toEqual(gate.needs);
     for (const row of rows) {
       const name = row.split("=")[0];
