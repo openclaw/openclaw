@@ -40,7 +40,7 @@ export function createUpdateConfigFailure(
   return new UpdatePreMutationError(
     "invalid-config",
     [
-      "Update refused: configuration is invalid.",
+      `Update refused: configuration is invalid at ${snapshot.path}.`,
       ...formatConfigIssueLines(issues, "-", { normalizeRoot: true }),
       nextAction,
     ].join("\n"),
