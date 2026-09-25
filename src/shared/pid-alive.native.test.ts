@@ -138,7 +138,29 @@ it("keeps sealed helpers independent of installed native packages", async () => 
   expect(nativeKoffi).not.toHaveBeenCalled();
 });
 
-it.each([600, 1000])("charges %sms native loading to the fallback budget", async (elapsed) => {
+it("preserves default shell recovery after slow native loading fails", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  nativeKoffi.mockImplementation(() => {
+    now += 1500;
+    throw new Error("native unavailable");
+  });
+  const shell = vi
+    .spyOn(childProcess, "execFileSync")
+    .mockImplementation((_file, args) =>
+      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
+    );
+  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
+  const expected = Date.UTC(2026, 8, 24) / 1000;
+  expect(getFileLockProcessStartTime(42)).toBe(expected);
+  expect(readDarwinProcessIdentity(42)).toEqual({ parentPid: 7, startedAt: expected });
+  expect(shell).toHaveBeenCalledTimes(2);
+  for (const call of shell.mock.calls) {
+    expect(call[2]?.timeout).toBe(1000);
+  }
+});
+
+it.each([600, 1000])("charges %sms native loading to an explicit deadline", async (elapsed) => {
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
   nativeKoffi.mockImplementation(() => {
@@ -147,16 +169,23 @@ it.each([600, 1000])("charges %sms native loading to the fallback budget", async
   });
   const shell = vi
     .spyOn(childProcess, "execFileSync")
-    .mockReturnValue("Thu Sep 24 00:00:00 2026\n");
+    .mockImplementation((_file, args) =>
+      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
+    );
   const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
-  expect(getFileLockProcessStartTime(42)).toBe(
+  expect(getFileLockProcessStartTime(42, process.env, 1000)).toBe(
     elapsed === 1000 ? null : Date.UTC(2026, 8, 24) / 1000,
   );
+  expect(readDarwinProcessIdentity(42, process.env, 1000)).toEqual(
+    elapsed === 1000 ? null : { parentPid: 7, startedAt: Date.UTC(2026, 8, 24) / 1000 },
+  );
   if (elapsed === 1000) {
-    expect(readDarwinProcessIdentity(42)).toBeNull();
     expect(shell).not.toHaveBeenCalled();
   } else {
-    expect(shell.mock.calls[0]?.[2]).toMatchObject({ timeout: 400 });
+    expect(shell).toHaveBeenCalledTimes(2);
+    for (const call of shell.mock.calls) {
+      expect(call[2]).toMatchObject({ timeout: 400 });
+    }
   }
 });
 

@@ -144,14 +144,18 @@ export function isPidDefinitelyDead(pid: number): boolean {
 function getDarwinProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv,
-  timeoutMs = PROCESS_START_TIMEOUT_MS,
+  timeoutMs?: number,
 ): number | null {
   const started = performance.now();
   const native = readDarwinNativeIdentity(pid);
   if (native) {
     return native.startedAt;
   }
-  const remainingMs = Math.ceil(timeoutMs - (performance.now() - started));
+  // The default bounds ps itself; explicit deadlines also pay for native loading.
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
   if (remainingMs <= 0) {
     return null;
   }
@@ -178,7 +182,7 @@ function getDarwinProcessStartTime(
 export function readDarwinProcessIdentity(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  timeoutMs = PROCESS_START_TIMEOUT_MS,
+  timeoutMs?: number,
 ): { parentPid: number; startedAt: number } | null {
   if (process.platform !== "darwin" || !isValidPid(pid)) {
     return null;
@@ -188,7 +192,10 @@ export function readDarwinProcessIdentity(
   if (native) {
     return native;
   }
-  const remainingMs = Math.ceil(timeoutMs - (performance.now() - started));
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
   if (remainingMs <= 0) {
     return null;
   }
