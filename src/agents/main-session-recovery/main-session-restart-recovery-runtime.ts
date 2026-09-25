@@ -333,7 +333,12 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   let exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
   const run = Promise.resolve().then(async () => {
     if (params.waitForStart) {
-      await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
+      const aborted = waitForAbortSignal(abortController.signal);
+      try {
+        await Promise.race([params.waitForStart(), aborted]);
+      } finally {
+        aborted.release();
+      }
     }
     await runRecoveryRetries({
       initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,

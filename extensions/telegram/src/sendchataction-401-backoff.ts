@@ -194,12 +194,17 @@ export function createTelegramSendChatActionHandler({
         });
         // A canceled waiter can release its node without releasing its predecessor.
         authorizationRetryTail = previousRetry.then(() => retryFinished);
-        await Promise.race([
-          previousRetry,
-          waitForAbortSignal(signal).then(() => {
-            throw new DOMException("Chat action canceled", "AbortError");
-          }),
-        ]);
+        const aborted = waitForAbortSignal(signal);
+        try {
+          await Promise.race([
+            previousRetry,
+            aborted.then(() => {
+              throw new DOMException("Chat action canceled", "AbortError");
+            }),
+          ]);
+        } finally {
+          aborted.release();
+        }
         signal.throwIfAborted();
         if (suspended) {
           throw new Error("sendChatAction suspended");

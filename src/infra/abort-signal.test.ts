@@ -5,6 +5,7 @@ import {
   createAbortError,
   isAbortError,
   racePromiseWithAbortSignal,
+  raceWithAbortRelease,
   waitForAbortSignal,
 } from "./abort-signal.js";
 
@@ -74,6 +75,57 @@ describe("waitForAbortSignal", () => {
     abort.abort();
     await task;
     expect(resolved).toBe(true);
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
+  });
+
+  it("leaves no listener when a racing caller abandons the wait", async () => {
+    const abort = new AbortController();
+    const aborted = waitForAbortSignal(abort.signal);
+
+    // Mirrors production races such as main-session restart recovery: the other
+    // source wins while the signal stays un-aborted for the life of the process.
+    await Promise.race([Promise.resolve("other source won"), aborted]);
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(1);
+
+    aborted.release();
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
+  });
+
+  it("tolerates release after the signal already aborted", async () => {
+    const abort = new AbortController();
+    const aborted = waitForAbortSignal(abort.signal);
+
+    abort.abort();
+    await aborted;
+    aborted.release();
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
+  });
+
+  it("reports release as a no-op without a signal", () => {
+    expect(() => waitForAbortSignal(undefined).release()).not.toThrow();
+  });
+});
+
+describe("raceWithAbortRelease", () => {
+  it("returns the source result and leaves no listener when the source wins", async () => {
+    const abort = new AbortController();
+    const result = await raceWithAbortRelease(
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("source won"), 5);
+      }),
+      abort.signal,
+    );
+
+    expect(result).toBe("source won");
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
+  });
+
+  it("resolves undefined on abort and still removes the listener", async () => {
+    const abort = new AbortController();
+    const pending = raceWithAbortRelease(new Promise<never>(() => {}), abort.signal);
+
+    abort.abort();
+    await expect(pending).resolves.toBeUndefined();
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
   });
 });

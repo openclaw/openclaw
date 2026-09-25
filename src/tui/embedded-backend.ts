@@ -100,7 +100,7 @@ import {
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
-import { waitForAbortSignal } from "../infra/abort-signal.js";
+import { raceWithAbortRelease } from "../infra/abort-signal.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -1287,10 +1287,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       const recheckPreparedRuntimeAtAdmission = params.queuedAfter !== undefined;
       if (params.queuedAfter) {
         try {
-          await Promise.race([
+          await raceWithAbortRelease(
             waitForQueuedLocalRun(params.queuedAfter, params.runId),
-            waitForAbortSignal(params.controller.signal),
-          ]);
+            params.controller.signal,
+          );
         } catch (error) {
           const run = this.runs.get(params.runId);
           if (run) {
