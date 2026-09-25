@@ -1,4 +1,3 @@
-// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
 import {
   resolveStoredModelOverride,
@@ -60,15 +59,6 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   return { provider, model };
 }
 
-function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
-  return readStringField(context, key) ?? fallback;
-}
-
-function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
-  const value = context[key];
-  return asFiniteNumber(value) ?? parseStrictInteger(value);
-}
-
 function normalizePage(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 1;
@@ -88,18 +78,6 @@ function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE
     hasNext: safePage < totalPages,
     totalItems: items.length,
   };
-}
-
-function buildContext(state: MattermostModelPickerState): Record<string, unknown> {
-  return {
-    [MATTERMOST_MODEL_PICKER_CONTEXT_KEY]: true,
-    ...state,
-  };
-}
-
-function buildButtonId(state: MattermostModelPickerState): string {
-  const digest = createHash("sha256").update(JSON.stringify(state)).digest("hex").slice(0, 12);
-  return `${ACTION_IDS[state.action]}${digest}`;
 }
 
 function buildButton(params: {
@@ -132,12 +110,13 @@ function buildButton(params: {
             model: normalizeStringifiedOptionalString(params.model) ?? "",
           };
 
+  const digest = createHash("sha256").update(JSON.stringify(baseState)).digest("hex").slice(0, 12);
   return {
     // Mattermost requires action IDs to be unique within a post.
-    id: buildButtonId(baseState),
+    id: `${ACTION_IDS[baseState.action]}${digest}`,
     text: params.text,
     ...(params.style ? { style: params.style } : {}),
-    context: buildContext(baseState),
+    context: { [MATTERMOST_MODEL_PICKER_CONTEXT_KEY]: true, ...baseState },
   };
 }
 
@@ -180,8 +159,8 @@ export function parseMattermostModelPickerContext(
     return null;
   }
 
-  const ownerUserId = normalizeOptionalString(readContextString(context, "ownerUserId")) ?? "";
-  const action = normalizeOptionalString(readContextString(context, "action")) ?? "";
+  const ownerUserId = normalizeOptionalString(context.ownerUserId) ?? "";
+  const action = normalizeOptionalString(context.action) ?? "";
   if (!ownerUserId) {
     return null;
   }
@@ -190,8 +169,8 @@ export function parseMattermostModelPickerContext(
     return { action, ownerUserId };
   }
 
-  const provider = normalizeProviderId(readContextString(context, "provider"));
-  const page = readContextNumber(context, "page");
+  const provider = normalizeProviderId(readStringField(context, "provider") ?? "");
+  const page = asFiniteNumber(context.page) ?? parseStrictInteger(context.page);
   if (!provider) {
     return null;
   }
@@ -206,7 +185,7 @@ export function parseMattermostModelPickerContext(
   }
 
   if (action === "select") {
-    const model = normalizeOptionalString(readContextString(context, "model")) ?? "";
+    const model = normalizeOptionalString(context.model) ?? "";
     if (!model) {
       return null;
     }

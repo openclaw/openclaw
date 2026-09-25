@@ -12,7 +12,7 @@ import {
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
-} from "./text-runtime.js";
+} from "./targets-runtime.js";
 
 async function withTempDir<T>(
   prefix: string,
@@ -175,7 +175,7 @@ describe("jidToE164", () => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       vi.resetModules();
       try {
-        const { jidToE164: freshJidToE164 } = await import("./text-runtime.js");
+        const { jidToE164: freshJidToE164 } = await import("./targets-runtime.js");
         expect(freshJidToE164("123@lid")).toBe("+5551234");
       } finally {
         if (previousStateDir === undefined) {

@@ -28,7 +28,7 @@ vi.mock("./session.js", () => ({
     (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode,
   waitForWaConnection: mocks.waitForWaConnection,
 }));
-vi.mock("./text-runtime.js", () => ({ jidToE164: mocks.jidToE164 }));
+vi.mock("./targets-runtime.js", () => ({ jidToE164: mocks.jidToE164 }));
 vi.mock("./inbound/send-api.js", () => ({ createWebSendApi: mocks.createWebSendApi }));
 
 function createMockSocket() {

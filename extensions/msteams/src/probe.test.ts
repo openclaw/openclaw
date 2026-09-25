@@ -37,11 +37,11 @@ vi.mock("@microsoft/teams.api", () => ({
   }),
 }));
 
-vi.mock("./token.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./token.js")>();
+vi.mock("./delegated-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./delegated-state.js")>();
   return {
     ...actual,
-    loadDelegatedTokens: async () => hostMockState.delegatedTokens,
+    loadMSTeamsDelegatedTokens: async () => hostMockState.delegatedTokens,
   };
 });
 

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "./src/secret-input.js";
+import {
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 
 /** Mirror Teams auth-mode requirements without loading the Azure SDK or full channel. */
 export function hasConfiguredMSTeamsChannelState(params: {

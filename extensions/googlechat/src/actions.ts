@@ -1,4 +1,3 @@
-// Googlechat plugin module implements actions behavior.
 import {
   jsonResult,
   readStringArrayParam,
@@ -51,17 +50,13 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     assertDirectAdapterHandoff,
     onPlatformSendDispatch,
   }) => {
-    if (action === "upload-file") {
+    if (
+      action === "upload-file" ||
+      (action === "send" && hasGoogleChatOutboundAttachment(params))
+    ) {
       throw new Error(
         "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
       );
-    }
-    if (action === "send") {
-      if (hasGoogleChatOutboundAttachment(params)) {
-        throw new Error(
-          "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
-        );
-      }
     }
 
     const account = resolveGoogleChatAccount({

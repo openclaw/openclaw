@@ -1,15 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildFileInfoCard } from "./file-consent.js";
 import type { DriveItemProperties } from "./graph-upload.js";
 
-export function buildTeamsFileInfoCard(file: DriveItemProperties): {
-  contentType: string;
-  contentUrl: string;
-  name: string;
-  content: {
-    uniqueId: string;
-    fileType: string;
-  };
-} {
+export function buildTeamsFileInfoCard(file: DriveItemProperties) {
   // Extract unique ID from eTag (remove quotes, braces, and version suffix)
   // Example eTag formats: "{GUID},version" or "\"{GUID},version\""
   const rawETag = file.eTag;
@@ -24,13 +17,10 @@ export function buildTeamsFileInfoCard(file: DriveItemProperties): {
   const fileType =
     lastDot >= 0 ? normalizeLowercaseStringOrEmpty(file.name.slice(lastDot + 1)) : "";
 
-  return {
-    contentType: "application/vnd.microsoft.teams.card.file.info",
+  return buildFileInfoCard({
+    filename: file.name,
     contentUrl: file.webDavUrl,
-    name: file.name,
-    content: {
-      uniqueId,
-      fileType,
-    },
-  };
+    uniqueId,
+    fileType,
+  });
 }

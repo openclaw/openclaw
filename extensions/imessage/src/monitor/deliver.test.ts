@@ -34,10 +34,17 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("./deliver.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>()),
   resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
-  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
+}));
+vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-chunking")>()),
+  chunkMarkdownTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
+}));
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>()),
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
 }));
 
@@ -59,7 +66,9 @@ describe("deliverIMessageReply", () => {
 
   afterAll(() => {
     vi.doUnmock("../send.js");
-    vi.doUnmock("./deliver.runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/reply-chunking");
+    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.resetModules();
   });
 

@@ -1,6 +1,8 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMSTeamsRequestTimeoutMs,
   type MSTeamsRequestDeadline,
@@ -10,7 +12,6 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
   applyAuthorizationHeaderForUrl,
-  isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
@@ -303,19 +304,7 @@ async function downloadMSTeamsBotFrameworkAttachment(
 export async function downloadMSTeamsBotFrameworkAttachments(
   params: BotFrameworkDownloadOptions & { attachmentIds: string[] },
 ): Promise<MSTeamsGraphMediaResult> {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const id of params.attachmentIds ?? []) {
-    if (typeof id !== "string") {
-      continue;
-    }
-    const trimmed = id.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
+  const unique = normalizeUniqueTrimmedStringList(params.attachmentIds);
   if (unique.length === 0 || !params.serviceUrl || !params.tokenProvider) {
     return { media: [], attachmentCount: unique.length };
   }

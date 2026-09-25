@@ -21,14 +21,18 @@ vi.mock("./resolve-allowlist.js", () => ({
   resolveMSTeamsUserAllowlist,
 }));
 
-vi.mock("./secret-input.js", () => ({
+vi.mock("openclaw/plugin-sdk/secret-input", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input")>()),
   normalizeSecretInputString,
 }));
 
 vi.mock("./token.js", () => ({
   hasConfiguredMSTeamsCredentials,
   resolveMSTeamsCredentials,
-  saveDelegatedTokens,
+}));
+
+vi.mock("./delegated-state.js", () => ({
+  saveMSTeamsDelegatedTokens: saveDelegatedTokens,
 }));
 
 vi.mock("./oauth.js", () => {

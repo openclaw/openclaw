@@ -10,6 +10,7 @@ import {
   defaultRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   assertWebCredsPathRegularFileOrMissing,
@@ -27,7 +28,7 @@ import {
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
-import { resolveUserPath, type WebChannel } from "./text-runtime.js";
+import type { WebChannel } from "./targets-runtime.js";
 export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
 
 export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";

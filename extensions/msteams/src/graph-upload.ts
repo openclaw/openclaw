@@ -10,10 +10,12 @@
 
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
-import { createMSTeamsHttpError } from "./http-error.js";
 import {
   resolveMSTeamsSharePointUploadTimeoutMs,
   withMSTeamsAbortableRequestTimeout,
@@ -99,7 +101,7 @@ async function requestSharePointJson<T>(
       });
       const res = responseWithRelease(response, release);
       if (!res.ok) {
-        throw await createMSTeamsHttpError(
+        throw await createProviderHttpError(
           res,
           typeof request.error === "string" ? request.error : request.error(res),
         );

@@ -5,14 +5,10 @@ import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { SignalRpcOptions } from "./client-types.js";
 import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
-export type SignalRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  assertDirectAdapterHandoff?: () => void;
-};
+export type { SignalRpcOptions } from "./client-types.js";
 
 type SignalRpcError = {
   code?: number;

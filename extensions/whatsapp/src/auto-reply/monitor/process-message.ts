@@ -137,10 +137,15 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
   );
 }
 
-function emitWhatsAppMessageReceivedHooks(params: {
+function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
+  cfg: ReturnType<LoadConfigFn>;
   ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
+  accountId?: string;
   sessionKey: string;
 }): void {
+  if (!shouldEmitWhatsAppMessageReceivedHooks(params)) {
+    return;
+  }
   const canonical = deriveInboundMessageHookContext(params.ctx);
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
@@ -169,38 +174,6 @@ function emitWhatsAppMessageReceivedHooks(params: {
     undefined,
     WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
   );
-}
-
-function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
-  accountId?: string;
-  sessionKey: string;
-}): void {
-  if (
-    !shouldEmitWhatsAppMessageReceivedHooks({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    })
-  ) {
-    return;
-  }
-
-  emitWhatsAppMessageReceivedHooks({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-  });
-}
-
-function resolvePinnedMainDmRecipient(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  allowFrom?: string[];
-}): string | null {
-  return resolvePinnedMainDmOwnerFromAllowlist({
-    dmScope: params.cfg.session?.dmScope,
-    allowFrom: params.allowFrom,
-    normalizeEntry: (entry) => normalizeE164(entry),
-  });
 }
 
 export async function processMessage(params: {
@@ -531,9 +504,10 @@ export async function processMessage(params: {
     sessionKey: params.route.sessionKey,
   });
 
-  const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
-    cfg: params.cfg,
+  const pinnedMainDmRecipient = resolvePinnedMainDmOwnerFromAllowlist({
+    dmScope: params.cfg.session?.dmScope,
     allowFrom: inboundPolicy.configuredAllowFrom,
+    normalizeEntry: normalizeE164,
   });
   updateWhatsAppMainLastRoute({
     backgroundTasks: params.backgroundTasks,

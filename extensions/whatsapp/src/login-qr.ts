@@ -560,14 +560,15 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), remaining);
+      timer = setTimeout(() => resolve("timeout"), remaining);
     });
     const result = await Promise.race([
       login.waitPromise.then(() => "done" as const),
       login.qrUpdatePromise.then(() => "qr-update" as const),
       timeout,
-    ]);
+    ]).finally(() => clearTimeout(timer));
 
     if (result === "timeout") {
       return {

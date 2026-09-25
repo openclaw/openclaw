@@ -28,4 +28,5 @@ export {
 export { logVerbose, shouldLogVerbose, type getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 export { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-export { jidToE164, normalizeE164 } from "../../text-runtime.js";
+export { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+export { jidToE164 } from "../../targets-runtime.js";

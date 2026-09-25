@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import { buildMSTeamsAdaptiveCardActivity } from "./message-activity.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -146,15 +147,7 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
             promptStarters: msteamsCfg?.promptStarters,
           });
           try {
-            await ctx.sendActivity({
-              type: "message",
-              attachments: [
-                {
-                  contentType: "application/vnd.microsoft.card.adaptive",
-                  content: card,
-                },
-              ],
-            });
+            await ctx.sendActivity(buildMSTeamsAdaptiveCardActivity(card));
             deps.log.info("sent welcome card");
           } catch (err) {
             deps.log.debug?.("failed to send welcome card", { error: formatUnknownError(err) });

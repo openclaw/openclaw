@@ -1,4 +1,3 @@
-// Mattermost helper module supports normalize behavior.
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
@@ -120,33 +119,19 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
     return undefined;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
+  if (lower.startsWith("channel:") || lower.startsWith("group:")) {
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     return id ? `channel:${id}` : undefined;
   }
-  if (lower.startsWith("group:")) {
-    const id = trimmed.slice("group:".length).trim();
-    return id ? `channel:${id}` : undefined;
-  }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    return id ? `user:${id}` : undefined;
-  }
-  if (lower.startsWith("mattermost:")) {
-    const id = trimmed.slice("mattermost:".length).trim();
+  if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     return id ? `user:${id}` : undefined;
   }
   if (trimmed.startsWith("@")) {
     const id = trimmed.slice(1).trim();
     return id ? `@${id}` : undefined;
   }
-  if (trimmed.startsWith("#")) {
-    // Strip # prefix and fall through to directory lookup (same as bare names).
-    // The core's resolveMessagingTarget will use the directory adapter to
-    // resolve the channel name to its Mattermost ID.
-    return undefined;
-  }
-  // Bare name without prefix — return undefined to allow directory lookup
+  // Bare names and #channel names resolve through the directory adapter.
   return undefined;
 }
 

@@ -312,7 +312,7 @@ describe("msteamsPlugin", () => {
   });
 
   it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
-    const monitorModule = await import("./index.js");
+    const monitorModule = await import("./monitor.js");
     const monitor = vi.spyOn(monitorModule, "monitorMSTeamsProvider").mockResolvedValue({
       app: null,
       shutdown: async () => {},

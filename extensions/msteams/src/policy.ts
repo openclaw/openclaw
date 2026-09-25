@@ -4,7 +4,6 @@ import {
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
 import type {
-  AllowlistMatch,
   ChannelGroupContext,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
@@ -15,7 +14,6 @@ import type {
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
-  resolveAllowlistMatchSimple,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
 } from "../runtime-api.js";
@@ -217,17 +215,6 @@ type MSTeamsReplyPolicy = {
   requireMention: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
-
-type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
-
-export function resolveMSTeamsAllowlistMatch(params: {
-  allowFrom: ReadonlyArray<string | number>;
-  senderId: string;
-  senderName?: string | null;
-  allowNameMatching?: boolean;
-}): MSTeamsAllowlistMatch {
-  return resolveAllowlistMatchSimple(params);
-}
 
 export function resolveMSTeamsReplyPolicy(params: {
   isDirectMessage: boolean;

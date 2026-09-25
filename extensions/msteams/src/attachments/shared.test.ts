@@ -1,3 +1,7 @@
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
+} from "openclaw/plugin-sdk/ssrf-policy";
 // Msteams tests cover shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -5,10 +9,8 @@ import {
   encodeGraphShareId,
   isDownloadableAttachment,
   isLikelyImageAttachment,
-  isUrlAllowed,
   normalizeContentType,
   resolveAttachmentFetchPolicy,
-  resolveMediaSsrfPolicy,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";

@@ -209,18 +209,25 @@ function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   return [...dirs];
 }
 
-function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options }): string | null {
-  const mappingFilename = `lid-mapping-${params.lid}_reverse.json`;
+function readLidMapping(params: {
+  key: string;
+  normalize: (value: string) => string | null;
+  opts?: JidToE164Options;
+}): string | null {
+  const mappingFilename = `lid-mapping-${params.key}.json`;
   const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
   for (const dir of mappingDirs) {
     const mappingPath = path.join(dir, mappingFilename);
     try {
       const data = fs.readFileSync(mappingPath, "utf8");
-      const phone = JSON.parse(data) as string | number | null;
-      if (phone === null || phone === undefined) {
+      const value: unknown = JSON.parse(data);
+      if (value === null || value === undefined) {
         continue;
       }
-      return normalizeE164(String(phone));
+      const normalized = params.normalize(String(value));
+      if (normalized !== null) {
+        return normalized;
+      }
     } catch {
       // next location
     }
@@ -228,29 +235,12 @@ function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options })
   return null;
 }
 
-function readLidForwardMapping(params: {
-  phoneDigits: string;
-  opts?: JidToE164Options;
-}): string | null {
-  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
-  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
-  for (const dir of mappingDirs) {
-    const mappingPath = path.join(dir, mappingFilename);
-    try {
-      const data = fs.readFileSync(mappingPath, "utf8");
-      const lid = JSON.parse(data) as string | number | null;
-      if (lid === null || lid === undefined) {
-        continue;
-      }
-      const digits = String(lid).replace(/\D/g, "");
-      if (digits) {
-        return digits;
-      }
-    } catch {
-      // next location
-    }
-  }
-  return null;
+function readLidForwardMapping(params: { phoneDigits: string; opts?: JidToE164Options }) {
+  return readLidMapping({
+    key: params.phoneDigits,
+    normalize: (value) => value.replace(/\D/g, "") || null,
+    opts: params.opts,
+  });
 }
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
@@ -268,7 +258,7 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (!lid) {
     return null;
   }
-  const phone = readLidReverseMapping({ lid, opts });
+  const phone = readLidMapping({ key: `${lid}_reverse`, normalize: normalizeE164, opts });
   if (phone) {
     return phone;
   }

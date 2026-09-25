@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Googlechat plugin module implements setup core behavior.
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import {
   createPatchedAccountSetupAdapter,

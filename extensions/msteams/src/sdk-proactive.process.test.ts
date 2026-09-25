@@ -40,6 +40,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const require = createRequire(import.meta.url);
       const Module = require("node:module");
       const originalLoad = Module._load;
+      const hostStringCoercion = require("openclaw/plugin-sdk/string-coerce-runtime");
       const universalStub = new Proxy(
         function universalStub() {
           return universalStub;
@@ -70,6 +71,9 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       // The built plugin expects an installed OpenClaw host. Stub unrelated host SDK exports so
       // this child isolates the emitted Teams loader and the real pinned Teams CommonJS package.
       Module._load = function load(request, parent, isMain) {
+        if (request === "openclaw/plugin-sdk/string-coerce-runtime") {
+          return hostStringCoercion;
+        }
         if (request.startsWith("openclaw/plugin-sdk/")) {
           return hostSdkStub;
         }

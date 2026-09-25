@@ -9,10 +9,10 @@ const resolveDefaultGroupPolicy = vi.hoisted(() => vi.fn());
 const warnMissingProviderGroupPolicyFallbackOnce = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({ createChannelPairingController }));
+vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({ isDangerousNameMatchingEnabled }));
+vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   GROUP_POLICY_BLOCKED_LABEL: { space: "space" },
-  createChannelPairingController,
-  isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -95,7 +95,9 @@ describe("googlechat inbound access policy", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("../runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
+    vi.doUnmock("openclaw/plugin-sdk/dangerous-name-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("./api.js");
     vi.resetModules();
   });

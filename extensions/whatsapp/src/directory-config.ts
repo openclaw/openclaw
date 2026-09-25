@@ -1,4 +1,3 @@
-// Whatsapp helper module supports directory config behavior.
 import {
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
@@ -19,7 +18,7 @@ import {
   WhatsAppConnectionOwnerBusyError,
   type WhatsAppConnectionOwnerLease,
 } from "./connection-owner.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize-target.js";
 import {
   createWaDirectorySocket,
   waitForCredsSaveQueueWithTimeout,
@@ -29,17 +28,10 @@ import { closeWhatsAppSocketAndWait } from "./socket-close.js";
 
 type WhatsAppDirectoryAccount = WhatsAppAccountConfig & { accountId: string };
 
-function resolveWhatsAppDirectoryAccount(
-  cfg: DirectoryConfigParams["cfg"],
-  accountId?: string | null,
-): WhatsAppDirectoryAccount {
-  return resolveMergedWhatsAppAccountConfig({ cfg, accountId });
-}
-
 export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConfigParams) {
   return listResolvedDirectoryUserEntriesFromAllowFrom<WhatsAppDirectoryAccount>({
     ...params,
-    resolveAccount: resolveWhatsAppDirectoryAccount,
+    resolveAccount: (cfg, accountId) => resolveMergedWhatsAppAccountConfig({ cfg, accountId }),
     resolveAllowFrom: (account) => account.allowFrom,
     normalizeId: (entry) => {
       const normalized = normalizeWhatsAppTarget(entry);
@@ -54,7 +46,7 @@ export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConf
 export async function listWhatsAppDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
   return listResolvedDirectoryGroupEntriesFromMapKeys<WhatsAppDirectoryAccount>({
     ...params,
-    resolveAccount: resolveWhatsAppDirectoryAccount,
+    resolveAccount: (cfg, accountId) => resolveMergedWhatsAppAccountConfig({ cfg, accountId }),
     resolveGroups: (account) => account.groups,
   });
 }
@@ -235,7 +227,7 @@ async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
 async function listGroupsThroughStandaloneOwner(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveWhatsAppDirectoryAccount(params.cfg, params.accountId);
+  const account = resolveMergedWhatsAppAccountConfig(params);
   const authDir = resolveWhatsAppAuthDir({
     cfg: params.cfg,
     accountId: account.accountId,

@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import { stripHtmlFromTeamsMessage } from "./graph-thread.js";
+import {
+  stripHtmlFromTeamsMessage,
+  type GraphThreadMessage as GraphMessage,
+} from "./graph-thread.js";
 import {
   deleteGraphRequest,
   fetchGraphAbsoluteUrl,
@@ -9,23 +12,6 @@ import {
   resolveGraphToken,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
-
-type GraphMessageBody = {
-  content?: string;
-  contentType?: string;
-};
-
-type GraphMessageFrom = {
-  user?: { id?: string; displayName?: string };
-  application?: { id?: string; displayName?: string };
-};
-
-type GraphMessage = {
-  id?: string;
-  body?: GraphMessageBody;
-  from?: GraphMessageFrom;
-  createdDateTime?: string;
-};
 
 type GraphPinnedMessage = {
   id?: string;
@@ -132,7 +118,7 @@ type MSTeamsMessageTarget = {
 type GetMessageMSTeamsResult = {
   id: string;
   text: string | undefined;
-  from: GraphMessageFrom | undefined;
+  from: GraphMessage["from"];
   createdAt: string | undefined;
 };
 
@@ -407,12 +393,7 @@ type SearchMessagesMSTeamsParams = {
 };
 
 type SearchMessagesMSTeamsResult = {
-  messages: Array<{
-    id: string;
-    text: string | undefined;
-    from: GraphMessageFrom | undefined;
-    createdAt: string | undefined;
-  }>;
+  messages: GetMessageMSTeamsResult[];
   truncated: boolean;
 };
 
