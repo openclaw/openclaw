@@ -72,7 +72,9 @@ export async function runAcceptedManagerTurn(params: {
       // Finish only this accepted instance; never write idle over its predecessor.
       const assertCancellationCurrent = () => {
         if (started || params.turns.get(actorKey) !== turns || !turns.has(turn)) {
-          throw new Error("ACP queued cancellation no longer owns its accepted turn");
+          throw new Error("ACP queued cancellation no longer owns its accepted turn", {
+            cause: error,
+          });
         }
         turn.revalidateCancel?.();
       };
