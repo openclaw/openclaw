@@ -7,7 +7,6 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const auxiliaryNames = [
-  "docs",
   "node-runtime-conformance",
   "plugin-init-scaffold-validation",
   "sandbox-common-smoke",
@@ -46,9 +45,11 @@ describe("hourly main CI admission", () => {
         }
       }
     }
-    for (const name of auxiliaryNames) {
+    for (const name of [...auxiliaryNames, "docs"]) {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const entry = Object.values(workflow.jobs)[0] as { if: string };
+      const entry = Object.entries(workflow.jobs).find(([id]) => id !== "scope")![1] as {
+        if: string;
+      };
       expect(evaluate(entry.if, context), name).toBe(admitted);
     }
   });
@@ -85,7 +86,9 @@ describe("hourly main CI admission", () => {
       expect(workflow.on.schedule).toHaveLength(1);
       const cron = workflow.on.schedule[0].cron.split(" ");
       expect(cron).toHaveLength(5);
-      expect(cron.slice(1)).toEqual(["*", "*", "*", "*"]);
+      expect(cron.slice(1)).toEqual(
+        name === "sandbox-common-smoke" ? ["5", "*", "*", "*"] : ["*", "*", "*", "*"],
+      );
       const entry = Object.values(workflow.jobs)[0] as { if: string };
       expect(evaluate(entry.if, context), name).toBe(true);
       expect(evaluate(entry.if, { ...context, repository: "fork/openclaw" }), name).toBe(false);
@@ -106,14 +109,20 @@ describe("hourly main CI admission", () => {
         const scheduled = { ...shared, eventName: "schedule" as const };
         const push = { ...shared, eventName: "push" as const };
         for (const [name, raw] of Object.entries(ci.jobs)) {
+          if (name === "pr-fail-fast") {
+            expect(evaluate(ci.jobs[name].if, scheduled), name).toBe(false);
+            expect(evaluate(ci.jobs[name].if, push), name).toBe(false);
+            continue;
+          }
           const job = raw as { "runs-on"?: string; steps?: { with?: Record<string, unknown> }[] };
-          if (job["runs-on"])
+          if (job["runs-on"]) {
             expect(evaluate(job["runs-on"], scheduled), name).toEqual(
               evaluate(job["runs-on"], push),
             );
+          }
           for (const step of job.steps ?? []) {
             const cache = step.with?.["dependency-cache"];
-            if (typeof cache === "string" && cache.startsWith("$" + "{{")) {
+            if (typeof cache === "string" && cache.startsWith("${{")) {
               expect(evaluate(cache, scheduled), name).toBe(evaluate(cache, push));
               expect(
                 evaluate(cache, { ...scheduled, runnerEnvironment: "github-hosted" }),
@@ -162,8 +171,11 @@ describe("hourly main CI admission", () => {
           ...context,
           preflightOutputs: { ["strict_" + surface + "_i18n"]: value },
         };
-        if (surface === "native") expect(evaluate(parity.if, finalContext)).toBe(manualStrict);
-        else expect(evaluate(parity["continue-on-error"], finalContext)).toBe(!manualStrict);
+        if (surface === "native") {
+          expect(evaluate(parity.if, finalContext)).toBe(manualStrict);
+        } else {
+          expect(evaluate(parity["continue-on-error"], finalContext)).toBe(!manualStrict);
+        }
       }
     }
   });

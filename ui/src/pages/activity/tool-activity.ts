@@ -214,7 +214,7 @@ export function updateToolActivity(
   const next = existing
     ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
     : [...entries, nextEntry];
-  return next.slice(-ACTIVITY_ENTRY_LIMIT);
+  return next.length > ACTIVITY_ENTRY_LIMIT ? next.slice(-ACTIVITY_ENTRY_LIMIT) : next;
 }
 
 function readAnswerCandidateStatus(value: unknown): "candidate" | "superseded" | "selected" | null {
@@ -256,5 +256,5 @@ function updateAnswerCandidateActivity(
   const next = existing
     ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
     : [...entries, nextEntry];
-  return next.slice(-ACTIVITY_ENTRY_LIMIT);
+  return next.length > ACTIVITY_ENTRY_LIMIT ? next.slice(-ACTIVITY_ENTRY_LIMIT) : next;
 }

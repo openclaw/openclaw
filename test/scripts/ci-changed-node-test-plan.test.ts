@@ -24,6 +24,7 @@ import {
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
   hasUiE2eAffectingChange,
+  resolveReleaseFastLaneScope,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -1758,6 +1759,84 @@ describe("CI changed Node test plan", () => {
         "src/agents/embedded-agent-runner/run/deleted-session-runtime.ts",
       ]),
     ).toBe(true);
+  });
+
+  describe("release fast lane", () => {
+    it("admits release tooling and independently checked documentation", () => {
+      expect(
+        resolveReleaseFastLaneScope([
+          ".github/workflows/openclaw-release-publish.yml",
+          "scripts/lib/release-publish-children.sh",
+          "test/scripts/release-publish-children.test.ts",
+          "docs/reference/RELEASING.md",
+          ".agents/skills/release-openclaw-ci/SKILL.md",
+          "docs/ci.md",
+        ]),
+      ).toEqual({ eligible: true });
+    });
+
+    it.each(["src/foo.ts", "config/knip.config.ts"])("declines out-of-scope %s", (file) => {
+      expect(resolveReleaseFastLaneScope([file])).toEqual({
+        eligible: false,
+        reason: `outside the release tooling scope: ${file}`,
+      });
+    });
+
+    it("declines global execution inputs before ordinary scope mismatches", () => {
+      expect(
+        resolveReleaseFastLaneScope([
+          "src/foo.ts",
+          "scripts/run-vitest.mts",
+          "scripts/run-vitest.mjs",
+        ]),
+      ).toEqual({
+        eligible: false,
+        reason: "global execution or resolution input: scripts/run-vitest.mts",
+      });
+    });
+
+    it.each([null, []])("declines missing changed paths: %j", (changedPaths) => {
+      expect(resolveReleaseFastLaneScope(changedPaths)).toEqual({
+        eligible: false,
+        reason: "missing changed paths",
+      });
+    });
+
+    it("accepts deleted tooling paths and uses the existing documentation classifier", () => {
+      const cwd = argvTempDirs.make("release-fast-lane-scope-");
+      mkdirSync(path.join(cwd, "docs"));
+      writeFileSync(path.join(cwd, "docs/page.md"), "fixture");
+      symlinkSync("page.md", path.join(cwd, "docs/linked.md"));
+      expect(
+        resolveReleaseFastLaneScope(["scripts/deleted.mts", "docs/page.md", "docs/deleted.md"], {
+          cwd,
+        }),
+      ).toEqual({ eligible: true });
+      expect(resolveReleaseFastLaneScope(["docs/linked.md"], { cwd })).toEqual({
+        eligible: false,
+        reason: "outside the release tooling scope: docs/linked.md",
+      });
+    });
+
+    it("relaxes only the compact packing policy fallback", () => {
+      const onFallback = vi.fn();
+      createChangedNodeTestShards(
+        ["scripts/lib/ci-node-test-plan.mts", "test/scripts/ci-node-test-plan.test.ts"],
+        { runnerBackend: "blacksmith", releaseFastLane: true, onFallback },
+      );
+      expect(onFallback).not.toHaveBeenCalledWith(
+        "compact packing policy requires full-plan proof",
+      );
+      expect(
+        createChangedNodeTestShards(["scripts/run-vitest.mts"], {
+          releaseFastLane: true,
+          onFallback,
+        }),
+      ).toBeNull();
+      expect(onFallback).toHaveBeenLastCalledWith(
+        "global execution or resolution input: scripts/run-vitest.mts",
+      );
+    });
   });
 
   it.each([

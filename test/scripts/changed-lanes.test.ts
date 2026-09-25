@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -60,6 +61,7 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 
 const tempDirs: string[] = [];
 const uiCompanionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const renameTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const testNodeExecPath = resolveTestNodeExecPath();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
@@ -982,6 +984,40 @@ describe("scripts/changed-lanes", () => {
     writeRepoFile(dir, "README.md", "initial\n");
     git(dir, ["add", "README.md"]);
     expect(runChangedLanesCli(dir, ["--json", "--staged"]).paths).toEqual(["README.md"]);
+  });
+
+  it("preserves both rename owners through worktree, staged, and committed changes", () => {
+    const dir = renameTempDirs.make("openclaw-changed-lanes-rename-");
+    const before = "src/old name.ts";
+    const after = "ui/new name.ts";
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    git(dir, ["config", "diff.renames", "true"]);
+    writeRepoFile(dir, before, "export const value = 1;\n");
+    commitAll(dir, "before rename");
+    mkdirSync(path.join(dir, "ui"));
+    renameSync(path.join(dir, before), path.join(dir, after));
+    git(dir, ["add", "--intent-to-add", "--", after]);
+
+    for (const mode of ["worktree", "staged", "committed"] as const) {
+      if (mode === "staged") {
+        git(dir, ["add", "--all"]);
+      } else if (mode === "committed") {
+        commitAll(dir, "rename across owners");
+      }
+      const paths =
+        mode === "staged"
+          ? listStagedChangedPaths(dir)
+          : listChangedPathsFromGit({
+              base: mode === "committed" ? "HEAD^" : "HEAD",
+              cwd: dir,
+              includeWorktree: mode === "worktree",
+            });
+      expect(paths, mode).toEqual([before, after]);
+      expectLanes(detectChangedLanes(paths).lanes, { core: true, coreTests: true, ui: true });
+      if (mode === "staged") {
+        expect(listChangedPathsFromGit({ base: "HEAD", cwd: dir })).toEqual(paths);
+      }
+    }
   });
 
   it("includes staged added, modified, and deleted files in the changed format check", () => {
