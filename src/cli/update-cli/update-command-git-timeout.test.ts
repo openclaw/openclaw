@@ -23,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(
   (["git", "package-to-git"] as const).flatMap((route) => [
-    { route, timeout: "omitted", timeoutMs: undefined, expectedTimeoutMs: 30 * 60_000 },
+    { route, timeout: "omitted", timeoutMs: undefined, expectedTimeoutMs: undefined },
     { route, timeout: "explicit", timeoutMs: 42_000, expectedTimeoutMs: 42_000 },
   ]),
 )(

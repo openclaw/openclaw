@@ -27,6 +27,8 @@ import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
+  /** This live thread leaves the durable binding unchanged and owns no submission store. */
+  preserveExistingBinding?: true;
   rotatedContextEngineBinding?: boolean;
   activeTurnIds?: string[];
 };
@@ -87,6 +89,7 @@ export type CodexStartOrResumeThreadParams = {
   agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (

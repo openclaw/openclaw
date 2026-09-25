@@ -2,12 +2,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
 import { formatCliFailureLines } from "../cli/failure-output.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import * as tmpRoot from "../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
@@ -39,9 +43,10 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
   shouldManageGatewayService: async () => true,
 }));
-vi.mock("../infra/update-run-ledger.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-run-ledger.js")>()),
-  listUpdateRuns: () => [],
+// These cases exercise service/schema refusal after update admission, not ledger admission.
+vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
+  createUpdateRunAdmissionReader: () => () => [],
 }));
 
 const activationReason =
@@ -51,7 +56,13 @@ const maintenanceSuffix =
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  const directory = fs.realpathSync(tempDirs.make("doctor-refusal-handoff-"));
+  const binding = createManagedHandoffTestBinding(directory);
+  vi.spyOn(tmpRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
+  vi.stubEnv("NODE_OPTIONS", `${process.env.NODE_OPTIONS ?? ""} ${binding.nodeOption}`.trim());
+  binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
   mockSystemAccountHome();
 });
@@ -61,6 +72,7 @@ afterEach(async () => {
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 type History =

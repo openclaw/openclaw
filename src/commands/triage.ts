@@ -23,7 +23,6 @@ import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   installationTargetEnv,
   resolveInstallationTarget,
-  withInstallationTarget,
   type InstallationTarget,
 } from "../infra/installation-target-context.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -229,13 +228,7 @@ export async function triageCommand(
   const bundle: TriageBundle = deferDiagnostics
     ? { kind: "deferred" }
     : await collectTriageBundle(options.noExport === true, redaction);
-  const prompt = renderTriagePrompt({
-    findings,
-    bundle,
-    redaction,
-    updateFailure,
-    failure: automatic?.failure,
-  });
+
   // Packaged OpenClaw/Bun hosts cannot interpret npm shim entrypoints. Reuse the
   // active Node runtime or require an installed node.exe before choosing a shim.
   const nodeExecutable = isNodeRuntime(process.execPath)
@@ -281,6 +274,16 @@ export async function triageCommand(
       resolveAgentEffectiveModelPrimary(config, agentId),
     );
   }
+  const prompt = renderTriagePrompt({
+    findings,
+    bundle,
+    redaction,
+    updateFailure,
+    failure: automatic?.failure,
+    ...(runEmbedded && automatic && !automatic.diagnosticOnly
+      ? { maintenanceHandoff: true as const }
+      : {}),
+  });
   const canStartAgent = allowAgent && (runEmbedded || handoff !== undefined);
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
   const outputDir = path.join(target.stateDir, "logs", "support");
@@ -542,75 +545,18 @@ export async function triageCommand(
   }
 
   if (automatic && !automatic.diagnosticOnly) {
-    const deadline = Date.now() + 600_000;
-    const controller = new AbortController();
-    const signal = AbortSignal.any([automatic.signal, controller.signal]);
-    const timer = setTimeout(
-      () => controller.abort(new Error("Automatic triage timed out.")),
-      600_000,
-    );
-    try {
-      const result = await withInstallationTarget(target, async () => {
-        const { prepareUpdateRepairInference, runUpdateRepairTurn } =
-          await import("../infra/update-repair-agent.runtime.js");
-        if (!isCurrent()) {
-          return {
-            status: "unavailable" as const,
-            reason: "Repair authority is no longer current.",
-          };
-        }
-        const selected = await prepareUpdateRepairInference(
-          signal,
-          Math.max(1, deadline - Date.now()),
-        );
-        if (!isCurrent()) {
-          return {
-            status: "unavailable" as const,
-            reason: "Repair authority is no longer current.",
-          };
-        }
-        if (!selected.ok) {
-          return { status: "unavailable" as const, reason: selected.reason };
-        }
-        signal.throwIfAborted();
-        return runUpdateRepairTurn({
-          target: {
-            stateDir: target.stateDir,
-            configPath: target.configPath,
-            workspaceDir: target.defaultWorkspaceDir,
-            installRoot: agentCwd ?? process.cwd(),
-          },
-          route: selected.route,
-          modelFallbacks: selected.modelFallbacks,
-          prompt,
-          signal,
-          timeoutMs: Math.max(1, deadline - Date.now()),
-          maxToolCalls: 40,
-          isCurrent,
-        });
-      });
-      if (result.status === "unavailable") {
-        runtime.error(triageCollectionError(result.reason, redaction));
-        exitCliAfterOutput(runtime, controller.signal.aborted ? 2 : 1);
-      }
-      if (result.envelope.final) {
-        runtime.log(
-          redactSupportString(result.envelope.final, redaction, { maxLength: 32 * 1024 }),
-        );
-      }
-      if (result.envelope.error?.message) {
-        runtime.error(triageCollectionError(result.envelope.error.message, redaction));
-      }
-      if (controller.signal.aborted || result.envelope.status !== "ok") {
-        exitCliAfterOutput(
-          runtime,
-          controller.signal.aborted || result.envelope.status === "timeout" ? 2 : 1,
-        );
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-    return;
+    const { runAutomaticTriageRepair } = await import("./triage-automatic-repair.js");
+    return runAutomaticTriageRepair({
+      runtime,
+      target,
+      targetEnv,
+      prompt,
+      isCurrent,
+      installRoot: agentCwd ?? process.cwd(),
+      signal: automatic.signal,
+      allowGatewayActivation: automatic.failure.gateway === "verify-running",
+      formatError: (error) => triageCollectionError(error, redaction),
+    });
   }
 
   const { runUpdateRepairLoop } = await import("../infra/update-repair-agent.js");

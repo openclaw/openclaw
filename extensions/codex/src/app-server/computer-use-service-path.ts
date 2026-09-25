@@ -1,13 +1,15 @@
 /** Filesystem ownership guards for isolated Computer Use service provisioning. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
+import {
+  assertDirectoryIdentitySync,
+  readDirectoryIdentity,
+  type DirectoryIdentity,
+} from "@openclaw/fs-safe/advanced";
+import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
 
-type OwnedServiceParent = {
+type OwnedServiceParent = DirectoryIdentity & {
   logicalPath: string;
-  realPath: string;
-  dev: number;
-  ino: number;
 };
 
 export async function assertOwnedServicePath(params: {
@@ -95,24 +97,13 @@ export async function readRealDirectoryIdentity(
   label: string,
 ): Promise<OwnedServiceParent> {
   const logicalPath = path.resolve(directoryPath);
-  const before = await fs.lstat(logicalPath);
-  if (before.isSymbolicLink() || !before.isDirectory()) {
-    throw new Error(`${label} must be a real directory: ${logicalPath}`);
+  try {
+    const identity = await readDirectoryIdentity(logicalPath);
+    assertDirectoryIdentitySync(logicalPath, identity);
+    return { logicalPath, ...identity };
+  } catch (cause) {
+    throw new Error(`${label} must remain a real directory: ${logicalPath}`, { cause });
   }
-  const realPath = await fs.realpath(logicalPath);
-  const [after, resolved] = await Promise.all([fs.lstat(logicalPath), fs.lstat(realPath)]);
-  if (
-    after.isSymbolicLink() ||
-    !after.isDirectory() ||
-    !resolved.isDirectory() ||
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    after.dev !== resolved.dev ||
-    after.ino !== resolved.ino
-  ) {
-    throw new Error(`${label} changed while its ownership boundary was being established.`);
-  }
-  return { logicalPath, realPath, dev: after.dev, ino: after.ino };
 }
 
 export async function assertOwnedServiceParentStable(parent: OwnedServiceParent): Promise<void> {
@@ -130,16 +121,8 @@ export async function assertDirectoryIdentityStable(
 
 export async function directoryIdentityIsStable(expected: OwnedServiceParent): Promise<boolean> {
   try {
-    const current = await fs.lstat(expected.logicalPath);
-    if (
-      current.isSymbolicLink() ||
-      !current.isDirectory() ||
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino
-    ) {
-      return false;
-    }
-    return (await fs.realpath(expected.logicalPath)) === expected.realPath;
+    assertDirectoryIdentitySync(expected.logicalPath, expected);
+    return true;
   } catch {
     return false;
   }
@@ -166,39 +149,17 @@ async function ensureRealDirectoryTree(
   const root = path.resolve(ownershipRoot);
   const target = path.resolve(directoryPath);
   assertPathAtOrInside(root, target, label);
-  const relative = path.relative(root, target);
-  let current = root;
-  for (const segment of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    const existing = await fs.lstat(current).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
+  if (root !== target) {
+    // The separator preserves literal trailing whitespace through pathScope's input trimming.
+    const prepared = await pathScope(root, { label }).ensureDir(`${target}${path.sep}`, {
+      mode: 0o700,
     });
-    if (!existing) {
-      try {
-        await fs.mkdir(current, { mode: 0o700 });
-      } catch (error) {
-        if (!hasNodeErrorCode(error, "EEXIST")) {
-          throw error;
-        }
-      }
-      const created = await fs.lstat(current);
-      if (created.isSymbolicLink() || !created.isDirectory()) {
-        throw new Error(`${label} changed while its directory tree was being created: ${current}`);
-      }
-    } else if (existing.isSymbolicLink() || !existing.isDirectory()) {
-      throw new Error(`${label} must traverse real directories: ${current}`);
+    if (!prepared.ok) {
+      throw new Error(`${label} must traverse real directories: ${prepared.error}`, {
+        cause: prepared.diagnostic,
+      });
     }
   }
-  await assertNoSymlinkParents({
-    rootDir: root,
-    targetPath: target,
-    allowMissing: false,
-    requireDirectories: true,
-    messagePrefix: "Computer Use service path",
-  });
   await readRealDirectoryIdentity(target, label);
 }
 

@@ -142,6 +142,19 @@ const meetingTranscriptLineSchema = z
     ...(provenance !== undefined ? { provenance } : {}),
   }));
 
+const meetingTranscriptLinesSchema = z
+  .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+  .transform((lines) => lines.filter((line) => line !== null));
+
+const meetingCaptionLinesSchema = z
+  .array(
+    z.union([
+      meetingTranscriptLineSchema.and(z.object({ source: z.unknown().optional() })),
+      invalidBrowserArrayItemSchema,
+    ]),
+  )
+  .transform((lines) => lines.filter((line) => line !== null));
+
 const meetingBrowserStatusSchema = z.looseObject({
   inCall: optionalBrowserBoolean,
   micMuted: optionalBrowserBoolean,
@@ -154,11 +167,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   lastCaptionAt: optionalBrowserString,
   lastCaptionSpeaker: optionalBrowserString,
   lastCaptionText: optionalBrowserString,
-  recentTranscript: z
-    .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
-    .transform((lines) => lines.filter((line) => line !== null))
-    .optional()
-    .catch(undefined),
+  recentTranscript: meetingTranscriptLinesSchema.optional().catch(undefined),
   audioInputRouted: optionalBrowserBoolean,
   audioInputDeviceLabel: optionalBrowserString,
   audioInputRouteError: optionalBrowserString,
@@ -299,46 +308,34 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
       ? Math.max(0, payload.droppedLines)
       : 0;
   const parseLines = (values: unknown): MeetingTranscriptLine[] =>
-    Array.isArray(values)
-      ? values.flatMap((value) => {
-          if (!value || typeof value !== "object") {
-            return [];
-          }
-          const line = value as {
-            at?: unknown;
-            speaker?: unknown;
-            text?: unknown;
-            source?: unknown;
-            provenance?: unknown;
-          };
-          if (typeof line.text !== "string" || !line.text.trim()) {
-            return [];
-          }
-          const source = meetingCaptionSourceSchema.safeParse(line.source);
-          const identity =
-            source.success && source.data.epoch === payload.epoch ? source.data : undefined;
-          // Text-only legacy providers keep their shape. A supplied source or envelope
-          // needs explicit unknown facts when observation provenance is unavailable.
-          return [
-            {
-              ...(typeof line.at === "string" ? { at: line.at } : {}),
-              ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
-              text: line.text,
-              ...(line.provenance !== undefined || line.source !== undefined
-                ? {
-                    provenance: normalizeMeetingObservationProvenance(line.provenance, {
-                      observer: adapterId,
-                      epoch: payload.epoch,
-                      observedAt: line.at,
-                      speaker: line.speaker,
-                    }),
-                  }
-                : {}),
-              ...(identity ? { source: identity } : {}),
-            },
-          ];
-        })
-      : [];
+    meetingCaptionLinesSchema
+      .catch([])
+      .parse(values)
+      .map((line) => {
+        const source = meetingCaptionSourceSchema.safeParse(line.source);
+        const identity =
+          source.success && source.data.epoch === payload.epoch ? source.data : undefined;
+        // Legacy rows keep their shape; observation facts do not grant action authority.
+        const transcriptLine: MeetingTranscriptLine = { text: line.text };
+        if (line.at !== undefined) {
+          transcriptLine.at = line.at;
+        }
+        if (line.speaker !== undefined) {
+          transcriptLine.speaker = line.speaker;
+        }
+        if (line.provenance !== undefined || line.source !== undefined) {
+          transcriptLine.provenance = normalizeMeetingObservationProvenance(line.provenance, {
+            observer: adapterId,
+            epoch: payload.epoch,
+            observedAt: line.at,
+            speaker: line.speaker,
+          });
+        }
+        if (identity) {
+          transcriptLine.source = identity;
+        }
+        return transcriptLine;
+      });
   return {
     droppedLines,
     ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),

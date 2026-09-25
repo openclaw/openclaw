@@ -14,11 +14,8 @@ import {
   readSessionEntryMaintenanceNextAgeAt,
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
-import {
-  canSkipSessionEntryMaintenanceInDatabase,
-  emptySessionEntryMaintenancePlan,
-} from "./session-accessor.sqlite-maintenance-store.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import {
   createSessionMaintenancePlanningOperation,
   runSqliteSessionReclamation,
@@ -177,29 +174,20 @@ async function runPendingMaintenance(
           ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
           : resolveMaintenanceConfig();
         const ageCapture = captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance);
-        if (maintenance.mode === "warn") {
-          return { maintenance, ageCapture, operation: undefined };
-        }
-        // Cold planning stays off-thread. Only an already-owned, current fact can
-        // justify the compact count read before dispatching a no-op Worker request.
-        if (
-          ageCapture.fact &&
-          isOpenClawAgentDatabasePathCurrent(owner.database) &&
-          canSkipSessionEntryMaintenanceInDatabase(owner.database, { maintenance })
-        ) {
-          return { maintenance, ageCapture, operation: undefined };
-        }
-        const operation = createSessionMaintenancePlanningOperation({
-          databaseOptions: toDatabaseOptions(owner.scope),
-          input: {
-            ageFact: ageCapture.fact,
-            activeSessionKeys,
-            archiveDirectory: owner.archiveDirectory,
-            maintenance,
-            preservation: null,
-            storePath: owner.storePath,
-          },
-        });
+        const operation =
+          maintenance.mode === "warn"
+            ? null
+            : createSessionMaintenancePlanningOperation({
+                databaseOptions: toDatabaseOptions(owner.scope),
+                input: {
+                  ageFact: ageCapture.fact,
+                  activeSessionKeys,
+                  archiveDirectory: owner.archiveDirectory,
+                  maintenance,
+                  preservation: null,
+                  storePath: owner.storePath,
+                },
+              });
         return { maintenance, operation, ageCapture };
       },
       "session.maintenance.plan",
@@ -209,7 +197,7 @@ async function runPendingMaintenance(
       return;
     }
     const { maintenance, operation } = prepared;
-    if (maintenance.mode === "warn") {
+    if (operation === null) {
       if (isCurrent() && owner.generation !== generation) {
         scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
       } else {
@@ -224,37 +212,29 @@ async function runPendingMaintenance(
       }
       if (
         owner.generation !== generation ||
-        (operation &&
-          operation.input.preservation !== null &&
+        (operation.input.preservation !== null &&
           !isDeepStrictEqual(
             operation.input.preservation,
             captureSessionMaintenancePreservation(operation.input.storePath),
           ))
       ) {
         planningChanged = true;
-        throw new Error("SQLite automatic maintenance inputs changed before commit");
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance inputs changed before commit",
+        );
       }
     };
     const assertCurrent = () => {
       assertInputsCurrent();
       if (!isSessionEntryMaintenanceAgeCaptureCurrent(owner.database.db, ageCapture)) {
         planningChanged = true;
-        throw new Error("SQLite automatic maintenance age fact changed before commit");
-      }
-      if (!operation && !isOpenClawAgentDatabasePathCurrent(owner.database)) {
-        planningChanged = true;
-        throw new Error("SQLite automatic maintenance database path changed");
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance age fact changed before commit",
+        );
       }
     };
-    const runPlanning = () => {
-      if (!operation) {
-        assertCurrent();
-        return Promise.resolve({
-          kind: "maintenance-plan" as const,
-          value: emptySessionEntryMaintenancePlan(),
-        });
-      }
-      return runSqliteSessionReclamation({
+    const runPlanning = () =>
+      runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertCurrent,
         onWorkerResult: (result) => {
@@ -265,12 +245,8 @@ async function runPendingMaintenance(
         forceInProcess: false,
         plan: operation,
       });
-    };
     let result = await runPlanning();
-    if (!operation) {
-      assertCurrent();
-    }
-    if (operation && result.kind === "maintenance-preservation-required") {
+    if (result.kind === "maintenance-preservation-required") {
       await runExclusiveSqliteSessionWrite(
         owner.scope,
         async () => {
@@ -294,6 +270,25 @@ async function runPendingMaintenance(
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }
     const plan = result.value;
+    if (plan.archived === 0 && plan.entryRemovals.length === 0) {
+      assertInputsCurrent();
+      if (!isOpenClawAgentDatabasePathCurrent(owner.database)) {
+        planningChanged = true;
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance database path changed after no-op planning",
+        );
+      }
+      // A synchronous writer can change pressure after the Worker acknowledges its fact.
+      if (
+        captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance).fact !==
+        result.ageFact
+      ) {
+        planningChanged = true;
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance age fact changed after no-op planning",
+        );
+      }
+    }
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
       isCurrent,
     });

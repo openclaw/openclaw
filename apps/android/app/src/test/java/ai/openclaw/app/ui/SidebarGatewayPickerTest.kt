@@ -92,6 +92,8 @@ import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
 import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
@@ -604,12 +606,12 @@ class SidebarGatewayPickerTest {
       model.attachRuntimeUi(lifecycleOwner, PermissionRequester(app))
     }
     showSidebarAndComposer(composerLifecycleOwner = lifecycleOwner)
-    // Compose idleness does not join the initial IO history load. Its fixture run
-    // must be adopted before the controller can accept a terminal event for it.
-    composeRule.waitUntil {
-      composeRule.runOnIdle {
-        !model.chatHistoryLoading.value && model.chatSelectedActiveRunPresentation.value.runId == "android-screenshot-active-run"
-      }
+    // Compose idleness does not join the initial IO history load. Drain the real
+    // runtime state transition before publishing the terminal event for its run.
+    drainWithMainLooper {
+      combine(model.chatHistoryLoading, model.chatSelectedActiveRunPresentation) { loading, activeRun ->
+        !loading && activeRun.runId == "android-screenshot-active-run"
+      }.first { it }
     }
     composeRule.runOnIdle {
       ReflectionHelpers.getField<ChatController>(runtime, "chat").handleGatewayEvent(
@@ -618,7 +620,7 @@ class SidebarGatewayPickerTest {
       )
     }
     // The composer consumes the ViewModel bridge, not the controller's immediate state.
-    composeRule.waitUntil { composeRule.runOnIdle { model.pendingRunCount.value == 0 } }
+    drainWithMainLooper { model.pendingRunCount.first { it == 0 } }
     val owner = model.captureChatShareOwner()
     composeRule
       .onNode(SemanticsMatcher("Voice options") { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Voice options" })

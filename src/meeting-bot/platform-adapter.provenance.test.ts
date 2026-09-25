@@ -121,6 +121,22 @@ describe("meeting observation provenance parsing", () => {
     expect(parsed.lines[0]?.text).toBe("Still retained");
   });
 
+  it("retains shared row validation when captions carry source identity", () => {
+    const provenance = testMeetingObservation();
+    const row = { text: "Caption", source: TEST_CAPTION_SOURCE, provenance };
+    const parsed = parseTranscript({
+      epoch: "epoch-1",
+      lines: [null, 42, { text: " " }, { ...row, at: 42, speaker: false }],
+      pendingLines: [false, { text: 42 }, row],
+    });
+    expect(parsed).toEqual({
+      droppedLines: 0,
+      epoch: "epoch-1",
+      lines: [row],
+      pendingLines: [row],
+    });
+  });
+
   it("preserves optional legacy provider output without manufacturing an observer or identity", () => {
     const line = { text: "Legacy provider without observation metadata" };
     expect(parseTranscript({ lines: [line] })).toEqual({ droppedLines: 0, lines: [line] });
@@ -131,7 +147,9 @@ describe("meeting observation provenance parsing", () => {
     const health = TEST_MEETING_PLATFORM_ADAPTER.browser.parseStatus({
       result: JSON.stringify({
         recentTranscript: [
-          { text: "Current", provenance },
+          { text: "Current", provenance, source: TEST_CAPTION_SOURCE },
+          null,
+          { text: " " },
           { text: "Unknown", speaker: "Bob", provenance: null },
           { text: "Legacy" },
         ],

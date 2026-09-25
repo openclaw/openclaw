@@ -188,7 +188,10 @@ export function startGatewayTaskSubscriptions(params: {
         : state.tasks.keys();
       for (const taskId of taskIds) {
         const task = state.tasks.get(taskId);
-        if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
+        if (
+          (task?.runtime === "cli" || task?.runtime === "subagent") &&
+          !isTerminalTaskStatus(task.status)
+        ) {
           observers.onEvent({ kind: "upserted", task: cloneTaskRecordForObserver(task) });
         }
       }

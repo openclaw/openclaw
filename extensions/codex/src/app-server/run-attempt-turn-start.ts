@@ -9,7 +9,6 @@ import {
   buildCodexTurnStartFailureResult,
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
-import { isCodexContextRestartSelectionChangedError } from "./attempt-startup.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -25,6 +24,7 @@ import type {
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
+import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   CodexUsageLimitPromptError,

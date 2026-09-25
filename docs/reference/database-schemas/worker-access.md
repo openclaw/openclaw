@@ -95,6 +95,13 @@ receives a refusal and settles cleanup without waiting behind the foreground
 callback that requested close. Already admitted write-capable work retains its
 permit through native settlement; cancellation never releases it early.
 
+Reclamation commit acceptance checks the live parent authority and atomically
+accepts the pending commit before returning to the event loop. Revocation before
+acceptance refuses the commit; an accepted commit drains through its settled
+result or native worker exit before releasing writer admission, publishing facts,
+or releasing request custody. The parent does not open SQLite or synchronously
+wait for the worker's commit. This changes no schema, retention, or update behavior.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
@@ -108,8 +115,10 @@ the main thread and workers, naming the database and operation when supplied.
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher probe and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
-the committing transaction. Goal events share that recording command. Synchronous
-creation, compaction, terminal-event, watch, reset, and deletion callbacks remain
+the committing transaction. Goal events and normalized child-run terminal outcomes
+share that recording command. Child completion joins recording and rechecks its
+current lifecycle or ACP actor authority at transaction and commit admission.
+Synchronous creation, compaction, watch, reset, and deletion callbacks remain
 separate migration work.
 
 Durable session entry replacement reads its detached snapshot in the history
@@ -124,10 +133,25 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Durable trajectory flushes use the same agent database executor for sequence
+allocation, event insertion, and retention. The recorder captures its pending
+prefix inside the physical store's writer FIFO and retains the host metadata
+handle while its live source authority is checked at transaction admission and
+commit. It joins native settlement before releasing that FIFO turn: a retained
+commit receipt retires the prefix even if the reply is lost, a proven rollback
+leaves it retryable, and an unknown outcome fences replay. Events recorded during
+the write remain queued for the next flush. Incognito and maintenance scopes and
+already executing workers keep their native kernel. Event bytes, ordering,
+retention limits, schemas, and update behavior are unchanged.
+
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;
-the host captures live admission identities and rechecks protection before each
-archive and deletion. A deferred WAL checkpoint still blocks another discovery
+the host captures live admission identities and rechecks their protection before
+archive preparation and deletion. Node references are rechecked in the reclamation
+worker transaction before archive persistence or deletion, without a redundant
+host reference scan per candidate. A newly referenced candidate may undergo archive
+preparation, but the transaction preserves its history and publishes no archive.
+A deferred WAL checkpoint still blocks another discovery
 pass until a newer completed checkpoint. Exact lifecycle removal and logical
 maintenance planning limit reference results to the generations they might
 delete. No new cache, index, schema, retention policy, or update step is required.
@@ -178,6 +202,14 @@ per-transcript queue, then recheck the live session before publishing. Message
 lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
 their projection-readiness retry. Process-held incognito transcripts remain with
 their in-memory owner. Schemas, retained data, and update behavior are unchanged.
+
+Exact transcript-event matching also uses the history worker for disk discovery,
+payload decoding, and selection. Callers supply a serializable selection for the
+latest event, visible final result, idempotency key, or active assistant message.
+The host captures the physical source before yielding and rechecks its admission
+before returning the result. Cold archives retain their existing restoration
+owner. Native transaction callbacks and process-held incognito transcripts retain
+their synchronous reader; worker failures never fall back to host disk reads.
 
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
@@ -291,6 +323,15 @@ Grant resumption reads the current assigned role and email aliases from that
 retained owner on each assertion. The requester resolves its role ceiling from
 those supplied facts through the shared role-policy owner.
 
+Internal operator run admission retains the same prepared profile owner before
+accepting work. Current authority reads the exact profile and assigned role from
+committed resident facts, without scanning aliases or querying SQLite on the
+Gateway thread. Role, source, device, and Gateway revocation remain live through
+retained continuations; benign aliases added to the target profile do not revoke
+it. Callers revalidate after preparation, and assertions reread profile facts
+after source callbacks. External plugin authority callbacks retain their existing
+synchronous contract and may have their own storage dependencies.
+
 Session metadata and membership facts are prepared through the existing session
 worker. Their canonical writers publish committed changes before observers, and
 unknown or unavailable facts leave publication recovery pending until preparation
@@ -307,8 +348,15 @@ worker transition owner. Accepted run updates retain FIFO order through preparat
 commit, and publication. The worker rereads exact task and backing records, while
 the host rechecks the captured runtime, registry entry, and execution authority at
 admission. Delivery callbacks await settlement before mirroring or cleanup. The
-shipped synchronous detached-task SDK remains a separate compatibility adapter;
-other native task mutation callers remain migration debt. Slow main-thread
+shipped synchronous detached-task SDK remains a separate compatibility adapter.
+
+Asynchronous completion waits, kill reconciliation, delivery, and cleanup select
+tasks through the existing prepared registry reader. Each poll shares one accepted
+read, preserves preferred-run and backing-record selection, and rechecks abort,
+runtime ownership, and lifecycle authority after awaiting. Synchronous permission,
+kill, and requester-wake commits retain their native boundary, as do shipped custom
+runtime hooks. Those boundaries do not provide a fallback for worker read failures.
+Other native task mutation callers remain migration debt. Slow main-thread
 coordinator warnings include the caller stack as well as the operation label,
 captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
 are unchanged.
@@ -345,6 +393,16 @@ ordinary discovery reads retain committed-state isolation. This avoids preparing
 a child-process snapshot while holding the shared-state write coordinator. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
+
+Cron activation, exact reservation cleanup, and stale-family removal use typed
+commands through the existing worker mutation owner. The host retains the
+partition lock, reservation identity, live policy, and runner settlement. The
+worker rereads durable receipt and deletion guards before committing. Publication
+uses the matching committed receipt once; a lost reply never causes a replay.
+Deferred receipt finishing retains the captured physical worker context through
+settlement. Reservation creation and remaining manual or timer finalizers retain
+their native implementation as migration debt. Schemas, retention, configuration,
+and update behavior are unchanged.
 
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and
@@ -416,6 +474,20 @@ lease; database close joins the callback and its retained worker cleanup. Cleanu
 refuses a replacement physical database and cannot delete a successor's lease.
 Upload formats, expiry limits, installation permissions, and update behavior are
 unchanged.
+
+Reply recovery reads file-backed logical session entries through the existing
+agent database executor. The worker preserves canonical initialization and schema
+migration, logical key and folded-candidate validation, configured owner inference,
+and the distinction between logical agents and shared physical stores. Captured
+registry authority follows only registration changes witnessed by that same
+opening owner after dispatch. A read queued behind an earlier writer may refresh
+registry facts before opening its actor, but must prove the original logical owner,
+physical target, and caller authority are unchanged. It never replays a dispatched
+operation or accepts target reassociation. Recovery callers await the result and
+recheck their live authority before admission or reply decisions.
+Transaction predicates and commit checks stay with their existing writers.
+Process-held incognito entries retain their native owner until its complete
+worker cutover; this does not make the whole reply path free of host SQLite.
 
 Discord thread-binding startup and bundled mutations use the existing plugin-state
 worker. Inbound and outbound activity, binding changes, lifecycle settings, thread

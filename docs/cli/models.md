@@ -156,6 +156,11 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
+A provider that rejects authentication keeps its sign-in status without causing
+a catalog refresh warning. For an installed agent app, open **Models** in the
+Control UI and follow its sign-in guidance. Timeouts and other discovery failures
+still produce the refresh warning, even when another provider needs sign-in.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.

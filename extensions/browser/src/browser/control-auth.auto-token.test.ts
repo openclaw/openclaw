@@ -82,11 +82,8 @@ vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
   mutateConfigFile: mocks.mutateConfigFile,
 }));
 
-vi.mock("../gateway/startup-auth.js", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   ensureGatewayStartupAuth: mocks.ensureGatewayStartupAuth,
-}));
-
-vi.mock("../gateway/auth.js", () => ({
   resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 

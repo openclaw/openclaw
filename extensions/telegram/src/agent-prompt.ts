@@ -17,12 +17,10 @@ export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
       cfg,
       accountId: accountId ?? undefined,
     });
-    return [
-      ...(inlineButtonsScope === "off" ? [] : ["inlineButtons"]),
-      ...(isTelegramRichMessagesEnabled(cfg, accountId) ? ["markdownDetails"] : []),
-    ];
+    return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
   },
-  // Every runtime receives the channel authoring contract via inbound-meta response_format.
+  // The only Telegram formatting contract, including `<details>`. Core delivers it to
+  // every turn whose output reaches this account: replies, heartbeats, cron, announces.
   inboundFormattingHints: ({ cfg, accountId }) => {
     const richMessages = isTelegramRichMessagesEnabled(cfg, accountId);
     if (richMessages) {

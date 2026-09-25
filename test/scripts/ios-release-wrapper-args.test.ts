@@ -208,7 +208,7 @@ describe("iOS release shell wrapper arguments", () => {
       bundle,
       "#!/usr/bin/env bash\n" +
         '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-        '[[ "${1:-}" == "_2.6.9_" ]] || exit 92\n' +
+        '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
         '[[ "${2:-}" != "check" ]] || exit 0\n' +
         '[[ "${2:-}" == "exec" && "${3:-}" == "fastlane" ]] || exit 93\n' +
         "shift 3\n" +

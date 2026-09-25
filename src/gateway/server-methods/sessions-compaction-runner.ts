@@ -25,6 +25,7 @@ type GatewaySessionCompactionParams = {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  abortSignal?: AbortSignal;
   runId?: string;
   sessionId: string;
   sessionKey: string;
@@ -87,7 +88,7 @@ export async function preflightGatewaySessionCompaction(
 
 export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
-  host?: Parameters<typeof compactEmbeddedAgentSession>[1],
+  host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
   const transcriptTarget = await resolveGatewayCompactionTranscriptTarget(params);
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
@@ -105,6 +106,7 @@ export async function runGatewaySessionCompaction(
   const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
   return await compactEmbeddedAgentSession(
     {
+      abortSignal: params.abortSignal,
       contextEngineAgentId: params.agentId,
       runId: params.runId,
       sessionId: params.sessionId,

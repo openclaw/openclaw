@@ -36,6 +36,7 @@ export const runtimeProcessEntrypoints = {
   stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
   githubExec: runtimeProcessEntrypoint("agents/github-exec-launcher"),
   sqliteReadOnly: runtimeProcessEntrypoint("infra/sqlite-readonly-location.worker"),
+  sqliteSourceRevision: runtimeProcessEntrypoint("infra/sqlite-source-revision.worker"),
   sqliteIntegrity: runtimeProcessEntrypoint("infra/sqlite-integrity.worker"),
   preparedModelCatalog: runtimeProcessEntrypoint("agents/prepared-model-catalog.worker"),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
@@ -51,6 +52,9 @@ export const runtimeProcessEntrypoints = {
   sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
   sessionManagerMetadata: runtimeProcessEntrypoint(
     "agents/sessions/session-manager-metadata.worker",
+  ),
+  sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
+    "config/sessions/session-transcript-projection-publication.worker",
   ),
   sessionTranscriptReports: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-transcript-reports.worker",

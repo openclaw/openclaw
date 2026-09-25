@@ -1,5 +1,5 @@
-// Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -14,7 +14,6 @@ import {
 } from "../routing/session-key.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import type { ChatLog } from "./components/chat-log.js";
-import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import {
   formatPrimitiveString,
@@ -177,12 +176,23 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
-    refreshTuiAgentList({
-      load: () => client.listAgents(),
-      apply: (result) => ownsRefresh() && applyAgentsResult(result),
-      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
-    });
+  const refreshAgents = async (
+    ownsRefresh: () => boolean = () => true,
+  ): Promise<Result<void, string>> => {
+    try {
+      const result = await client.listAgents();
+      if (ownsRefresh()) {
+        applyAgentsResult(result);
+      }
+      return ok(undefined);
+    } catch (error) {
+      const message = formatTuiErrorMessage(error);
+      if (ownsRefresh()) {
+        chatLog.addSystem(`agents list failed: ${message}`);
+      }
+      return resultError(message);
+    }
+  };
 
   const updateAgentFromSessionKey = (key: string) => {
     const parsed = parseAgentSessionKey(key);
@@ -348,11 +358,10 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      const entry =
-        result.session &&
-        agentSessionKeysMatchByRequestKey(result.session.key, selection.sessionKey)
-          ? result.session
-          : undefined;
+      const entry = result.session;
+      if (entry && (!entry.key || !isCurrentSessionMutation(entry))) {
+        return;
+      }
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
         state.currentSessionKey = entry.key;
@@ -373,9 +382,7 @@ export function createSessionActions(context: SessionActionContext) {
 
   // Many TUI paths ask for the same session snapshot at once; bursts need only
   // one active lookup and one follow-up with the latest selection.
-  const refreshSessionInfoRunner = createTuiRefreshCoalescer(async () => {
-    await runRefreshSessionInfo();
-  });
+  const refreshSessionInfoRunner = createTuiRefreshCoalescer(runRefreshSessionInfo);
   const refreshSessionInfo = () => refreshSessionInfoRunner.run();
 
   const applySessionInfoFromPatch = (
@@ -700,7 +707,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (pendingRunId) {
         // Re-read after abortChat: an event may already have dropped the queued row.
         const pendingDraft = submit.getPendingSubmitDraft(state);
-        submit.clearPendingSubmit(state, pendingRunId ?? undefined);
+        submit.clearPendingSubmit(state, pendingRunId);
         if (pendingDraft?.runId === pendingRunId) {
           dropPendingRun(pendingRunId);
         }

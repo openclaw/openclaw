@@ -114,10 +114,18 @@ const eventSchema = z.looseObject({
 });
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
-export type AgentsApiReasoning = {
-  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
-  summary?: "concise" | "detailed" | "auto" | null;
+export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
+export type AgentsApiFunctionDeclaration = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  defer_loading?: boolean;
 };
+export type AgentsApiFunctionResult =
+  | { success: true; output: string }
+  | { success: false; error: string };
+
 /** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
@@ -161,9 +169,9 @@ export class AgentsApiClient {
     signal: AbortSignal,
     instructions: string,
     model: string,
-    reasoningEffort?: AgentReasoningParam["effort"],
-    extras?: {
-      reasoning?: AgentsApiReasoning;
+    options?: {
+      functions?: AgentsApiFunctionDeclaration[];
+      reasoning?: AgentReasoningParam;
     },
   ): Promise<string> {
     const session = await this.sessions.create(
@@ -171,13 +179,9 @@ export class AgentsApiClient {
         agent: {
           model,
           instructions,
-          reasoning: extras?.reasoning
-            ? { ...extras.reasoning, effort: reasoningEffort }
-            : reasoningEffort === undefined
-              ? undefined
-              : { effort: reasoningEffort },
+          reasoning: options?.reasoning,
           multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }],
+          tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
         },
         environment: { type: "openai_hosted" },
       },
@@ -227,6 +231,53 @@ export class AgentsApiClient {
       throw new Error("Agents API returned a different session");
     }
     return session;
+  }
+
+  async pendingFunctionCalls(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<AgentsApiFunctionCall[]> {
+    const session = sessionSchema.parse(await this.session(sessionId, signal));
+    if (session.status === "failed") {
+      throw new Error(session.error ?? "Agents API session failed");
+    }
+    if (session.status !== "requires_action") {
+      return [];
+    }
+    const calls: AgentsApiFunctionCall[] = [];
+    for (const action of session.required_actions) {
+      if (action.type !== "function_call") {
+        throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
+      }
+      calls.push(action);
+    }
+    return calls;
+  }
+
+  async toolResult(
+    sessionId: string,
+    call: AgentsApiFunctionCall,
+    result: AgentsApiFunctionResult,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [
+          {
+            type: "agent.session.input.tool_result",
+            turn_id: call.turn_id,
+            call_id: call.call_id,
+            ...(result.success
+              ? { success: true, output: result.output }
+              : { success: false, error: result.error }),
+          },
+        ],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
+    this.assertCurrent();
   }
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
@@ -338,6 +389,10 @@ export class AgentsApiError extends Error {
     this.type = details.type;
     this.param = details.param;
   }
+}
+
+export function isAgentsApiTerminalTurn(status?: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 async function* observeEvents(

@@ -19,6 +19,8 @@ import {
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksPluginMetadata,
+  type CompactHooksQueuedCompaction,
+  type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
 import { mockCompactHooksTools } from "./compact.hooks.tools.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
@@ -26,21 +28,6 @@ import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-type MockResolvedModel = {
-  logicalRef: { provider: string; model: string };
-  model: {
-    provider: string;
-    api: string;
-    baseUrl?: string;
-    id: string;
-    input: unknown[];
-    contextWindow?: number;
-    requestTimeoutMs?: number;
-  };
-  error: null;
-  authStorage: Pick<import("../sessions/auth-storage.js").AuthStorage, "setRuntimeApiKey">;
-  modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
-};
 type MockMemorySearchManager = {
   manager: {
     sync: (params?: unknown) => Promise<void>;
@@ -149,7 +136,7 @@ export const resolveSessionAgentIdsMock = vi.fn<
 export const resolveAgentConfigMock = vi.fn(
   (_config?: unknown, _agentId?: string): unknown => undefined,
 );
-let fixtureWorkspaceDir: string;
+let fixture: { workspaceDir: string; sessionId: string };
 export const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
@@ -199,7 +186,7 @@ export const resolveCliBackendConfigMock = vi.fn(() => null as Record<string, un
 function createMockCompactionSession() {
   let onContextReplaced: ((tokensAfter: number, tokensBefore: number) => void) | undefined;
   const session = {
-    sessionId: "session-1",
+    sessionId: fixture.sessionId,
     messages: sessionMessages.map((message) => structuredClone(message)),
     agent: {
       streamFn: vi.fn(),
@@ -548,8 +535,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSkillsPromptMock.mockReturnValue(undefined);
 }
 
-export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
-  fixtureWorkspaceDir = workspaceDir;
+export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = "session-1"): void {
+  fixture = { workspaceDir, sessionId };
   runCliAgentMock.mockClear();
   resolveCliBackendConfigMock.mockReset();
   resolveCliBackendConfigMock.mockReturnValue(null);
@@ -635,7 +622,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
 
 export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
-  compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+  compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
@@ -964,10 +951,10 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       listAgentIds,
       resolveAgentConfig: resolveAgentConfigMock,
       resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
-        join(fixtureWorkspaceDir, "agents", agentId, "agent"),
+        join(fixture.workspaceDir, "agents", agentId, "agent"),
       ),
       resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
-      resolveAgentWorkspaceDir: vi.fn(() => fixtureWorkspaceDir),
+      resolveAgentWorkspaceDir: vi.fn(() => fixture.workspaceDir),
       resolveDefaultAgentDir: resolveDefaultAgentDirMock,
       resolveDefaultAgentId: vi.fn(() => "main"),
       resolveAgentIdFromSessionKey: vi.fn(
@@ -1092,7 +1079,14 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
+    compactEmbeddedAgentSession: (params, host = {}) =>
+      compactQueuedModule.compactEmbeddedAgentSession(params, {
+        ...host,
+        sourceAuthority: host.sourceAuthority ?? {
+          assertActive: host.assertActive ?? (() => {}),
+          operatorAuthority: undefined,
+        },
+      }),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };

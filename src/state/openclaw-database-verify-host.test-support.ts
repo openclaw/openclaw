@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { setTimeout as delay } from "node:timers/promises";
-import { isMainThread } from "node:worker_threads";
+import { once } from "node:events";
+import { isMainThread, MessageChannel } from "node:worker_threads";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
@@ -22,12 +22,15 @@ await withOpenClawTestState(
   async ({ env, statePath }) => {
     setLoggerOverride({ level: "info", file: statePath("verify.log"), consoleLevel: "silent" });
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    closeOpenClawAgentDatabaseByPath(agent.path);
+    // Simulate a restart: retain the clean receipt without the initializer's runtime proof.
+    closeOpenClawAgentDatabasesForTest();
     const before = readOpenClawAgentIntegrityVerification(agent.path, env);
     assert.equal(before?.clean_close, 1);
     assert.ok(before);
 
-    let verified = false;
+    // The real Gateway keeps a listener alive; its verifier timer is deliberately unref'd.
+    const { port1, port2 } = new MessageChannel();
+    const verified = once(port1, "message");
     const unsubscribe = onInternalDiagnosticEvent(
       (event) => {
         if (
@@ -36,7 +39,7 @@ await withOpenClawTestState(
           event.message === "database integrity verification passed" &&
           event.attributes?.path === agent.path
         ) {
-          verified = true;
+          port2.postMessage(null);
         }
       },
       { include: ["log.record"] },
@@ -61,7 +64,7 @@ await withOpenClawTestState(
             binding.authorize(request);
             context.admission.assertCurrent();
             assert.ok(grant(), "Synthetic database admission expired");
-          }),
+          }, binding.attachment),
         });
       },
     };
@@ -69,17 +72,7 @@ await withOpenClawTestState(
       await generation.run(source, (scope) =>
         scope.execute({ type: "database.prepareWrite", input: undefined }),
       );
-      const deadline = performance.now() + 20_000;
-      for (;;) {
-        if (verified) {
-          break;
-        }
-        assert.ok(
-          performance.now() < deadline,
-          "Cached Worker open never completed its quick check",
-        );
-        await delay(20);
-      }
+      await verified;
       assert.deepEqual(
         { ...readOpenClawAgentIntegrityVerification(agent.path, env) },
         {
@@ -92,6 +85,8 @@ await withOpenClawTestState(
       await generation.close();
       await drainGlobalSingletonLifecycleState();
       unsubscribe();
+      port1.close();
+      port2.close();
       setLoggerOverride(null);
     }
   },

@@ -10,7 +10,6 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -245,7 +244,6 @@ test("sessions.create does not start title generation for a model denied by poli
     prefix: "openclaw-session-worktree-title-denied-model-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = {
     workspace,
     model: { primary: "openai/gpt-5.6-luna" },
@@ -289,7 +287,6 @@ test("sessions.create keeps the crustacean fallback when no title source exists"
     prefix: "openclaw-session-worktree-empty-title-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   let worktreeId: string | undefined;
@@ -336,7 +333,6 @@ test.each(["packages/app", "..notes"])(
       fs.mkdir(workspace, { recursive: true }),
       fs.mkdir(worktreePath, { recursive: true }),
     ]);
-    closeOpenClawStateDatabaseForTest();
     testState.agentConfig = { workspace };
     await createSessionStoreDir();
     const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
@@ -431,7 +427,6 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
     path: worktreePath,
     repoRoot: selectedWorkspace,
   });
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
   const createSpy = vi

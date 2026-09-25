@@ -12,7 +12,7 @@ import {
   readClawPackageRefs,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
+import type { ClawAddPlan, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 
@@ -46,7 +46,6 @@ function packageKey(value: Pick<ClawPackage, "kind" | "ref">): string {
 
 export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
-  _targetManifest: ClawManifest,
   targetAddPlan: ClawAddPlan,
   options: ClawPluginRuntimeOptions & {
     installPackages?: typeof installClawPackages;

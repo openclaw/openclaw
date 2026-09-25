@@ -230,6 +230,10 @@ including `package-lock.json` verification, hoisted dependency scanning,
 and npm install records. Plain archive paths still install as local
 archives under the plugin extensions root.
 
+For registered archive plugins in the extensions root, `openclaw doctor --fix`
+repairs stale or dangling `node_modules/openclaw` host links using the installed
+package. This repair does not require the original archive or reinstall the plugin.
+
 Claude marketplace installs are also supported.
 
 ### Marketplace shorthand

@@ -3,14 +3,8 @@ import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 
-/**
- * Drops a delivery topic that the incoming patch has orphaned.
- *
- * A topic only means anything for the exact route it was authored against, so
- * changing any part of that route -- the mode, the channel, the sending
- * account, the agent, or the recipient itself -- invalidates it unless the
- * same patch supplies a replacement.
- */
+// Topics belong to an exact delivery route; retain one only when that route survives
+// or the same patch supplies a replacement.
 export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
@@ -26,14 +20,7 @@ export function invalidateStaleDeliveryRoute(
     : patch;
 }
 
-/**
- * Reports whether a form change invalidates the cached directory itself.
- *
- * Only the fields the `conversations.list` request is keyed on qualify. The
- * sending account is applied to the cached rows locally, so editing it must
- * never re-read the Gateway -- otherwise every keystroke in the Account ID
- * field launches another directory discovery across configured accounts.
- */
+// Account filtering is local: only request-key changes rediscover the directory.
 export function requiresDirectoryReload(current: CronFormState, next: CronFormState): boolean {
   return (
     next.deliveryMode !== current.deliveryMode ||
@@ -157,42 +144,6 @@ export class DeliveryConversationsController {
     editorGeneration: number,
     stillEditing: boolean,
   ) {
-    this.resettle(cronState, connectionScope, editorGeneration, stillEditing);
-  }
-
-  /**
-   * Resettle the directory when a rejected save replaced the editor's route.
-   *
-   * Revision-conflict recovery loads the authoritative definition into the
-   * editor and still reports `saved: false`, so the post-save resettle above
-   * never runs for it. If that definition moved the route the cache was read
-   * against, the cached rows describe a channel or agent the editor no longer
-   * targets -- the sending account is applied locally, so an unchanged account
-   * does not hide them -- and a read still outstanding for the old route would
-   * publish onto the new one. Retiring both and reading the recovered route is
-   * the only outcome that leaves no stale target selectable.
-   *
-   * A rejected save that did not move the route (a field error, a refused
-   * request) leaves the cache alone, so retrying a save never re-reads the
-   * Gateway for a directory that still answers.
-   */
-  reconcileRoute(
-    cronState: CronState,
-    connectionScope: GatewayConnectionScope | null,
-    editorGeneration: number,
-  ) {
-    if (sameDirectoryRoute(this.readRoute, readDirectoryRoute(cronState))) {
-      return;
-    }
-    this.resettle(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
-  }
-
-  private resettle(
-    cronState: CronState,
-    connectionScope: GatewayConnectionScope | null,
-    editorGeneration: number,
-    stillEditing: boolean,
-  ) {
     if (!this.ownedBy(cronState, connectionScope, editorGeneration)) {
       return;
     }
@@ -202,6 +153,19 @@ export class DeliveryConversationsController {
     } else {
       this.editorGeneration += 1;
     }
+  }
+
+  // Revision-conflict recovery may replace the route despite `saved: false`.
+  // Retire its stale suggestions and pending read, but keep unchanged routes quiet.
+  reconcileRoute(
+    cronState: CronState,
+    connectionScope: GatewayConnectionScope | null,
+    editorGeneration: number,
+  ) {
+    if (sameDirectoryRoute(this.readRoute, readDirectoryRoute(cronState))) {
+      return;
+    }
+    this.afterSave(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
   }
 
   /**

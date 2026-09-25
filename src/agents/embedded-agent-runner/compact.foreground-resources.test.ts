@@ -330,29 +330,35 @@ it.for([
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
-          compactEmbeddedAgentSession({
-            ...target,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            workspaceDir: state.workspaceDir,
-            agentDir: state.agentDir(),
-            config,
-            provider: pluginId,
-            model: "model",
-            trigger: deferred ? "budget" : "manual",
-            ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
-            abortSignal: caller.signal,
-            enqueue: async (task) => await task(),
-          });
+          compactEmbeddedAgentSession(
+            {
+              ...target,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              workspaceDir: state.workspaceDir,
+              agentDir: state.agentDir(),
+              config,
+              provider: pluginId,
+              model: "model",
+              trigger: deferred ? "budget" : "manual",
+              ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
+              abortSignal: caller.signal,
+              enqueue: async (task) => await task(),
+            },
+            { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+          );
         const completion = parent ? parent.run(start) : start();
         pending = completion;
         if (deferred) {
           await completion;
-          await withTestTimeout(
-            entered.promise,
-            5_000,
-            "Deferred factory never entered maintenance",
+          const maintenanceResult = await racePromiseWithAbortSignal(
+            Promise.race([
+              entered.promise.then(() => "started"),
+              waitForDeferredTurnMaintenanceForSession(target.sessionKey).then(() => "settled"),
+            ]),
+            signal,
           );
+          expect(maintenanceResult).toBe("started");
         } else {
           await Promise.race([
             entered.promise,

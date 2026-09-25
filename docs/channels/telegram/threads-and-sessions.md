@@ -46,6 +46,8 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly, and OpenClaw pins the spawn confirmation in-topic. Controlled by `session.threadBindings.spawnSessions` (default: `true`).
 
+    Startup waits for stored thread bindings before accepting updates. Shutdown drains accepted binding changes before a replacement bot reloads them. Bundled Telegram handlers persist bindings through the shared SQLite worker so storage does not block message handling. Deprecated synchronous Plugin SDK touch and lifecycle setters keep their immediate behavior on the same binding owner until the next SDK major.
+
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.

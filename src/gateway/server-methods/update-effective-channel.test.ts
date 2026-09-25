@@ -104,7 +104,7 @@ describe("update.status effective channel", () => {
   });
 
   it("prefers the current config channel over the startup schedule", async () => {
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
     const handler = updateHandlers["update.status"];
@@ -192,7 +192,7 @@ describe("update.status effective channel", () => {
       ts: 2,
       stats: { after: { version: "2.0.0" } },
     });
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 

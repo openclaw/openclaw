@@ -6,7 +6,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -31,10 +30,11 @@ import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useTranscriptRewriteTempDirs(afterEach);
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -139,15 +139,6 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
-function requireValue<T>(value: T | undefined, label: string): T {
-  // Fail with a labeled invariant instead of letting optional entries produce
-  // weak assertions later in transcript-branch tests.
-  if (value === undefined) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 beforeAll(async () => {
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
   ({ rewriteTranscriptEntriesInSessionManager } = await import("./transcript-rewrite.js"));
@@ -187,7 +178,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         idempotencyKey: "admitted-rewrite:user",
         ...(excludeFromContext ? { excludeFromContext: true } : {}),
       };
-      const source = requireValue(
+      const source = expectDefined(
         await stageSessionPendingInput(target, {
           runId: "admitted-rewrite",
           message,
@@ -198,7 +189,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       const sources = [source];
       if (collected) {
         sources.push(
-          requireValue(
+          expectDefined(
             await stageSessionPendingInput(target, {
               runId: "admitted-rewrite-second",
               message: {
@@ -212,7 +203,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         );
       }
       const receipt = collected
-        ? requireValue(
+        ? expectDefined(
             bindSessionPendingInputSources(sources, {
               ...message,
               idempotencyKey: "collected-rewrite:user",
@@ -240,7 +231,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           ).rejects.toThrow("Pending input relocation");
           expect(await loadTranscriptEvents(target)).toEqual(originalRows);
         }
-        let rewriteTarget = requireValue(toolEntryId, "tool result entry");
+        let rewriteTarget = expectDefined(toolEntryId, "tool result entry");
         let currentEntryId = receipt.inputId;
         const beforeNested = getBranchMessages(manager);
         let nestedRewrite: Promise<unknown> | undefined;
@@ -287,7 +278,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
                     sessionManager: manager,
                     replacements: [
                       {
-                        entryId: requireValue(currentTool, "observer tool result").id,
+                        entryId: expectDefined(currentTool, "observer tool result").id,
                         message: createToolResultReplacement("read", "observer rewrite", 3),
                       },
                     ],
@@ -299,7 +290,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           return 0;
         });
         publicationDatabase.db.exec(
-          "CREATE TRIGGER observe_rewrite_custody AFTER INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.message.content[0].text') = 'short result' BEGIN SELECT queue_custody_observer(); END;",
+          "CREATE TEMP TRIGGER observe_rewrite_custody AFTER INSERT ON main.transcript_events WHEN json_extract(NEW.event_json, '$.message.content[0].text') = 'short result' BEGIN SELECT queue_custody_observer(); END;",
         );
         for (const replacementText of ["short result", "shorter"]) {
           const rewritten = await receipt.run(() =>
@@ -314,6 +305,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
             }),
           );
           expect(rewritten.changed).toBe(true);
+          expect(observerRewrites).toHaveLength(replacementText === "short result" ? 1 : 0);
           for (const observerRewrite of observerRewrites.splice(0)) {
             expect((await observerRewrite).changed).toBe(true);
           }
@@ -335,7 +327,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
                 entry.message.idempotencyKey === receipt.message.idempotencyKey,
             );
           expect(activeUsers).toHaveLength(1);
-          currentEntryId = requireValue(activeUsers[0], "active admitted user").id;
+          currentEntryId = expectDefined(activeUsers[0], "active admitted user").id;
           expect(currentEntryId).not.toBe(receipt.inputId);
           expect(
             readActiveTranscriptEntryAnchor({ ...target, entryId: currentEntryId }),
@@ -343,7 +335,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           expect(
             await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message })),
           ).toMatchObject({ appended: false, messageId: currentEntryId });
-          rewriteTarget = requireValue(
+          rewriteTarget = expectDefined(
             reopened
               .getBranch()
               .find((entry) => entry.type === "message" && entry.message.role === "toolResult"),
@@ -402,7 +394,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
   it("preserves active-branch labels after rewritten entries are re-appended", async () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-    const summaryEntry = requireValue(
+    const summaryEntry = expectDefined(
       findAssistantEntryByText(sessionManager, "summarized"),
       "summary entry",
     );
@@ -422,7 +414,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     );
 
     expect(result.changed).toBe(true);
-    const rewrittenSummaryEntry = requireValue(
+    const rewrittenSummaryEntry = expectDefined(
       findAssistantEntryByText(sessionManager, "summarized"),
       "rewritten summary entry",
     );
@@ -479,8 +471,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       );
       const compactionEntry = branch.find((entry) => entry.type === "compaction");
 
-      const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
-      const compaction = requireValue(compactionEntry, "compaction entry");
+      const keptAssistant = expectDefined(keptAssistantEntry, "kept assistant entry");
+      const compaction = expectDefined(compactionEntry, "compaction entry");
       if (compaction.type !== "compaction") {
         throw new Error("expected compaction entry");
       }
