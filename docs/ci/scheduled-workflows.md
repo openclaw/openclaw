@@ -34,13 +34,22 @@ independent, and subsequent security-only pushes cannot cancel hourly work.
 The hourly dispatcher and manual CI remain available during release validation;
 `OPENCLAW_RELEASE_PRIORITY_RUN` does not control their admission.
 
-The standalone Docs, Node Runtime Conformance, Plugin Init Scaffold Validation,
-and Sandbox Common Smoke workflows also run hourly at minute 23, retaining
-their existing PR scopes. Plugin NPM Release runs its nonpublishing metadata
-and unpublished-package pack preview hourly; schedules cannot enter its
-manual-only approval or publication jobs. Vitest Cache Warm runs at minute 17
-of every hour, retaining its manual and repository-dispatch recovery paths.
-The warmer is independent; its completion before CI is not guaranteed.
+Hourly CI owns docs checks, including RunsOn routing. The standalone Docs workflow
+retains manual and opted-in push runs.
+
+Node Runtime Conformance and Plugin Init Scaffold Validation check for changed
+inputs hourly at minute 23. They reuse proof only when the required jobs passed
+on the same branch within 24 hours and the complete input diff is unchanged.
+Skipped jobs cannot advance the comparison base. Missing proof, incomplete
+diffs, or API errors request fresh validation. Each decision reports its reason.
+Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+
+Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
+Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
+preview hourly. Schedules cannot enter its manual-only approval or publication
+jobs. Vitest Cache Warm runs at minute 17 of every hour, retaining its manual
+and repository-dispatch recovery paths. The warmer is independent. Its
+completion before CI is not guaranteed.
 
 ### Restore per-push CI
 
@@ -76,14 +85,31 @@ and production dependency auditing) on its existing non-docs push scope.
 Default main pushes also run the baseline-growth, assertion-safety, and new
 protocol-method metadata guards there against the exact push `before` SHA,
 so hourly manual CI's main-against-itself comparison cannot lose these checks;
-Workflow Sanity retains its existing push scope. The full CI aggregate job is
+Workflow Sanity checks tracked conflict markers on every admitted push.
+Its workflow lint and security tools run only when workflow, action, or lint
+policy inputs change. The full CI aggregate job is
 skipped on default main pushes, **not** on runnable PRs or full manual runs.
 CodeQL and Workflow Sanity also remain available during release validation.
 PR required-check names and security-review enforcement are unchanged.
 
 Publishing and its prerequisite checks stay event-driven: docs mirror and
 website installer synchronization, runner-image publication, locale-generation
-PRs, release closeout, and ClawSweeper activity forwarding are unchanged.
+PRs, and ClawSweeper activity forwarding retain their existing admission.
+Stable main closeout runs when release inputs change. The existing
+`pnpm release:stable` closeout phase waits for successful publication, verifies
+main, and dispatches closeout. With saved orchestrator state, resume it with
+`pnpm release:stable YYYY.M.PATCH --from closeout`.
+
+If you publish directly from the Actions UI after the main forward-port,
+dispatch closeout after Release Publish succeeds and main carries the shipped
+version and changelog:
+
+```bash
+gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH
+```
+
+Unrelated source pushes no longer poll for release completion. Manual recovery
+retains its existing evidence checks.
 Docs Agent now verifies the exact successful full-CI attempt before admitting
 its write job: opted-in main pushes and hourly full-CI children qualify, while
 security-only pushes do not. Its hourly/current-main guard remains in place.

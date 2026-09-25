@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
+  if?: string;
   name?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -212,6 +213,39 @@ function prepareConfig(
 }
 
 describe("security-fast workflow", () => {
+  it.each([false, true])(
+    "installs workflow scanners only for changed workflow files: %s",
+    (changed) => {
+      const fixture = createFixture();
+      if (changed) {
+        mkdirSync(join(fixture.repo, ".github", "workflows"));
+        writeFileSync(join(fixture.repo, ".github", "workflows", "example.yml"), "name: fixture\n");
+        runGit(fixture.repo, "add", ".github/workflows/example.yml");
+        runGit(fixture.repo, "commit", "-m", "workflow input");
+      }
+      const output = join(fixture.runnerTemp, "output");
+      const result = runStep(securityStep("Detect changed GitHub workflows"), fixture.repo, {
+        ...fixture.environment,
+        BASE_SHA: fixture.baseSha,
+        GITHUB_OUTPUT: output,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readGitHubEnvironment(output).changed).toBe(changed ? "true" : undefined);
+      expect(readFileSync(join(fixture.runnerTemp, "security-workflow-files"), "utf8")).toBe(
+        changed ? ".github/workflows/example.yml\n" : "",
+      );
+      for (const name of [
+        "Install security scanners",
+        "Audit changed GitHub workflows with zizmor",
+      ]) {
+        expect(securityStep(name).if).toBe("steps.workflow_scope.outputs.changed == 'true'");
+        expect(securityStepIndex("Detect changed GitHub workflows")).toBeLessThan(
+          securityStepIndex(name),
+        );
+      }
+    },
+  );
+
   it.each([0, 1, 2, 3, 130])(
     "propagates audit exit %s in ordinary and scheduled CI",
     (auditExit) => {

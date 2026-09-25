@@ -1463,10 +1463,14 @@ AFTER_CD
 
     for (const [workflowPath, jobName] of workflows) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.on.pull_request).toEqual({
-        types: ["opened", "reopened", "synchronize", "ready_for_review"],
-        paths: [".github/workflows/**"],
-      });
+      expect(workflow.on.pull_request.types).toEqual([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+      ]);
+      expect(workflow.on.pull_request.paths).toContain(workflowPath);
+      expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
       expect(workflow.jobs[jobName].if).toBe(
         "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
       );
@@ -7753,7 +7757,7 @@ server.listen(0, "127.0.0.1", () => {
   it("uses the maintained checkout across workflow sanity jobs", () => {
     const workflow = readWorkflowSanityWorkflow();
 
-    for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
+    for (const jobName of ["actionlint", "generated-doc-baselines"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -7843,7 +7847,9 @@ server.listen(0, "127.0.0.1", () => {
     expect(owner.with).toBeUndefined();
     expect(steps.indexOf(python)).toBeLessThan(steps.indexOf(owner));
     expect(steps.indexOf(owner)).toBeLessThan(steps.indexOf(policy));
-    expect(policy.if).toBe("github.event_name == 'pull_request'");
+    expect(policy.if).toBe(
+      "github.event_name == 'pull_request' && steps.scope.outputs.changed == 'true'",
+    );
     expect(policy.env).toEqual({
       BASE_REF: "${{ github.event.pull_request.base.ref }}",
       BASE_SHA: "${{ github.event.pull_request.base.sha }}",

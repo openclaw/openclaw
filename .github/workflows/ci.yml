@@ -1379,7 +1379,7 @@ jobs:
         id: manifest
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'hourly-main-')) && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_NODE_TEST_DATA_ONLY: ${{ steps.changed_scope.outputs.node_test_data_only || 'false' }}
           # Ordinary manual/release validation stays full. A release_gate is a
@@ -2564,10 +2564,8 @@ jobs:
       - name: Detect committed private keys
         run: node "$PRIVATE_KEY_SCANNER_PATH"
 
-      - name: Install security scanners
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
-
-      - name: Audit changed GitHub workflows with zizmor
+      - name: Detect changed GitHub workflows
+        id: workflow_scope
         env:
           BASE_SHA: ${{ steps.diff_base.outputs.sha }}
         run: |
@@ -2583,13 +2581,23 @@ jobs:
             exit 0
           fi
 
-          mapfile -t workflow_files < <(
-            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-          )
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
+          git diff --name-only --diff-filter=ACMR "${BASE_SHA}" HEAD -- \
+            '.github/workflows/*.yml' '.github/workflows/*.yaml' > "$RUNNER_TEMP/security-workflow-files"
+          if [ ! -s "$RUNNER_TEMP/security-workflow-files" ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install security scanners
+        if: steps.workflow_scope.outputs.changed == 'true'
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
+
+      - name: Audit changed GitHub workflows with zizmor
+        if: steps.workflow_scope.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t workflow_files < "$RUNNER_TEMP/security-workflow-files"
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \

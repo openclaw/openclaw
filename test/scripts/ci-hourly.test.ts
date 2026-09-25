@@ -7,7 +7,6 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const auxiliaryNames = [
-  "docs",
   "node-runtime-conformance",
   "plugin-init-scaffold-validation",
   "sandbox-common-smoke",
@@ -47,9 +46,11 @@ describe("hourly main CI admission", () => {
         }
       }
     }
-    for (const name of auxiliaryNames) {
+    for (const name of [...auxiliaryNames, "docs"]) {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const entry = Object.values(workflow.jobs)[0] as { if: string };
+      const entry = Object.entries(workflow.jobs).find(([id]) => id !== "scope")![1] as {
+        if: string;
+      };
       expect(evaluate(entry.if, context), name).toBe(admitted);
     }
   });
@@ -90,7 +91,9 @@ describe("hourly main CI admission", () => {
       expect(workflow.on.schedule).toHaveLength(1);
       const cron = workflow.on.schedule[0].cron.split(" ");
       expect(cron).toHaveLength(5);
-      expect(cron.slice(1)).toEqual(["*", "*", "*", "*"]);
+      expect(cron.slice(1)).toEqual(
+        name === "sandbox-common-smoke" ? ["5", "*", "*", "*"] : ["*", "*", "*", "*"],
+      );
       const entry = Object.values(workflow.jobs)[0] as { if: string };
       expect(evaluate(entry.if, context), name).toBe(true);
       expect(evaluate(entry.if, { ...context, repository: "fork/openclaw" }), name).toBe(false);
