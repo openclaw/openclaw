@@ -280,6 +280,9 @@ describe("chat model runtime choices", () => {
           container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]')!;
         const defaultRow = () =>
           container.querySelector<HTMLButtonElement>("[data-chat-model-default]")!;
+        expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
+          defaultRow(),
+        );
         expect(runtimeRow().getAttribute("aria-selected")).toBe(String(initialRuntime === "codex"));
         expect(defaultRow().getAttribute("aria-selected")).toBe(String(initialRuntime !== "codex"));
         runtimeRow().click();

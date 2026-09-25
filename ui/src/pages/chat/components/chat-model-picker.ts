@@ -132,8 +132,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
     if (existing) {
-      if (option === leadingModelOption) {
+      // Default restores inheritance; it stays ahead of ranked model choices.
+      if (option.isDefault) {
         existing.unshift(option);
+      } else if (option === leadingModelOption) {
+        existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
       } else {
         existing.push(option);
       }

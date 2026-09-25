@@ -236,24 +236,25 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           // hello-ok precedes worker-backed catalog publication; join that event
           // instead of assuming preparation fits the polling matcher's deadline.
           await savedPublication.promise;
+          expect(savedPublications[0]?.catalog.models).toHaveLength(2);
           expect(savedPublications).toMatchObject([
             {
               scope: { agentId: "alpha", sessionKey },
               catalog: {
-                models: [
-                  {
+                models: expect.arrayContaining([
+                  expect.objectContaining({
                     id: "first",
                     provider: "fixture",
                     available: true,
                     manualSelectionAllowed: true,
-                  },
-                  {
+                  }),
+                  expect.objectContaining({
                     id: "second",
                     provider: "fixture",
                     available: true,
                     manualSelectionAllowed: false,
-                  },
-                ],
+                  }),
+                ]),
                 accountSelection: {
                   kind: "shared",
                   authProfileId: "fixture:saved-account",
