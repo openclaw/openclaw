@@ -226,9 +226,12 @@ describe("release:stable CLI", () => {
 
   it("stops on the first failed stable validation and resumes only after operator recovery", () => {
     const release = fixture();
-    release.seed(phaseState("validate"));
+    const legacy = phaseState("validate");
+    const legacyState = { ...legacy, validate: { ...legacy.validate, continues: 2 } };
+    release.seed(legacyState);
     const failed = release.run([...validateSetup(), request(), validationRun("failure", 1)]);
     expect(failed.status).toBe(2);
+    expect(release.readState().validate).not.toHaveProperty("continues");
     expect(failed.stderr).toContain(
       "Full Release Validation 101 failed; diagnose before operator recovery.",
     );
@@ -278,20 +281,24 @@ describe("release:stable CLI", () => {
     expect(release.readState().validate.runId).toBeUndefined();
   });
 
-  it("prints retained status without changing state or invoking release helpers", () => {
-    const release = fixture();
-    const state = phaseState("macos");
-    state.macos = { validateRunId: "201", preflightRunId: "202" };
-    release.seed(state);
-    const before = readFileSync(release.stateFile, "utf8");
-    const result = release.run([], ["--status"]);
-    expect(result.status, result.output).toBe(0);
-    expect(result.calls).toEqual([]);
-    expect(result.stdout).toMatch(/cut\s+completed\s+cutSha=/u);
-    expect(result.stdout).toMatch(/macos\s+pending\s+validateRunId=201 preflightRunId=202/u);
-    expect(result.stdout.trim().split("\n")).toHaveLength(7);
-    expect(readFileSync(release.stateFile, "utf8")).toBe(before);
-  });
+  it.each([0, 2])(
+    "prints legacy status with counter %i without writing or invoking helpers",
+    (continues) => {
+      const release = fixture();
+      const state = phaseState("macos");
+      state.macos = { validateRunId: "201", preflightRunId: "202" };
+      const legacyState = { ...state, validate: { ...state.validate, continues } };
+      release.seed(legacyState);
+      const before = readFileSync(release.stateFile, "utf8");
+      const result = release.run([], ["--status"]);
+      expect(result.status, result.output).toBe(0);
+      expect(result.calls).toEqual([]);
+      expect(result.stdout).toMatch(/cut\s+completed\s+cutSha=/u);
+      expect(result.stdout).toMatch(/macos\s+pending\s+validateRunId=201 preflightRunId=202/u);
+      expect(result.stdout.trim().split("\n")).toHaveLength(7);
+      expect(readFileSync(release.stateFile, "utf8")).toBe(before);
+    },
+  );
 
   it.each(["unknown", "stableSoakWaiver", "laneWaiver"])(
     "refuses retired or unknown state field %s without overwriting recovery evidence",
@@ -301,7 +308,7 @@ describe("release:stable CLI", () => {
       release.seed(state);
       const invalid = JSON.stringify({
         ...state,
-        validate: { ...state.validate, [field]: "retained legacy value" },
+        validate: { ...state.validate, continues: 2, [field]: "retained legacy value" },
       });
       writeFileSync(release.stateFile, invalid);
       const result = release.run([]);

@@ -98,6 +98,13 @@ const releaseStateSchema = z.strictObject({
     z.strictObject({ at: timestamp, phase: phaseSchema, event: z.string(), detail: z.string() }),
   ),
 });
+// Older writers recorded retry bookkeeping even for waiver-free releases. Read
+// and discard that counter only; retired waiver fields still fail strict parsing.
+const releaseStateReadSchema = releaseStateSchema.extend({
+  validate: releaseStateSchema.shape.validate
+    .extend({ continues: z.number().int().min(0).optional() })
+    .transform(({ continues: _continues, ...validation }) => validation),
+});
 export type ReleaseState = z.infer<typeof releaseStateSchema>;
 export type ReleaseOptions = {
   release: string;
@@ -293,7 +300,7 @@ export function loadReleaseState(options: ReleaseOptions): ReleaseState {
     return createReleaseState(options);
   }
   try {
-    const state = releaseStateSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    const state = releaseStateReadSchema.parse(JSON.parse(readFileSync(path, "utf8")));
     if (
       state.release !== options.release ||
       state.tag !== `v${options.release}` ||
