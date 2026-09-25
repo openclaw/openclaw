@@ -12,6 +12,9 @@ scenario:
   gatewayConfigPatch:
     commands:
       ownerAllowFrom: [qa-channel:alice]
+      # Bob may run commands but is not an owner.
+      allowFrom:
+        qa-channel: [alice, bob]
     agents:
       entries:
         qa:
@@ -21,6 +24,7 @@ scenario:
             alsoAllow: [openclaw]
   successCriteria:
     - The delegated config change posts an approval prompt with an /approve reply in the requesting conversation.
+    - A command-authorized non-owner's /approve is refused and leaves the change pending and unapplied.
     - The owner's /approve reply resolves the pending OpenClaw change from chat.
     - The Gateway config shows the approved change and the agent finishes its turn with one visible reply.
   docsRefs:
@@ -94,6 +98,29 @@ flow:
         - sendInbound:
             conversation:
               ref: conversation
+            senderId: bob
+            senderName: Bob
+            text:
+              expr: "`/approve ${approvalId} allow-once`"
+            nativeCommand: { name: approve }
+        - call: waitForOutboundMessage
+          saveAs: nonOwnerReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversation.id && String(candidate.text ?? '').includes('Only the owner can approve OpenClaw changes')"
+            - 60000
+        - set: levelAfterNonOwner
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.logging?.level ?? null"
+        - assert:
+            expr: "levelAfterNonOwner === levelBefore"
+            message:
+              expr: "`non-owner /approve changed logging.level to ${levelAfterNonOwner}`"
+        - sendInbound:
+            conversation:
+              ref: conversation
             senderId: alice
             senderName: Alice
             text:
@@ -122,4 +149,4 @@ flow:
             expr: "outboundTexts.filter((text) => text.includes(config.expectedMarker)).length === 1"
             message:
               expr: "`expected one final reply, saw ${JSON.stringify(outboundTexts)}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'system-agent-chat-approval', provider: env.providerMode, transport: transport.id, approvalId, levelBefore, levelAfter, outboundTexts }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'system-agent-chat-approval', provider: env.providerMode, transport: transport.id, approvalId, levelBefore, nonOwnerReply: nonOwnerReply.text, levelAfterNonOwner, levelAfter, outboundTexts }, null, 2)"

@@ -619,6 +619,64 @@ describe("handleApproveCommand", () => {
     expect(approvalResolverRequest(1).approvalKind).toBeUndefined();
   });
 
+  describe("OpenClaw change approvals on channels without reviewer custody", () => {
+    const approveOnSlack = (owner: { senderIsOwner: boolean; assertOwnerCurrent?: () => void }) => {
+      const params = buildApproveParams(
+        "/approve system-agent:abc allow-once",
+        {},
+        {
+          Provider: "slack",
+          Surface: "slack",
+          SenderId: "U123",
+        },
+      );
+      Object.assign(params.command, owner);
+      return handleApproveCommand(params, true);
+    };
+
+    beforeEach(() => {
+      resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+      isPendingSystemAgentApprovalMock.mockResolvedValue(true);
+    });
+
+    it("rejects a command-authorized non-owner before any canonical decision", async () => {
+      const result = await approveOnSlack({ senderIsOwner: false });
+
+      expect(result?.reply?.text).toContain("Only the owner can approve OpenClaw changes");
+      const canonicalCalls = resolveApprovalOverGatewayMock.mock.calls.filter(
+        ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
+      );
+      expect(canonicalCalls).toHaveLength(0);
+    });
+
+    it("rejects an owner whose authority was revoked before the decision", async () => {
+      const result = await approveOnSlack({
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          throw new Error("owner revoked");
+        },
+      });
+
+      expect(result?.reply?.text).toContain("owner authority changed");
+      const canonicalCalls = resolveApprovalOverGatewayMock.mock.calls.filter(
+        ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
+      );
+      expect(canonicalCalls).toHaveLength(0);
+    });
+
+    it("submits the owner's decision", async () => {
+      resolveApprovalOverGatewayMock
+        .mockRejectedValueOnce(new Error("unknown or expired approval id"))
+        .mockRejectedValueOnce(new Error("unknown or expired approval id"))
+        .mockResolvedValueOnce({ applied: true });
+
+      const result = await approveOnSlack({ senderIsOwner: true, assertOwnerCurrent: () => {} });
+
+      expect(result?.reply?.text).toContain("Approval allow-once submitted for system-agent:abc");
+      expect(approvalResolverRequest(2).approvalKind).toBe("system-agent");
+    });
+  });
+
   it("returns the underlying not-found error for plugin-only approval routing", async () => {
     setActivePluginRegistry(
       createTestRegistry([

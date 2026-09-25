@@ -154,10 +154,10 @@ export async function publishAppliedApprovalResolution(params: {
       run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
     });
   }
-  // An allowed change reports its applied outcome from the system-agent owner.
+  // Decisions (allowed or denied) report their outcome from the system-agent owner.
   if (
     params.record.kind === "system-agent" &&
-    params.record.status !== "allowed" &&
+    (params.record.status === "expired" || params.record.status === "cancelled") &&
     params.forwarder?.handleSystemAgentApprovalResolved
   ) {
     await runSideEffect({

@@ -162,6 +162,9 @@ export async function handleApproveCommandFromContext(
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );
+  // Channels with reviewer custody let the Gateway judge the actor; elsewhere an
+  // OpenClaw change needs the current configured owner, like the tool that proposed it.
+  const systemAgentNeedsOwner = !approvalCapability?.authorizeActorAction;
   const commandBehaviors = new Map<ChannelApprovalKind, ApproveCommandBehavior | undefined>();
   for (const approvalKind of approvalKinds) {
     commandBehaviors.set(
@@ -218,6 +221,13 @@ export async function handleApproveCommandFromContext(
     if (!isSystemAgentApproval) {
       throw new Error("unknown or expired approval id");
     }
+    if (systemAgentNeedsOwner) {
+      try {
+        params.command.assertOwnerCurrent?.();
+      } catch {
+        throw new Error("your owner authority changed; send /approve again");
+      }
+    }
     await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: parsed.id,
@@ -228,7 +238,18 @@ export async function handleApproveCommandFromContext(
     });
   };
 
+  const systemAgentRefusedForOwner =
+    systemAgentNeedsOwner &&
+    !params.command.senderIsOwner &&
+    authorizations["system-agent"].authorized;
+  const ownerOnlyResult = {
+    shouldContinue: false,
+    reply: { text: "❌ Only the owner can approve OpenClaw changes in this chat." },
+  };
   const methods = approvalKinds.filter((approvalKind) => {
+    if (approvalKind === "system-agent" && systemAgentRefusedForOwner) {
+      return false;
+    }
     const behavior = commandBehaviors.get(approvalKind);
     return authorizations[approvalKind].authorized && (!behavior || behavior.kind === "allow");
   });
@@ -236,6 +257,9 @@ export async function handleApproveCommandFromContext(
     const blocked = blockedCommandResult();
     if (blocked) {
       return blocked;
+    }
+    if (systemAgentRefusedForOwner) {
+      return ownerOnlyResult;
     }
     return {
       shouldContinue: false,
@@ -263,6 +287,10 @@ export async function handleApproveCommandFromContext(
         const blocked = blockedCommandResult();
         if (blocked) {
           return blocked;
+        }
+        // Not an exec or plugin approval; it may be a change only the owner can decide.
+        if (systemAgentRefusedForOwner) {
+          return ownerOnlyResult;
         }
         return {
           shouldContinue: false,

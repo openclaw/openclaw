@@ -125,6 +125,8 @@ with native approval cards show **Allow once** and **Deny** buttons, and every o
 chat receives the change summary with a `/approve <id> allow-once|deny` reply. The
 Control UI and OpenClaw apps can decide the same approval. Replying "yes" in the
 delegated chat cannot authorize a change; the button or `/approve` command does.
+Channels with their own approver settings decide who may approve; elsewhere only
+a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
 Independent filesystem and sandbox boundaries,
 tool policy, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
