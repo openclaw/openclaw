@@ -1,5 +1,19 @@
 # Regular beta and stable release
 
+## Orchestrated stable (default)
+
+`pnpm release:stable YYYY.M.PATCH` drives the whole fast path from
+`docs/reference/RELEASING.md` (cut → validate → publish → sync-beta →
+flip-github → macos → closeout) with state in
+`.artifacts/release-YYYY.M.PATCH/state.json`. Rerun to resume, `--from <phase>`
+to restart a phase, `--status` to inspect, `--dry-run` to print every command.
+Two prompts only: confirm the cut SHA (`--confirm-cut-sha <sha>` without a
+terminal) and approve publication (`--approve-publication`). A refusal prints
+`Next:` with the exact commands; run them, then resume. Use the manual sequence
+below when the orchestrator refuses a step it cannot repair itself (editorial
+changelog work, the compat inventory PR, an appcast PR, the closeout PR) or for
+betas.
+
 ## Freeze and validate code
 
 Read [preparation](preparation.md) before branch or version changes. Record the

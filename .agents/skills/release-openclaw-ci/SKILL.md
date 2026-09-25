@@ -522,6 +522,10 @@ and must be cleared after the release.
 
 ### Publish children
 
+- `pnpm release:stable <version>` (RELEASING.md "Orchestrated stable release")
+  dispatches the parent once, approves `npm-release` gates, sweeps stale bot
+  children, and on any refusal prints `Next:` with the exact recovery command;
+  the commands below are what it runs and the fallback when it refuses.
 - npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) need their
   own `npm-release` approval; the parent's approval does not always propagate,
   and an unapproved core child sits `waiting` silently. Watch every child and
