@@ -367,6 +367,9 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
   capturedErrors.length = 0;
   const delivered: DeliveredReply[] = [];
   registerProofDeliveryChannel(delivered);
+  // Delivery happens through the channel callback, so read the count through a
+  // call: `asserts` narrowing on `delivered.length` would otherwise pin it to 0.
+  const deliveredCount = (): number => delivered.length;
   const endpoint = await startLoopbackModelEndpoint();
   const workspaceDir = path.join(proofHomeDir, "workspace");
   const storePath = path.join(proofHomeDir, "sessions.json");
@@ -492,7 +495,7 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
     `expected ${EXPECTED_MAX_CONSECUTIVE_FAILURES} failed attempts before suspension, saw ${failedAttempts}`,
   );
   assert(
-    delivered.length === 0,
+    deliveredCount() === 0,
     `expected nothing delivered while suspended, saw ${delivered.length}`,
   );
 
@@ -507,7 +510,7 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
     "expected both the retained item and its successor to stay queued in order",
   );
   assert(
-    failedAttempts === EXPECTED_MAX_CONSECUTIVE_FAILURES && delivered.length === 0,
+    failedAttempts === EXPECTED_MAX_CONSECUTIVE_FAILURES && deliveredCount() === 0,
     "expected an enqueue during suspension to neither retry nor deliver",
   );
   console.log(
