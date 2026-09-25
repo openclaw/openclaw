@@ -34,6 +34,7 @@ export function createUsageCostResolver(
   params?: { config?: OpenClawConfig; agentDir?: string },
   pricing?: CapturedModelCostPricing,
 ): UsageCostResolver {
+  let capturedPricing = pricing;
   const cache = new Map<string, ModelCostConfig | undefined>();
   return ({ provider, model }) => {
     const key = `${provider ?? ""}\0${model ?? ""}`;
@@ -41,8 +42,8 @@ export function createUsageCostResolver(
       return cache.get(key);
     }
     // Diagnostic readers enter pricing only after the first unpriced record is prepared.
-    pricing ??= captureModelCostPricing(params?.config, params?.agentDir);
-    const cost = pricing.resolve(provider, model);
+    capturedPricing ??= captureModelCostPricing(params?.config, params?.agentDir);
+    const cost = capturedPricing.resolve(provider, model);
     cache.set(key, cost);
     return cost;
   };
