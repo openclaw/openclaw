@@ -593,7 +593,7 @@ describe("Gateway GitHub publication", () => {
       environmentId: "environment-1",
       ownerEpoch: 2,
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -616,7 +616,7 @@ describe("Gateway GitHub publication", () => {
       idempotencyKey: "publish-stale",
     });
     await vi.waitFor(() => expect(resolveIdentity).toBeTypeOf("function"));
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
     resolveIdentity?.({
       source: "system-configured",
       profileId: "ghp_11111111111111111111111111111111",
@@ -639,7 +639,7 @@ describe("Gateway GitHub publication", () => {
       environmentId: "environment-idempotency",
       ownerEpoch: 2,
     });
-    const firstClaim = placements.claimTurn({
+    const firstClaim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -654,8 +654,8 @@ describe("Gateway GitHub publication", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "reused-worker-call",
     });
-    placements.releaseTurn(firstClaim);
-    const secondClaim = placements.claimTurn({
+    await placements.releaseTurn(firstClaim);
+    const secondClaim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -686,7 +686,7 @@ describe("Gateway GitHub publication", () => {
       environmentId: "environment-snapshot",
       ownerEpoch: 2,
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -943,7 +943,7 @@ describe("Gateway GitHub publication", () => {
       environmentId: "environment-publication",
       ownerEpoch: 2,
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,

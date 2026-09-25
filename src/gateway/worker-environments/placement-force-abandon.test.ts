@@ -48,7 +48,7 @@ describe("forced worker environment abandonment", () => {
 
   it("drains nested operations before recording result loss and releasing the claim", async () => {
     const { store, environmentId } = createActiveAbandonmentFixture(database);
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...REQUEST,
       claimId: "forced-claim",
       runId: "forced-run",

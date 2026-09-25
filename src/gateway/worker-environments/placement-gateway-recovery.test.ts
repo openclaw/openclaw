@@ -29,14 +29,14 @@ describe("failed placement Gateway recovery", () => {
       const prepareGatewayMove = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
         assertCurrent();
         expect(placementStore.get(REQUEST.sessionId)?.state).toBe("failed");
-        expect(() =>
+        await expect(
           placementStore.claimTurn({
             ...REQUEST,
             owner: { kind: "local" },
             claimId: "premature-local-turn",
             runId: "premature-local-run",
           }),
-        ).toThrow();
+        ).rejects.toThrow();
       });
       const harness = createHarness(database, placementStore, { prepareGatewayMove });
       const requested = placementStore.startDispatch(REQUEST);
@@ -64,13 +64,13 @@ describe("failed placement Gateway recovery", () => {
           }),
         );
       }
-      const localTurn = placementStore.claimTurn({
+      const localTurn = await placementStore.claimTurn({
         ...REQUEST,
         owner: { kind: "local" },
         claimId: "recovered-local-turn",
         runId: "recovered-local-run",
       });
-      placementStore.releaseTurn(localTurn);
+      await placementStore.releaseTurn(localTurn);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     },
   );

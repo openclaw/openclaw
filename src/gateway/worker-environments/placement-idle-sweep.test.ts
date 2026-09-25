@@ -132,9 +132,9 @@ describe("worker placement idle suspension", () => {
     await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
-    const claim = claimWorkerTurn("recent-turn");
+    const claim = await claimWorkerTurn("recent-turn");
     nowMs += 5_000;
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
 
     nowMs += 59_999;
     await idleSweep.sweep();
@@ -229,9 +229,9 @@ describe("worker placement idle suspension", () => {
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
-        claimWorkerTurn();
+        await claimWorkerTurn();
       } else if (kind === "local-claim" || kind === "pending-result") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "busy-local-claim",
           runId: "busy-local-run",
@@ -356,9 +356,9 @@ describe("worker placement idle suspension", () => {
         await reclaimQueued.promise;
 
         if (change === "activity") {
-          const claim = claimWorkerTurn("turn-during-idle-reclaim-wait");
+          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
           nowMs += 1_000;
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else {
           profile.suspendAfter = change === "disabled policy" ? undefined : "2m";
         }

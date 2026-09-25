@@ -476,7 +476,7 @@ describe("personal publication authority and recovery", () => {
     async (state) => {
       let selectedAction = action;
       if (state === "turn") {
-        placements.claimTurn({
+        await placements.claimTurn({
           ...action,
           claimId: "busy",
           runId: "busy-run",
@@ -492,7 +492,7 @@ describe("personal publication authority and recovery", () => {
         const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
-          const claim = placements.claimTurn({
+          const claim = await placements.claimTurn({
             ...active,
             claimId: "pending",
             runId: "pending-run",
@@ -521,14 +521,14 @@ describe("personal publication authority and recovery", () => {
     const pending = coordinator.requestPersonalForSession(request(), action);
     await Promise.race([entered.promise, pending]);
     try {
-      expect(() =>
+      await expect(
         placements.claimTurn({
           ...action,
           claimId: "later",
           runId: "later-run",
           owner: { kind: "local" },
         }),
-      ).toThrow("being published");
+      ).rejects.toThrow("being published");
       await expect(acquireWorktreeRunLease("worktree-1")).rejects.toThrow("in use");
       await expect(
         coordinator.requestPersonalForSession(
@@ -547,13 +547,13 @@ describe("personal publication authority and recovery", () => {
       release.resolve();
     }
     await expect(pending).resolves.toMatchObject({ status: "published" });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...action,
       claimId: "after",
       runId: "after-run",
       owner: { kind: "local" },
     });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
   });
 
   it.each(["socket", "scope", "disconnect", "reconnect", "merge", "session"] as const)(

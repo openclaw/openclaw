@@ -618,8 +618,8 @@ it.each(["missing", "local"] as const)(
       entry,
     );
     if (state === "local") {
-      placements.releaseTurn(
-        placements.claimTurn({
+      await placements.releaseTurn(
+        await placements.claimTurn({
           ...REQUEST,
           owner: { kind: "local" },
           claimId: "seed",

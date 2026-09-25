@@ -45,7 +45,7 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "force-destroy-claim",
       runId: "force-destroy-run",

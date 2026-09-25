@@ -85,7 +85,7 @@ describe("worker placement dispatch conflict lookup", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placementStore.claimTurn({
+      const claim = await placementStore.claimTurn({
         ...REQUEST,
         claimId: "restarted-turn-claim",
         runId: "restarted-turn-run",

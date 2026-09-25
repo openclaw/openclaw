@@ -57,7 +57,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
   };
   writePlacementEnvironmentFixture(database, environment);
   seedActivePlacement(placements, environment);
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     sessionId,
     sessionKey,
     agentId,

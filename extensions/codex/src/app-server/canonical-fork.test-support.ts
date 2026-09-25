@@ -73,7 +73,7 @@ export async function createCanonicalForkFixture(params: {
     workerOwned?: boolean;
   }) => Promise<{
     capabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
-    close: () => void;
+    close: () => void | Promise<void>;
     abortController: AbortController;
     invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
     runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
@@ -350,7 +350,7 @@ export async function createCanonicalForkFixture(params: {
         }
       });
     } finally {
-      host.close();
+      await host.close();
     }
   };
   return {
