@@ -81,11 +81,16 @@ function resolvePackageRuntimeExtensionEntries(params: {
 }
 
 function missingCompiledRuntimeEntryMessage(params: {
-  label: string;
+  context: "install" | "installed";
   entry: string;
   candidates: readonly string[];
 }): string {
-  return `${params.label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.`;
+  const label = params.context === "install" ? "package install" : "installed plugin package";
+  const recovery =
+    params.context === "install"
+      ? "retry installation after the publisher ships compiled JavaScript"
+      : "update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then";
+  return `${label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}. This is a plugin packaging issue, not a local config problem; ${recovery}. TypeScript source fallback is only supported for source checkouts and local development paths.`;
 }
 
 async function validatePackageExtensionEntry(params: {
@@ -189,7 +194,7 @@ async function validatePackageEntryForInstall(params: {
     return {
       ok: false,
       error: missingCompiledRuntimeEntryMessage({
-        label: "package install",
+        context: "install",
         entry: params.entry,
         candidates: builtEntryCandidates,
       }),
@@ -467,7 +472,7 @@ function resolvePackageRuntimeEntrySource(params: {
         level: "warn",
         ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
         message: missingCompiledRuntimeEntryMessage({
-          label: "installed plugin package",
+          context: "installed",
           entry: safeEntry.relativePath,
           candidates: builtEntryCandidates,
         }),
