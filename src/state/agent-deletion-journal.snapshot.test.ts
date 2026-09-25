@@ -13,6 +13,7 @@ import {
 import { prepareAgentDatabaseDeletionSnapshotRead } from "./agent-deletion-journal.read.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -110,6 +111,11 @@ it.each(["source", "maintenance"] as const)(
         }
         expect(assertCurrent).toThrow();
         await expect(prepared.read()).rejects.toThrow();
+        if (lifetime === "maintenance") {
+          await expect(prepared.readWithCurrentAdmission()).rejects.toThrow();
+        } else {
+          expect((await prepared.readWithCurrentAdmission()).snapshot).toBeDefined();
+        }
         expect(
           (await prepareAgentDatabaseDeletionSnapshotRead(options).read()).snapshot,
         ).toBeDefined();
@@ -120,12 +126,13 @@ it.each(["source", "maintenance"] as const)(
   },
 );
 
-it("keeps absent discovery conservative without creating shared state or sidecars", async () => {
+it("keeps absent discovery conservative until its first canonical creation", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async (state) => {
     const pathname = resolveOpenClawStateSqlitePath(state.env);
     const files = [pathname, `${pathname}-wal`, `${pathname}-shm`, `${pathname}-journal`];
     expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
-    const result = await prepareAgentDatabaseDeletionSnapshotRead({ env: state.env }).read();
+    const prepared = prepareAgentDatabaseDeletionSnapshotRead({ env: state.env });
+    const result = await prepared.readWithCurrentAdmission();
     expect(result.snapshot).toBeUndefined();
     expect(result.assertCurrent).not.toThrow();
     const isRetained = createRetainedAgentDatabaseMatcherFromSnapshot(
@@ -135,6 +142,20 @@ it("keeps absent discovery conservative without creating shared state or sidecar
     );
     expect(isRetained(state.statePath("unknown.sqlite"), "unknown")).toBe("unavailable");
     expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
+    openOpenClawStateDatabase({ env: state.env });
+    expect((await prepared.readWithCurrentAdmission()).snapshot).toBeDefined();
+  });
+});
+
+it("does not renew an expired existing-schema scope for a successor read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const prepared = withExistingOpenClawStateSchema({ path: database.path }, () =>
+      prepareAgentDatabaseDeletionSnapshotRead({ env: state.env }),
+    );
+    await expect(prepared.readWithCurrentAdmission()).rejects.toThrow(
+      "Existing shared-state schema admission has ended",
+    );
   });
 });
 

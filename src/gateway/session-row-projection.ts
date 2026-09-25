@@ -220,7 +220,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     return (preparingTopology ??= inOwnerContext(async () => {
       const targetEpoch = topologyEpoch;
       const nextConfig = params.getConfig?.() ?? cfg;
-      const prepared = await discoveryRead.read();
+      const prepared = await discoveryRead.readWithCurrentAdmission();
       const topologyCurrent = () =>
         !disposed && topologyEpoch === targetEpoch && (params.getConfig?.() ?? cfg) === nextConfig;
       prepared.assertCurrent();
@@ -436,6 +436,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       cfg,
       disposed,
       topologyDirty,
+      registryPrepared: Boolean(inOwnerContext(getSubagentSessionListReadSnapshotIdentity)),
     }),
     runAsOwner: inOwnerContext,
     lookup,

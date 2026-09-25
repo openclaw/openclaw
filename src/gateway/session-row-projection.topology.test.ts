@@ -20,6 +20,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { applyOpenClawDatabaseVerificationResults } from "../state/openclaw-database-verify.impl.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -399,12 +400,24 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
         } else {
           const database = openOpenClawStateDatabase({ env: state.env });
           await closeOpenClawStateDatabaseByPathAsync(database.path);
+          const replacement = `${database.path}.replacement`;
+          await copyFile(database.path, replacement);
+          await rename(replacement, database.path);
           openOpenClawStateDatabase({ env: state.env });
         }
         release.resolve();
         if (change === "source") {
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
           await expect(projection.prepareMembership()).rejects.toThrow();
+          const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          try {
+            await successor.prepareMembership();
+            expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+              "topology",
+            ]);
+          } finally {
+            successor.dispose();
+          }
         } else {
           expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
           if (change === "config" || change === "identity scopes") {
@@ -436,12 +449,21 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const prepare = projection.prepareMembership;
-      vi.spyOn(projection, "prepareMembership").mockImplementationOnce(async () => {
-        await prepare();
-        entered.resolve();
-        await release.promise;
-      });
+      const releaseForeground = retainSessionListForegroundWork();
+      const originalRead = stateReads.executeExistingOpenClawStateRead;
+      let held = false;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+        async (...args) => {
+          const reply = await originalRead(...args);
+          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return reply;
+        },
+      );
+      sessionChanges.emit({ all: true, scope: "stores" });
       const respond = vi.fn();
       const revoked = new Error("Original request authority ended");
       let active = true;
@@ -479,7 +501,63 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
         release.resolve();
         await settled;
         projection.dispose();
+        releaseForeground();
       }
     });
   },
 );
+
+it("starts a new topology read after healthy integrity confirmation without reviving its old reply", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const query = { agentId: "main", key: "agent:main:verified-topology" };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key },
+      {
+        sessionId: "verified-topology",
+        updatedAt: 1,
+      },
+    );
+    const releaseForeground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const originalRead = stateReads.executeExistingOpenClawStateRead;
+    let held = false;
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+      const reply = await originalRead(...args);
+      if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return reply;
+    });
+    sessionChanges.emit({ all: true, scope: "stores" });
+    const pending = projection.prepareMembership();
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withTestTimeout(entered.promise, 2_000, "Topology snapshot did not reach its owner");
+      await applyOpenClawDatabaseVerificationResults({
+        env: state.env,
+        targets: [{ kind: "state", label: "OpenClaw state database", path: database.path }],
+        results: [
+          { path: database.path, ok: false, error: "stale terminal result", terminal: true },
+        ],
+      });
+      expect(database.db.isOpen).toBe(false);
+      release.resolve();
+      expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
+      await expect(projection.prepareMembership()).resolves.toBeUndefined();
+      expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+        "verified-topology",
+      ]);
+    } finally {
+      release.resolve();
+      await settled;
+      projection.dispose();
+      releaseForeground();
+    }
+  });
+});

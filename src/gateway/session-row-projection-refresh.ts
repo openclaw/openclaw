@@ -25,6 +25,7 @@ export function createSessionRowRefresh(
       cfg: records.Inputs["cfg"];
       disposed: boolean;
       topologyDirty: boolean;
+      registryPrepared: boolean;
     };
     databaseRevision: () => number;
     runAsOwner: <T>(operation: () => T) => T;
@@ -177,6 +178,26 @@ export function createSessionRowRefresh(
       pending && !owner.state().disposed;
       pending = exactPreparationsIdle
     ) {
+      const state = owner.state();
+      if (
+        !state.topologyDirty &&
+        state.registryPrepared &&
+        !owner.catalog.needsInitialRead &&
+        !owner.placementFacts.needsPreparation &&
+        !owner.membership.needsPreparation
+      ) {
+        // Accepted exact facts need no worker read and may finish while their page remains pinned.
+        const ids: string[] = [];
+        for (const id of exactReads.keys()) {
+          ids.push(id);
+          if (ids.length === MAX_CONCURRENT_EXACT_ROW_READS * MAX_SESSION_ROW_FACTS_KEYS) {
+            break;
+          }
+        }
+        if (materializer.refreshPending(ids)) {
+          return;
+        }
+      }
       await pending.promise;
     }
     for (

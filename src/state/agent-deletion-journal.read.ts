@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -10,6 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
@@ -29,7 +31,10 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(
@@ -159,15 +164,18 @@ export function readAgentDatabaseDeletionSnapshot(
   );
 }
 
+type PreparedAgentDatabaseDeletionSnapshot = {
+  snapshot: AgentDatabaseDeletionSnapshot | undefined;
+  assertCurrent: () => void;
+};
+
 /** Repeated discovery reads keep their original source custody and observe current committed facts. */
 export function prepareAgentDatabaseDeletionSnapshotRead(
   inputOptions: OpenClawStateDatabaseOptions = {},
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): {
-  read(): Promise<{
-    snapshot: AgentDatabaseDeletionSnapshot | undefined;
-    assertCurrent: () => void;
-  }>;
+  read(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
+  readWithCurrentAdmission(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
   withCurrentSnapshot<T>(
     consume: (snapshot: AgentDatabaseDeletionSnapshot | undefined) => T | Promise<T>,
   ): Promise<T>;
@@ -178,26 +186,56 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
     env,
     path: path.resolve(inputOptions.path ?? resolveOpenClawStateSqlitePath(env)),
   };
+  const inSourceContext = AsyncLocalStorage.snapshot();
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => {
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   };
-  const read = async () => {
-    assertCurrent();
+  const readSnapshot = async (readContext: typeof context) => {
+    const assertReadCurrent = () => {
+      readContext.maintenanceScope?.assertAdmission();
+      readContext.admission.assertCurrent();
+    };
+    assertReadCurrent();
     const reply = await executeExistingOpenClawStateRead(
       options,
       { type: "agentDatabaseDeletion.snapshot", purpose },
-      { context, current: true },
+      { context: readContext, current: true },
     );
-    assertCurrent();
+    assertReadCurrent();
     if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
       throw new Error("Unexpected agent database deletion snapshot result");
     }
-    return { snapshot: reply?.snapshot, assertCurrent };
+    return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };
+  const read = () => readSnapshot(context);
   return {
     read,
+    async readWithCurrentAdmission() {
+      return inSourceContext(() => {
+        context.maintenanceScope?.assertAdmission();
+        const original = context.admission.identity;
+        if (original.key.startsWith("file:")) {
+          assertExistingDatabaseIdentity(options.path, original.key, original.birthtime);
+        } else {
+          // A still-current absent source can bind its first canonical creation.
+          context.admission.assertCurrent();
+        }
+        const current = captureOpenClawStateReadContext(options.path);
+        const source = context.admission.identity;
+        if (
+          current.admission.identity.key !== source.key ||
+          current.admission.identity.birthtime !== source.birthtime ||
+          current.maintenanceScope !== context.maintenanceScope ||
+          current.existingSchemaPath !== context.existingSchemaPath
+        ) {
+          throw new Error("Deletion snapshot source changed before read admission");
+        }
+        // A new read may follow handle retirement; an earlier reply retains its own revoked admission.
+        return readSnapshot({ ...context, ...current });
+      });
+    },
     async withCurrentSnapshot(consume) {
       let changed: boolean;
       const stop = sessionChanges.subscribeFacts((change) => {
