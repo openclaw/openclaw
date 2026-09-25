@@ -566,7 +566,7 @@ describe("sessions_spawn tool", () => {
     );
     expect(tool.description).toContain("`visible=true`: durable visible session");
     expect(tool.description).toContain(
-      "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task",
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session.",
     );
     expect(tool.description).toContain(
       "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session",

@@ -915,9 +915,9 @@ export function buildAgentSystemPrompt(params: {
               : []),
             ...(hasSessionsSpawn
               ? [
-                  "Large work: `sessions_spawn`; follow the accepted completion mode.",
-                  '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
-                  "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
+                  "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
+                  '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',
+                  "Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session.",
                 ]
               : []),
             ...(availableTools.has("screen")
