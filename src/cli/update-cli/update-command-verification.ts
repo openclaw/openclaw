@@ -120,28 +120,21 @@ export async function verifyPreviousManagedGatewayForUpdate(
   }
   // Recovery retains the observed verdict even if its receipt cannot be written.
   params.assertCurrent?.();
-  recordPreviousGatewayVerification(params.opts.run, verified);
-}
-
-function recordPreviousGatewayVerification(
-  run: UpdateCommandOptions["run"],
-  verified: boolean,
-): void {
-  if (!run) {
-    return;
+  const run = params.opts.run;
+  if (run) {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "previous gateway verification",
+        status: "completed",
+        detail: verified
+          ? "Previous package is running and ready."
+          : "Previous gateway was not verified; automatic rollback cannot restart it.",
+        endedAtMs: Date.now(),
+      },
+      { env: run.env },
+    );
   }
-  recordUpdateRunStep(
-    run.runId,
-    {
-      step: "previous gateway verification",
-      status: "completed",
-      detail: verified
-        ? "Previous package is running and ready."
-        : "Previous gateway was not verified; automatic rollback cannot restart it.",
-      endedAtMs: Date.now(),
-    },
-    { env: run.env },
-  );
 }
 
 export function recordUpdateGatewayHealth(

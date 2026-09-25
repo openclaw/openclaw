@@ -39,6 +39,7 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -86,6 +87,7 @@ export async function validateUpdateCandidateCanary(params: {
   assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
   onStep?: (step: UpdateStepResult) => void;
+  onProgress?: (step: UpdateRunStep) => void;
 }): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
@@ -108,6 +110,7 @@ export async function validateUpdateCandidateCanary(params: {
           directory === rehearsal.stateDir
             ? "candidate-state-cleanup"
             : "candidate-plugin-inventory-cleanup",
+        onProgress: params.onProgress,
         onWarning: (step) => {
           steps.push(step);
           params.onStep?.(step);
