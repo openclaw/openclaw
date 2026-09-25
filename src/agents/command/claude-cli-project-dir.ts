@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
+const CLAUDE_HOME_DIRNAME = ".claude";
+const CLAUDE_PROJECTS_DIRNAME = "projects";
 const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
 // Claude CLI stores project state under a sanitized workspace key. Add a stable
@@ -38,6 +39,17 @@ function canonicalizeWorkspaceDir(workspaceDir: string): string {
   }
 }
 
+// Claude Code stores project transcripts under $CLAUDE_CONFIG_DIR/projects
+// when CLAUDE_CONFIG_DIR is set (the upstream "Respect CLAUDE_CONFIG_DIR
+// everywhere" convention) and otherwise under ~/.claude/projects. This matches
+// the session catalog's configuredClaudeConfigDir resolution.
+function resolveClaudeCliProjectsDir(homeDir: string): string {
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return configuredDir
+    ? path.join(path.resolve(configuredDir), CLAUDE_PROJECTS_DIRNAME)
+    : path.join(homeDir, CLAUDE_HOME_DIRNAME, CLAUDE_PROJECTS_DIRNAME);
+}
+
 /** Resolves Claude CLI's per-workspace project directory. */
 export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
@@ -46,8 +58,7 @@ export function resolveClaudeCliProjectDirForWorkspace(params: {
   const homeDir = normalizeOptionalString(params.homeDir) || process.env.HOME || os.homedir();
   const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
   return path.join(
-    homeDir,
-    CLAUDE_PROJECTS_DIRNAME,
+    resolveClaudeCliProjectsDir(homeDir),
     sanitizeClaudeCliProjectKey(canonicalWorkspaceDir),
   );
 }
