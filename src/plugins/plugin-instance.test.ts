@@ -235,22 +235,29 @@ describe("managed plugin instances", () => {
     await current.dispose();
   });
 
-  it("shares explicit process runtime stores across plugin instances and host recovery", async () => {
-    const store = createPluginRuntimeStore<string>({
-      key: "plugin-runtime:test:process-owner",
+  it("keeps explicit-key runtime stores isolated on replacement and rollback", async () => {
+    const store = createPluginRuntimeStore<{ retired: boolean }>({
+      key: "memory-core:test:reload-lifecycle",
       errorMessage: "not set",
     });
-    const connectionOwner = new PluginInstance("shared");
-    const outboundAdapter = new PluginInstance("shared");
+    const current = new PluginInstance("memory-core");
+    const candidate = new PluginInstance("memory-core");
+    current.run(() => store.setRuntime({ retired: false }));
+    candidate.run(() => store.setRuntime({ retired: false }));
 
-    connectionOwner.run(() => store.setRuntime("connected"));
+    current.run(() => {
+      store.getRuntime().retired = true;
+    });
+    expect(candidate.run(store.getRuntime)).toEqual({ retired: false });
+    await candidate.dispose(); // rollback leaves the current generation's state intact
+    expect(current.run(store.getRuntime)).toEqual({ retired: true });
+    await current.dispose();
 
-    expect(outboundAdapter.run(store.getRuntime)).toBe("connected");
-    expect(store.getRuntime()).toBe("connected");
-
-    store.clearRuntime();
-    await outboundAdapter.dispose();
-    await connectionOwner.dispose();
+    const replacement = new PluginInstance("memory-core");
+    expect(replacement.run(store.tryGetRuntime)).toBeNull();
+    replacement.run(() => store.setRuntime({ retired: false }));
+    expect(replacement.run(store.getRuntime)).toEqual({ retired: false });
+    await replacement.dispose();
   });
 
   it("preserves class receivers and fences callable re-exports, including frozen getters", async () => {
