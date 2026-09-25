@@ -65,21 +65,24 @@ describe("desktop panel audio wiring", () => {
     return { panel, handle, connect };
   }
 
-  it.each([false])("offers real click-to-unmute in document mode %s", async (documentMode) => {
-    const { panel } = await setup(true, documentMode);
-    const socket = AudioSocketMock.instances[0]!;
-    expect(AudioContextMock.instances).toHaveLength(0);
-    expect(socket.send).not.toHaveBeenCalled();
-    clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
-    expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
-    await panel.updateComplete;
-    expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
-    socket.message('{"state":"started"}');
-    await panel.updateComplete;
-    clickPanelButton(panel, "[aria-label='Mute desktop audio']");
-    expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
-    expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "offers real click-to-unmute in document mode %s",
+    async (documentMode) => {
+      const { panel } = await setup(true, documentMode);
+      const socket = AudioSocketMock.instances[0]!;
+      expect(AudioContextMock.instances).toHaveLength(0);
+      expect(socket.send).not.toHaveBeenCalled();
+      clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
+      expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
+      await panel.updateComplete;
+      expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
+      socket.message('{"state":"started"}');
+      await panel.updateComplete;
+      clickPanelButton(panel, "[aria-label='Mute desktop audio']");
+      expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
+      expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("shows unavailable rather than a working toggle when audio is not advertised", async () => {
     const { panel } = await setup(false);
@@ -90,7 +93,7 @@ describe("desktop panel audio wiring", () => {
     expect(panel.renderRoot.textContent).not.toContain("pulseaudio");
   });
 
-  it.each([false])(
+  it.each([false, true])(
     "shows actionable managed setup failure without audio or RFB teardown (document %s)",
     async (documentMode) => {
       const { panel, handle } = await setup(false, documentMode, true);
