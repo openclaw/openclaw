@@ -1,5 +1,6 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { SystemAgentSession } from "./agent-turn.js";
 import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
@@ -16,6 +17,15 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
 import { loadSystemAgentOverview } from "./overview.js";
+import { buildFacts } from "./runtime-admission.test-helpers.js";
+import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+
+// The partial-turn fixture owns terminal handling, not catalog discovery. Keep
+// selected-owner publication and lease cleanup real while supplying synthetic facts.
+vi.mock(
+  "../agents/prepared-model-runtime.build.js",
+  async () => (await import("./runtime-admission.test-helpers.js")).runtimeAdmissionBuildModule,
+);
 
 describe("SystemAgentChatEngine facade", () => {
   it("ends a partial timed-out agent turn without starting a second planner inference", async () => {
@@ -23,6 +33,7 @@ describe("SystemAgentChatEngine facade", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { model: "openai/gpt-5.6-luna" } },
     };
+    buildFacts.metadata = createSystemAgentPluginMetadataTestSnapshot(config).bindForConfig(config);
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
     const planner = vi
       .spyOn(await import("./assistant.js"), "planSystemAgentCommand")
@@ -77,6 +88,7 @@ describe("SystemAgentChatEngine facade", () => {
     } finally {
       planner.mockRestore();
       await engine.dispose();
+      await resetPreparedModelRuntimeSnapshotsForTest();
     }
   });
 
