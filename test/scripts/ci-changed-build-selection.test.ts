@@ -1,10 +1,12 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import fs, { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { tuiPtyTestFiles } from "../vitest/vitest.test-shards.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,16 +23,28 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
     mkdirSync(path.dirname(absolute), { recursive: true });
     writeFileSync(absolute, source);
   }
-  const shards = createChangedNodeTestShards(["src/example/runtime.ts"], {
-    cwd,
-    dedicatedBuildArtifacts: false,
-  });
-  expect(shards).not.toBeNull();
-  expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain("src/example/runtime.test.ts");
-  expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-  expect(shards?.flatMap((shard) => shard.configs ?? [])).toContain(
-    "test/vitest/vitest.boundary.config.ts",
-  );
+  const readFile = vi.spyOn(fs, "readFileSync");
+  try {
+    const shards = createChangedNodeTestShards(["src/example/runtime.ts"], {
+      cwd,
+      dedicatedBuildArtifacts: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(
+      "src/example/runtime.test.ts",
+    );
+    expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+    expect(shards?.flatMap((shard) => shard.configs ?? [])).toContain(
+      "test/vitest/vitest.boundary.config.ts",
+    );
+    const checkoutTestReads = readFile.mock.calls
+      .map(([file]) => path.relative(process.cwd(), String(file)).replaceAll("\\", "/"))
+      .filter((file) => file.startsWith("src/") && file.endsWith(".test.ts"));
+    const selectedTargets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+    expect(checkoutTestReads.filter((file) => !selectedTargets.includes(file))).toEqual([]);
+  } finally {
+    readFile.mockRestore();
+  }
 });
 
 it("executes the source TUI assertion helper without admitting deferred PTY builds", () => {
@@ -140,4 +154,27 @@ it("runs selected channel files in one config child while retaining separate con
   expect(
     shards?.filter((shard) => shard.configs.includes("test/vitest/vitest.boundary.config.ts")),
   ).toHaveLength(1);
+});
+
+it("retains the canonical fallback for an untracked config importing a changed helper", () => {
+  const cwd = tempDirs.make("ci-untracked-config-");
+  const helper = "scripts/config-input.mts";
+  const test = "test/scripts/config-input.test.ts";
+  for (const [file, source] of Object.entries({
+    [helper]: "export const value = 1;",
+    [test]: 'import "../../scripts/config-input.mts";',
+    "test/vitest/vitest.commands.config.ts": 'import "../../scripts/config-input.mts";',
+  })) {
+    const absolute = path.join(cwd, file);
+    mkdirSync(path.dirname(absolute), { recursive: true });
+    writeFileSync(absolute, source);
+  }
+  const gitOptions = { cwd, env: createNestedGitEnv() };
+  execFileSync("git", ["init", "-q"], gitOptions);
+  execFileSync("git", ["add", "--", helper, test], gitOptions);
+  const onFallback = vi.fn();
+  expect(createChangedNodeTestShards([helper], { cwd, onFallback })).toBeNull();
+  expect(onFallback).toHaveBeenCalledWith(
+    "changed Vitest configs lack canonical checkout metadata",
+  );
 });
