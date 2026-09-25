@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  coerceErrorMessage,
   collectErrorGraphCandidates,
   readErrorCauses,
 } from "@openclaw/normalization-core/error-coercion";
@@ -24,20 +25,25 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import { isGatewayTransportError } from "./transport-error.js";
 
 export const GATEWAY_STALE_INSTALL_CLOSE_REASON =
   "gateway install changed; run: openclaw gateway restart";
 
+export type GatewayStaleConnectionReason = "installation-replaced" | "legacy-handler-unavailable";
+
 export function classifyGatewayStaleConnectionError(
-  message: string | undefined,
-): "installation-replaced" | "legacy-handler-unavailable" | undefined {
-  if (message?.includes(GATEWAY_STALE_INSTALL_CLOSE_REASON)) {
+  error: unknown,
+): GatewayStaleConnectionReason | undefined {
+  if (coerceErrorMessage(error).includes(GATEWAY_STALE_INSTALL_CLOSE_REASON)) {
     return "installation-replaced";
   }
   // Published June Gateways report failed runtime imports before STALE_INSTALL existed.
   if (
-    message?.replace(/^Error: /u, "").split("\n", 1)[0] ===
-    "gateway closed (1011): gateway message handler unavailable"
+    isGatewayTransportError(error) &&
+    error.kind === "closed" &&
+    error.code === 1011 &&
+    error.reason === "gateway message handler unavailable"
   ) {
     return "legacy-handler-unavailable";
   }

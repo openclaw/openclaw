@@ -14,8 +14,10 @@ import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
+import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 
 /** Keep short-budget residents behind their own admission fence until stop or release. */
@@ -35,6 +37,9 @@ export async function withGatewayMaintenanceDrain<T>(
   let legacyStalePid: number | undefined;
   const finish = async () => {
     if (legacyStalePid !== undefined) {
+      if (!(await ownsLegacyListener(legacyStalePid))) {
+        throw new Error("Legacy Gateway listener changed during maintenance drain");
+      }
       const legacy = await readLegacyGatewayLockIdentity(params.state.env);
       assertResidentCurrent();
       if (
@@ -61,7 +66,7 @@ export async function withGatewayMaintenanceDrain<T>(
   };
   let residentBudget: GatewayShutdownStatus | undefined;
   let lastObservation: GatewaySuspendPrepareResult | undefined;
-  let observationError: string | undefined;
+  let observationFailure: { error: unknown } | undefined;
   const remaining = () => Math.max(1, deadline - performance.now());
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
@@ -78,14 +83,25 @@ export async function withGatewayMaintenanceDrain<T>(
     });
     return { config, controlAuth, port, target };
   })().catch((error: unknown) => {
-    observationError = coerceErrorMessage(error);
+    observationFailure = { error };
     return undefined;
   });
   assertResidentCurrent();
+  const ownsLegacyListener = async (pid: number) => {
+    if (!connection?.target) {
+      return false;
+    }
+    // The configured local probe connects to IPv4 loopback, independently of bind mode.
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
+  };
   const call = async <R>(method: string, args?: unknown): Promise<R> => {
     assertResidentCurrent();
     if (!connection?.target) {
-      throw new Error(observationError ?? "Gateway TLS certificate unavailable");
+      throw observationFailure
+        ? observationFailure.error
+        : new Error("Gateway TLS certificate unavailable");
     }
     const { config, controlAuth, port, target } = connection;
     let observedBootId: string | undefined;
@@ -128,14 +144,14 @@ export async function withGatewayMaintenanceDrain<T>(
       verifiedResident = true;
     }
   } catch (error) {
-    observationError = coerceErrorMessage(error);
+    observationFailure = { error };
   }
   assertResidentCurrent();
   // A resident whose installation was replaced underneath it refuses every
   // connection; it can neither report readiness nor accept new work, so
   // draining it is pointless and would only burn the deadline.
   const staleResident = async () => {
-    const reason = classifyGatewayStaleConnectionError(observationError);
+    const reason = classifyGatewayStaleConnectionError(observationFailure?.error);
     if (reason === "installation-replaced") {
       return true;
     }
@@ -145,6 +161,9 @@ export async function withGatewayMaintenanceDrain<T>(
     const legacy = await readLegacyGatewayLockIdentity(params.state.env);
     assertResidentCurrent();
     if (legacy?.state !== "alive" || legacy.pid !== params.state.runtime?.pid) {
+      return false;
+    }
+    if (!(await ownsLegacyListener(legacy.pid))) {
       return false;
     }
     legacyStalePid = legacy.pid;
@@ -188,13 +207,13 @@ export async function withGatewayMaintenanceDrain<T>(
         if (lastObservation.status !== "busy") {
           suspensionId = lastObservation.suspensionId;
         }
-        observationError = undefined;
+        observationFailure = undefined;
       } catch (error) {
         assertResidentCurrent();
-        observationError = coerceErrorMessage(error);
+        observationFailure = { error };
       }
       assertResidentCurrent();
-      if (!observationError && lastObservation?.status === "ready") {
+      if (!observationFailure && lastObservation?.status === "ready") {
         return await finish();
       }
       if (await staleResident()) {
@@ -204,7 +223,7 @@ export async function withGatewayMaintenanceDrain<T>(
         return await finish();
       }
       if (performance.now() >= deadline) {
-        const custody = observationError ? undefined : lastObservation?.writeCustody;
+        const custody = observationFailure ? undefined : lastObservation?.writeCustody;
         const held = custody?.filter(({ count }) => count > 0);
         if (held?.length) {
           throw new GatewayServiceStopUnsafeError(
@@ -224,7 +243,7 @@ export async function withGatewayMaintenanceDrain<T>(
           : (residentBudget?.activeWork?.cronRuns ?? "unknown");
         const custodyNotice =
           custody === undefined
-            ? `The resident build cannot distinguish migrations/backups from ordinary work in this observation.${observationError ? ` Current lifecycle observation unavailable (${observationError}).` : ""}`
+            ? `The resident build cannot distinguish migrations/backups from ordinary work in this observation.${observationFailure ? ` Current lifecycle observation unavailable (${coerceErrorMessage(observationFailure.error)}).` : ""}`
             : "No lifecycle write custody was reported.";
         const next =
           (managerTimeout ?? 0) >= GATEWAY_SERVICE_STOP_TIMEOUT_MS

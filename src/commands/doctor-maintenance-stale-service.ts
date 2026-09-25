@@ -3,7 +3,6 @@ import { inspectGatewayRestart } from "../cli/daemon-cli/restart-health.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { resolveUpdatedGatewayRestartPort } from "../cli/update-cli/update-command-service-plan.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { classifyGatewayStaleConnectionError } from "../gateway/stale-install.js";
 import { readLegacyGatewayLockIdentity } from "../infra/gateway-lock-legacy.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { probePortUsage } from "../infra/ports-probe.js";
@@ -92,7 +91,7 @@ export async function inspectStaleDoctorGateway(params: {
     legacy ||
     health?.buildIdMismatch?.actual != null ||
     health?.versionMismatch ||
-    classifyGatewayStaleConnectionError(health?.probeError) !== undefined;
+    health?.staleConnection !== undefined;
   if (!stale) {
     return undefined;
   }

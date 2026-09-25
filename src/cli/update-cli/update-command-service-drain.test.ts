@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
 import type {
   GatewaySuspendBlocker,
   GatewaySuspendPrepareResult,
@@ -10,17 +14,20 @@ import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { CallGatewayCliOptions } from "../../gateway/call.js";
 import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
   managerTimeout: vi.fn(),
   legacyLock: vi.fn(),
+  portUsage: vi.fn(),
 }));
 vi.mock("../../gateway/call.js", () => ({ callGatewayCli: mocks.call }));
 vi.mock("../../infra/gateway-lock-legacy.js", () => ({
   readLegacyGatewayLockIdentity: mocks.legacyLock,
 }));
+vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.portUsage }));
 vi.mock("../../daemon/systemd-maintenance.js", () => ({
   readSystemdGatewayStopTimeout: mocks.managerTimeout,
 }));
@@ -43,6 +50,12 @@ beforeEach(() => {
   mocks.call.mockReset();
   mocks.managerTimeout.mockReset().mockResolvedValue(330_000);
   mocks.legacyLock.mockReset().mockResolvedValue(undefined);
+  mocks.portUsage.mockReset().mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ pid: 42 }],
+    hints: [],
+  });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -413,6 +426,7 @@ it.each([GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection])(
     ]);
     if (reason === GATEWAY_STALE_INSTALL_CLOSE_REASON) {
       expect(mocks.legacyLock).not.toHaveBeenCalled();
+      expect(mocks.portUsage).not.toHaveBeenCalled();
     }
   },
 );
@@ -474,6 +488,90 @@ it.each([
   expect(mocks.legacyLock).not.toHaveBeenCalled();
   expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
 });
+
+it.each<PortUsage>([
+  { port: 18789, status: "free", listeners: [], hints: [] },
+  { port: 18789, status: "unknown", listeners: [], hints: [] },
+  { port: 18789, status: "busy", listeners: [{}], hints: [] },
+  { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] },
+  { port: 18789, status: "busy", listeners: [{ pid: 42 }, { pid: 43 }], hints: [] },
+])("does not shorten the June deadline without owned listener attribution: %j", async (usage) => {
+  const f = fixture();
+  mocks.legacyLock.mockResolvedValue(legacyResident);
+  mocks.portUsage.mockResolvedValue(usage);
+  mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
+  const running = withGatewayMaintenanceDrain(f.params, f.stop);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
+  await expect(running).resolves.toBe("stopped");
+  expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+});
+
+it.each(["plain error", "protocol response", "extended close reason"])(
+  "does not shorten the June deadline for a %s lookalike",
+  async (kind) => {
+    const f = fixture();
+    mocks.legacyLock.mockResolvedValue(legacyResident);
+    let error: Error;
+    if (kind === "protocol response") {
+      const response = new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: juneStaleConnection,
+      });
+      retainGatewayResponsePayload(response, undefined);
+      error = response;
+    } else if (kind === "extended close reason") {
+      error = createGatewayCloseTransportError({
+        code: 1011,
+        reason: "gateway message handler unavailable\nfor a different reason",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "Gateway target: ws://127.0.0.1:18789",
+        },
+        requestDispatched: false,
+      });
+    } else {
+      error = new Error(juneStaleConnection);
+    }
+    mocks.call.mockRejectedValue(error);
+    const running = withGatewayMaintenanceDrain(f.params, f.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
+    await expect(running).resolves.toBe("stopped");
+    expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+  },
+);
+
+it.each(["listener", "authority"])(
+  "does not stop when %s changes during June listener revalidation",
+  async (change) => {
+    const f = fixture();
+    mocks.legacyLock.mockResolvedValue(legacyResident);
+    mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
+    mocks.portUsage
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 42 }],
+        hints: [],
+      })
+      .mockImplementationOnce(async () => {
+        if (change === "authority") {
+          f.loseAuthority();
+        }
+        return { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] };
+      });
+    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
+      change === "authority"
+        ? "service operation authority lost"
+        : "Legacy Gateway listener changed",
+    );
+    expect(f.stop).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["lock", "native PID", "authority"])(
   "does not stop when %s changes during legacy revalidation",

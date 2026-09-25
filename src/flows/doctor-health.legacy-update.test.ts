@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
@@ -168,16 +169,19 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
             healthy: false,
             staleGatewayPids: [],
             gatewayVersion: null,
-            probeError: createGatewayCloseTransportError({
-              code: 1011,
-              reason: "gateway message handler unavailable",
-              connectionDetails: {
-                url: "ws://127.0.0.1:18789",
-                urlSource: "local loopback",
-                message: "Gateway target: ws://127.0.0.1:18789",
-              },
-              requestDispatched: false,
-            }).message,
+            staleConnection: "legacy-handler-unavailable",
+            probeError: sanitizeTerminalText(
+              createGatewayCloseTransportError({
+                code: 1011,
+                reason: "gateway message handler unavailable",
+                connectionDetails: {
+                  url: "ws://127.0.0.1:18789",
+                  urlSource: "local loopback",
+                  message: "Gateway target: ws://127.0.0.1:18789",
+                },
+                requestDispatched: false,
+              }).message,
+            ),
           }));
         }
         mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
