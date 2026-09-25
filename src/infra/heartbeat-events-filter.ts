@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS,
   isHeartbeatAcknowledgementText,
 } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -90,7 +90,7 @@ export function buildCronEventPrompt(
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
     const completionInstruction = useHeartbeatResponseTool
-      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      ? HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS
       : deliverToUser
         ? `Reply ${SILENT_REPLY_TOKEN}.`
         : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
@@ -123,7 +123,7 @@ export function buildExecEventPrompt(
       : rawEventText;
   if (!eventText) {
     const completionInstruction = useHeartbeatResponseTool
-      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      ? HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS
       : `Reply ${SILENT_REPLY_TOKEN} only.`;
     return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
   }
@@ -131,7 +131,7 @@ export function buildExecEventPrompt(
     if (useHeartbeatResponseTool) {
       return (
         "An async command completion event was triggered, but user delivery is disabled for this run. " +
-        `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ` +
+        `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS} ` +
         "Do not mention, summarize, or reuse command output."
       );
     }

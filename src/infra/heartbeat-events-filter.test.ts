@@ -120,12 +120,34 @@ describe("heartbeat event prompts", () => {
     expect(prompt).not.toContain("HEARTBEAT_OK");
   });
 
+  it("keeps the tool-absent fallback in empty cron response-tool prompts", () => {
+    const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("If the heartbeat_respond tool is not available in this run");
+  });
+
   it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
     const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
 
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("keeps the tool-absent fallback in quiet exec response-tool prompts", () => {
+    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("If the heartbeat_respond tool is not available in this run");
+  });
+
+  it("keeps the tool-absent fallback when exec delivery is disabled in response-tool mode", () => {
+    const prompt = buildExecEventPrompt(["Exec finished: ok"], {
+      deliverToUser: false,
+      useHeartbeatResponseTool: true,
+    });
+
+    expect(prompt).toContain("Handle the result internally.");
+    expect(prompt).toContain("If the heartbeat_respond tool is not available in this run");
   });
 });
 
