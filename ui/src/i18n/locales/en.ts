@@ -4330,6 +4330,7 @@ export const en: TranslationMap & {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+    ca: "Català (Catalan)",
   },
   secretsStore: {
     name: "Name",
