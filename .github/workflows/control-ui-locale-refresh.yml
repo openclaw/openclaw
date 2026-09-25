@@ -28,6 +28,7 @@ on:
       - scripts/lib/control-ui-i18n-sync-plan.ts
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
+      - .github/actions/publish-generated-pr/policy.py
       - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
@@ -117,34 +118,68 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Create generated PR tokens
-        id: tokens
-        uses: ./.github/actions/create-generated-pr-tokens
+      - name: Reconcile stale generated locale PR
+        uses: ./.github/actions/publish-generated-pr
         with:
+          mode: ${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && 'preflight' || 'reconcile-stale' }}
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
-          pull-request-contents-permission: write
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/control-ui-locale-refresh
+          commit-message: "chore(ui): refresh control ui locales"
+          pr-title: "chore(ui): refresh control ui locales"
+          auto-merge: "true"
+          generated-paths: &control-ui-generated-paths |
+            ui/src/i18n/.i18n/*.tm.jsonl
+            ui/src/i18n/.i18n/*.meta.json
+            ui/src/i18n/.i18n/catalog-fallbacks.json
+          invalidation-paths: &control-ui-invalidation-paths |
+            ui/src/i18n/locales/*.ts
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/locales/en-agents.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            ui/src/i18n/.i18n/raw-copy-baseline.json
+            ui/src/i18n/lib/types.ts
+            ui/src/i18n/lib/registry.ts
+            ui/config/control-ui-locales.ts
+            scripts/control-ui-i18n.ts
+            scripts/control-ui-i18n-verify.ts
+            scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-catalog-values.ts
+            ui/src/i18n/lib/config-hint-translation.ts
+            ui/src/lib/fnv1a.ts
+            src/config/schema*.ts
+            src/config/zod-schema*.ts
+            src/config/media-audio-field-metadata.ts
+            src/config/talk-defaults.ts
+            src/config/channel-config-keys.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-raw-copy.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
+            .github/workflows/control-ui-locale-refresh.yml
+          pr-body: &control-ui-pr-body |
+            ## What Problem This Solves
 
-      - name: Verify repository auto-merge setting
-        env:
-          GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
-          REPOSITORY_NAME: ${{ github.event.repository.name }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          auto_merge_allowed="$(
-            gh api graphql \
-              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
-              -f owner="${REPOSITORY_OWNER}" \
-              -f name="${REPOSITORY_NAME}" \
-              --jq '.data.repository.autoMergeAllowed'
-          )"
-          if [[ "${auto_merge_allowed}" != "true" ]]; then
-            echo "Repository auto-merge must be enabled before generated locale publication." >&2
-            exit 1
-          fi
+            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
+
+            ## Why This Change Was Made
+
+            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/control-ui-i18n.ts check`
 
   refresh:
     needs: [resolve-base, publisher-preflight]
@@ -264,6 +299,7 @@ jobs:
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
+          mode: publish
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
@@ -273,51 +309,6 @@ jobs:
           commit-message: "chore(ui): refresh control ui locales"
           pr-title: "chore(ui): refresh control ui locales"
           auto-merge: "true"
-          generated-paths: |
-            ui/src/i18n/.i18n/*.tm.jsonl
-            ui/src/i18n/.i18n/*.meta.json
-            ui/src/i18n/.i18n/catalog-fallbacks.json
-          invalidation-paths: |
-            ui/src/i18n/locales/*.ts
-            ui/src/i18n/locales/en.ts
-            ui/src/i18n/locales/en-agents.ts
-            ui/src/i18n/.i18n/glossary.*.json
-            ui/src/i18n/.i18n/raw-copy-baseline.json
-            ui/src/i18n/lib/types.ts
-            ui/src/i18n/lib/registry.ts
-            ui/config/control-ui-locales.ts
-            scripts/control-ui-i18n.ts
-            scripts/control-ui-i18n-verify.ts
-            scripts/lib/control-ui-i18n-catalog.ts
-            scripts/lib/control-ui-i18n-catalog-values.ts
-            ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
-            src/config/schema*.ts
-            src/config/zod-schema*.ts
-            src/config/media-audio-field-metadata.ts
-            src/config/talk-defaults.ts
-            src/config/channel-config-keys.ts
-            scripts/lib/control-ui-i18n-config.json
-            scripts/lib/control-ui-i18n-config.ts
-            scripts/lib/control-ui-i18n-raw-copy.ts
-            scripts/lib/control-ui-i18n-sync-plan.ts
-            .github/actions/create-generated-pr-tokens/action.yml
-            .github/actions/publish-generated-pr/action.yml
-            .github/workflows/control-ui-locale-refresh.yml
-          pr-body: |
-            ## What Problem This Solves
-
-            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
-
-            ## Why This Change Was Made
-
-            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
-
-            ## User Impact
-
-            No direct user-facing change beyond refreshed translations.
-
-            ## Evidence
-
-            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            - `node --import tsx scripts/control-ui-i18n.ts check`
+          generated-paths: *control-ui-generated-paths
+          invalidation-paths: *control-ui-invalidation-paths
+          pr-body: *control-ui-pr-body

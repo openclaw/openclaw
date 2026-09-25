@@ -36,6 +36,10 @@ inputs:
     description: Newline-delimited generator input paths that make an older run stale.
     required: false
     default: ""
+  mode:
+    description: Select permission preflight, stale reconciliation, or final publication.
+    required: false
+    default: publish
   working-directory:
     description: Repository root containing the generated files.
     required: false
@@ -79,6 +83,7 @@ runs:
         PR_BODY: ${{ inputs.pr-body }}
         GENERATED_PATHS: ${{ inputs.generated-paths }}
         INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
+        PUBLISH_MODE: ${{ inputs.mode }}
         OVERLAP_POLICY: ${{ inputs.overlap-policy }}
         AUTO_MERGE: ${{ inputs.auto-merge }}
       run: |
@@ -104,6 +109,13 @@ runs:
             exit 1
             ;;
         esac
+        case "${PUBLISH_MODE}" in
+          preflight | reconcile-stale | publish) ;;
+          *)
+            echo "Generated PR publication mode must be 'preflight', 'reconcile-stale', or 'publish'." >&2
+            exit 1
+            ;;
+        esac
         case "${AUTO_MERGE}" in
           true | false) ;;
           *)
@@ -118,6 +130,14 @@ runs:
             -f state=open -f base="${BASE_BRANCH}" \
             -f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}" \
             --jq '[.[] | select(.base.repo.full_name == env.GITHUB_REPOSITORY and .head.repo.full_name == env.GITHUB_REPOSITORY and .base.ref == env.BASE_BRANCH and .head.ref == env.HEAD_BRANCH)][0] | if . == null then "" else [.html_url, .head.sha] | @tsv end'
+        }
+        read_repository_auto_merge() {
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh api graphql \
+              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
+              -f owner="${GITHUB_REPOSITORY_OWNER}" \
+              -f name="${GITHUB_REPOSITORY#*/}" \
+              --jq '.data.repository.autoMergeAllowed'
         }
 
         read_auto_merge_record_for_head() {
@@ -210,5 +230,6 @@ runs:
             gh pr merge "$1" --repo "${GITHUB_REPOSITORY}" --disable-auto
         }
         export -f disable_auto_merge
-        export -f find_open_pr read_auto_merge_record_for_head ensure_auto_merge_compatible mutate_pr merge_pr
+        export -f find_open_pr read_repository_auto_merge read_auto_merge_record_for_head
+        export -f ensure_auto_merge_compatible mutate_pr merge_pr
         exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"

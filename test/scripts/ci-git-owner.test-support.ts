@@ -245,6 +245,7 @@ export async function runCiGitStep(options: {
         PR_BODY: "fixture",
         GENERATED_PATHS: "generated",
         INVALIDATION_PATHS: "source",
+        PUBLISH_MODE: "publish",
         OVERLAP_POLICY: "defer",
         AUTO_MERGE: "false",
         BASE_SHA: base,

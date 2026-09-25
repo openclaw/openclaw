@@ -76,7 +76,10 @@ import {
   type WorkflowStep,
   writeExecutable,
 } from "./ci-workflow.test-support.js";
-import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+import {
+  runGeneratedPublisherReconcileThenPublish,
+  runGeneratedPublisherScenario,
+} from "./generated-publisher.test-support.js";
 
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
@@ -95,6 +98,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const PUBLISH_GENERATED_PR_POLICY = ".github/actions/publish-generated-pr/policy.py";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
 const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
   echo "${AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC}" >&2
@@ -1884,6 +1888,7 @@ AFTER_CD
     for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
       expect(ownerWorkflow.on.push.paths).toContain(CREATE_GENERATED_PR_TOKENS_ACTION);
       expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_ACTION);
+      expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_POLICY);
       const resolveBase = ownerWorkflow.jobs["resolve-base"];
       const resolveStep = resolveBase.steps.find(
         (step: { name?: string }) =>
@@ -1938,39 +1943,29 @@ AFTER_CD
       expect(preflight.needs).toBe("resolve-base");
       expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
       expect(preflight.strategy).toBeUndefined();
-      expect(preflight.steps).toHaveLength(3);
+      expect(preflight.steps).toHaveLength(2);
       const checkoutStep = preflight.steps.find(
         (step: { uses?: string }) => step.uses === CHECKOUT_V6,
       );
-      const tokensStep = preflight.steps.find(
-        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      const publisherStep = preflight.steps.find(
+        (step: { uses?: string }) => step.uses === "./.github/actions/publish-generated-pr",
       );
       expect(checkoutStep.with).toMatchObject({
         ref: "${{ needs.resolve-base.outputs.sha }}",
         "persist-credentials": false,
       });
-      expect(tokensStep.uses).toBe("./.github/actions/create-generated-pr-tokens");
-      expect(tokensStep.with).toEqual({
+      expect(publisherStep.with).toMatchObject({
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
         "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
-        "pull-request-contents-permission": "write",
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+        "auto-merge": "true",
       });
-    }
-    for (const preflight of [controlUiPreflight, nativePreflight]) {
-      const tokensStep = preflight.steps.find(
-        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      expect(publisherStep.with.mode).toBe(
+        preflight === controlUiPreflight
+          ? "${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && 'preflight' || 'reconcile-stale' }}"
+          : "reconcile-stale",
       );
-      const autoMergeSettingStep = preflight.steps.find(
-        (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
-      );
-      expect(tokensStep.id).toBe("tokens");
-      expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
-        "${{ steps.tokens.outputs.pull-request-token }}",
-      );
-      expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
-      expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
     }
 
     const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
@@ -2054,6 +2049,12 @@ AFTER_CD
     expect(actionPublishStep.env.CONTENTS_TOKEN).toBe("${{ steps.tokens.outputs.contents-token }}");
     expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.tokens.outputs.pull-request-token }}");
     expect(actionPublishStep.env.INVALIDATION_PATHS).toBe("${{ inputs.invalidation-paths }}");
+    expect(actionPublishStep.env.PUBLISH_MODE).toBe("${{ inputs.mode }}");
+    expect(publishAction.inputs.mode).toEqual({
+      description: "Select permission preflight, stale reconciliation, or final publication.",
+      required: false,
+      default: "publish",
+    });
     expect(publishAction.inputs["invalidation-paths"]).toEqual({
       description: "Newline-delimited generator input paths that make an older run stale.",
       required: false,
@@ -2079,11 +2080,13 @@ AFTER_CD
     expect(actionPublishStep.env.AUTO_MERGE).toBe("${{ inputs.auto-merge }}");
     const publishPolicy = readFileSync(".github/actions/publish-generated-pr/policy.py", "utf8");
     expect(actionPublishStep.run).toContain('case "${OVERLAP_POLICY}" in');
+    expect(actionPublishStep.run).toContain('case "${PUBLISH_MODE}" in');
+    expect(actionPublishStep.run).toContain("preflight | reconcile-stale | publish");
     expect(actionPublishStep.run).toContain("defer | fail");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
     expect(
       actionPublishStep.run.match(/timeout --signal=TERM --kill-after=10s 60s/gu),
-    ).toHaveLength(6);
+    ).toHaveLength(7);
     expect(actionPublishStep.env.PUBLISH_ACTION_PATH).toBe("${{ github.action_path }}");
     expect(actionPublishStep.run).toContain(
       'exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"',
@@ -2096,6 +2099,7 @@ AFTER_CD
     );
     expect(publishPolicy.match(/timeout=\d+/gu)).toEqual([
       "timeout=60",
+      "timeout=120",
       "timeout=120",
       "timeout=60",
     ]);
@@ -2223,12 +2227,127 @@ AFTER_CD
       expect(publishStep.with["invalidation-paths"]).toContain(
         ".github/actions/publish-generated-pr/action.yml",
       );
+      expect(publishStep.with["invalidation-paths"]).toContain(PUBLISH_GENERATED_PR_POLICY);
       expect(publishStep.with).not.toHaveProperty("overlap-policy");
       expect(publishStep.with["auto-merge"]).toBe("true");
+      expect(publishStep.with.mode).toBe("publish");
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
       expect(publishStep.with["pr-body"]).not.toContain("${{ github.sha }}");
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "disarms a stale generated PR before locale matrix work",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toContain("--disable-auto");
+      expect(result.summary).toContain("Preserved stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "leaves stale PR auto-merge unchanged when current main only changed unrelated paths",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        invalidationPaths: "unrelated",
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rearms exact-head auto-merge only after fresh generated output is published",
+    () => {
+      const { publish, reconcile } = runGeneratedPublisherReconcileThenPublish();
+
+      expect(reconcile.mergeCalls).toContain("--disable-auto");
+      expect(publish.generatedA).toBe("desired-a");
+      expect(publish.mergeCalls).toContain("--disable-auto");
+      expect(publish.mergeCalls).toContain("--auto --squash --match-head-commit");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("keeps publisher preflight mutation-free", () => {
+    const result = runGeneratedPublisherScenario(null, {
+      autoMerge: true,
+      existingAutoMergeMethod: "SQUASH",
+      existingPr: true,
+      mode: "preflight",
+    });
+
+    expect(result.branchHead).toBe(result.initialBranch);
+    expect(result.mergeCalls).toBe("");
+    expect(result.summary).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "fails closed when a stale generated branch moves during early disarm",
+    () => {
+      const beforeDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        reconcileHeadRace: true,
+        updateSource: true,
+      });
+      const duringDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        disarmRace: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(beforeDisarm.mergeCalls).toBe("");
+      expect(beforeDisarm.summary).toBe("");
+      expect(duringDisarm.mergeCalls).toContain("--disable-auto");
+      expect(duringDisarm.summary).not.toContain("Preserved stale");
+    },
+  );
+
+  it("keeps generated publisher action and policy inventories paired", () => {
+    const workflowFiles = globSync(".github/workflows/*.{yml,yaml}");
+    for (const workflowFile of workflowFiles) {
+      const workflow = parse(readFileSync(workflowFile, "utf8"));
+      const triggerPaths = workflow.on?.push?.paths ?? [];
+      expect(triggerPaths.includes(PUBLISH_GENERATED_PR_POLICY), workflowFile).toBe(
+        triggerPaths.includes(PUBLISH_GENERATED_PR_ACTION),
+      );
+      for (const job of Object.values(workflow.jobs ?? {}) as Array<{
+        steps?: Array<{ uses?: string; with?: Record<string, string> }>;
+      }>) {
+        for (const step of job.steps ?? []) {
+          if (step.uses !== "./.github/actions/publish-generated-pr") {
+            continue;
+          }
+          const invalidationPaths = step.with?.["invalidation-paths"]?.trim().split("\n") ?? [];
+          if (invalidationPaths.includes(PUBLISH_GENERATED_PR_ACTION)) {
+            expect(invalidationPaths, workflowFile).toContain(PUBLISH_GENERATED_PR_POLICY);
+          }
+        }
+      }
     }
   });
 
@@ -11202,12 +11321,21 @@ it("pins generated publisher and maturity owners before credentials and selected
       const jobSteps = (job as { steps?: WorkflowStep[] }).steps ?? [];
       return jobSteps.flatMap((step, index) =>
         step.uses === "./.github/actions/publish-generated-pr"
-          ? [{ index, length: jobSteps.length }]
+          ? [{ index, length: jobSteps.length, mode: step.with?.mode }]
           : [],
       );
     });
-    expect(publishers, file).toHaveLength(1);
-    expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
+    const finalPublishers = publishers.filter(
+      ({ mode }) => mode === undefined || mode === "publish",
+    );
+    expect(finalPublishers, file).toHaveLength(1);
+    expect(finalPublishers[0]?.index, file).toBe(finalPublishers[0]!.length - 1);
+    expect(
+      publishers
+        .filter(({ mode }) => mode !== undefined && mode !== "publish")
+        .every(({ index }) => index < finalPublishers[0]!.index),
+      file,
+    ).toBe(true);
   }
 });
 

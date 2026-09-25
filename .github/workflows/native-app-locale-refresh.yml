@@ -86,34 +86,73 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Create generated PR tokens
-        id: tokens
-        uses: ./.github/actions/create-generated-pr-tokens
+      - name: Reconcile stale generated locale PR
+        uses: ./.github/actions/publish-generated-pr
         with:
+          mode: reconcile-stale
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
-          pull-request-contents-permission: write
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/native-app-locale-refresh
+          commit-message: "chore(i18n): refresh native locales"
+          pr-title: "chore(i18n): refresh native locales"
+          auto-merge: "true"
+          generated-paths: &native-generated-paths |
+            apps/.i18n/native
+            apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
+            apps/android/app/src/main/res/values*/assistant.xml
+            apps/android/app/src/main/res/values*/strings.xml
+            apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml
+            apps/android/wear/src/main/res/values*/strings.xml
+            apps/ios/Resources/Localizable.xcstrings
+            apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings
+            apps/ios/Sources/*.lproj/InfoPlist.strings
+            apps/ios/WatchApp/*.lproj/InfoPlist.strings
+            apps/ios/ShareExtension/*.lproj/InfoPlist.strings
+            apps/ios/ActivityWidget/*.lproj/InfoPlist.strings
+          invalidation-paths: &native-invalidation-paths |
+            apps/.i18n/native-source.json
+            apps/android/app/src/main
+            apps/android/app/src/play
+            apps/android/app/src/thirdParty
+            apps/android/wear/src/main
+            apps/ios
+            apps/macos/Sources
+            apps/macos/Package.swift
+            apps/shared/OpenClawKit/Sources
+            scripts/control-ui-i18n.ts
+            scripts/lib/control-ui-i18n-catalog-values.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
+            scripts/android-app-i18n.ts
+            scripts/apple-app-i18n.ts
+            scripts/native-app-i18n.ts
+            scripts/native-i18n-locales.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
+            .github/workflows/native-app-locale-refresh.yml
+          pr-body: &native-pr-body |
+            ## What Problem This Solves
 
-      - name: Verify repository auto-merge setting
-        env:
-          GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
-          REPOSITORY_NAME: ${{ github.event.repository.name }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          auto_merge_allowed="$(
-            gh api graphql \
-              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
-              -f owner="${REPOSITORY_OWNER}" \
-              -f name="${REPOSITORY_NAME}" \
-              --jq '.data.repository.autoMergeAllowed'
-          )"
-          if [[ "${auto_merge_allowed}" != "true" ]]; then
-            echo "Repository auto-merge must be enabled before generated locale publication." >&2
-            exit 1
-          fi
+            Keeps generated native app locales synchronized without bypassing protected-branch checks.
+
+            ## Why This Change Was Made
+
+            The Native App Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/native-app-i18n.ts check`
 
   refresh:
     needs: [resolve-base, publisher-preflight]
@@ -254,6 +293,7 @@ jobs:
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
+          mode: publish
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
@@ -263,57 +303,6 @@ jobs:
           commit-message: "chore(i18n): refresh native locales"
           pr-title: "chore(i18n): refresh native locales"
           auto-merge: "true"
-          generated-paths: |
-            apps/.i18n/native
-            apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
-            apps/android/app/src/main/res/values*/assistant.xml
-            apps/android/app/src/main/res/values*/strings.xml
-            apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml
-            apps/android/wear/src/main/res/values*/strings.xml
-            apps/ios/Resources/Localizable.xcstrings
-            apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings
-            apps/ios/Sources/*.lproj/InfoPlist.strings
-            apps/ios/WatchApp/*.lproj/InfoPlist.strings
-            apps/ios/ShareExtension/*.lproj/InfoPlist.strings
-            apps/ios/ActivityWidget/*.lproj/InfoPlist.strings
-          invalidation-paths: |
-            apps/.i18n/native-source.json
-            apps/android/app/src/main
-            apps/android/app/src/play
-            apps/android/app/src/thirdParty
-            apps/android/wear/src/main
-            apps/ios
-            apps/macos/Sources
-            apps/macos/Package.swift
-            apps/shared/OpenClawKit/Sources
-            scripts/control-ui-i18n.ts
-            scripts/lib/control-ui-i18n-catalog-values.ts
-            scripts/lib/control-ui-i18n-config.json
-            scripts/lib/control-ui-i18n-config.ts
-            scripts/lib/control-ui-i18n-sync-plan.ts
-            scripts/android-app-i18n.ts
-            scripts/apple-app-i18n.ts
-            scripts/native-app-i18n.ts
-            scripts/native-i18n-locales.ts
-            ui/src/i18n/.i18n/glossary.*.json
-            .github/actions/create-generated-pr-tokens/action.yml
-            .github/actions/publish-generated-pr/action.yml
-            .github/actions/publish-generated-pr/policy.py
-            .github/workflows/native-app-locale-refresh.yml
-          pr-body: |
-            ## What Problem This Solves
-
-            Keeps generated native app locales synchronized without bypassing protected-branch checks.
-
-            ## Why This Change Was Made
-
-            The Native App Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
-
-            ## User Impact
-
-            No direct user-facing change beyond refreshed translations.
-
-            ## Evidence
-
-            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            - `node --import tsx scripts/native-app-i18n.ts check`
+          generated-paths: *native-generated-paths
+          invalidation-paths: *native-invalidation-paths
+          pr-body: *native-pr-body

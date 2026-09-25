@@ -87,6 +87,7 @@ jobs:
             pnpm-lock.yaml
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
             .github/workflows/ci-test-timings-refit.yml
             .github/workflows/ci.yml
           pr-body: |

@@ -14,6 +14,7 @@ head_branch = os.environ["HEAD_BRANCH"]
 base_ref = f"refs/remotes/origin/{base_branch}"
 generated_paths = [p for p in os.environ["GENERATED_PATHS"].split("\n") if p]
 invalidation_paths = [p for p in os.environ["INVALIDATION_PATHS"].split("\n") if p]
+publish_mode = os.environ["PUBLISH_MODE"]
 push_log = Path(os.environ["RUNNER_TEMP"]) / "generated-pr-push.log"
 auth_key = "http.https://github.com/.extraheader"
 lease_rejection = r"stale info|non-fast-forward|fetch first"
@@ -83,6 +84,21 @@ def read_remote_head():
     output = git("ls-remote", "--heads", "origin", f"refs/heads/{head_branch}",
                  timeout=60, capture=True)
     return output.splitlines()[0].split()[0] if output.splitlines() else ""
+
+
+def verify_repository_auto_merge():
+    if gh("read_repository_auto_merge", capture=True) != "true":
+        fail("Repository auto-merge must be enabled before generated locale publication.")
+
+
+def fetch_generated_head(expected_head):
+    generated_ref = f"refs/remotes/origin/{head_branch}"
+    git("fetch", "--no-tags", "--depth=2", "origin",
+        f"+refs/heads/{head_branch}:{generated_ref}", timeout=120)
+    observed_head = git("rev-parse", generated_ref, capture=True).rstrip("\n")
+    if observed_head != expected_head:
+        fail("Generated branch moved before stale source reconciliation.")
+    return generated_ref
 
 
 def fetch_base():
@@ -189,10 +205,14 @@ def report_push_failure():
         print("::error::Generated branch moved concurrently; refusing to overwrite the newer head.", flush=True)
 
 
-def preserve_stale_pr():
+def preserve_stale_pr(expected_pr_url="", expected_pr_head=""):
     stale_pr_url, stale_pr_head = find_open_pr()
     if not stale_pr_url:
         return
+    if expected_pr_url and (
+        stale_pr_url != expected_pr_url or stale_pr_head != expected_pr_head
+    ):
+        fail("Generated pull request moved before stale auto-merge reconciliation.")
     if read_remote_head() != stale_pr_head:
         fail("Generated branch moved before stale auto-merge reconciliation.")
     record = gh("read_auto_merge_record_for_head", stale_pr_head, stale_pr_url, capture=True)
@@ -207,6 +227,26 @@ def preserve_stale_pr():
         fail("Generated branch moved during stale auto-merge reconciliation; rerun the publisher.")
     summary(f"Preserved stale generated pull request with auto-merge disabled: {stale_pr_url}. "
             "A fresh generator run will update it and restore the configured auto-merge policy.")
+
+
+def reconcile_stale_pr():
+    stale_pr_url, stale_pr_head = find_open_pr()
+    if not stale_pr_url:
+        return
+    if not re.fullmatch(r"[0-9a-f]{40}", stale_pr_head):
+        fail("Generated pull request returned an invalid head commit.")
+    if read_remote_head() != stale_pr_head:
+        fail("Generated branch moved before stale source reconciliation.")
+    generated_ref = fetch_generated_head(stale_pr_head)
+    commit = git("rev-list", "--parents", "-n", "1", generated_ref, capture=True).split()
+    if len(commit) != 2:
+        fail("Generated pull request head must have exactly one source parent.")
+    source_parent = commit[1]
+    if not invalidation_paths or git_test(
+        "diff", "--quiet", source_parent, source_commit, "--", *invalidation_paths
+    ):
+        return
+    preserve_stale_pr(stale_pr_url, stale_pr_head)
 
 
 def finish_nonpublication(reason):
@@ -352,20 +392,28 @@ def cleanup_git_auth():
         pass  # Preserve ordinary missing/unset tolerance, never lifecycle failure.
 
 
-if not generated_paths:
+if publish_mode == "publish" and not generated_paths:
     import sys
     print("Generated PR publication requires at least one generated path.", file=sys.stderr)
     raise SystemExit(1)
+if publish_mode in ("preflight", "reconcile-stale"):
+    verify_repository_auto_merge()
+if publish_mode == "preflight":
+    raise SystemExit(0)
 source_commit = git("rev-parse", "HEAD", capture=True).rstrip("\n")
-git("config", "user.name", "github-actions[bot]")
-git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+if publish_mode == "publish":
+    git("config", "user.name", "github-actions[bot]")
+    git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
 # Branch transport and PR mutations retain their separate least-privilege identities.
 git_auth = base64.b64encode(f"x-access-token:{os.environ['CONTENTS_TOKEN']}".encode()).decode()
 print(f"::add-mask::{git_auth}", flush=True)
 git("config", "--local", auth_key, f"AUTHORIZATION: basic {git_auth}")
 del git_auth
 try:
-    publish()
+    if publish_mode == "reconcile-stale":
+        reconcile_stale_pr()
+    else:
+        publish()
 except PublicationFailure as error:
     raise SystemExit(error.code)
 finally:
