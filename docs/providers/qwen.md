@@ -259,7 +259,7 @@ Image-generation-only plan models are not included here because they use
 different APIs.
 
 | Model ref                                | Input       | Context   | Picker status |
-|------------------------------------------|-------------|-----------|---------------|
+| ---------------------------------------- | ----------- | --------- | ------------- |
 | `qwen-token-plan/qwen3.7-plus`           | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.8-max`            | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.8-flash`          | text, image | 1,000,000 | visible       |
@@ -284,6 +284,7 @@ different APIs.
 service for it even when the model list omits it. Treat the model-list omission
 as a discovery/visibility distinction, not evidence that the exact ID is
 unavailable.
+
 ## Thinking controls
 
 Agent runs and standalone completions use the same model-specific thinking

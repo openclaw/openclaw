@@ -176,11 +176,11 @@ describe("qwen token plan provider catalog", () => {
     });
     expect(models.find((model) => model.id === "deepseek-v4-pro-0813")).toMatchObject({
       contextWindow: 1_000_000,
-      maxTokens: 393_216,
+      maxTokens: 384_000,
     });
     expect(models.find((model) => model.id === "deepseek-v4.1-flash")).toMatchObject({
       contextWindow: 1_000_000,
-      maxTokens: 393_216,
+      maxTokens: 384_000,
     });
     expect(models.find((model) => model.id === "kimi-k2.6")).toMatchObject({
       contextWindow: 262_144,
