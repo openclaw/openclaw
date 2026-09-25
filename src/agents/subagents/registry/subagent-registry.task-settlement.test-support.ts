@@ -294,7 +294,7 @@ export function registerReplacedGenerationTaskSettlementTest({
       const settleRootWork = observeRootWork();
       try {
         // The spawning turn runs inside its admitted plugin generation.
-        withPluginRuntimeRegistryScope(spawning, () =>
+        await withPluginRuntimeRegistryScope(spawning, () =>
           mod.registerSubagentRun({
             runId,
             task: "outlive a plugin reload",
