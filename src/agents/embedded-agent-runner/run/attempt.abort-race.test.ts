@@ -1,6 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../../../infra/embedded-plugin-approval-broker.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
+import { runBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
   cleanupTempPaths,
@@ -14,6 +22,17 @@ import {
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
 
+function rejectWhenAttemptSettles(attempt: Promise<unknown>, readiness: string): Promise<never> {
+  return attempt.then(
+    () => {
+      throw new Error(`embedded attempt settled before ${readiness}`);
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+}
+
 describe("runEmbeddedAttempt abort races", () => {
   beforeAll(async () => {
     await preloadRunEmbeddedAttemptForTests();
@@ -26,6 +45,137 @@ describe("runEmbeddedAttempt abort races", () => {
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
+    vi.useRealTimers();
+  });
+
+  it("preserves the approval budget through the production attempt entrypoint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
+    const broker = new EmbeddedPluginApprovalBroker();
+    const approvalRequested = createDeferred();
+    const promptTimerInstalled = createDeferred();
+    const attemptAbortController = new AbortController();
+    let activeAttempt: ReturnType<typeof createContextEngineAttemptRunner> | undefined;
+    const approvalEvents: string[] = [];
+    const unsubscribe = broker.subscribe((event) => {
+      approvalEvents.push(event.event);
+      if (event.event === "plugin.approval.requested") {
+        approvalRequested.resolve();
+        vi.setSystemTime(60_000);
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "waiting-approval", approvalId: event.payload.id },
+        });
+      } else if (event.event === "plugin.approval.resolved") {
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "approval-resolved", approvalId: event.payload.id },
+        });
+      }
+    });
+    setEmbeddedMode(true);
+    setEmbeddedPluginApprovalBroker(broker);
+
+    try {
+      activeAttempt = createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:approval-clock-step",
+        tempPaths,
+        sessionPrompt: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 40);
+            promptTimerInstalled.resolve();
+          });
+          const approvalPromise = runBeforeToolCallHook({
+            toolName: "skill_workshop",
+            params: { action: "apply", proposal_id: "clock-step" },
+            toolCallId: "clock-step",
+            ctx: {
+              agentId: "main",
+              sessionKey: "agent:main:telegram:direct:approval-clock-step",
+              config: { skills: { workshop: { approvalPolicy: "pending" } } },
+            },
+          });
+          await Promise.race([approvalRequested.promise, approvalPromise.then(() => undefined)]);
+          const approval = broker.listPending()[0];
+          if (!approval) {
+            throw new Error(
+              "approval broker did not publish a pending request before hook settled",
+            );
+          }
+          await approvalPromise;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        },
+        attemptOverrides: {
+          timeoutMs: 1_000,
+          abortSignal: attemptAbortController.signal,
+          onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
+        },
+      });
+
+      await Promise.race([
+        promptTimerInstalled.promise,
+        rejectWhenAttemptSettles(activeAttempt!, "prompt timer installation"),
+      ]);
+      await vi.advanceTimersByTimeAsync(40);
+      await Promise.race([
+        approvalRequested.promise,
+        rejectWhenAttemptSettles(activeAttempt!, "approval request publication"),
+      ]);
+      const approval = broker.listPending()[0];
+      if (!approval) {
+        throw new Error("approval broker did not publish a pending request");
+      }
+      if (!broker.resolve(approval.id, "allow-once")) {
+        throw new Error("approval broker did not resolve the pending request");
+      }
+      await vi.advanceTimersByTimeAsync(80);
+      const result = await activeAttempt!;
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
+        "bounded",
+        "unlimited",
+        "bounded",
+      ]);
+      expect(publishedDeadlines[2]?.deadlineAtMs).toBeGreaterThan(
+        (publishedDeadlines[0]?.deadlineAtMs ?? 0) + 59_000,
+      );
+      expect(approvalEvents).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
+      process.stdout.write(
+        `REAL_BEHAVIOR_PROOF terminal=ok deadlineKinds=${publishedDeadlines.map(({ kind }) => kind).join(",")} ` +
+          `resumedDeadlineDeltaMs=${(publishedDeadlines[2]?.deadlineAtMs ?? 0) - (publishedDeadlines[0]?.deadlineAtMs ?? 0)} ` +
+          `approvalLifecycle=${approvalEvents.join(",")}\n`,
+      );
+    } finally {
+      attemptAbortController.abort();
+      const pendingApproval = broker.listPending()[0];
+      if (pendingApproval) {
+        broker.resolve(pendingApproval.id, "deny");
+      }
+      await vi.runOnlyPendingTimersAsync();
+      const pendingApprovalAfterAbort = broker.listPending()[0];
+      if (pendingApprovalAfterAbort) {
+        broker.resolve(pendingApprovalAfterAbort.id, "deny");
+        await vi.runOnlyPendingTimersAsync();
+      }
+      if (activeAttempt) {
+        await activeAttempt.catch(() => undefined);
+      }
+      unsubscribe();
+      broker.stop();
+      setEmbeddedPluginApprovalBroker(null);
+      setEmbeddedMode(false);
+      expect(getEmbeddedPluginApprovalBroker()).toBeNull();
+      expect(isEmbeddedMode()).toBe(false);
+    }
   });
 
   it.each([
