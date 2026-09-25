@@ -47,7 +47,7 @@ export default defineSingleProviderPluginEntry({
         order: "late",
         run: async (ctx) => {
           const provider = ctx.config.models?.providers?.[APPLE_FM_PROVIDER_ID];
-          return provider && process.platform === "darwin" ? { provider, outcomes: [] } : null;
+          return provider && process.platform === "darwin" ? { provider } : null;
         },
       },
       resolveSyntheticAuth: ({ providerConfig }) =>

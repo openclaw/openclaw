@@ -309,7 +309,6 @@ export async function resolveOllamaDiscoveryResult(params: {
         api,
         ...(apiKey ? { apiKey } : {}),
       },
-      outcomes: [],
     };
   }
   if (!hasMeaningfulExplicitConfig && hasRemoteOllamaApiProvider) {

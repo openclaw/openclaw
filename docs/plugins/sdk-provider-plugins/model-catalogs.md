@@ -57,11 +57,6 @@ acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
 Neither a static catalog nor skipped discovery produces a live outcome.
-Legacy hooks that return provider configurations without `outcomes` record a
-successful discovery for those providers, including an empty model list.
-An explicit `outcomes` array remains authoritative. SDK advisory and skipped
-discovery results use `outcomes: []` so their fallback rows are not recorded as
-successful account discovery.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
 Provider-scoped refreshes preserve explicit outcomes reported under a registered
@@ -91,7 +86,6 @@ to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
 Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
-Legacy hooks that omit outcomes retain the compatibility behavior described above.
 
 Custom catalog hooks may receive optional `mode` metadata from
 `ctx.resolveProviderApiKey()`: `api_key`, `oauth`, or `token`. When present,

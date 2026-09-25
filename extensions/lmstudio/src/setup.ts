@@ -56,7 +56,6 @@ import {
 import {
   hasLmstudioAuthorizationHeader,
   resolveLmstudioProviderAuthMode,
-  resolvePersistedLmstudioApiKey,
   shouldUseLmstudioApiKeyPlaceholder,
 } from "./provider-auth.js";
 import {
@@ -271,6 +270,32 @@ function resolveLmstudioDiscoveryFailure(params: {
     };
   }
   return null;
+}
+
+function resolvePersistedLmstudioApiKey(params: {
+  currentApiKey: ModelProviderConfig["apiKey"] | undefined;
+  explicitAuth: ModelProviderConfig["auth"] | undefined;
+  fallbackApiKey: ModelProviderConfig["apiKey"] | undefined;
+  preferFallbackApiKey?: boolean;
+  hasModels: boolean;
+  hasAuthorizationHeader?: boolean;
+}): ModelProviderConfig["apiKey"] | undefined {
+  if (params.explicitAuth === "api-key") {
+    if (params.preferFallbackApiKey && params.fallbackApiKey !== undefined) {
+      return params.fallbackApiKey;
+    }
+    if (resolveLmstudioProviderAuthMode(params.currentApiKey)) {
+      return params.currentApiKey;
+    }
+    return params.fallbackApiKey;
+  }
+  return shouldUseLmstudioApiKeyPlaceholder({
+    hasModels: params.hasModels,
+    resolvedApiKey: params.currentApiKey,
+    hasAuthorizationHeader: params.hasAuthorizationHeader,
+  })
+    ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
+    : undefined;
 }
 
 /** Preserves existing allowlist metadata and appends discovered LM Studio model refs. */
@@ -1005,7 +1030,6 @@ export async function discoverLmstudioProvider(
         ...(persistedAuth ? { auth: persistedAuth } : {}),
         models,
       },
-      ...(hasExplicitModels ? { outcomes: [] } : {}),
     };
   };
   return options && !hasExplicitModels
