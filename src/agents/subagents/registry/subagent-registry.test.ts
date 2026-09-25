@@ -77,6 +77,7 @@ import {
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
+  registerProvisionalKillCompletionSettlementTest,
   registerRestoredRunningTaskSettlementTest,
   registerRestoredTaskSettlementTest,
 } from "./subagent-registry.task-settlement.test-support.js";
@@ -4047,35 +4048,9 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(run?.cleanupCompletedAt).toBeTypeOf("number"));
   });
 
-  it("reconciles persisted completion before expiring a provisional kill", async () => {
-    const startedAt = Date.parse("2026-03-24T11:50:00Z");
-    const killedAt = Date.parse("2026-03-24T11:55:00Z");
-    const endedAt = Date.parse("2026-03-24T11:56:00Z");
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        updatedAt: endedAt,
-        status: "done",
-        startedAt,
-        endedAt,
-      }),
-    };
-    mod.addSubagentRunForTests(
-      makeKilledRun(killedAt, {
-        runId: "run-killed-with-persisted-completion",
-        task: "recover persisted completion",
-        createdAt: startedAt,
-        startedAt,
-      }),
-    );
-
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() => {
-      const run = findRequesterRun("run-killed-with-persisted-completion");
-      expect(run?.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
-      expect(run?.execution.outcome).toMatchObject({ status: "ok", startedAt, endedAt });
-      expect(run?.archiveAtMs).toBeUndefined();
-    });
+  registerProvisionalKillCompletionSettlementTest({
+    getRegistry: () => mod,
+    mocks,
   });
 
   it.each([

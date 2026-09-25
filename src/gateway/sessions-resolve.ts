@@ -26,6 +26,7 @@ import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { authorizeIncognitoSessionTarget } from "./session-sharing-policy.js";
@@ -96,6 +97,38 @@ function sessionResolveCandidate(
     ...(entry.boardFace ? { boardFace: entry.boardFace } : {}),
     ...(entry.boardPresentation ? { boardPresentation: entry.boardPresentation } : {}),
   };
+}
+
+/** Prepare durable facts, then resolve and consume against current caller state without a yield. */
+export async function withPreparedSessionResolve<T>(
+  params: Parameters<typeof resolveSessionKeyFromResolveParams>[0] & { isCurrent?: () => boolean },
+  consume: (result: SessionsResolveResult) => T,
+): Promise<T> {
+  const { projection, p } = params;
+  const key = normalizeOptionalString(p.key);
+  const assertCurrent = () => {
+    if (params.isCurrent?.() === false) {
+      throw new Error("Session projection changed while resolving the session; retry the request");
+    }
+  };
+  if (key) {
+    return withReadySessionRows(
+      projection,
+      (cfg) => {
+        const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+        return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+      },
+      () => {
+        assertCurrent();
+        return consume(resolveSessionKeyFromResolveParams(params));
+      },
+    );
+  }
+  do {
+    await projection.ensureMaterialized();
+    assertCurrent();
+  } while (projection.needsMaterialization);
+  return consume(resolveSessionKeyFromResolveParams(params));
 }
 
 export function resolveSessionKeyFromResolveParams(params: {

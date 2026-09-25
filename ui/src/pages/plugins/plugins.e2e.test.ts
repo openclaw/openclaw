@@ -362,14 +362,32 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-      await page.getByRole("button", { name: "Install", exact: true }).click();
-      const failure = page.locator('.plugins-row-message[role="alert"]');
+      await page.goto(`${server.baseUrl}plugins`);
+      const card = page.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
+      await card.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      const failure = card.locator('.plugins-row-message[role="alert"]');
       await failure
         .getByText("ClawHub package download failed; check the network and retry.")
         .waitFor();
-      await page.getByRole("button", { name: "Install", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("plugins.install")).length).toBe(2);
+      await gateway.setMethodResponse("plugins.install", {
+        __mockError: {
+          code: "UNAVAILABLE",
+          message: "Plugin startup failed.",
+          details: { persistence: { operation: "install", pluginId: matrixEnabled.id } },
+        },
+      });
+      await card.getByRole("button", { name: "Retry install of Matrix", exact: true }).click();
+      const status = card.getByRole("button", {
+        name: "View status of Matrix installation",
+        exact: true,
+      });
+      await status.click();
+      await card.getByText("Installation saved", { exact: true }).waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const proof = createControlUiE2eArtifactDir("plugin-status-popup");
+        await page.screenshot({ path: `${proof}/status.png` });
+      }
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(2);
     } finally {
       await context.close();
     }

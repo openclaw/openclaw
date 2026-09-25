@@ -3,8 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
@@ -209,6 +211,10 @@ fs.appendFileSync(env.FIXTURE_LAUNCHES, JSON.stringify({
   registry: env.NPM_CONFIG_REGISTRY, args,
 }) + "\\n");
 const mode = env.FIXTURE_MODE;
+if (mode === "live-refusal" || mode === "timeout") {
+  fs.writeSync(1, "startup trace detail\\n".repeat(mode === "timeout" ? 16384 : 1024));
+  fs.writeSync(1, "startup trace: runtime.plugins.complete 10.0ms token=sk-SyntheticStartupTraceSecret1234567890\\n");
+}
 if ((mode === "convergence-once" && attempt === 1) || mode === "convergence-repeated" || mode === "other-exit" || mode === "live-refusal") {
   fs.writeFileSync(prepared, "published convergence retained");
   process.stdout.write(env.FIXTURE_RESTART_MESSAGE + "\\n");
@@ -220,6 +226,9 @@ if ((mode === "convergence-once" && attempt === 1) || mode === "convergence-repe
   fs.writeFileSync(env.FIXTURE_READY, "ready");
   process.stdout.write("[gateway] ready\\n");
 }
+process.on("SIGTERM", () => {
+  process.stdout.write("Gateway stopped after observation\\n", () => process.exit(0));
+});
 setInterval(() => {}, 1000);
 `,
     { mode: 0o755 },
@@ -250,6 +259,9 @@ trap cleanup EXIT
 eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
 openclaw_e2e_wait_gateway_ready() { fixture_wait_gateway_ready "$1" "$2" 4 "$4" "$5"; }
 openclaw_e2e_probe_http() { [ -f "$FIXTURE_READY" ]; }
+probe_gateway_endpoint() {
+  printf '{"body":{"ready":true},"status":200}\\n' >"$3"
+}
 if [ "$FIXTURE_MODE" = bad-clock ]; then node() { return 17; }; fi
 phase() { shift; "$@"; }
 check_gateway_probes() { [ -f "$FIXTURE_READY" ]; printf 'baseline-probes\\n'; }
@@ -306,4 +318,53 @@ printf 'baseline-complete\\n'
   expect(result.stdout.includes("baseline-complete")).toBe(code === 0);
   expect(result.stdout.includes("baseline-probes")).toBe(code === 0);
   expect(result.stdout.includes("baseline-stopped")).toBe(code === 0);
+  const gatewayLog = path.join(artifactRoot, "missing-load-path", "baseline-gateway.log");
+  const observationLog = path.join(artifactRoot, "missing-load-path", "startup-readiness.log");
+  const diagnosticLog = [gatewayLog, observationLog]
+    .filter(existsSync)
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
+  const liveFailure = mode === "live-refusal" || mode === "timeout";
+  expect(diagnosticLog.includes("Startup readiness observation after failure")).toBe(liveFailure);
+  if (liveFailure) {
+    expect(diagnosticLog).toContain('{"body":{"ready":true},"status":200}');
+    expect(readFileSync(gatewayLog, "utf8")).toContain("Gateway stopped after observation");
+    const captured = spawnSync(
+      resolveTestNodeExecPath(),
+      [
+        "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs",
+        "capture",
+        artifactRoot,
+        "missing-load-path-baseline-start",
+        String(result.status),
+        "",
+        artifactRoot,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        },
+      },
+    );
+    expect(captured.status, captured.stderr).toBe(0);
+    const published = path.join(root, "published");
+    publishDiagnostics(artifactRoot, published, redactSensitiveText);
+    const report = JSON.parse(readFileSync(path.join(published, "failure.json"), "utf8"));
+    expect(Object.values(report.logs).join("\n")).toContain('{"body":{"ready":true},"status":200}');
+    expect(JSON.stringify(report)).not.toContain("sk-SyntheticStartupTraceSecret1234567890");
+    if (mode === "live-refusal") {
+      expect(report.logs["missing-load-path/baseline-gateway.log"]).toContain(
+        "startup trace: runtime.plugins.complete",
+      );
+    }
+    expect(report.omissions["missing-load-path/baseline-gateway.log"]).toContain(
+      mode === "timeout" ? "input exceeds cap" : "truncated at a complete line",
+    );
+  }
 });

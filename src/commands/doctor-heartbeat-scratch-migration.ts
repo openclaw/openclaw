@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { TextDecoder } from "node:util";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -20,7 +21,6 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage, hasErrnoCode } from "../infra/errors.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";

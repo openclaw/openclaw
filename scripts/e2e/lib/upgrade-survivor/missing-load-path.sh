@@ -8,6 +8,17 @@ start_missing_load_path_baseline() {
   # Published startup may install migration plugins, then require one fresh process.
   # Never restart a live/timed-out child or reinterpret an unrelated startup failure.
   if kill -0 "$gateway_pid" >/dev/null 2>&1; then
+    local observation
+    if observation="$(mktemp "$ARTIFACT_ROOT/missing-load-path/startup-readiness.XXXXXX")"; then
+      {
+        printf '\nStartup readiness observation after failure (does not change the result):\n'
+        if probe_gateway_endpoint /readyz ready "$observation" \
+          --timeout-ms 400 --attempt-timeout-ms 400 --max-body-bytes 16384; then
+          cat "$observation"
+        fi
+      } >"$ARTIFACT_ROOT/missing-load-path/startup-readiness.log" 2>&1 || true
+      rm -f -- "$observation" || true
+    fi
     return "$start_status"
   fi
   wait "$gateway_pid" || exit_status=$?

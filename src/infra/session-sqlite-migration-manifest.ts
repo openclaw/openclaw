@@ -2,13 +2,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertNoSymlinkParentsSync } from "@openclaw/fs-safe/advanced";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
-import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
-import * as replaceFile from "./replace-file.js";
 import {
   MigrationArtifactSchema,
   type MigrationArtifact,

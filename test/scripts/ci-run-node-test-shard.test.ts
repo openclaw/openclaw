@@ -44,6 +44,8 @@ const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const bunTarget = "packages/markdown-core/src/chunk-text.test.ts";
 const nodeTarget = "test/scripts/update-restart-module-outcome.test.ts";
+const agentsSupportConfig = "test/vitest/vitest.agents-support.config.ts";
+const worktreeRecoveryTarget = "src/agents/worktrees/service.removal-recovery.test.ts";
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -498,6 +500,64 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
+    { policy: "node", expected: [{ runtime: "node" }] },
+    { policy: "bun-compatible", expected: [{ runtime: "bun" }] },
+    { policy: "dual", expected: [{ runtime: "node" }, { runtime: "bun" }] },
+  ] as const)("admits complete qualified worktree recovery selections under $policy", (row) => {
+    for (const selection of [
+      { targets: [worktreeRecoveryTarget] },
+      { configs: [agentsSupportConfig], includePatterns: [worktreeRecoveryTarget] },
+      {
+        configs: [agentsSupportConfig],
+        includePatterns: ["worktrees/service.removal-recovery.test.ts"],
+      },
+    ]) {
+      expect(resolveCiTestRuntimeSelections(selection, row.policy)).toEqual(row.expected);
+      expect(ciTestShardRequiresBun(selection, row.policy)).toBe(row.policy !== "node");
+    }
+  });
+
+  it.each([
+    { name: "full config", includePatterns: undefined, bun: true },
+    { name: "empty group include list", includePatterns: [], bun: true },
+    {
+      name: "mixed exact files",
+      includePatterns: [
+        worktreeRecoveryTarget,
+        "src/agents/worktrees/service.remove-lease.test.ts",
+      ],
+      bun: true,
+    },
+    {
+      name: "repository-relative glob",
+      includePatterns: ["src/agents/worktrees/service.*.test.ts"],
+      bun: true,
+    },
+    { name: "scoped glob", includePatterns: ["worktrees/service.*.test.ts"], bun: true },
+    {
+      name: "unqualified sibling",
+      includePatterns: ["src/agents/worktrees/service.remove-lease.test.ts"],
+      bun: false,
+    },
+    {
+      name: "external scoped include",
+      includePatterns: ["src/channels/registry.test.ts"],
+      bun: false,
+    },
+  ])("preserves agents-support envelopes and dual coverage for $name", (row) => {
+    const selection = { configs: [agentsSupportConfig], includePatterns: row.includePatterns };
+    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible")).toEqual([
+      { runtime: "node" },
+    ]);
+    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(false);
+    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([
+      { runtime: "node" },
+      ...(row.bun ? [{ runtime: "bun", includePatterns: [worktreeRecoveryTarget] }] : []),
+    ]);
+    expect(ciTestShardRequiresBun(selection, "dual")).toBe(row.bun);
+  });
+
+  it.each([
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--root=another-root"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--project=another-project"]' } },
@@ -515,14 +575,27 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "invalid" } },
     { env: { OPENCLAW_VITEST_INCLUDE_FILE: "external.json" } },
+    { env: { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "external.json" } },
     { configs: [bunConfig, "test/vitest/vitest.unit-fast-fake-timers.config.ts"] },
     { targets: ["packages/markdown-core/src"] },
     { targets: ["packages/markdown-core/src/*.test.ts"] },
     { targets: [bunTarget, nodeTarget] },
+    {
+      targets: [worktreeRecoveryTarget, "src/agents/worktrees/service.remove-lease.test.ts"],
+    },
   ])("keeps ambiguous selection contracts on Node: %s", (selection) => {
     const shard = { configs: [bunConfig], ...selection };
     expect(resolveCiTestRuntimeSelections(shard, "bun-compatible")).toEqual([{ runtime: "node" }]);
     expect(resolveCiTestRuntimeSelections(shard, "dual")).toEqual([{ runtime: "node" }]);
+    const qualifiedShard = {
+      configs: [agentsSupportConfig],
+      includePatterns: [worktreeRecoveryTarget],
+      ...selection,
+    };
+    expect(resolveCiTestRuntimeSelections(qualifiedShard, "bun-compatible")).toEqual([
+      { runtime: "node" },
+    ]);
+    expect(resolveCiTestRuntimeSelections(qualifiedShard, "dual")).toEqual([{ runtime: "node" }]);
     if (!selection.targets) {
       expect(ciTestShardRequiresBun(shard, "dual")).toBe(false);
     }

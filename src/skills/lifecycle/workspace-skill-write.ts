@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
-import { isPathInside } from "../../infra/path-safety.js";
 
 const ALLOWED_SUPPORT_FILE_ROOTS = new Set(
   "assets examples references scripts templates".split(" "),
