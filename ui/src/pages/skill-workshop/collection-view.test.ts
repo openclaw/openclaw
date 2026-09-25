@@ -109,7 +109,7 @@ describe("Workshop installed comparisons", () => {
     const reader = page.querySelector(".sw-collection__reader");
     expect(page.querySelector(".sw-installed-skill__name")?.textContent).toBe("release-review");
     expect(page.querySelector(".sw-installed-skill__change")?.textContent?.trim()).toBe(
-      "Changed 37d ago",
+      "Changes since 37d ago",
     );
     const versions = reader?.querySelectorAll("details");
     expect(versions?.[0]?.open).toBe(false);
