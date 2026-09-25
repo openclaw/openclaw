@@ -294,6 +294,19 @@ from `openclaw/plugin-sdk/webhook-ingress`. Gateway owns the listener, connectio
 admission, request scope, and route lease handoff; the channel owns its signature
 verification and bounded body read.
 
+For bundled callback setup and Doctor guidance, `classifyGatewayProbePath(pathname)`
+from the private `openclaw/plugin-sdk/gateway-config-runtime` facade identifies
+Gateway probe paths without loading webhook execution code. This facade is not
+part of the third-party SDK. Normalize callback input
+through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
+`ready`, and `startup` identify exact paths owned by probes on the Gateway port;
+choose a different webhook path. Results `namespace` and `outside` do not identify
+an exact probe route. The same private facade exports `resolvePluginRoutePathContext`
+and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
+If the callback falls under a protected namespace, choose the channel's safe default
+path before moving the external callback or reverse proxy to the Gateway port.
+A legacy listener can still serve its old path during that migration.
+
 For a shipped channel listener, registration can include
 `legacyListener: { port, host? }`. The Gateway forwards requests on that endpoint
 through the same plugin dispatch, preserving the original socket, URL, body,
@@ -318,6 +331,19 @@ Legacy ports retain native Node expectation handling, Upgrade fallback, header
 limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
 registration contracts, not new operator configuration.
+
+The channel owns effective listener resolution: preserve its shipped default when
+`legacyWebhook` is omitted, use an explicit endpoint object when configured, and
+register no legacy listener when it is `false`. Resolve the same endpoint for
+runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
+`createLegacyWebhookListenerDoctorContract` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
+inherited bind addresses through the normal backed-up config write. An explicit
+legacy host without a port uses the channel's shipped default port. Canonical
+`false` settings remain authoritative when Doctor removes retired keys.
+Return normal listener guidance in `runConfigSequence().infoNotes` so Doctor
+labels it as information. Keep actionable configuration problems in
+`warningNotes`; `changeNotes` describe applied repairs.
 
 Account leases sharing a route can retain separate endpoints. Endpoints retained
 only by a restart handoff return retryable 503 responses; endpoints with live

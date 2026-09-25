@@ -9,13 +9,19 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  classifyGatewayProbePath,
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+  resolveGatewayPort,
+} from "openclaw/plugin-sdk/gateway-config-runtime";
+import {
   asObjectRecord,
   collectChannelAccountScopes,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramLegacyWebhookListener } from "./account-config.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
-  listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -583,16 +589,44 @@ export const telegramDoctor: ChannelDoctorAdapter = {
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
     }),
-    ...listEnabledTelegramAccounts(cfg)
-      .filter(({ config }) => Boolean(config.webhookUrl) && config.webhookPath === "/healthz")
-      .map(
-        ({ accountId }) =>
-          `- Telegram account "${accountId}" resolves webhookPath to /healthz, which is reserved for webhook listener health checks. Change webhookPath and the public webhook URL or proxy route before restarting OpenClaw.`,
-      ),
     ...collectTelegramSelectedQuoteToolProgressWarnings({
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),
   ],
+  runConfigSequence: ({ cfg, env }) => {
+    const infoNotes: string[] = [];
+    const warningNotes: string[] = [];
+    const accountIds = cfg.channels?.telegram?.enabled === false ? [] : listTelegramAccountIds(cfg);
+    for (const accountId of accountIds) {
+      const config = mergeTelegramAccountConfig(cfg, accountId);
+      if (config.enabled === false || !config.webhookUrl) {
+        continue;
+      }
+      const legacyListener = resolveTelegramLegacyWebhookListener(config.legacyWebhook);
+      const path = config.webhookPath ?? "/telegram-webhook";
+      const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
+      const probe = classifyGatewayProbePath(pathname);
+      const pathConflict =
+        probe === "live" || probe === "ready" || probe === "startup"
+          ? "is reserved for Gateway probes"
+          : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
+            ? "requires Gateway authentication"
+            : undefined;
+      if (pathConflict) {
+        warningNotes.push(
+          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
+        );
+        continue;
+      }
+      const destination = `Gateway port ${resolveGatewayPort(cfg, env)}${path}`;
+      infoNotes.push(
+        legacyListener
+          ? `Telegram account "${accountId}": legacy listener ${legacyListener.host}:${legacyListener.port} forwards to ${destination}. Move the reverse proxy for ${config.webhookUrl} to that Gateway route, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`
+          : `Telegram account "${accountId}": legacyWebhook: false disables legacy forwarding for this account. Route ${config.webhookUrl} to ${destination}.`,
+      );
+    }
+    return { changeNotes: [], infoNotes, warningNotes };
+  },
   repairConfig: repairTelegramConfig,
   collectEmptyAllowlistExtraWarnings: collectTelegramEmptyAllowlistExtraWarnings,
   shouldSkipDefaultEmptyGroupAllowlistWarning: (params) => params.channelName === "telegram",
