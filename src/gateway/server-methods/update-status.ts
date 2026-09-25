@@ -75,8 +75,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         }
       }
       mark("identity");
-      const schedule = getUpdateSchedule();
-      let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
+      let effectiveChannel = configChannel ?? normalizeUpdateChannel(getUpdateSchedule()?.channel);
       if (!effectiveChannel) {
         try {
           effectiveChannel = await getUpdateEffectiveChannel();
@@ -96,6 +95,20 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("history");
       const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      const campaignRunId = gatewayUpdateCampaign.getRunId();
+      const campaignRun =
+        !campaignRunId || lastRun?.runId === campaignRunId
+          ? lastRun
+          : activeRun?.runId === campaignRunId
+            ? activeRun
+            : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
+                context?.logGateway?.warn(
+                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
+                );
+                return undefined;
+              });
+      gatewayUpdateCampaign.reconcileRun(campaignRun);
+      const schedule = getUpdateSchedule();
       mark("response");
       const result = {
         sentinel,

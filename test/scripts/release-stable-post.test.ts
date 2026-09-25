@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -16,7 +18,11 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => releaseFixture(directories.make(".release-stable-post-test-", REPO_ROOT));
+const fixture = () => {
+  const scratch = join(REPO_ROOT, ".tmp");
+  mkdirSync(scratch, { recursive: true });
+  return releaseFixture(directories.make(".release-stable-post-test-", scratch));
+};
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const closeoutAssets = (
   names = [

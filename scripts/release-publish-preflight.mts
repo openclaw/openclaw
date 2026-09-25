@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Read-only publication admission: gather all known blockers before dispatch.
+// Publication admission; only an explicit --workflow-sha tooling-tag mint mutates state.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   createPublishPreflightEvidenceClient,
   createPublishPreflightGh,
+  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   preflightApi,
   requirePreflightRecord,
@@ -104,6 +105,12 @@ export async function runReleasePublishPreflight(
     () => {
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(options.repo)) {
         throw new Error("repo must be owner/name.");
+      }
+      if (options.workflowSha && (!SHA.test(options.workflowSha) || options.workflowRef)) {
+        throw new Error("workflowSha must be a lowercase 40-character SHA without workflowRef.");
+      }
+      if (!options.workflowSha && !options.workflowRef) {
+        throw new Error("A workflow ref or workflow SHA is required.");
       }
       if (
         !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
@@ -193,6 +200,23 @@ export async function runReleasePublishPreflight(
     "Protected publisher identity is valid.",
     "Use an existing protected lightweight release-publish/<sha12>-<provenance> tag at the approved tooling SHA.",
     () => {
+      if (options.workflowSha) {
+        const ensured = ensureReleasePublishToolingTag({
+          runGh,
+          repo: options.repo,
+          toolingSha: options.workflowSha,
+        });
+        workflowRef = ensured.tag;
+        console.error(
+          `[release-publish-preflight] ${ensured.created ? "created" : "reusing"} protected tooling tag ${ensured.tag} at ${options.workflowSha}`,
+        );
+        rows.push({
+          id: "publisher.tooling-tag",
+          status: "PASS",
+          message: `Protected tooling tag ${ensured.tag} ${ensured.created ? "created" : "reused"} at ${options.workflowSha}.`,
+          remediation: "",
+        });
+      }
       if (PUBLISH_REF.test(workflowRef)) {
         toolingSha = resolvePreflightTag(runGh, options.repo, workflowRef);
         verifyReleasePreflightToolingIdentity({
@@ -222,7 +246,7 @@ export async function runReleasePublishPreflight(
         toolingSha ||= String(main.sha);
         const proposed = `release-publish/${toolingSha.slice(0, 12)}-${Math.floor(Date.now() / 1000)}`;
         workflowRef = proposed;
-        const remediation = `After explicit release authorization: git tag ${proposed} ${toolingSha} && git push origin refs/tags/${proposed}; repeat preflight with --workflow-ref ${proposed}.`;
+        const remediation = `Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`;
         if (!context.allowPlannedTag) {
           throw new Error(`Mutating publish cannot dispatch from main. ${remediation}`);
         }

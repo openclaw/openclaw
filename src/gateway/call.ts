@@ -22,11 +22,7 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
-import {
-  resolveConfigPath as resolveConfigPathFromPaths,
-  resolveGatewayPort as resolveGatewayPortFromPaths,
-  resolveStateDir as resolveStateDirFromPaths,
-} from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -376,8 +372,9 @@ export function isGatewayExplicitAuthRequiredError(
 
 // Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
 // Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
-const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
+  return getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+}
 
 async function stopGatewayClient(client: GatewayClient): Promise<void> {
   try {
@@ -400,10 +397,6 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
   return method ? `gateway:${method}` : "gateway:request";
 }
 
-async function loadGatewayConfig(): Promise<OpenClawConfig> {
-  return await defaultGetRuntimeConfig();
-}
-
 /**
  * Load config for a fully flag-addressed connection. Config only supplies
  * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
@@ -417,20 +410,8 @@ async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig>
   }
 }
 
-function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
-  return readGatewayDispatchConfig();
-}
-
-function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
-  return resolveStateDirFromPaths(env);
-}
-
 function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
-  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
-}
-
-function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
-  return resolveGatewayPortFromPaths(config, env);
+  return resolveConfigPath(env, resolveStateDir(env));
 }
 
 export function buildGatewayConnectionDetails(
@@ -445,9 +426,9 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
-    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
-    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+    getRuntimeConfig: readGatewayDispatchConfig,
+    resolveConfigPath: resolveGatewayConfigPath,
+    resolveGatewayPort,
   });
 }
 
@@ -558,7 +539,7 @@ async function resolveGatewayCallContext(
   const config =
     opts.config ??
     (canSkipConfigLoad
-      ? ({} as OpenClawConfig)
+      ? {}
       : explicitConnection
         ? await loadGatewayConfigForExplicitConnection()
         : await loadGatewayConfig());

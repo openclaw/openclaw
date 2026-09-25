@@ -3,13 +3,13 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import {
   sealBackupResourceInventory,
   type BackupCoreDatabase,
   type BackupResourceInventory,
   type BackupResourcePlan,
 } from "../commands/backup-resource-inventory.js";
-import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -92,9 +92,9 @@ export function classifyBackupSqliteSource(
     return undefined;
   }
   const withinOwnedRoot =
-    isPathWithin(resolvedSourcePath, inventory.stateDir) ||
+    isPathInside(inventory.stateDir, resolvedSourcePath) ||
     inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
-      isPathWithin(resolvedSourcePath, agentRoot),
+      isPathInside(agentRoot, resolvedSourcePath),
     );
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
@@ -139,7 +139,7 @@ async function discoverBackupSqliteSources(params: {
 
     for (const entry of entries) {
       const entryPath = path.join(resolvedDirectoryPath, entry.name);
-      if (isPathWithin(entryPath, gatewayLockDir) || params.inventory.isVolatile(entryPath)) {
+      if (isPathInside(gatewayLockDir, entryPath) || params.inventory.isVolatile(entryPath)) {
         continue;
       }
       if (entry.isDirectory()) {

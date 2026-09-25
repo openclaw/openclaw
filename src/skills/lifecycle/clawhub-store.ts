@@ -415,15 +415,19 @@ export async function recordClawHubSkillInstall(
   await writeClawHubSkillsLockfile(params.workspaceDir, lock);
 }
 
-export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
-  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
-  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+export function resolveWorkspaceClawHubSkills(workspaceDir: string) {
+  const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   if (access && !access.clawHubSkills) {
     throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
   }
-  const lock = await (
-    access?.clawHubSkills?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile
-  )(workspaceDir);
+  return access?.clawHubSkills;
+}
+
+export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
+  const tracking = resolveWorkspaceClawHubSkills(workspaceDir);
+  const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
+    workspaceDir,
+  );
   return Object.keys(lock.skills).toSorted();
 }
 

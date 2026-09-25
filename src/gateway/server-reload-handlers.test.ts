@@ -96,7 +96,12 @@ import {
 } from "./config-reload-plan.js";
 import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
-import { prepareConfigReloadTest, waitForReloadState } from "./config-reload.test-support.js";
+import {
+  captureNextPluginLifecycleLease,
+  createRecoveryRestartMock,
+  prepareConfigReloadTest,
+  waitForReloadState,
+} from "./config-reload.test-support.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
 import { createChannelManager } from "./server-channels.js";
@@ -166,15 +171,6 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function createRecoveryRestartMock() {
-  const emitted = createDeferred();
-  const requestRecoveryRestart = vi.fn(() => {
-    emitted.resolve();
-    return { status: "emitted" as const };
-  });
-  return { requestRecoveryRestart, restartEmitted: emitted.promise };
 }
 
 const tempDirs: string[] = [];
@@ -5040,9 +5036,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await reloader.ready;
     const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
+    assert(registeredWriteListener, "Expected config write listener to be registered");
 
     try {
       const application = publishConfigWrite(
@@ -5776,9 +5770,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await reloader.ready;
     const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
+    assert(registeredWriteListener, "Expected config write listener to be registered");
 
     try {
       registeredWriteListener(
@@ -6150,6 +6142,7 @@ describe("gateway Gmail hot reload handlers", () => {
     async (holdPromotion) => {
       vi.useFakeTimers();
       const harness = await createManagedRestartSequenceHarness();
+      const waitForReloadLease = captureNextPluginLifecycleLease();
       const promotionGate = createDeferred();
       if (holdPromotion) {
         const promote = harness.promoteSnapshot.getMockImplementation();
@@ -6182,9 +6175,8 @@ describe("gateway Gmail hot reload handlers", () => {
           expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         }
         promotionGate.resolve();
-        // Promotion signals inside reload:config; join its admission before advancing
-        // the restart poll, or that poll can correctly defer instead of reaching preflight.
-        await waitForReloadState(() => getActiveGatewayRootWorkCount() === 0);
+        // Restart preparation reacquires the outer plugin lease after reload root admission ends.
+        await waitForReloadLease();
         expect(harness.assertRestartReady).not.toHaveBeenCalled();
         hoisted.activeTaskBlockers.length = 0;
         const retryScheduled = harness.nextReloadWarning(
@@ -6399,9 +6391,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await reloader.ready;
     const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
+    assert(registeredWriteListener, "Expected config write listener to be registered");
 
     registeredWriteListener(
       createConfigWriteNotification(
@@ -6456,9 +6446,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await reloader.ready;
     const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
+    assert(registeredWriteListener, "Expected config write listener to be registered");
 
     registeredWriteListener(
       createConfigWriteNotification(
@@ -6502,9 +6490,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await reloader.ready;
       try {
         const registeredWriteListener = writeListenerRef.current;
-        if (!registeredWriteListener) {
-          throw new Error("Expected config write listener to be registered");
-        }
+        assert(registeredWriteListener, "Expected config write listener to be registered");
 
         const application = publishConfigWrite(
           registeredWriteListener,
@@ -6550,9 +6536,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await reloader.ready;
     const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
+    assert(registeredWriteListener, "Expected config write listener to be registered");
 
     registeredWriteListener(
       createConfigWriteNotification(
@@ -7384,8 +7368,11 @@ describe("deferred channel reload abort generation", () => {
       const settled = vi.fn();
       void application.result.then(settled);
       const deferralStarted = createDeferred();
+      const replayDeferralStarted = createDeferred();
       const logReload = createInfoWarnErrorLogger();
-      logReload.warn.mockImplementation(() => deferralStarted.resolve());
+      logReload.warn
+        .mockImplementation(() => replayDeferralStarted.resolve())
+        .mockImplementationOnce(() => deferralStarted.resolve());
       const watch = vi.spyOn(chokidar, "watch");
       setActivePluginRegistry(registry);
       const reloader = startManagedGatewayConfigReloader({
@@ -7400,9 +7387,7 @@ describe("deferred channel reload abort generation", () => {
       });
       await reloader.ready;
       const registeredWriteListener = writeListenerRef.current;
-      if (!registeredWriteListener) {
-        throw new Error("Expected config write listener to be registered");
-      }
+      assert(registeredWriteListener, "Expected config write listener to be registered");
       const unrelatedRequest = tryBeginGatewayRootWorkAdmission();
       if (!unrelatedRequest) {
         throw new Error("Expected unrelated gateway request admission");
@@ -7460,6 +7445,13 @@ describe("deferred channel reload abort generation", () => {
           snapshotGate.resolve();
           await vi.advanceTimersByTimeAsync(0);
           if (outcome !== "newer content") {
+            // Timer advancement does not join the reloader's detached replay.
+            await Promise.race([
+              replayDeferralStarted.promise,
+              application.result.then((result) => {
+                throw new Error(`Reload receipt settled before replay deferred: ${result}`);
+              }),
+            ]);
             expect(settled).not.toHaveBeenCalled();
             expect(setState).not.toHaveBeenCalled();
             expect(logReload.warn).toHaveBeenCalledTimes(2);

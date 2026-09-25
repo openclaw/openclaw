@@ -1,4 +1,3 @@
-// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -90,8 +89,6 @@ type GatewayConnectionOptions = {
   suppressEnvAuthFallback?: boolean;
 };
 
-type GatewayEvent = TuiEvent;
-
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -158,25 +155,14 @@ async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boole
   }
 }
 
-function isLegacyPreserveSideRunsError(err: unknown): boolean {
+function isLegacyParameterError(err: unknown, method: string, parameter: string): boolean {
   if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
     return false;
   }
   const message = err.message.toLowerCase();
-  return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
+  return message.includes(`invalid ${method} params`) && message.includes(parameter);
 }
 
-function isLegacySucceedsParentError(err: unknown): boolean {
-  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message = err.message.toLowerCase();
-  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
-}
-
-type GatewaySessionList = TuiSessionList;
-type GatewayAgentsList = TuiAgentsList;
-type GatewayModelChoice = TuiModelChoice;
 type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
@@ -191,7 +177,7 @@ export class GatewayChatClient implements TuiBackend {
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
-  onEvent?: (evt: GatewayEvent) => void;
+  onEvent?: (evt: TuiEvent) => void;
   onModelsChanged?: (agentId?: string) => void;
   onConnected?: () => void;
   onConnectError?: (error: Error) => void;
@@ -374,7 +360,7 @@ export class GatewayChatClient implements TuiBackend {
     } catch (err) {
       // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
       // so mixed-version TUI stops still work, even without BTW isolation.
-      if (!isLegacyPreserveSideRunsError(err)) {
+      if (!isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
@@ -438,7 +424,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listSessions(opts?: SessionsListParams) {
-    return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
+    return await this.client.request<TuiSessionList>("sessions.list", opts ?? {});
   }
 
   async resolveSession(opts: HandoffSessionResolveParams): Promise<SessionsResolveResult> {
@@ -482,7 +468,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listAgents() {
-    const result = await this.client.request<GatewayAgentsList>("agents.list", {});
+    const result = await this.client.request<TuiAgentsList>("agents.list", {});
     if (!this.modelCatalogs.has(result.defaultId)) {
       void this.listModels({ agentId: result.defaultId }).catch(() => {});
     }
@@ -501,7 +487,10 @@ export class GatewayChatClient implements TuiBackend {
     try {
       return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
     } catch (err) {
-      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+      if (
+        opts.succeedsParent === undefined ||
+        !isLegacyParameterError(err, "sessions.create", "succeedsparent")
+      ) {
         throw err;
       }
       const { succeedsParent: _succeedsParent, ...legacyParams } = params;
@@ -539,11 +528,11 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request("status");
   }
 
-  getKnownModels(opts?: { agentId?: string }): GatewayModelChoice[] | undefined {
+  getKnownModels(opts?: { agentId?: string }): TuiModelChoice[] | undefined {
     return this.modelCatalogs.get(opts?.agentId)?.models;
   }
 
-  listModels(opts?: { agentId?: string }): Promise<GatewayModelChoice[]> {
+  listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
     return refreshTuiGatewayModelCatalog({
       catalogs: this.modelCatalogs,
       client: this.client,
@@ -555,7 +544,7 @@ export class GatewayChatClient implements TuiBackend {
     });
   }
 
-  private refreshModelsForEvent(event: GatewayEvent) {
+  private refreshModelsForEvent(event: TuiEvent) {
     const payload = asNullableRecord(event.payload);
     const clear =
       event.event === "config.changed" ||

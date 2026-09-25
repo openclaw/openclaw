@@ -15,7 +15,6 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
-import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -340,17 +339,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     );
   }
 
-  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
-  if (dreamingStaleCount > 0) {
-    findings.push(
-      legacyCronStoreFinding({
-        message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
-        path: sqliteStorePath,
-        requirement: "legacy-dreaming-payload",
-      }),
-    );
-  }
-
   return findings;
 }
 
@@ -541,7 +529,6 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
-  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
   // --fix preview so the repair note does not promise a fix that never lands (#94655).
   const commandPromptAdvisory = formatUnresolvedCommandPromptAdvisory(
@@ -650,11 +637,6 @@ export async function maybeRepairLegacyCronStore(params: {
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
-    );
-  }
-  if (dreamingStaleCount > 0) {
-    previewLines.push(
-      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0 && !legacyStoreDetected) {

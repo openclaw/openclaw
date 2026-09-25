@@ -78,6 +78,8 @@ overrides:
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.6
+  # Keep both Lit analyzers on the same classic compiler until they support native TS7.
+  "web-component-analyzer@2.0.0>typescript": 5.9.3
   "zca-js@2.2.0>tough-cookie": 6.0.2
   yauzl: 3.4.0
   protobufjs: 8.8.0
@@ -110,10 +112,10 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-  # This analyzer still uses classic compiler APIs; match its existing analyzer dependency.
+  # lit-analyzer imports the classic compiler without declaring it; match its analyzer dependency.
   "lit-analyzer@2.0.3":
     dependencies:
-      typescript: 5.2.2
+      typescript: 5.9.3
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch

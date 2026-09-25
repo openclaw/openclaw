@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -23,7 +24,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  no-tabs:
+  actionlint:
     if: (github.event_name != 'workflow_dispatch')
     runs-on: ubuntu-24.04
     steps:
@@ -34,7 +35,50 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      # Conflict markers can occur anywhere, including docs-only changes.
+      # Keep this global while the workflow toolchains stay input-scoped.
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
+
+      - name: Detect workflow audit changes
+        id: scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { matchesGlob } = require('node:path');
+            const paths = ['.github/workflows/**', '.github/actions/**',
+              '.github/actionlint*', '.github/zizmor.yml', '.pre-commit-config.yaml',
+              'scripts/check-composite-action-input-interpolation.py'];
+            let files;
+            try {
+              if (context.eventName === 'pull_request') {
+                files = await github.paginate(github.rest.pulls.listFiles, {
+                  ...context.repo, pull_number: context.issue.number, per_page: 100,
+                });
+              } else {
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                  ...context.repo, basehead: `${context.payload.before}...${context.sha}`,
+                });
+                files = data.files;
+              }
+            } catch {
+              core.warning('Workflow scope lookup failed; running full workflow audits.');
+            }
+            // The compare API caps files at 300; never infer no changes from a partial diff.
+            const limit = context.eventName === 'pull_request' ? 3000 : 300;
+            const changed = !files || files.length >= limit || files.some(file =>
+              [file.filename, file.previous_filename].filter(Boolean).some(name =>
+                paths.some(pattern => matchesGlob(name, pattern))));
+            core.setOutput('changed', changed);
+
       - name: Fail on tabs in workflow files
+        if: steps.scope.outputs.changed == 'true'
         run: |
           python - <<'PY'
           from __future__ import annotations
@@ -59,21 +103,18 @@ jobs:
             sys.exit(1)
           PY
 
-  actionlint:
-    if: (github.event_name != 'workflow_dispatch')
-    runs-on: ubuntu-24.04
-    steps:
-      - *workflow_sanity_checkout_step
       - name: Setup Python
+        if: steps.scope.outputs.changed == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Prepare Git owner
+        if: steps.scope.outputs.changed == 'true'
         uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
 
       - name: Prepare trusted workflow audit configs
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.scope.outputs.changed == 'true'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -148,9 +189,11 @@ jobs:
           PYTHON
 
       - name: Install pre-commit
+        if: steps.scope.outputs.changed == 'true'
         run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Install ShellCheck
+        if: steps.scope.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -165,12 +208,14 @@ jobs:
           sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
       - name: Setup Go
+        if: steps.scope.outputs.changed == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.25.0"
           cache: false
 
       - name: Install actionlint
+        if: steps.scope.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -185,9 +230,11 @@ jobs:
           echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Lint workflows
+        if: steps.scope.outputs.changed == 'true'
         run: actionlint
 
       - name: Audit all workflows with zizmor
+        if: steps.scope.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -197,16 +244,8 @@ jobs:
           pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Disallow direct inputs interpolation in composite run blocks
+        if: steps.scope.outputs.changed == 'true'
         run: python3 scripts/check-composite-action-input-interpolation.py
-
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.21.0"
-          package-manager-cache: false
-
-      - name: Disallow tracked merge conflict markers
-        run: node scripts/check-no-conflict-markers.mjs
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
