@@ -2404,6 +2404,14 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
 fi
 run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+    phase seed-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs seed "$(package_root)" "$CANDIDATE_SPEC"
+    phase start-restored-index-baseline start_gateway
+    phase patch-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs patch
+    phase stop-restored-index-baseline stop_gateway
+    phase restore-baseline-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs restore
+    # Do not restart the published Gateway after restoring stale metadata over its current SQLite state.
+  fi
   phase prepare-schema-expectation prepare_schema_expectation
   phase capture-backup-rollback capture_backup_rollback
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
@@ -2428,11 +2436,18 @@ if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA
   phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     installed "$(package_root)" "$CANDIDATE_SPEC"
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.4" ]; then
+  # Inspect the first hop before any candidate CLI can repair a failed migration.
+  phase assert-restored-index-update node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs post-update "$(package_root)"
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
   { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
   # Native read-only inspection precedes every candidate CLI/Gateway probe.
   phase assert-retained-cron-doctor node scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs \
     assert "$last_update_observation_root"
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.4" ]; then
+  phase reimport-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs candidate-import "$(package_root)"
 fi
 run_missing_load_path_fixture post-update
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
@@ -2557,6 +2572,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+    phase assert-restored-index-rollback node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs rollback "$ARTIFACT_ROOT/backup-rollback.json"
+  fi
 fi
 
 run_completed="1"

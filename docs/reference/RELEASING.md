@@ -451,6 +451,58 @@ publish. The objectives are to seal validation in approximately 20 minutes and
 publish within an hour of the cut; they are targets, not measured guarantees.
 The full checklist below explains each step; this section decides the default.
 
+#### Orchestrated stable release
+
+`pnpm release:stable YYYY.M.PATCH` runs the fast path as one resumable state
+machine with the phases `cut → validate → publish → sync-beta → flip-github →
+macos → closeout`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
+rerunning the command continues from the first incomplete phase, `--from <phase>`
+restarts from that phase, `--status` prints the table, and `--dry-run` prints
+every command it would run without executing anything. The operator answers
+exactly two prompts: confirm the cut SHA (`--confirm-cut-sha <sha>` when there
+is no terminal) and approve publication (`--approve-publication`). Every refusal
+prints `Next:` with the exact commands to run before resuming.
+
+Each phase runs the existing helpers, in the order the manual fallback below
+describes: `cut` creates `release/YYYY.M.PATCH` at the confirmed SHA and refuses
+until version, changelog, and contribution record are on the branch tip;
+`validate` tags `release-publish/<sha12>-<epoch>` once at the tooling SHA,
+dispatches `pnpm ci:full-release` with the beta profile (nightly evidence is
+reused by the helper), continues a failed parent with `pnpm frv continue --failed`
+at most twice, and composes the standard soak-waiver wording; `publish` runs
+`pnpm release:candidate`, pushes the final tag, starts the macOS validate and
+preflight lanes from the tag, dispatches `OpenClaw Release Publish` once with
+`wait_for_clawhub=false`, approves the parent's `npm-release` gate, and
+completes when `openclaw@YYYY.M.PATCH` is visible on npm; it never approves or
+cancels a child run (the API cannot prove which parent dispatched one), so
+until the approval receipt and self-sweeping parent land it prints the exact
+child-approval and stale-child sweep commands for the operator instead; `sync-beta` runs the beta-to-stable
+dist-tag sync; `flip-github` un-drafts the release and marks it latest;
+`macos` waits for the preflight, dispatches the real publish, and requires the
+appcast on `main`; `closeout` waits for the publish parent, requires the exact
+shipped version and changelog on `main`, and dispatches the closeout run unless
+the release already carries the closeout manifest and checksum assets.
+
+The orchestrator probes four capabilities and otherwise falls back to today's
+manual commands: a publish parent at the tooling SHA that runs the dist-tag
+sync itself (`sync-beta` verifies for 20 minutes before dispatching the sync),
+a parent that sweeps its predecessors' stale children (`sweep_superseded_children`;
+otherwise the sweep commands are printed before dispatch), a parent approval
+receipt at the tooling SHA that lets npm children skip their own gate (otherwise
+the child approval commands are printed), and a closeout workflow on `main` that
+resolves waivers from the sealed publish evidence (dispatched with the tag alone
+instead of the recorded waivers). Runs dispatched on `main` are reconciled by
+workflow path, ref, the operator's own login, and a ten-minute window; two
+matches refuse instead of guessing.
+Pass `--stable-soak-waiver` / `--lane-waiver` to override the composed waiver
+text, `--plugin-sdk-api-acknowledgement` when the candidate reports SDK API
+changes, and `--from macos --macos-preflight-run-id <id>` /
+`--macos-validate-run-id <id>` after a manual notarization resume. A state
+directory is bound to one cut and one tooling SHA; selecting another needs a
+fresh `--state-dir`, which the refusal prints.
+
+#### Manual fallback
+
 1. **One cut.** Create `release/YYYY.M.PATCH` from `main`, named exactly that:
    no `-cutN`, staging, or preview suffixes. Version alignment, the changelog
    entry, and the contribution record land on that branch in one commit, so
@@ -501,22 +553,30 @@ The full checklist below explains each step; this section decides the default.
    hides the release from users but no longer blocks apps. If the parent has
    not flipped it yet, do it by hand:
    `gh release edit vYYYY.M.PATCH --repo openclaw/openclaw --draft=false --latest`.
-   Run the beta-to-stable dist-tag sync (`openclaw-npm-dist-tags.yml` in
-   `openclaw/releases`, `mode=sync_beta_to_stable`) immediately after core npm
-   publishes and before the parent's completion verify, because that verify
-   fails on a stale `beta` tag and leaves the release drafted. "Visible" means
-   `npm view openclaw versions --prefer-online` lists it, 5-6 minutes after the
-   core child's `+ openclaw@YYYY.M.PATCH`. Each npm child (`Plugin NPM
-Release`, `openclaw-npm-release.yml`) needs its own `npm-release` approval;
+   The parent's `Complete publish workflows` step waits for the registry
+   document to list the version under the target dist-tag (bounded 10 minutes;
+   the core child's `+ openclaw@YYYY.M.PATCH` precedes visibility by 5-6
+   minutes), then dispatches the beta-to-stable dist-tag sync
+   (`openclaw-npm-dist-tags.yml` in `openclaw/releases`,
+   `mode=sync_beta_to_stable`) through a release-ledger app token and waits for
+   it before verification, because that verify fails on a stale `beta` tag and
+   leaves the release drafted. If the token step fails (summary line
+   `npm beta floor: release-ledger token unavailable`), dispatch the sync by
+   hand before the verify runs. `Finalize GitHub release` accepts an already
+   public release with the expected tag target and latest state; a manual flip
+   does not fail the parent. Each npm child (`Plugin NPM Release`,
+   `openclaw-npm-release.yml`) needs its own `npm-release` approval;
    watch `gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments`
    and approve npm children only. Never approve a ClawHub child by hand (its
    publish jobs then fail `Artifact not found`); cancel it and re-dispatch the
-   parent. Before any re-dispatch, reject and cancel the failed parent's stale
-   `waiting`/`queued` children or the new parent fails
-   `ClawHub dispatch blocked by waiting run`. If the parent failed only at its
-   completion verify, run the sync and dispatch a new parent with the same
-   inputs: it recognizes published bytes and only runs ClawHub, GitHub release
-   evidence, and Docker. Exact commands: `$release-openclaw-ci` Publish children.
+   parent. Before every child dispatch the parent rejects the gates of, cancels,
+   and waits (bounded 5 minutes) for a failed earlier parent's `waiting`/`queued`
+   children of the same release; a parent failure also cancels its own waiting
+   npm children. Only legacy children without a parent identity in their run
+   title still need the manual sweep before re-dispatch. If the parent failed
+   only at its completion verify, run the sync and dispatch a new parent with
+   the same inputs: it recognizes published bytes and only runs ClawHub, GitHub
+   release evidence, and Docker. Exact commands: `$release-openclaw-ci` Publish children.
 
 7. **Targeted local proof.** Do not mirror FRV locally. Run a lane locally only
    after it failed in CI, to separate flake from defect, bounded to 15 minutes
@@ -1700,10 +1760,13 @@ gh workflow run plugin-clawhub-release.yml \
   -f recovered_clawhub_run_attempt=<original-child-run-attempt>
 ```
 
-Before dispatching either ClawHub publisher, the parent checks waiting children
-for the same release tag across tooling refs. It cancels a superseded child at
-its pending gates only after verifying its failed parent attempt and confirming no
-job is running, then waits for the child to finish before dispatching. Target
+Before dispatching any child publisher, the parent checks waiting children
+for the same release tag across tooling refs (ClawHub and core children by the
+parent identity in their run title; plugin npm by the release SHA, and only
+while no other publish parent is live, so the child's owner is terminal). It rejects
+a superseded child's pending gates and cancels it only after verifying its
+failed parent attempt and confirming no job is running, then waits (bounded, 5
+minutes for the sweep) for the child to finish before dispatching. Target
 concurrency stays unchanged, so publication remains serialized. Each dispatch
 is recorded immediately; a later parent failure or cancellation cleans up its
 own unfinished ClawHub children, including a partially dispatched batch.
@@ -1849,7 +1912,7 @@ When cutting a regular orchestrated stable release:
 5. Save the successful `preflight_run_id`, `full_release_validation_run_id`, and exact `full_release_validation_run_attempt`.
 6. Run `OpenClaw Release Publish` from the protected `release-publish/<sha12>-<epoch>` tooling tag with the same `tag`, the same `npm_dist_tag`, the optional Windows input pair, the saved `preflight_run_id`, `full_release_validation_run_id`, and `full_release_validation_run_attempt`. It starts plugin npm and ClawHub in parallel, then promotes the prepared OpenClaw npm package once plugin npm succeeds. GitHub finalization waits for npm and Docker evidence; apps attach independently afterward.
 7. If the release landed on `beta`, use the `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow to promote that stable version from `beta` to `latest`.
-8. Immediately after publishing or promoting to `latest`, manually dispatch that same release-ledger workflow to repair the beta floor. Every package's `beta` must be at least its own `latest`; preserve a newer beta. The daily scheduled repair is only a backstop, not a substitute for this release step.
+8. Immediately after publishing or promoting to `latest`, repair the beta floor through that same release-ledger workflow (`mode=sync_beta_to_stable`). A `latest` publish parent dispatches it itself once the registry lists the core version, using a release-ledger app token, and waits for it before verification; when the parent's summary reports the token unavailable, dispatch it manually before the verify runs. Every package's `beta` must be at least its own `latest`; preserve a newer beta. The daily scheduled repair is only a backstop, not a substitute for this release step.
 
 The release ledger owns npm dist-tag promotion and repair because those operations require `NPM_TOKEN`, while the source repo keeps OIDC-only publish. Post-publication verification reads npm dist-tags through the exact release version and fails when core or an official plugin in the release selection has a missing beta or a beta older than latest, listing the affected packages and observed tags.
 

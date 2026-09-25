@@ -113,6 +113,11 @@ provider discovery. Model-inventory requests return those rows immediately and
 can renew expired provider inventory in the background. A selected native model
 can load its own metadata while that renewal is still running.
 
+In chat apps, `/models` and model picker buttons return the newest completed list
+without waiting for discovery. Pending providers show `checking models…`.
+Open the menu again to see newly discovered models; completing discovery does not
+edit a list that was already sent.
+
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A
 warning names the remaining agents and acquisition stage, including workspace

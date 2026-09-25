@@ -1,4 +1,5 @@
 name: OpenClaw NPM Release
+run-name: "openclaw-npm-release.yml [${{ inputs.tag }}] ${{ inputs.preflight_only && 'preflight' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:
