@@ -1406,11 +1406,14 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
     expect(script).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
+    expect(script).toContain(
+      'openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL"',
+    );
     expect(script).toContain("run_podman_detached()");
     expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
-    expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
-    expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
+    expect(script).toContain("run_podman_detached --pull=never -d --replace \\");
+    expect(script).not.toContain("podman run --pull=never -d --replace \\");
   });
 
   it("passes image-scoped pip packages through Docker and Podman setup", () => {
