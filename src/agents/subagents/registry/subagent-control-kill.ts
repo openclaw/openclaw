@@ -20,6 +20,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
+  captureSubagentExecution,
   killSubagentRun,
   persistSubagentAbortedLastRun,
   resolveSubagentKillTargetState,
@@ -32,6 +33,8 @@ import {
   isSameSubagentRunGeneration,
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   listSubagentRunsForController,
@@ -256,6 +259,59 @@ async function withSubagentKillScope<T>(
     };
     scope.refresh();
     const result = await run(scope, trees);
+    const settleQueued = async (tree: KillTree): Promise<void> => {
+      const { entry, session, dispatchHold } = tree;
+      const execution = entry.execution;
+      const reconciliation = entry.killReconciliation;
+      const executionTail =
+        session && captureSubagentExecution({ entry, session })?.execution.executionSettlement;
+      if (executionTail && executionTail.status !== "fulfilled") {
+        return;
+      }
+      if (
+        tree.errors.size === 0 &&
+        dispatchHold &&
+        session?.entry?.sessionId &&
+        entry.collect === true &&
+        execution.status === "terminal" &&
+        execution.startedAt === undefined &&
+        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        reconciliation &&
+        (await dispatchHold.settleCancellation())
+      ) {
+        const isCurrent = () =>
+          tree.isCurrent(entry) &&
+          entry.execution === execution &&
+          entry.killReconciliation === reconciliation;
+        if (isCurrent()) {
+          const assertCurrent = () => {
+            cancellationControl?.assertCurrent();
+            if (!isCurrent()) {
+              throw new Error("Queued cancellation no longer owns its terminal publication");
+            }
+          };
+          assertCurrent();
+          await persistSubagentSessionTiming(entry, {
+            isCurrentGeneration: isCurrent,
+            assertCommitAllowed: assertCurrent,
+            settledQueuedCancellation: {
+              storePath: session.storePath,
+              sessionId: session.entry.sessionId,
+              lifecycleRevision: session.entry.lifecycleRevision,
+            },
+          });
+          assertCurrent();
+        }
+      }
+    };
+    const selectedSettlements = (selectedTrees: KillTree[]): Array<Promise<void>> =>
+      selectedTrees.flatMap((tree) => [settleQueued(tree), ...selectedSettlements(tree.children)]);
+    const settlements = await Promise.allSettled(selectedSettlements(trees));
+    for (const settlement of settlements) {
+      if (settlement.status === "rejected") {
+        throw settlement.reason;
+      }
+    }
     if (preparePublication) {
       do {
         await preparePublication.prepare();
@@ -336,7 +392,11 @@ async function killLatestSubagentRun(params: {
     return {
       entry,
       session,
-      result: { killed: false, targetState: resolveSubagentKillTargetState(entry) },
+      result: {
+        killed: false,
+        targetState: resolveSubagentKillTargetState(entry),
+        ...(result.error !== undefined ? { error: result.error } : {}),
+      },
     };
   }
   return { entry, session, result };
@@ -383,6 +443,9 @@ async function killSubagentRunTree(
         visits.set(tree, result);
         if (
           !tree.entry.execution.endedAt ||
+          (tree.session &&
+            captureSubagentExecution({ entry: tree.entry, session: tree.session })?.execution
+              .executionSettlement) ||
           tree.entry.pauseReason === "sessions_yield" ||
           (params.suppressTaskDelivery && suppressCompletedWakes && tree.entry.requesterSettleWake)
         ) {

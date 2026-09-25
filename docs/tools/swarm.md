@@ -432,6 +432,10 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
+A queued child can be cancelled without ever running. Its terminal session identity
+is recorded after its owned preparation cleanup finishes; it does not acquire a
+start time, runtime, or agent execution history merely because it was cancelled.
+
 If Stop reports incomplete descendant cancellation, inspect the remaining work
 on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,

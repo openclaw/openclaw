@@ -34,6 +34,7 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -73,7 +74,17 @@ import {
 } from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export async function startAgentRunExecution(params: {
+export async function startAgentRunExecution(
+  params: Parameters<typeof executeAgentRun>[0],
+): Promise<void> {
+  return await runWithChatAbortExecution(
+    params.prepared.activeRunAbort.entry,
+    () => executeAgentRun(params),
+    params.prepared.activeRunAbort.cleanup,
+  );
+}
+
+async function executeAgentRun(params: {
   assertContextCurrent?: () => void;
   prepared: PreparedAgentRunDispatch;
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;

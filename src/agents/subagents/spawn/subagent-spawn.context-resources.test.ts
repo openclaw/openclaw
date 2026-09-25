@@ -110,6 +110,90 @@ describe("spawn context-engine resource custody", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["registration", "claim"] as const)(
+    "joins preactivation resource cleanup without awaiting the public spawn's %s",
+    async (blockedOn) => {
+      const registered = createDeferred<string>();
+      const registrationGate = createDeferred();
+      const claimEntered = createDeferred();
+      const claimGate = createDeferred();
+      const disposalEntered = createDeferred();
+      const disposalGate = createDeferred();
+      let claimed = true;
+      const rollback = vi.fn(async () => fixture.read());
+      const fixture = createEngineFixture(
+        async () => ({ rollback }),
+        async () => {
+          disposalEntered.resolve();
+          await disposalGate.promise;
+        },
+      );
+      resolveEngine.mockImplementation(() => fixture.resolve());
+      const scope = {
+        waitForClaim: () => {
+          if (!claimed) {
+            return undefined;
+          }
+          claimEntered.resolve();
+          return claimGate.promise;
+        },
+        canLaunch: () => false,
+        canCleanupSession: () => true,
+        canAcceptLaunch: () => true,
+        canRetireReservation: () => false,
+        settleFailedLaunch: vi.fn(async () => {}),
+      } satisfies SubagentRegistrationScope;
+      registerRun.mockImplementation(
+        async (
+          { runId }: { runId: string },
+          options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
+        ) => {
+          options.retainOwnership(scope);
+          registered.resolve(runId);
+          await registrationGate.promise;
+        },
+      );
+      const operation = spawn(
+        { task: "cancel before activation", collect: true, groupId: "owned-preparation" },
+        { agentSessionKey: "main" },
+      );
+      const runId = await registered.promise;
+      const cancellation = scheduler.holdQueuedSwarmRun(runId)!;
+      try {
+        if (blockedOn === "claim") {
+          registrationGate.resolve();
+          await claimEntered.promise;
+        }
+        expect(cancellation.withdraw()).toBe(true);
+        const publication = vi.fn();
+        const settlement = cancellation.settleCancellation().then((qualified) => {
+          if (qualified) {
+            publication();
+          }
+          return qualified;
+        });
+        await disposalEntered.promise;
+        fixture.read();
+        expect(publication).not.toHaveBeenCalled();
+        expect(fixture.retired).not.toHaveBeenCalled();
+        disposalGate.resolve();
+        expect(await settlement).toBe(true);
+        expect(fixture.database.isOpen).toBe(false);
+        expect(fixture.retired).toHaveBeenCalledOnce();
+        expect(rollback).toHaveBeenCalledOnce();
+        expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+      } finally {
+        disposalGate.resolve();
+        registrationGate.resolve();
+        claimed = false;
+        claimGate.resolve();
+        await cancellation.release();
+        await operation;
+        await fixture.cleanup();
+      }
+    },
+  );
+
   it.each([
     "success",
     "absent-hook",

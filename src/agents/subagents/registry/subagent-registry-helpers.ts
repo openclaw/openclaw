@@ -101,6 +101,11 @@ export async function persistSubagentSessionTiming(
   options?: {
     isCurrentGeneration?: () => boolean;
     assertCommitAllowed?: () => void;
+    settledQueuedCancellation?: {
+      storePath: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+    };
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -110,7 +115,9 @@ export async function persistSubagentSessionTiming(
 
   const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const storePath =
+    options?.settledQueuedCancellation?.storePath ??
+    resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
@@ -133,6 +140,24 @@ export async function persistSubagentSessionTiming(
       if (options?.isCurrentGeneration && !options.isCurrentGeneration()) {
         return null;
       }
+      const settled = options?.settledQueuedCancellation;
+      if (
+        settled &&
+        (entry.collect !== true ||
+          entry.execution.status !== "terminal" ||
+          entry.execution.startedAt !== undefined ||
+          sessionEntry.startedAt !== undefined ||
+          entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+          !entry.killReconciliation ||
+          sessionEntry.sessionId !== settled.sessionId ||
+          sessionEntry.lifecycleRevision !== settled.lifecycleRevision ||
+          sessionEntry.activeWriterRunId !== undefined ||
+          sessionEntry.lifecycleRunId !== undefined ||
+          (sessionEntry.lastRunId !== undefined &&
+            sessionEntry.lastRunId !== (entry.swarmRunId ?? entry.runId)))
+      ) {
+        return null;
+      }
       if (status === "killed") {
         const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
           notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
@@ -150,6 +175,11 @@ export async function persistSubagentSessionTiming(
         }
       }
       const next = { ...sessionEntry };
+      if (settled) {
+        // The cancellation owner supplies this only after exact queued withdrawal
+        // and successful resource cleanup. No agent start/execution is fabricated.
+        next.lastRunId = entry.swarmRunId ?? entry.runId;
+      }
 
       if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
         next.startedAt = startedAt;

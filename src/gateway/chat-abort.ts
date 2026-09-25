@@ -22,7 +22,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
@@ -40,6 +40,7 @@ import {
 } from "./session-subscription-keys.js";
 
 export type { ChatAbortControllerEntry } from "./chat-abort.types.js";
+export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -190,6 +191,7 @@ export function registerChatAbortController(params: {
     const entry = params.chatAbortControllers.get(params.runId);
     if (
       entry?.controller !== controller ||
+      entry.registrationCleanupRequested ||
       !entry.operationalRunInstance ||
       authority.operationalRunInstance !== entry.operationalRunInstance
     ) {
@@ -206,7 +208,11 @@ export function registerChatAbortController(params: {
       return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (entry?.controller !== controller || controller.signal.aborted) {
+    if (
+      entry?.controller !== controller ||
+      entry.registrationCleanupRequested ||
+      controller.signal.aborted
+    ) {
       return false;
     }
     executionStarted = true;
@@ -233,6 +239,7 @@ export function registerChatAbortController(params: {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
       }
       entry.registrationCleanupRequested = true;
+      entry.projectSessionActive = false;
       entry.pendingTimeoutCompletion = undefined;
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
@@ -314,7 +321,10 @@ export function registerChatAbortController(params: {
     registered: true,
     entry,
     deferTimeoutCompletion: (settle) => {
-      if (params.chatAbortControllers.get(params.runId) !== entry) {
+      if (
+        params.chatAbortControllers.get(params.runId) !== entry ||
+        entry.registrationCleanupRequested
+      ) {
         return false;
       }
       entry.pendingTimeoutCompletion = {
@@ -512,7 +522,7 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
 }
 
 export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {
-  if (entry.controller.signal.aborted) {
+  if (entry.registrationCleanupRequested || entry.controller.signal.aborted) {
     return false;
   }
   try {
@@ -520,39 +530,6 @@ export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEn
   } catch {
     return false;
   }
-}
-
-export function removeChatAbortControllerEntry(
-  entries: Map<string, ChatAbortControllerEntry>,
-  runId: string,
-  expectedEntry?: ChatAbortControllerEntry,
-): boolean {
-  const entry = entries.get(runId);
-  if (!entry || (expectedEntry && entry !== expectedEntry)) {
-    return false;
-  }
-  const pending = entry.pendingTimeoutCompletion;
-  if (pending) {
-    if (isFutureDateTimestampMs(pending.expiresAtMs, { nowMs: Date.now() })) {
-      return false;
-    }
-    // Orphan cleanup must record the known timeout before revoking this exact
-    // receipt owner. A late producer then reuses that receipt, never rewrites it.
-    entry.pendingTimeoutCompletion = undefined;
-    pending.settle();
-    if (entries.get(runId) !== entry) {
-      return false;
-    }
-  }
-  entries.delete(runId);
-  try {
-    entry.onRemoved?.();
-  } catch {
-    // Removal owns state cleanup even if a caller-provided release hook fails.
-  } finally {
-    notifyChatAbortControllerRemoved(entry);
-  }
-  return true;
 }
 
 export function abortChatRunById(

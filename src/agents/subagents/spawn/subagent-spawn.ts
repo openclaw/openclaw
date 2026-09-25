@@ -22,7 +22,7 @@ import {
 } from "../../spawn-pipeline.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { activateSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
@@ -32,7 +32,10 @@ import {
   cleanupProvisionalSession,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
-import { createCollectorLaunchCallbacks } from "./subagent-spawn-collector.js";
+import {
+  createCollectorLaunchCallbacks,
+  createCollectorPreparationHold,
+} from "./subagent-spawn-collector.js";
 import {
   prepareContextEngineSubagentSpawn,
   prepareSubagentSessionContext,
@@ -121,10 +124,13 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
-  const swarmReservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
+  const preparationHold = createCollectorPreparationHold({
+    runId: reservationPending ? childIdem : undefined,
+    gatewayContextResolver,
+  });
+  const swarmReservation = preparationHold.reservation;
   let canCleanupCreatedSession: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
-  let releaseOperatorAuthority: (() => void) | undefined;
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
@@ -136,7 +142,7 @@ export async function spawnSubagentDirect(
     }
     if (params.collect && operatorAuthority) {
       operatorAuthority.assertCurrent();
-      releaseOperatorAuthority = operatorAuthority.retain?.();
+      preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
     const childPlan = await resolveSubagentChildPlan({
       request: params,
@@ -441,6 +447,10 @@ export async function spawnSubagentDirect(
     type SubagentBackendState = { contextEnginePreparation?: PreparedContextEngineSubagentSpawn };
     let taskRowOwnership: "required" | "gateway_best_effort" = "required";
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
+      retainRegistrationScope(scope) {
+        canCleanupCreatedSession = scope.canCleanupSession;
+        canRetireReservation = scope.canRetireReservation;
+      },
       async initialize() {
         const result =
           params.lightContext && preparedSpawnContext.mode === "isolated"
@@ -457,6 +467,7 @@ export async function spawnSubagentDirect(
           throw new Error(result.error);
         }
         contextEnginePreparation = result.preparation;
+        preparationHold.prepared(result.preparation, isCleanupCurrent);
         return { contextEnginePreparation };
       },
       async dispatchTurn() {
@@ -640,7 +651,7 @@ export async function spawnSubagentDirect(
             requesterSessionKey: requesterInternalKey,
             gatewayContextResolver,
             operatorAuthority,
-            releaseOperatorAuthority,
+            releaseOperatorAuthority: preparationHold.releaseAuthority,
             cleanupOwner,
             registrationScope: pipelineResult.registrationScope,
             preparation: pipelineResult.state.contextEnginePreparation,
@@ -651,7 +662,6 @@ export async function spawnSubagentDirect(
             cleanupFailedSpawn,
           }),
         });
-        releaseOperatorAuthority = undefined;
       } else {
         if (canRetireReservation?.() !== false) {
           swarmReservation?.withdraw();
@@ -698,7 +708,7 @@ export async function spawnSubagentDirect(
     };
   } finally {
     provisionalCleanupOpen = false;
-    releaseOperatorAuthority?.();
+    preparationHold.finish();
     admissionReservation?.release();
     if (swarmReservationPending && canRetireReservation?.() !== false) {
       swarmReservation?.withdraw();

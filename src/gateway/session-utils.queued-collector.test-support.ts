@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { settleSubagentRegistryPersistenceWork } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
@@ -126,6 +127,8 @@ export function useQueuedCollectorFixture() {
     // Keep dispatch dependencies and session state alive until owned launch cleanup settles.
     await closeSwarmScheduler();
     await flushPendingSessionsChangedEvents();
+    // Registry finalization has an independent root beyond Stop's captured execution.
+    await settleSubagentRegistryPersistenceWork();
     schedulerTesting.reset();
     for (const runId of launchedRunIds.splice(0)) {
       clearAgentRunContext(runId);
@@ -228,10 +231,13 @@ export function useQueuedCollectorFixture() {
     creationPolicy: Parameters<typeof createInitialSubagentSession>[0]["creationPolicy"] = {
       actor: { type: "agent", id: "main" },
     },
+    requester?: { sessionKey: string; runId: string },
   ) {
+    const requesterSessionKey = requester?.sessionKey ?? parentKey;
+    const requesterTurnRunId = requester?.runId ?? "parent-turn";
     const childSessionKey = `agent:main:subagent:${name}`;
     const runId = `${name}-collector`;
-    const groupId = `swarm:${parentKey}:parent-turn`;
+    const groupId = `swarm:${requesterSessionKey}:${requesterTurnRunId}`;
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     expect(
       await createInitialSubagentSession({
@@ -240,8 +246,8 @@ export function useQueuedCollectorFixture() {
         childSessionKey,
         label: "Reserved collector",
         incognito: false,
-        requesterInternalKey: parentKey,
-        completionOwnerSessionKey: parentKey,
+        requesterInternalKey: requesterSessionKey,
+        completionOwnerSessionKey: requesterSessionKey,
         creationPolicy,
         modelPatch: {},
         swarmGroupId: groupId,
@@ -251,9 +257,9 @@ export function useQueuedCollectorFixture() {
     const registration = {
       runId,
       childSessionKey,
-      requesterSessionKey: parentKey,
-      requesterTurnRunId: "parent-turn",
-      requesterDisplayKey: parentKey,
+      requesterSessionKey,
+      requesterTurnRunId,
+      requesterDisplayKey: requesterSessionKey,
       task: "Wait for a slot",
       cleanup: "keep" as const,
       collect: true,

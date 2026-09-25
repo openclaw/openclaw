@@ -1,10 +1,12 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   GatewayDrainingError,
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import {
@@ -13,17 +15,14 @@ import {
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
-import type { activateSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdQueuedSwarmRun, type activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   type bindSubagentSpawnCleanup,
   type cleanupFailedSpawnBeforeAgentStart,
   retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
-import {
-  rollbackPreparedContextEngine,
-  type PreparedContextEngineSubagentSpawn,
-} from "./subagent-spawn-context.js";
+import type { PreparedContextEngineSubagentSpawn } from "./subagent-spawn-context.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
 
@@ -31,6 +30,65 @@ type CollectorLaunchCallbacks = Pick<
   Parameters<typeof activateSwarmRun>[0],
   "start" | "onStartFailure" | "onRemoved" | "signal"
 >;
+
+/** Hands preparation cleanup to its reservation before registration can wait on Stop. */
+export function createCollectorPreparationHold(params: {
+  runId?: string;
+  gatewayContextResolver?: GatewayContextResolver;
+}) {
+  const removal = params.runId
+    ? createDeferredCore<CollectorLaunchCallbacks["onRemoved"]>()
+    : undefined;
+  const reservation =
+    params.runId && removal
+      ? holdQueuedSwarmRun(params.runId, {
+          onRemoved: removal.promise,
+          lifecycleOwner: params.gatewayContextResolver
+            ? getCanonicalGatewayContextResolver(params.gatewayContextResolver)
+            : undefined,
+        })
+      : undefined;
+  let handedOff = false;
+  let releaseAuthority: (() => void) | undefined;
+  const release = () => {
+    const retained = releaseAuthority;
+    releaseAuthority = undefined;
+    retained?.();
+  };
+  return {
+    reservation,
+    retainAuthority: (retained: (() => void) | undefined) => {
+      releaseAuthority = retained;
+    },
+    releaseAuthority: release,
+    prepared(
+      preparation: PreparedContextEngineSubagentSpawn | undefined,
+      isCurrent: () => boolean,
+    ) {
+      if (!removal) {
+        return;
+      }
+      handedOff = true;
+      removal.resolve(async (reason) => {
+        try {
+          if (reason === "shutdown" || !isCurrent()) {
+            await preparation?.dispose();
+          } else {
+            await preparation?.rollback();
+          }
+        } finally {
+          release();
+        }
+      });
+    },
+    finish() {
+      if (!handedOff) {
+        release();
+        removal?.resolve(undefined);
+      }
+    },
+  };
+}
 
 /** Owns registered collector launch and settlement while the caller retains its FIFO reservation. */
 export function createCollectorLaunchCallbacks(params: {
@@ -137,7 +195,7 @@ export function createCollectorLaunchCallbacks(params: {
   let startAttempt: Promise<void> | undefined;
   const cleanupOnce = async () =>
     await Promise.allSettled([
-      rollbackPreparedContextEngine(preparation),
+      Promise.resolve().then(() => preparation?.rollback()),
       params.cleanupFailedSpawn(
         // A launch RPC can fail after acceptance. Keep the FIFO slot until
         // deleting the child session proves no accepted run remains active.
@@ -145,16 +203,15 @@ export function createCollectorLaunchCallbacks(params: {
       ),
     ]);
   let cleanupAttempt: ReturnType<typeof cleanupOnce> | undefined;
-  const publishCleanupCompletion = ([contextRollback, sessionCleanup]: Awaited<
+  const cleanupSucceeded = ([contextRollback, sessionCleanup]: Awaited<
     ReturnType<typeof cleanupOnce>
-  >) => {
-    const cleanupComplete =
-      contextRollback.status === "fulfilled" &&
-      contextRollback.value &&
-      sessionCleanup.status === "fulfilled" &&
-      sessionCleanup.value.attachmentsRemoved &&
-      sessionCleanup.value.sessionDeleted;
-    if (cleanupComplete && canCleanupCreatedSession?.() !== false) {
+  >) =>
+    contextRollback.status === "fulfilled" &&
+    sessionCleanup.status === "fulfilled" &&
+    sessionCleanup.value.attachmentsRemoved &&
+    sessionCleanup.value.sessionDeleted;
+  const publishCleanupCompletion = (cleanup: Awaited<ReturnType<typeof cleanupOnce>>) => {
+    if (cleanupSucceeded(cleanup) && canCleanupCreatedSession?.() !== false) {
       emitSessionLifecycleEvent({
         sessionKey: childSessionKey,
         reason: "delete",
@@ -230,8 +287,36 @@ export function createCollectorLaunchCallbacks(params: {
     onRemoved: async (reason) => {
       try {
         if (reason === "cancelled" && params.operatorAuthority?.signal?.aborted) {
-          if (!(await settleLaunchFailure(params.operatorAuthority.signal.reason))) {
+          const [settlement] = await Promise.allSettled([
+            settleLaunchFailure(params.operatorAuthority.signal.reason),
+          ]);
+          // Logical failure settlement can outlive cleanup ownership. Rejoin the
+          // cached disposer so retained native resources never certify cancellation.
+          try {
+            await preparation?.dispose();
+          } catch (error) {
+            if (settlement.status === "rejected") {
+              throw new AggregateError(
+                [settlement.reason, error],
+                "Collector source revocation settlement and disposal failed",
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+          if (settlement.status === "rejected") {
+            throw settlement.reason;
+          }
+          if (!settlement.value) {
             throw new Error("Collector source revocation settlement is pending");
+          }
+          const cleanup = cleanupAttempt && (await cleanupAttempt);
+          if (!cleanup || !cleanupSucceeded(cleanup)) {
+            const failed = cleanup?.find((result) => result.status === "rejected");
+            if (failed) {
+              throw failed.reason;
+            }
+            throw new Error("Collector source revocation cleanup is incomplete");
           }
         } else if (reason === "shutdown" || canCleanupCreatedSession?.() === false) {
           // Restart replays queuedLaunch without repeating its durable context preparation.

@@ -7,9 +7,14 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  captureChatAbortExecution,
+  isCurrentChatAbortExecution,
+} from "../../../gateway/chat-abort-lifecycle-internal.js";
 import { logVerbose } from "../../../globals.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-context-binding.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import {
   runExclusiveSessionLifecycleMutation,
@@ -144,17 +149,114 @@ export function resolveSubagentKillSession(cfg: OpenClawConfig, sessionKey: stri
   };
 }
 
-export async function killSubagentRun(params: {
-  cfg: OpenClawConfig;
+export function captureSubagentExecution(params: {
   entry: SubagentRunRecord;
   session: ReturnType<typeof resolveSubagentKillSession>;
-  cancellationControl?: TaskCancellationControl;
-  suppressTaskDelivery?: boolean;
-  beforeSessionKill?: () => boolean;
-  isCurrent?: (entry: SubagentRunRecord) => boolean;
-  withdrawQueuedReservation: () => void;
-  refreshDescendants: () => void;
-}): Promise<{
+}) {
+  const resolver = getGatewayContextResolver(params.entry);
+  const context = resolver?.();
+  const runId = params.entry.runId;
+  const execution =
+    context &&
+    captureChatAbortExecution({
+      entries: context.chatAbortControllers,
+      runId,
+      sessionKey: params.entry.childSessionKey,
+      sessionId: params.session.entry?.sessionId,
+      lifecycleGeneration: params.entry.execution.lifecycleGeneration,
+    });
+  return context && execution ? { resolver, context, runId, execution } : undefined;
+}
+
+export async function killSubagentRun(
+  params: Parameters<typeof mutateSubagentRunForKill>[0],
+): ReturnType<typeof mutateSubagentRunForKill> {
+  let captured = captureSubagentExecution(params);
+  const stopAcceptance = { accepted: false };
+  const initialTargetState = resolveSubagentKillTargetState(params.entry);
+  let result: Awaited<ReturnType<typeof mutateSubagentRunForKill>> = {
+    killed: false,
+    targetState: initialTargetState,
+  };
+  let settlementFailure: { error: unknown } | undefined;
+  try {
+    result = await mutateSubagentRunForKill(
+      params,
+      () => {
+        // An accepted registration may arrive while the mutation waits for its fence.
+        captured ??= captureSubagentExecution(params);
+      },
+      initialTargetState,
+      stopAcceptance,
+    );
+  } finally {
+    // Runtime disposal may mutate this session. Join only after the exclusive
+    // mutation exits; the caller still holds the selected retirement/reservation.
+    const execution = captured?.execution;
+    if (
+      execution &&
+      !isCurrentChatAbortExecution(execution) &&
+      (result.killed ||
+        result.targetState ||
+        execution.controller.signal.aborted ||
+        execution.registrationCleanupRequested ||
+        execution.executionSettlement?.status === "rejected")
+    ) {
+      // A refused or pre-interruption failure must not await work it left running.
+      try {
+        await execution.executionSettlement?.completion;
+      } catch (error) {
+        settlementFailure = { error };
+      }
+    }
+  }
+  // Revocation fences new effects, not the outcome of this accepted Stop.
+  if (!stopAcceptance.accepted) {
+    params.cancellationControl?.assertCurrent();
+  }
+  if (
+    captured &&
+    (params.entry.runId !== captured.runId ||
+      getGatewayContextResolver(params.entry) !== captured.resolver ||
+      captured.resolver?.() !== captured.context ||
+      (captured.context.chatAbortControllers.has(captured.runId) &&
+        captured.context.chatAbortControllers.get(captured.runId) !== captured.execution))
+  ) {
+    throw new Error("Subagent execution owner changed during cancellation");
+  }
+  if (settlementFailure) {
+    // The accepted parent's cleanup failure must not skip its captured descendants.
+    result = {
+      ...result,
+      error: [
+        result.error,
+        `Subagent execution settlement failed: ${formatErrorMessage(settlementFailure.error)}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+  }
+  return params.isCurrent?.(params.entry) === false
+    ? { ...result, killed: false, superseded: true }
+    : result;
+}
+
+async function mutateSubagentRunForKill(
+  params: {
+    cfg: OpenClawConfig;
+    entry: SubagentRunRecord;
+    session: ReturnType<typeof resolveSubagentKillSession>;
+    cancellationControl?: TaskCancellationControl;
+    suppressTaskDelivery?: boolean;
+    beforeSessionKill?: () => boolean;
+    isCurrent?: (entry: SubagentRunRecord) => boolean;
+    withdrawQueuedReservation: () => void;
+    refreshDescendants: () => void;
+  },
+  captureExecution: () => void,
+  initialTargetState: SubagentKillTargetState | undefined,
+  stopAcceptance: { accepted: boolean },
+): Promise<{
   killed: boolean;
   sessionId?: string;
   superseded?: boolean;
@@ -170,7 +272,6 @@ export async function killSubagentRun(params: {
       reason: "killed",
       suppressTaskDelivery: params.suppressTaskDelivery,
     });
-  const initialTargetState = resolveSubagentKillTargetState(params.entry);
   if (initialTargetState) {
     if (params.suppressTaskDelivery && params.entry.requesterSettleWake) {
       await cancelSubagentRequesterSettleWake(params.entry, () => {
@@ -198,14 +299,13 @@ export async function killSubagentRun(params: {
   const runtime = await subagentKillRuntimeLoader.load();
   let admission: "ready" | "declined" | "busy" = "ready";
   let killClaim: ReturnType<typeof claimSubagentRunKill>;
-  let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
   const cancellationFailure = (
     error: unknown,
     declined?: true,
   ): NonNullable<typeof preparationResult> => {
     let reason = formatErrorMessage(error);
-    if (killClaim && !stopAccepted) {
+    if (killClaim && !stopAcceptance.accepted) {
       try {
         releaseSubagentRunKillClaim({
           runId: params.entry.runId,
@@ -289,6 +389,7 @@ export async function killSubagentRun(params: {
       params.refreshDescendants();
       // The session fence is active before resolving/signaling other owners.
       // A refused full-session Stop must not interrupt their admissions or this collector.
+      captureExecution();
       if (params.beforeSessionKill?.() === false) {
         admission = "declined";
         return;
@@ -343,7 +444,8 @@ export async function killSubagentRun(params: {
         identities: [childSessionKey, sessionId],
         reason: createAgentRunDirectAbortError(),
       });
-      stopAccepted = interruption.interruptedRunIds.has(params.entry.runId) && killOwnerCurrent();
+      stopAcceptance.accepted =
+        interruption.interruptedRunIds.has(params.entry.runId) && killOwnerCurrent();
       const released = await waitForSessionWorkAdmissionRelease(
         interruption.released,
         SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -359,7 +461,7 @@ export async function killSubagentRun(params: {
       }
       if (admission === "busy") {
         try {
-          if (killClaim && !stopAccepted) {
+          if (killClaim && !stopAcceptance.accepted) {
             releaseSubagentRunKillClaim({
               runId: params.entry.runId,
               expected: params.entry,
@@ -376,7 +478,7 @@ export async function killSubagentRun(params: {
         return {
           killed: false,
           sessionId,
-          error: stopAccepted
+          error: stopAcceptance.accepted
             ? "Subagent accepted cancellation but is still active; cleanup is pending."
             : "Subagent is still active; try the kill again in a moment.",
         };
@@ -391,7 +493,7 @@ export async function killSubagentRun(params: {
           await pending;
         }
       } catch (error) {
-        if (!stopAccepted) {
+        if (!stopAcceptance.accepted) {
           return cancellationFailure(error);
         }
         readFailure = { error };
@@ -424,7 +526,7 @@ export async function killSubagentRun(params: {
         };
       }
       const declined = readFailure ? undefined : declineRevokedCancellation();
-      if (declined && !stopAccepted) {
+      if (declined && !stopAcceptance.accepted) {
         return declined;
       }
       const persistAbortedLastRun = (abortedLastRun: boolean, strict = false) =>
@@ -519,16 +621,18 @@ export async function killSubagentRun(params: {
         }
         const declinedBeforeAbort = declineRevokedCancellation();
         if (declinedBeforeAbort) {
-          return stopAccepted ? await settleTargetCancellation() : declinedBeforeAbort;
+          return stopAcceptance.accepted ? await settleTargetCancellation() : declinedBeforeAbort;
         }
         const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
-        stopAccepted ||= aborted;
+        stopAcceptance.accepted ||= aborted;
         if (!ownsSessionIncarnation()) {
           return releaseChangedSessionKill(claimedKill);
         }
         const declinedBeforeQueueClear = declineRevokedCancellation();
         if (declinedBeforeQueueClear) {
-          return stopAccepted ? await settleTargetCancellation() : declinedBeforeQueueClear;
+          return stopAcceptance.accepted
+            ? await settleTargetCancellation()
+            : declinedBeforeQueueClear;
         }
         const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
@@ -536,7 +640,7 @@ export async function killSubagentRun(params: {
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
           );
         }
-        if (active && !stopAccepted) {
+        if (active && !stopAcceptance.accepted) {
           try {
             releaseSubagentRunKillClaim({
               runId: params.entry.runId,

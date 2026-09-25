@@ -174,6 +174,7 @@ describe("queued collector session projection", () => {
           label: "Collector B",
           status: "killed",
           hasActiveRun: false,
+          lastRunId: second.runId,
         });
         expect(stopped?.startedAt).toBeUndefined();
         expect(stopped?.runtimeMs).toBeUndefined();

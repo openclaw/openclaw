@@ -152,6 +152,77 @@ describe("swarm scheduler", () => {
     await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
   });
 
+  it("does not certify an unactivated reservation without a preparation owner", async () => {
+    reserveSwarmRun({ groupId: "unprepared", runId: "child", maxConcurrent: 1, activeRunIds: [] });
+    const hold = holdQueuedSwarmRun("child");
+    assert(hold);
+    expect(hold.withdraw()).toBe(true);
+    expect(await hold.settleCancellation()).toBe(false);
+    await hold.release();
+  });
+
+  it.each(["success", "failure", "shutdown", "replacement"] as const)(
+    "joins owned preactivation cleanup without certifying %s incorrectly",
+    async (mode) => {
+      const owner = {};
+      const ready = createDeferred<Parameters<typeof activateSwarmRun>[0]["onRemoved"]>();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const failure = new Error("preparation cleanup failed");
+      reserveSwarmRun({ groupId: "prepared", runId: "child", maxConcurrent: 1, activeRunIds: [] });
+      const producer = holdQueuedSwarmRun("child", {
+        onRemoved: ready.promise,
+        lifecycleOwner: owner,
+      });
+      const cancellation = holdQueuedSwarmRun("child");
+      assert(producer && cancellation);
+      expect(cancellation.withdraw()).toBe(true);
+      const published = vi.fn();
+      const settlement = cancellation.settleCancellation().then(
+        (qualified) => {
+          if (qualified) {
+            published();
+          }
+          return { qualified };
+        },
+        (error: unknown) => ({ error }),
+      );
+      ready.resolve(async () => {
+        entered.resolve();
+        await release.promise;
+        if (mode === "failure") {
+          throw failure;
+        }
+      });
+      let closing: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        expect(published).not.toHaveBeenCalled();
+        if (mode === "shutdown") {
+          closing = closeSwarmScheduler(owner);
+        } else if (mode === "replacement") {
+          expect(
+            reserveSwarmRun({
+              groupId: "prepared",
+              runId: "child",
+              maxConcurrent: 1,
+              activeRunIds: [],
+            }),
+          ).toBe(true);
+        }
+      } finally {
+        release.resolve();
+      }
+      expect(await settlement).toEqual(
+        mode === "failure" ? { error: failure } : { qualified: mode === "success" },
+      );
+      await Promise.all([producer.release(), cancellation.release(), closing]);
+      if (mode === "failure") {
+        await expect(closeSwarmScheduler(owner)).rejects.toMatchObject({ errors: [failure] });
+      }
+    },
+  );
+
   it.each([false, true])(
     "joins removed queues and preserves retained cleanup failures (%s)",
     async (retained) => {
