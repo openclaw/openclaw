@@ -1,5 +1,5 @@
 // Provider entry tests cover provider plugin entry contracts and catalog integration.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
@@ -139,6 +139,8 @@ describe("defineSingleProviderPluginEntry", () => {
   });
 
   it("derives API-key auth and static and live model catalogs from the provider manifest", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    onTestFinished(() => fetch.mockRestore());
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
@@ -179,7 +181,11 @@ describe("defineSingleProviderPluginEntry", () => {
     });
     const { defaultModel, ...manifestProvider } = manifest.modelCatalog.providers.demo;
     expect(defaultModel).toBe("default");
-    expect(catalog).toEqual({ provider: { ...manifestProvider, apiKey: "test-key" } });
+    expect(catalog).toEqual({
+      provider: { ...manifestProvider, apiKey: "test-key" },
+      outcomes: [],
+    });
+    expect(fetch).not.toHaveBeenCalled();
     expect(staticCatalog).toEqual({ provider: manifestProvider });
     expect(unifiedCatalog).toEqual([
       { kind: "text", provider: "demo", model: "default", label: "Default", source: "live" },
@@ -492,6 +498,7 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(provider?.auth[0]?.wizard?.methodId).toBe("api-key");
 
     expect(catalog).toEqual({
+      outcomes: [],
       provider: {
         api: "openai-completions",
         apiKey: "test-key",
@@ -610,6 +617,7 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(provider?.auth[0]?.wizard?.groupHint).toBe("Primary key");
 
     expect(catalog).toEqual({
+      outcomes: [],
       provider: {
         api: "openai-completions",
         apiKey: "test-key",

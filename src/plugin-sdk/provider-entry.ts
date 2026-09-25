@@ -493,7 +493,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                 });
               return provider.catalog.discoveryMode === "strict"
                 ? runLiveProviderCatalog({ providerId, run })
-                : run();
+                : run().then((result) => (result ? { ...result, outcomes: [] } : result));
             },
           };
         }
