@@ -1,12 +1,16 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  classifyGatewayStorageFailure,
+  type GatewayStorageFailure,
+} from "../infra/sqlite-error-diagnostics.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 type RestoreState =
   | { status: "uninitialized" | "restoring" | "ready" }
-  | { status: "failed"; error: Error };
+  | { status: "failed"; error: Error; retryAtMs?: number };
 
 type SnapshotStore<Snapshot> = {
   withSnapshotAsync<T>(
@@ -14,6 +18,42 @@ type SnapshotStore<Snapshot> = {
     consume: (snapshot: Snapshot, reconcile?: () => Promise<void>) => T,
   ): Promise<T>;
 };
+
+// Storage failures that describe the moment, not the file. Corruption and schema errors stay latched.
+const TRANSIENT_RESTORE_FAILURES = new Set<GatewayStorageFailure>([
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+  "SQLITE_FULL",
+]);
+const TRANSIENT_RESTORE_RETRY_MS = 30_000;
+
+function isTransientRestoreFailure(error: unknown): boolean {
+  for (let current = error, depth = 0; current !== undefined && depth < 8; depth += 1) {
+    const failure = classifyGatewayStorageFailure(current);
+    if (failure && TRANSIENT_RESTORE_FAILURES.has(failure)) {
+      return true;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
+/** A transient failure may be restored again after this time; others stay sticky until reload. */
+export function resolveRegistryRestoreRetryAtMs(
+  error: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  return isTransientRestoreFailure(error) ? nowMs + TRANSIENT_RESTORE_RETRY_MS : undefined;
+}
+
+/** Restore entry points may start a retry once this is due; the failure stays recorded meanwhile. */
+export function isRegistryRestoreRetryDue(
+  state: { retryAtMs?: number },
+  nowMs = Date.now(),
+): boolean {
+  return state.retryAtMs !== undefined && nowMs >= state.retryAtMs;
+}
 
 /** One synchronous restore may reread once; settlement and publication stay with its owner. */
 export function createSyncRegistryReader<Snapshot>(owner: {
@@ -116,7 +156,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
       owner.onReady?.();
       return;
     }
-    if (state.status === "failed") {
+    if (state.status === "failed" && !isRegistryRestoreRetryDue(state)) {
       throw state.error;
     }
     const restore = Promise.resolve().then(async () => {
@@ -163,7 +203,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
             await reconcile();
             return;
           }
-          if (before.status === "failed") {
+          if (before.status === "failed" && !isRegistryRestoreRetryDue(before)) {
             throw before.error;
           }
           const revision = owner.getRevision();
