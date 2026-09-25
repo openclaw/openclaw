@@ -71,7 +71,7 @@ export function createIMessagePluginBase(params: {
   | "setupContract"
   | "messaging"
 > {
-  const base = createChannelPluginBase({
+  const base = createChannelPluginBase<ResolvedIMessageAccount>({
     id: IMESSAGE_CHANNEL,
     meta: {
       ...getChatChannelMeta(IMESSAGE_CHANNEL),
@@ -79,6 +79,13 @@ export function createIMessagePluginBase(params: {
       exposure: { configured: false },
     },
     setupWizard: params.setupWizard,
+    reload: { configPrefixes: ["channels.imessage"], noopPrefixes: ["messages.inbound"] },
+    configSchema: IMessageChannelConfigSchema,
+    security: imessageSecurityAdapter,
+    setupContract: params.setupContract,
+  });
+  return {
+    ...base,
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
@@ -96,8 +103,6 @@ export function createIMessagePluginBase(params: {
       effects: true,
       groupManagement: true,
     },
-    reload: { configPrefixes: ["channels.imessage"], noopPrefixes: ["messages.inbound"] },
-    configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -107,11 +112,6 @@ export function createIMessagePluginBase(params: {
           configured: account.configured,
         }),
     },
-    security: imessageSecurityAdapter,
-    setupContract: params.setupContract,
-  });
-  return {
-    ...base,
     messaging: {
       resolveInboundAttachmentRoots: resolveIMessageAttachmentRoots,
       resolveRemoteInboundAttachmentRoots: resolveIMessageRemoteAttachmentRoots,

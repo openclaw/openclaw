@@ -1185,6 +1185,7 @@ extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
+extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4

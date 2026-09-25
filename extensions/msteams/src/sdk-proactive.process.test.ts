@@ -170,6 +170,8 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
         env: {
           ...process.env,
           NODE_DISABLE_COMPILE_CACHE: "1",
+          // The plugin's package-boundary config maps SDK imports to declarations, not runtime source.
+          TSX_TSCONFIG_PATH: path.join(process.cwd(), "tsconfig.json"),
           OPENCLAW_MSTEAMS_PROACTIVE_ARTIFACT: proactiveArtifact,
           VITEST: undefined,
         },

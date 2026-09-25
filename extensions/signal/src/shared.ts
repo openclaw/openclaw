@@ -98,11 +98,6 @@ export function createSignalPluginBase(params: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
     },
     setupWizard: params.setupWizard,
-    capabilities: {
-      chatTypes: ["direct", "group"],
-      media: true,
-      reactions: true,
-    },
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
@@ -112,6 +107,16 @@ export function createSignalPluginBase(params: {
     },
     configSchema: SignalChannelConfigSchema,
     doctor: signalDoctor,
+    security: signalSecurityAdapter,
+    setupContract: params.setupContract,
+  });
+  return {
+    ...base,
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+      reactions: true,
+    },
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -124,11 +129,6 @@ export function createSignalPluginBase(params: {
           },
         }),
     },
-    security: signalSecurityAdapter,
-    setupContract: params.setupContract,
-  });
-  return {
-    ...base,
     messaging: {
       defaultMarkdownTableMode: "bullets",
     },

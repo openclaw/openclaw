@@ -68,7 +68,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       const prepared: PreparedWhatsAppApprovalTarget = {
         to,
         accountId: resolvePreparedApprovalAccountId({
-          plannedAccountId: plannedTarget.target.accountId,
+          plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
           contextAccountId: accountId,
           fallbackAccountId: cfg ? resolveDefaultWhatsAppAccountId(cfg) : DEFAULT_ACCOUNT_ID,
         }),
