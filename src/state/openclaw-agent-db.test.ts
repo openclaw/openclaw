@@ -15,6 +15,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { VERSION } from "../version.js";
 import {
   beginAgentDeletionJournal,
@@ -70,7 +71,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
+import {
+  createCacheExpiryIndexPhysicalDrift,
+  createTranscriptIdempotencyIndexDrift,
+  createUnsafeIndexDrift,
+} from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -550,39 +555,6 @@ function seedVersion1MemoryAgentDatabase(
   }
 }
 
-function createCacheExpiryIndexPhysicalDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
-      VALUES ('scope-a', 'key-a', '{}', 100, 1);
-      DROP INDEX idx_agent_cache_expiry;
-      CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
-    `);
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
-          WHERE name = 'idx_agent_cache_expiry'`,
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-    expect(database.prepare("PRAGMA integrity_check('cache_entries')").all()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          integrity_check: expect.stringMatching(/idx_agent_cache_expiry/),
-        }),
-      ]),
-    );
-  } finally {
-    database.close();
-  }
-}
-
 function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -597,72 +569,6 @@ function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
       .run();
     const schemaVersion = readSqliteNumberPragma(database, "schema_version");
     database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  } finally {
-    database.close();
-  }
-}
-
-function createTranscriptIdempotencyIndexDrift(
-  databasePath: string,
-  options: { duplicateRows?: boolean; hideWithCanonicalSql?: boolean } = {},
-): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      DROP INDEX idx_agent_transcript_message_idempotency;
-      CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
-        ON transcript_event_identities(session_id, event_id);
-      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-      VALUES ('agent:worker-1:session-1', 'session-1', '{}', 1);
-      INSERT INTO session_windows (
-        session_id, session_key, session_scope, created_at, updated_at
-      ) VALUES (
-        'session-1', 'agent:worker-1:session-1', 'conversation', 1, 1
-      );
-      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-      VALUES
-        ('session-1', 1, '{}', 1),
-        ('session-1', 2, '{}', 2);
-      INSERT INTO transcript_event_identities (
-        session_id, event_id, seq, message_idempotency_key, created_at
-      ) VALUES (
-        'session-1', 'event-1', 1, 'message-1', 1
-      );
-    `);
-    if (options.duplicateRows) {
-      database.exec(`
-        INSERT INTO transcript_event_identities (
-          session_id, event_id, seq, message_idempotency_key, created_at
-        ) VALUES (
-          'session-1', 'event-2', 2, 'message-1', 2
-        );
-      `);
-    }
-    if (options.hideWithCanonicalSql) {
-      database.enableDefensive?.(false);
-      database.exec("PRAGMA writable_schema = ON;");
-      database
-        .prepare(
-          `UPDATE sqlite_schema
-              SET sql = ?
-            WHERE type = 'index'
-              AND name = 'idx_agent_transcript_message_idempotency'`,
-        )
-        .run(
-          `CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
-             ON transcript_event_identities(session_id, message_idempotency_key)
-            WHERE message_idempotency_key IS NOT NULL`,
-        );
-      const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-      database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-    }
-    expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: options.hideWithCanonicalSql
-        ? expect.stringMatching(/idx_agent_transcript_message_idempotency/)
-        : "ok",
-    });
-    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally {
     database.close();
   }
@@ -3673,12 +3579,34 @@ describe("openclaw agent database", () => {
     ).toThrow(/UNIQUE constraint failed/iu);
   });
 
-  it("repairs physical transcript index drift hidden behind canonical schema text", () => {
+  it("refuses physical transcript index corruption until explicit Doctor repair", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
     createTranscriptIdempotencyIndexDrift(databasePath, { hideWithCanonicalSql: true });
 
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /integrity_check failed.*idx_agent_transcript_message_idempotency.*openclaw doctor --fix/,
+    );
+    const damaged = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+    try {
+      expect(damaged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
+        /idx_agent_transcript_message_idempotency/,
+      );
+      expect(
+        damaged.prepare("SELECT event_id FROM transcript_event_identities NOT INDEXED").all(),
+      ).toEqual([{ event_id: "event-1" }]);
+    } finally {
+      damaged.close();
+    }
+    const repair = await migrateLegacyMediaPersistence({
+      env,
+      configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: databasePath }],
+    });
+    expect(repair.warnings).toEqual([]);
+    expect(repair.changes).toContain(
+      "Warning: Rebuilt corrupt agent worker-1 SQLite indexes: idx_agent_transcript_message_idempotency. No table rows were removed.",
+    );
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
@@ -3735,12 +3663,34 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
-  it("repairs physical ordinary-index drift before cold-open reads", () => {
+  it("refuses physical ordinary-index corruption until explicit Doctor repair", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
     createCacheExpiryIndexPhysicalDrift(databasePath);
 
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
+    );
+    const damaged = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+    try {
+      expect(damaged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
+        /idx_agent_cache_expiry/,
+      );
+      expect(damaged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
+        { key: "key-a" },
+      ]);
+    } finally {
+      damaged.close();
+    }
+    const repair = await migrateLegacyMediaPersistence({
+      env,
+      configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: databasePath }],
+    });
+    expect(repair.warnings).toEqual([]);
+    expect(repair.changes).toContain(
+      "Warning: Rebuilt corrupt agent worker-1 SQLite indexes: idx_agent_cache_expiry. No table rows were removed.",
+    );
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
@@ -4979,7 +4929,7 @@ describe("openclaw agent database", () => {
     },
   ])(
     "rejects a validated reopen after $replacement replacement before write-capable checks",
-    ({ role, agentId, expectedError }) => {
+    async ({ role, agentId, expectedError }) => {
       const stateDir = createTempStateDir();
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -5042,6 +4992,14 @@ describe("openclaw agent database", () => {
 
       nowSpy.mockReturnValue(2_000);
       try {
+        expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+          /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
+        );
+        const repair = await migrateLegacyMediaPersistence({
+          env,
+          configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: databasePath }],
+        });
+        expect(repair.warnings).toEqual([]);
         openOpenClawAgentDatabase({ agentId: "worker-1", env });
         expect(
           listOpenClawRegisteredAgentDatabases({ env }).find(

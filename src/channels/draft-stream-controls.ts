@@ -180,9 +180,7 @@ async function deleteFinalizableDraftMessage<T>(
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
-  await params.stopForClear();
-  const messageId = params.readMessageId();
-  params.clearMessageId();
+  const messageId = await takeMessageIdAfterStop(params);
   if (!params.isValidMessageId(messageId)) {
     return;
   }

@@ -8,6 +8,7 @@ import {
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
   getRuntimeConfigSourceSnapshot,
@@ -374,7 +375,8 @@ export async function prepareGatewayServerBootstrap(input: {
     });
     if (
       !seededControlUiAllowedOrigins ||
-      runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined
+      runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined ||
+      resolveControlUiAllowedOrigins(runtimeConfig).length > 0
     ) {
       return runtimeConfig;
     }

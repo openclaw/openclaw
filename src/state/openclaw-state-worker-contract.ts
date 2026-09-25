@@ -263,6 +263,10 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
       input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
       output: void;
     };
+    "config.snapshot.upsert": {
+      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
+      output: boolean;
+    };
   };
 
 /** Internal inspection cannot open canonical state or execute a domain command. */

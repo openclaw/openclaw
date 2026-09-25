@@ -580,6 +580,7 @@ export async function executeMutableUpdate(
         tag: params.tag,
         installSpec: params.packageInstallSpec ?? undefined,
         timeoutMs: updateStepTimeoutMs,
+        workTimeoutMs: params.timeoutMs ?? null,
         startedAt: params.startedAt,
         progress: params.progress,
         invocationCwd: params.invocationCwd,

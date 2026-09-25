@@ -1,7 +1,7 @@
 import { expect, it, type Mock } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -236,7 +236,7 @@ export async function withEmbeddedModelCatalogOwnerFixture(
       throw new Error("Catalog projection must not create execution stores");
     },
   };
-  setPreparedModelRuntimeAuthStore(snapshot, { version: 1, profiles: {} });
+  bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
   try {
     return await read(snapshot);
   } finally {

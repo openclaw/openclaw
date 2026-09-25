@@ -14,6 +14,7 @@ import {
 } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentsListCommand } from "./agents.commands.list.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -28,34 +29,13 @@ vi.mock("./agents.providers.js", () => ({
 }));
 
 function instrumentParentSql() {
-  const native = requireNodeSqlite();
-  const counters = [
-    ...(["prepare", "exec", "close"] as const).map((method) =>
-      vi.spyOn(native.DatabaseSync.prototype, method),
-    ),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql({ includeClose: true });
   try {
-    const calibration = new native.DatabaseSync(":memory:");
-    try {
-      calibration.exec("CREATE TABLE counter (value INTEGER)");
-      calibration.prepare("INSERT INTO counter VALUES (1)").run();
-      const statement = calibration.prepare("SELECT value FROM counter");
-      statement.get();
-      statement.all();
-      expect([...statement.iterate()]).toHaveLength(1);
-    } finally {
-      calibration.close();
-    }
-    for (const counter of counters) {
-      expect(counter.mock.calls.length).toBeGreaterThan(0);
-      counter.mockClear();
-    }
-    return counters;
+    sql.calibrate();
+    return sql;
   } catch (error) {
-    counters.forEach((counter) => counter.mockRestore());
+    sql.restore();
     throw error;
   }
 }
@@ -110,7 +90,7 @@ it("creates an empty provenance database on the worker and closes without parent
   await withOpenClawTestState({ layout: "state-only", label: "provenance-cold" }, async (state) => {
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     expect(existsSync(databasePath)).toBe(false);
-    const counters = instrumentParentSql();
+    const sql = instrumentParentSql();
     try {
       const options = { env: { ...state.env }, path: databasePath };
       const ids = ["main"];
@@ -123,9 +103,9 @@ it("creates an empty provenance database on the worker and closes without parent
       expect(existsSync(databasePath)).toBe(true);
       expect(existsSync(laterPath)).toBe(false);
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      counters.forEach((counter) => counter.mockRestore());
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
   });
@@ -158,7 +138,7 @@ it("serves actual JSON and tree command output from worker provenance through re
       writeStdout: vi.fn<(value: string) => void>(),
       writeJson: vi.fn<(value: unknown) => void>(),
     };
-    const counters = instrumentParentSql();
+    const sql = instrumentParentSql();
     const requests = instrumentProvenanceWorkerRequests();
     try {
       await agentsListCommand({ json: true }, runtime);
@@ -186,10 +166,10 @@ it("serves actual JSON and tree command output from worker provenance through re
         "retired",
       ]);
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
       requests.restore();
-      counters.forEach((counter) => counter.mockRestore());
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
   });

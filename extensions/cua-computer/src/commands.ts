@@ -411,6 +411,7 @@ export function createCuaComputerProvider(
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
+  let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
   const createDriver =
     options.createDriver ??
@@ -421,11 +422,14 @@ export function createCuaComputerProvider(
     }
     return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
   };
-  const disposeAvailabilityDriver = async () => {
+  const disposeAvailabilityDriver = () => {
     stopped = true;
-    const current = ownedAvailabilityDriver;
-    ownedAvailabilityDriver = undefined;
-    await current?.dispose();
+    // Driver disposal is terminal; every stop must observe its actual result.
+    return (availabilityDisposal ??= Promise.resolve().then(async () => {
+      const current = ownedAvailabilityDriver;
+      ownedAvailabilityDriver = undefined;
+      await current?.dispose();
+    }));
   };
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
   const interval = options.setInterval ?? setInterval;
@@ -476,7 +480,7 @@ export function createCuaComputerProvider(
       timer.unref?.();
       return () => {
         clear(timer);
-        void disposeAvailabilityDriver();
+        return disposeAvailabilityDriver();
       };
     },
     openExecution: async () => {

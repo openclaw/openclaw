@@ -115,7 +115,7 @@ function createDeliveryRecorder(
     deliveries,
     records: taskRecords,
     runtime: {
-      captureAgentHarnessCompletionCustody: () => undefined,
+      captureAgentHarnessCompletionCustody: async () => undefined,
       createAgentHarnessTaskEventSink: () => () => {},
       createAgentHarnessTaskRuntime: () => taskRuntime,
       deliverAgentHarnessTaskCompletion: async (params: RecordedDelivery) => {
@@ -249,7 +249,7 @@ describeLive("codex native subagent monitor live", () => {
               };
             },
           });
-        let parent = registerParent("first");
+        let parent = await registerParent("first");
         const run = async (text: string) => {
           const turn = await client.request(
             "turn/start",
@@ -293,7 +293,7 @@ describeLive("codex native subagent monitor live", () => {
         const expectedTasks = [first];
         for (const ordinal of ["second", "third"] as const) {
           const token = ordinal.toUpperCase();
-          parent = registerParent(ordinal);
+          parent = await registerParent(ordinal);
           await run(
             `Send a follow-up to that same completed child using native collaboration; do not spawn another child. Tell it to run the shell command printf ${token}_NATIVE_SHELL, then reply exactly ${token}_RESULT. Wait for its result, keep the child open for another follow-up, then reply PARENT_${token}.`,
           );
@@ -447,7 +447,7 @@ describeLive("codex native subagent monitor live", () => {
         };
         const streamed = createDeliveryRecorder([], requesterSessionKey);
         const monitor = new CodexNativeSubagentMonitor(client as never, streamed.runtime);
-        const parentRegistration = monitor.registerParent(registration);
+        const parentRegistration = await monitor.registerParent(registration);
 
         // Detached-child scenario: the parent replies immediately while the
         // child still owes its own model round (plus a sleep for margin), so
@@ -544,7 +544,7 @@ describeLive("codex native subagent monitor live", () => {
           })),
         });
         const recoveryMonitor = new CodexNativeSubagentMonitor(client as never, recovery.runtime);
-        const recoveryRegistration = recoveryMonitor.registerParent(registration);
+        const recoveryRegistration = await recoveryMonitor.registerParent(registration);
         await recoveryRegistration.unregister();
         const recovered = await waitFor(
           () => recovery.deliveries[0],

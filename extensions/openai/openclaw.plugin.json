@@ -308,12 +308,13 @@
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
-      "choiceLabel": "ChatGPT Login",
-      "choiceHint": "Sign in with your ChatGPT or Codex subscription",
+      "choiceLabel": "Codex login (browser)",
+      "choiceHint": "Sign in to Codex with your ChatGPT account",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
     },
     {
       "provider": "openai",
@@ -325,13 +326,29 @@
       "channelLogin": {
         "aliases": ["codex"]
       },
-      "choiceLabel": "ChatGPT Device Pairing",
-      "choiceHint": "Pair your ChatGPT account in browser with a device code",
+      "choiceLabel": "Codex login (device code)",
+      "choiceHint": "Approve Codex access using a code in your browser",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
       "onboardingFeatured": true
+    },
+    {
+      "provider": "openai",
+      "method": "siwc",
+      "personalAccount": true,
+      "choiceId": "openai-token-sharing",
+      "appGuidedAuth": "oauth",
+      "credentialOnly": true,
+      "choiceLabel": "Sign in with ChatGPT",
+      "choiceHint": "Use your ChatGPT allowance through the Responses API",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
+      "assistantPriority": 0,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
     },
     {
       "provider": "openai",
@@ -341,10 +358,11 @@
       "appGuidedSecret": true,
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": 5,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
       "onboardingFeatured": true,
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",

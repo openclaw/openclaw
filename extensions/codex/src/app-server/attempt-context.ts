@@ -428,8 +428,8 @@ export function buildCodexWatchedSessionsContext(params: {
   });
 }
 
-/** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
-export function renderCodexSkillsCollaborationInstructions(params: {
+/** Renders loaded OpenClaw skill prompts as Codex developer instructions. */
+export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
 }): string | undefined {

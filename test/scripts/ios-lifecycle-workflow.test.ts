@@ -7,7 +7,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type Command = { tool: string; args: string[]; destination?: string; settings?: string };
 
-const workflow: { jobs: Record<string, { steps: { name?: string; run?: string }[] }> } = parse(
+type Step = { name?: string; run?: string; if?: string };
+const workflow: { jobs: Record<string, { env?: Record<string, string>; steps: Step[] }> } = parse(
   readFileSync(".github/workflows/ci.yml", "utf8"),
 );
 const watchStep = workflow.jobs["ios-build"]?.steps.find(
@@ -15,6 +16,9 @@ const watchStep = workflow.jobs["ios-build"]?.steps.find(
 );
 const voiceStep = workflow.jobs["ios-build"]?.steps.find(
   (step) => step.name === "Run focused iOS voice cleanup simulator tests",
+);
+const iosStep = workflow.jobs["ios-build"]?.steps.find(
+  (step) => step.name === "Run focused iOS lifecycle simulator tests",
 );
 const prepareStep = workflow.jobs["ios-build"]?.steps.find(
   (step) => step.name === "Prepare iOS simulator",
@@ -67,6 +71,8 @@ if (tool === "uname") {
   const other = { target: "OtherTarget", buildSettings: { TARGET_BUILD_DIR: "/wrong", FULL_PRODUCT_NAME: "Wrong.app" } };
   console.log(JSON.stringify(mode === "missing-product" ? [other] :
     mode === "ambiguous-product" ? [product, product] : [other, product]));
+} else if (args.includes("test") && mode === "voice-tests-failed") {
+  process.exit(25);
 } else if (args.includes("build-for-testing")) {
   const derivedIndex = args.indexOf("-derivedDataPath");
   if (derivedIndex >= 0) {
@@ -249,5 +255,58 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     expect(build.settings).toBe(appBuild?.settings);
     expect(build.args).toEqual(expect.arrayContaining(["-collect-test-diagnostics", "never"]));
     expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
+  const authClasses = [
+    "CloudflareAccessClientTests",
+    "CloudflareAccessTransferTests",
+    "CloudflareAccessSessionStoreTests",
+  ];
+
+  it("executes the actual auth test classes during smoke and excludes compatibility targets", () => {
+    expect(iosStep?.if).toContain("matrix.phase == 'smoke'");
+    expect(iosStep?.if).toContain("needs.preflight.outputs.compatibility_target != 'true'");
+    expect(workflow.jobs["ios-build"]?.env?.IOS_CI_PHASE).toBe("${{ matrix.phase }}");
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, iosStep]);
+    expect(result.status, result.stderr).toBe(0);
+    const tests = commands.filter((command) => command.tool === "xcodebuild");
+    expect(tests).toHaveLength(1);
+    expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
+    expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual(
+      authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
+    );
+    for (const name of authClasses) {
+      expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
+    }
+  });
+
+  it("keeps full lifecycle and UI tests alongside Access tests in full validation", () => {
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, iosStep], {
+      IOS_CI_PHASE: "tests",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const tests = commands.filter((command) => command.tool === "xcodebuild");
+    expect(tests).toHaveLength(2);
+    expect(tests[0]?.args).toEqual(
+      expect.arrayContaining([
+        ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
+        "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
+        "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
+        "-only-testing:OpenClawTests/OpenClawTypographyTests",
+      ]),
+    );
+    expect(tests[1]?.args).toContain(
+      "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
+    );
+  });
+
+  it("fails on auth test errors before attempting later UI tests", () => {
+    const { result, commands } = runSimulatorStep("voice-tests-failed", [prepareStep, iosStep], {
+      IOS_CI_PHASE: "tests",
+    });
+    expect(result.status).toBe(25);
+    expect(commands.filter((command) => command.tool === "xcodebuild")).toHaveLength(1);
   });
 });

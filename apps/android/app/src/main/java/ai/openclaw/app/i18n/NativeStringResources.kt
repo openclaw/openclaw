@@ -1697,7 +1697,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Widget image saved to Downloads" to R.string.native_bb4f2558e4333834,
     "Widget unavailable" to R.string.native_41659b48f2dc4c36,
     "Wired headset microphone" to R.string.native_8fe42acb8573244e,
-    "Work" to R.string.native_104ab9213e28e4ff,
     "Worked" to R.string.native_e7f93aad5026eeaf,
     "Worked for \$duration" to R.string.native_275bd067078dbe60,
     "Working" to R.string.native_a92f0449a9f7235b,

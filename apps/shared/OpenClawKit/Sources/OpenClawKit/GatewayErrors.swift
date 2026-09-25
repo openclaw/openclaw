@@ -1,6 +1,28 @@
 import Foundation
 import OpenClawProtocol
 
+func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
+    var details: [String: OpenClawProtocol.AnyCodable] = [:]
+    if let nested = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] {
+        details.merge(nested) { _, nestedValue in nestedValue }
+    }
+    if let error {
+        if details["code"] == nil {
+            details["code"] = OpenClawProtocol.AnyCodable(error.code)
+        } else {
+            details["errorCode"] = OpenClawProtocol.AnyCodable(error.code)
+        }
+        details["message"] = OpenClawProtocol.AnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = OpenClawProtocol.AnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
 /// A route lease became stale before its request touched the channel. Unlike
 /// a socket cancellation, this proves the payload was never dispatched.
 public enum GatewayNodeSessionRequestError: Error, Sendable {
