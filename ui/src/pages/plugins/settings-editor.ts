@@ -331,7 +331,6 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           disabled: !props.connected || !props.canEditConfig || props.configBusy,
           compact: true,
           commitOnBlur: true,
-          showLabel: false,
           maskSensitive: true,
           rawAvailable: false,
           onPatch: props.onConfigPatch,

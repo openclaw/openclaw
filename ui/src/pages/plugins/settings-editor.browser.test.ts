@@ -452,6 +452,9 @@ describe("grouped editor field discovery", () => {
         plugins: { entries: { fixture: { config: { alpha: "first", beta: "second" } } } },
       },
     });
+    expect(
+      editor.querySelector(".cfg-map > .settings-row .settings-row__title")?.textContent?.trim(),
+    ).toBe("Custom entries");
     const search = editor.querySelector<HTMLInputElement>('input[type="search"]')!;
     search.value = "alpha";
     search.dispatchEvent(new Event("input", { bubbles: true }));

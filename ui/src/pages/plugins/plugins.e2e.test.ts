@@ -363,7 +363,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}plugins`);
-      const card = page.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
+      // Featured and Trending remount during refresh; keep one card identity.
+      const card = page.locator(
+        `[data-catalog-section="channels"] [data-plugin-id="${matrixDiscoveryPlugin.id}"]`,
+      );
       await card.getByRole("button", { name: "Install Matrix", exact: true }).click();
       const failure = card.locator('.plugins-row-message[role="alert"]');
       await failure
@@ -376,12 +379,21 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           details: { persistence: { operation: "install", pluginId: matrixEnabled.id } },
         },
       });
+      const browses = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await gateway.deferNext("plugins.catalog.browse");
       await card.getByRole("button", { name: "Retry install of Matrix", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { after: browses });
+      const featuredCard = page.locator(
+        `[data-catalog-section="featured"] [data-plugin-id="${matrixDiscoveryPlugin.id}"]`,
+      );
+      await featuredCard.waitFor({ state: "detached" });
       const status = card.getByRole("button", {
         name: "View status of Matrix installation",
         exact: true,
       });
       await status.click();
+      await gateway.resolveDeferred("plugins.catalog.browse");
+      await featuredCard.waitFor();
       await card.getByText("Installation saved", { exact: true }).waitFor();
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const proof = createControlUiE2eArtifactDir("plugin-status-popup");
