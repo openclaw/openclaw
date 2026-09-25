@@ -80,7 +80,7 @@ function modelOptions(
     seen.add(ref);
     options.push(modelOption(model, authProviders));
   }
-  return options.toSorted((a, b) => a.label.localeCompare(b.label));
+  return options;
 }
 
 function modelOption(

@@ -403,7 +403,7 @@ This checklist is the public shape of the release flow. Private credentials and 
 
 ### Fast path (default)
 
-Optional `OPENCLAW_RELEASE_RUNNER_GROUP` reserves configured capacity for the validation parent and its workers without changing default labels. See [runner reservation](/ci) before configuring it; shared workers inherit the group from the release caller.
+Optional `OPENCLAW_RELEASE_RUNNER_GROUP` reserves configured capacity for the validation parent and its workers without changing default labels. The same variable automatically routes the Release Publish parent and every publish child (npm, plugin npm, ClawHub, Docker, VCR); nothing per dispatch is needed. See [runner reservation](/ci) before configuring it; shared workers inherit the group from the release caller. Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker) stay on default GitHub-hosted labels, and the hourly plugin npm preview never enters the group.
 
 After source admission, plugin compatibility readiness, and evidence reuse
 selection, normal CI, independent Plugin Prerelease, independent Release Checks,
@@ -647,8 +647,8 @@ complete.
 
 CI and supporting workflows run normally while Full Release Validation is active.
 `OPENCLAW_RELEASE_PRIORITY_RUN` no longer controls workflow admission or the CI
-gate. Release tooling may still set and clear this legacy variable, but a set or
-stale value does not pause new runs using the updated workflows.
+gate. The validation dispatcher (`full-release-validation-at-sha`) no longer
+writes it; only `pnpm frv prioritize --run` still sets it.
 
 For runs already deferred by the old workflows, use
 `pnpm frv prioritize --restore <record>` with the saved
@@ -661,6 +661,28 @@ Do not use `pnpm frv prioritize --run <parent>` for routine release validation:
 it still explicitly cancels queued non-release runs, but no longer reserves
 capacity or pauses newly arriving work. Runner capacity and normal GitHub Actions
 queueing determine when release and CI jobs start.
+
+The runner group expression reads the repository variable when each job is
+queued, so `gh run rerun` after changing the variable re-routes the rerun jobs.
+A workflow-shape test cannot prove GitHub's runtime evaluation: confirm
+`runner_group_name` for a rerun job with
+`gh api repos/openclaw/openclaw/actions/runs/<id>/jobs` rather than assuming it.
+
+### Continuous release readiness
+
+The 04:00 UTC nightly seals a direct-root manifest and per-child receipts for the exact main SHA.
+For a same-day cut, start the release train on `main` (version and changelog) before 04:00 UTC,
+then cut `release/YYYY.M.PATCH` at the nightly SHA so the Code SHA equals the validated SHA.
+Per-child adoption matches exact target SHA, role, and dispatch inputs minus `dispatch_id`:
+`productPerformance` is adopted because its inputs are context-free and match.
+A stable candidate dispatched with `--target-ref release/YYYY.M.PATCH` resolves
+`coveragePolicy=npm-stable-v1` and `ci_release_scope=npm-stable`, versus `full` scope on `main`.
+`normalCi`, plugin prerelease, and release checks are re-dispatched because their inputs add
+`target_context_ref`, plugin prerelease and release checks add `allow_frozen_target_scenario_omissions=true`, and scope differs.
+Whole-parent adoption requires byte-identical manifest `validationInputs`, including `validationPurpose`,
+`publicationSelectionJson`, `targetContextRef`, `targetVersion`, `allowUnreleasedChangelog`, and `coveragePolicy`;
+a `main-qualification` nightly is never adopted wholesale by a `publish`-purpose stable candidate.
+Purpose/context-crossing adoption is a verifier policy follow-up.
 
 ## Stable main closeout
 
