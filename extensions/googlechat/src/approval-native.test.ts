@@ -7,6 +7,7 @@ import {
   shouldHandleGoogleChatNativeApprovalRequest,
   shouldSuppressLocalGoogleChatExecApprovalPrompt,
 } from "./approval-native.js";
+import type { GoogleChatAccountConfig } from "./types.config.js";
 
 const GOOGLE_CHAT_APPROVAL_ACCOUNT = {
   serviceAccount: {
@@ -20,6 +21,13 @@ const GOOGLE_CHAT_APPROVAL_ACCOUNT = {
   appPrincipal: "123456789012345678901",
   allowFrom: ["users/123"],
 };
+
+function approvalConfig(
+  googlechat: GoogleChatAccountConfig = GOOGLE_CHAT_APPROVAL_ACCOUNT,
+  approvals: OpenClawConfig["approvals"] = { exec: { enabled: true } },
+): OpenClawConfig {
+  return { approvals, channels: { googlechat } };
+}
 
 const execApprovalPayload: ReplyPayload = {
   text: "I need approval to run this command.",
@@ -41,179 +49,70 @@ const activeExecApprovalHint: ChannelOutboundPayloadHint = {
 };
 
 describe("googleChatApprovalCapability", () => {
-  it("declares native exec, plugin, and system-agent approval runtime support", async () => {
+  it("declares native exec, plugin, and system-agent approval runtime support", () => {
     const runtime = googleChatApprovalCapability.nativeRuntime;
     expect(runtime?.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
-    expect(
-      runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                type: "service_account",
-                client_email: "bot@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
-              },
-              audienceType: "app-url",
-              audience: "https://chat-app.example.test/googlechat",
-              appPrincipal: "123456789012345678901",
-              allowFrom: ["users/123"],
-            },
-          },
-        },
-      }),
-    ).toBe(true);
+    expect(runtime?.availability.isConfigured({ cfg: approvalConfig() })).toBe(true);
   });
 
-  it("does not enable native cards when webhook callback audience auth is incomplete", async () => {
+  it("does not enable native cards when webhook callback audience auth is incomplete", () => {
     const runtime = googleChatApprovalCapability.nativeRuntime;
-    expect(
-      runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                type: "service_account",
-                client_email: "bot@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
-              },
-              allowFrom: ["users/123"],
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                type: "service_account",
-                client_email: "bot@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
-              },
-              audienceType: "project-number",
-              allowFrom: ["users/123"],
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("requires a top-level approval forwarding route before enabling native cards", async () => {
-    const runtime = googleChatApprovalCapability.nativeRuntime;
-    const googlechat = {
-      serviceAccount: {
-        type: "service_account" as const,
-        client_email: "bot@example.com",
-        private_key: "test-key",
-        token_uri: "https://oauth2.googleapis.com/token",
-      },
-      audienceType: "app-url" as const,
-      audience: "https://chat-app.example.test/googlechat",
+    const account = {
+      serviceAccount: GOOGLE_CHAT_APPROVAL_ACCOUNT.serviceAccount,
       allowFrom: ["users/123"],
     };
+    expect(runtime?.availability.isConfigured({ cfg: approvalConfig(account) })).toBe(false);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: approvalConfig({ ...account, audienceType: "project-number" }),
+      }),
+    ).toBe(false);
+  });
 
+  it("requires a top-level approval forwarding route before enabling native cards", () => {
+    const runtime = googleChatApprovalCapability.nativeRuntime;
+    const googlechat = { ...GOOGLE_CHAT_APPROVAL_ACCOUNT, appPrincipal: undefined };
+
+    expect(runtime?.availability.isConfigured({ cfg: { channels: { googlechat } } })).toBe(false);
     expect(
       runtime?.availability.isConfigured({
-        cfg: { channels: { googlechat } },
+        cfg: approvalConfig(googlechat, { exec: { enabled: false } }),
       }),
     ).toBe(false);
     expect(
       runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: false } },
-          channels: { googlechat },
-        },
+        cfg: approvalConfig(googlechat, { exec: { enabled: true, mode: "targets" } }),
       }),
     ).toBe(false);
     expect(
       runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true, mode: "targets" } },
-          channels: { googlechat },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { plugin: { enabled: true } },
-          channels: { googlechat },
-        },
+        cfg: approvalConfig(googlechat, { plugin: { enabled: true } }),
       }),
     ).toBe(true);
   });
 
-  it("enables native cards for supported webhook audience modes", async () => {
+  it("enables native cards for supported webhook audience modes", () => {
     const runtime = googleChatApprovalCapability.nativeRuntime;
+    const account = { ...GOOGLE_CHAT_APPROVAL_ACCOUNT, appPrincipal: undefined };
+    expect(runtime?.availability.isConfigured({ cfg: approvalConfig(account) })).toBe(true);
     expect(
       runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                type: "service_account",
-                client_email: "bot@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
-              },
-              audienceType: "app-url",
-              audience: "https://chat-app.example.test/googlechat",
-              allowFrom: ["users/123"],
-            },
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      runtime?.availability.isConfigured({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                type: "service_account",
-                client_email: "bot@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
-              },
-              audienceType: "project-number",
-              audience: "1234567890",
-              allowFrom: ["users/123"],
-            },
-          },
-        },
+        cfg: approvalConfig({ ...account, audienceType: "project-number", audience: "1234567890" }),
       }),
     ).toBe(true);
   });
 
   it("preserves Google Chat approval actor authorization", () => {
+    const action = {
+      cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
+      action: "approve" as const,
+      approvalKind: "plugin" as const,
+    };
     expect(
-      googleChatApprovalCapability.authorizeActorAction?.({
-        cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
-        senderId: "users/123",
-        action: "approve",
-        approvalKind: "plugin",
-      }),
+      googleChatApprovalCapability.authorizeActorAction?.({ ...action, senderId: "users/123" }),
     ).toEqual({ authorized: true });
-
     expect(
-      googleChatApprovalCapability.authorizeActorAction?.({
-        cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
-        senderId: "users/999",
-        action: "approve",
-        approvalKind: "plugin",
-      }),
+      googleChatApprovalCapability.authorizeActorAction?.({ ...action, senderId: "users/999" }),
     ).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Google Chat.",
@@ -227,27 +126,21 @@ describe("googleChatApprovalCapability", () => {
         googlechat: {
           accounts: {
             alpha: {
+              ...GOOGLE_CHAT_APPROVAL_ACCOUNT,
               enabled: true,
               serviceAccount: {
-                type: "service_account",
+                ...GOOGLE_CHAT_APPROVAL_ACCOUNT.serviceAccount,
                 client_email: "alpha@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
               },
-              audienceType: "app-url",
               audience: "https://alpha.example.com/googlechat",
-              appPrincipal: "123456789012345678901",
-              allowFrom: ["users/123"],
             },
             beta: {
+              ...GOOGLE_CHAT_APPROVAL_ACCOUNT,
               enabled: true,
               serviceAccount: {
-                type: "service_account",
+                ...GOOGLE_CHAT_APPROVAL_ACCOUNT.serviceAccount,
                 client_email: "beta@example.com",
-                private_key: "test-key",
-                token_uri: "https://oauth2.googleapis.com/token",
               },
-              audienceType: "app-url",
               audience: "https://beta.example.com/googlechat",
               appPrincipal: "987654321098765432109",
               allowFrom: ["users/456"],
@@ -285,23 +178,6 @@ describe("googleChatApprovalCapability", () => {
   });
 
   it("does not handle exec approvals when only plugin approval forwarding is enabled", () => {
-    const cfg: OpenClawConfig = {
-      approvals: { plugin: { enabled: true } },
-      channels: {
-        googlechat: {
-          serviceAccount: {
-            type: "service_account",
-            client_email: "bot@example.com",
-            private_key: "test-key",
-            token_uri: "https://oauth2.googleapis.com/token",
-          },
-          audienceType: "app-url",
-          audience: "https://chat-app.example.test/googlechat",
-          appPrincipal: "123456789012345678901",
-          allowFrom: ["users/123"],
-        },
-      },
-    };
     const request = {
       id: "approval-1",
       request: {
@@ -313,7 +189,7 @@ describe("googleChatApprovalCapability", () => {
 
     expect(
       shouldHandleGoogleChatNativeApprovalRequest({
-        cfg,
+        cfg: approvalConfig(GOOGLE_CHAT_APPROVAL_ACCOUNT, { plugin: { enabled: true } }),
         approvalKind: "exec",
         request,
       }),
@@ -323,10 +199,7 @@ describe("googleChatApprovalCapability", () => {
   it("suppresses the local exec prompt when a Google Chat native route is active", () => {
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
-        },
+        cfg: approvalConfig(),
         payload: execApprovalPayload,
         hint: activeExecApprovalHint,
       }),
@@ -334,54 +207,29 @@ describe("googleChatApprovalCapability", () => {
   });
 
   it("keeps the local exec prompt when native Google Chat delivery cannot own it", () => {
+    const prompt = { payload: execApprovalPayload, hint: activeExecApprovalHint };
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
-        },
-        payload: execApprovalPayload,
-        hint: {
-          kind: "approval-pending",
-          approvalKind: "exec",
-          nativeRouteActive: false,
-        },
+        ...prompt,
+        cfg: approvalConfig(),
+        hint: { ...activeExecApprovalHint, nativeRouteActive: false },
       }),
     ).toBe(false);
-
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({
-        cfg: {
-          approvals: { exec: { enabled: false } },
-          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
-        },
-        payload: execApprovalPayload,
-        hint: activeExecApprovalHint,
+        ...prompt,
+        cfg: approvalConfig(GOOGLE_CHAT_APPROVAL_ACCOUNT, { exec: { enabled: false } }),
       }),
     ).toBe(false);
-
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: {
-            googlechat: {
-              ...GOOGLE_CHAT_APPROVAL_ACCOUNT,
-              audience: undefined,
-            },
-          },
-        },
-        payload: execApprovalPayload,
-        hint: activeExecApprovalHint,
+        ...prompt,
+        cfg: approvalConfig({ ...GOOGLE_CHAT_APPROVAL_ACCOUNT, audience: undefined }),
       }),
     ).toBe(false);
-
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({
-        cfg: {
-          approvals: { exec: { enabled: true } },
-          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
-        },
+        cfg: approvalConfig(),
         payload: {
           channelData: {
             execApproval: {
@@ -391,11 +239,7 @@ describe("googleChatApprovalCapability", () => {
             },
           },
         },
-        hint: {
-          kind: "approval-pending",
-          approvalKind: "plugin",
-          nativeRouteActive: true,
-        },
+        hint: { kind: "approval-pending", approvalKind: "plugin", nativeRouteActive: true },
       }),
     ).toBe(false);
   });
