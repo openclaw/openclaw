@@ -131,14 +131,22 @@ unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budget
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable
-worker jobs. Provision eligible runners in that group with the existing Linux,
-Windows, and macOS labels, grant this repository access, and reserve capacity
-outside ordinary PR/main pools. The variable selects the group; it does not
-provision runners or increase concurrency limits. Missing group capacity queues
-jobs. Leaving the variable unset preserves current labels and routing. Shared
-workflows receive an optional `runner_group` from their release caller; ordinary
-CI, scheduled performance, and unrelated reusable callers retain their routing.
+worker jobs. The Release Publish parent and its dispatched publish children read
+the same variable. It selects the group; it does not provision runners or increase
+concurrency limits. Missing group capacity queues jobs. Shared workflows receive
+an optional `runner_group` from their release caller, including `docker-release.yml`
+and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
+ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
+only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.
+
+To reserve capacity outside ordinary PR/main pools:
+
+1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
+2. Grant `openclaw/openclaw` access to the group.
+3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
 
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the

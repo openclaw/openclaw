@@ -80,6 +80,7 @@ export function evaluateWorkflowExpression(
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     releaseRunnerGroup?: string;
+    releasePublishRunId?: string;
     runnerGroup?: string;
     releasePriorityRun?: string;
     releaseScope?: string;
@@ -182,6 +183,7 @@ export function evaluateWorkflowExpression(
     inputs: {
       dispatch_id: context.dispatchId ?? "",
       runner_group: context.runnerGroup ?? "",
+      release_publish_run_id: context.releasePublishRunId ?? "",
       runner_backend: context.requestedRunnerBackend ?? "default",
       ci_shape: context.ciShape ?? "default",
       include_android: context.includeAndroid ?? false,
