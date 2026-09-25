@@ -12,8 +12,12 @@ Pull requests route preflight, the failure monitor, every static-check family,
 artifact builds, and Windows tests directly to GitHub-hosted capacity. This PR policy takes
 precedence over the default backend routes below without changing the repository
 variable. Hybrid PR core lint uses five separate rows and retains six separate
-extension rows. Current PR Windows targets use four workers on either native image;
-historical targets and non-PR hosted Windows retain their original worker budget. The monitor still
+extension rows. Current PR dependency scans run in three separate jobs, and three
+topology stripes divide the commands declared by `check:architecture` in
+`package.json`; malformed pipelines fail instead of dropping coverage.
+Windows retains one Vitest worker on hosted runners and four on
+Blacksmith. Declaration fixtures already overlap native compilers inside each
+file; four hosted workers caused a measured 120-second case timeout. The monitor still
 reserves five minutes of its 60-minute job budget for cancellation cleanup and
 publishes the failure cause before cancellation, so the required aggregate stays
 red. Main, manual qualification, and release routing remain unchanged.

@@ -21,7 +21,7 @@ GitHub-hosted runners.
 
 The PR failure monitor, preflight, static checks, artifact build, and Windows
 tests use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
-six separate extension stripes; current PR Windows targets use four workers on
+six separate extension stripes; Windows retains its one-worker hosted budget on
 `windows-2025`. Hosted PR Node planning uses separate measured group costs,
 serial processes, and smaller file groups. Its limits are 120 compact rows and
 160 total Node rows, with up to 160 active rows. Main and release routing retain
@@ -46,7 +46,7 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
-Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides and the full architecture check sequence retained.
+Current PRs give each of the three dependency scans its own job and distribute the complete `check:architecture` package-script pipeline across three topology jobs. Main, manual, and frozen targets retain their existing execution layout. Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides retained.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 

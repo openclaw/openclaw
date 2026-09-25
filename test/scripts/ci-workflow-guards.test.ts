@@ -3061,11 +3061,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
                 runnerEnvironment,
                 frozenTarget,
               }),
-            ).toBe(
-              runnerEnvironment === "self-hosted" || (eventName === "pull_request" && !frozenTarget)
-                ? 4
-                : 1,
-            );
+            ).toBe(runnerEnvironment === "self-hosted" ? 4 : 1);
           }
         }
       }
@@ -9421,6 +9417,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           CI_TYPE_GRAPHS_JSON: "",
           CI_CORE_TYPE_GRAPHS_JSON: "",
           CI_CORE_TYPE_CONCURRENCY: "",
+          DEPENDENCY_STRIPE: "",
         },
       });
       expect(report.code, report.output).toBe(0);

@@ -50,9 +50,10 @@ function materializePlan(runnerProfile: string, rows: number) {
     runnerProfile,
     checkMatrix: {
       include: Array.from({ length: rows }, (_, index) => ({
-        check_name: `check-guards-${index}`,
-        task: "guards",
+        check_name: `check-dependencies-${index}`,
+        task: "dependencies",
         runner: "blacksmith-4vcpu-ubuntu-2404",
+        dependency_stripe: (index % 3) + 1,
       })),
     },
     coreTypeMatrix: { include: [] },
@@ -137,7 +138,7 @@ describe("CI check-plan completion count", () => {
   it.each(["blacksmith", "github", "hybrid"] as const)(
     "publishes the admitted workflow expansion for %s, including an empty plan",
     (runnerProfile) => {
-      for (const rows of [1, 0]) {
+      for (const rows of [1, 3, 0]) {
         const { run, planner, outputs } = materializePlan(runnerProfile, rows);
         expect(run.status, run.stderr).toBe(0);
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
@@ -151,6 +152,11 @@ describe("CI check-plan completion count", () => {
         };
         const admittedRows = admittedCheckRows(context);
         expect(outputs.check_job_count).toBe(String(admittedRows.length));
+        expect(
+          JSON.parse(outputs.check_matrix!).include.map(
+            (row: { dependency_stripe: number }) => row.dependency_stripe,
+          ),
+        ).toEqual(Array.from({ length: rows }, (_, index) => (index % 3) + 1));
         const marker: WorkflowStep = planner.steps.at(-1);
         const admission = marker.if ?? "success()";
         const condition = admission.startsWith("${{") ? admission : `\${{ ${admission} }}`;
