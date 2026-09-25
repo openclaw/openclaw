@@ -8,7 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { countFailedChannelIngressQueueEntries } from "./ingress-queue-health.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createChannelIngressQueue, deleteChannelIngressFailedEvents } from "./ingress-queue.js";
 
 async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-dead-letters-"));
@@ -151,6 +151,75 @@ describe("channel ingress dead letters", () => {
         id: "event-null",
         payload: null,
       });
+    });
+  });
+
+  it("preserves a newer failure that replaced the operator snapshot", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+        stateDir,
+      });
+      await queue.enqueue("event-1", { text: "first attempt" }, { receivedAt: 10 });
+      const firstClaim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!firstClaim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(firstClaim, { reason: "first-failure", failedAt: 20 });
+      const [selected] = (await queue.listFailed?.({ limit: "all" })) ?? [];
+      if (!selected || !queue.resubmit) {
+        throw new Error("Expected a selected, resubmittable failure");
+      }
+
+      await queue.resubmit("event-1", { resubmittedAt: 30 });
+      const secondClaim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!secondClaim) {
+        throw new Error("Expected a resubmitted claim");
+      }
+      await queue.fail(secondClaim, { reason: "second-failure", failedAt: 40 });
+
+      await expect(
+        deleteChannelIngressFailedEvents({ channelId: "telegram", accountId: "ops", stateDir }, [
+          selected,
+        ]),
+      ).resolves.toBe(0);
+      await expect(queue.listFailed?.({ limit: "all" })).resolves.toEqual([
+        expect.objectContaining({ id: "event-1", reason: "second-failure", failedAt: 40 }),
+      ]);
+    });
+  });
+
+  it("deletes a selection larger than SQLite's binding limit", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+        stateDir,
+      });
+      await queue.enqueue("event-1", { text: "discard" }, { receivedAt: 10 });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      const [selected] = (await queue.listFailed?.({ limit: "all" })) ?? [];
+      if (!selected) {
+        throw new Error("Expected a selected failure");
+      }
+      const oversizedSelection = Array.from({ length: 40_000 }, (_, index) => ({
+        ...selected,
+        id: `missing-${index}`,
+      }));
+      oversizedSelection.push(selected);
+
+      await expect(
+        deleteChannelIngressFailedEvents(
+          { channelId: "telegram", accountId: "ops", stateDir },
+          oversizedSelection,
+        ),
+      ).resolves.toBe(1);
+      await expect(queue.listFailed?.({ limit: "all" })).resolves.toEqual([]);
     });
   });
 

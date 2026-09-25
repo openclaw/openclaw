@@ -105,6 +105,18 @@ After correcting the underlying problem, re-enqueue one event with its original 
 openclaw channels dead-letters resubmit <event-id> --channel telegram --account default
 ```
 
+Discard failed events after inspection with an interactive confirmation:
+
+```bash
+openclaw channels dead-letters delete <event-id> --channel telegram --account default
+openclaw channels dead-letters purge --channel telegram --account default
+```
+
+Pass `--force` for non-interactive automation. Deletion only removes rows that
+are still `failed`; active and completed events are never affected. The failed
+row and its duplicate barrier are physically removed, so a later delivery with
+the same event id can be accepted again. Both commands support `--json`.
+
 Run these commands on the Gateway host so they access the same shared state database as the channel runtime. Resubmission preserves the payload, metadata, and lane, but resets the attempt counter and queue age. It atomically replaces that event's failed marker, so repeating the command while the event is pending or claimed refuses instead of creating a second dispatch. The running channel picks it up on its next ingress drain. Completed events remain terminal and cannot be resubmitted. Failed rows created before payload retention was added can still appear in the list, but resubmission refuses them because their payload is unavailable.
 
 `openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.

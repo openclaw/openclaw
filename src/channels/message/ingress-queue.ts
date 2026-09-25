@@ -5,11 +5,12 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type {
   ChannelIngressEvents,
@@ -260,6 +261,47 @@ export type CreateChannelIngressQueueOptions = {
    */
   access?: "read-write" | "read-only";
 };
+
+export type ChannelIngressFailedEventIdentity = Pick<
+  ChannelIngressQueueDeadLetterRecord,
+  "id" | "updatedAt" | "receivedAt" | "attempts"
+>;
+
+/** Delete only the unchanged failed rows selected by an operator command. */
+export async function deleteChannelIngressFailedEvents(
+  options: CreateChannelIngressQueueOptions,
+  failures: readonly ChannelIngressFailedEventIdentity[],
+): Promise<number> {
+  if (failures.length === 0) {
+    return 0;
+  }
+  const channelId = normalizePart(options.channelId, "unknown");
+  const accountId = normalizePart(options.accountId, "default");
+  const queueName = queueNameForParts(channelId, accountId);
+  const identities = failures.map(({ id, updatedAt, receivedAt, attempts }) =>
+    JSON.stringify([idFrom(id), updatedAt, receivedAt, attempts]),
+  );
+  const database = openChannelIngressDatabase(options.stateDir);
+  return runOpenClawStateWriteTransaction(
+    (tx) =>
+      affectedRows(
+        executeSqliteQuerySync(
+          tx.db,
+          getChannelIngressKysely(tx.db)
+            .deleteFrom("channel_ingress_events")
+            .where("queue_name", "=", queueName)
+            .where("status", "=", "failed")
+            .where(
+              // kysely-allow-raw: one JSON tuple preserves failure identity with one SQL binding.
+              sql<string>`json_array(event_id, updated_at, received_at, attempts)`,
+              "in",
+              sqliteStringSet(identities),
+            ),
+        ),
+      ),
+    { path: database.path },
+  );
+}
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 type ChannelIngressRow = Selectable<ChannelIngressEvents>;
