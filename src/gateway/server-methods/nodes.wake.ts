@@ -13,6 +13,7 @@ import {
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
 import type { NodeSession } from "../node-registry.js";
+import type { NodeWakeAttempt } from "../node-wake-state-store.js";
 import {
   captureNodeWakeLifecycle,
   isNodeWakeLifecycleCurrent,
@@ -21,7 +22,6 @@ import {
   releaseNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
-  type NodeWakeAttempt,
   type NodeWakeLifecycle,
   type NodeWakeNudgeAttempt,
 } from "../node-wake-state.js";
