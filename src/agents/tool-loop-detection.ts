@@ -16,12 +16,12 @@ import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import {
   buildArgumentChurnWarning,
-  getArgumentChurnNoProgressStreak,
+  getToolArgumentChurnStreak,
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
-import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { hashWriteMutationTarget, isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -51,8 +51,11 @@ export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
-type ToolLoopDetectionScope = {
+export type ToolLoopDetectionScope = {
   runId?: string;
+  cwd?: string;
+  /** Writer-parity write-target hash, precomputed by async callers with sandbox context. */
+  writeTargetHash?: string;
 };
 
 function selectHistoryForScope(
@@ -342,6 +345,12 @@ function hashToolOutcome(
   if (toolName === "write" && isWriteNoProgressOutcome(details)) {
     return { resultHash: digestToolOutcome({ status: "unchanged" }), noProgress: true };
   }
+  if (toolName === "write" && details.changed === true) {
+    return {
+      resultHash: digestToolOutcome({ details, text }),
+      outcomeKind: "write-mutation",
+    };
+  }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
@@ -535,7 +544,13 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
-  const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName, currentHash);
+  const argumentChurn = getToolArgumentChurnStreak(history, {
+    toolName,
+    argsHash: currentHash,
+    mutationTargetHash:
+      scope?.writeTargetHash ?? hashWriteMutationTarget(toolName, params, scope?.cwd),
+    timestamp: Date.now(),
+  });
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
   const argumentChurnLivenessSignal =
@@ -683,6 +698,8 @@ export function recordToolCall(
   state.toolCallHistory.push({
     toolName,
     argsHash: hashToolCall(toolName, params),
+    mutationTargetHash:
+      scope?.writeTargetHash ?? hashWriteMutationTarget(toolName, params, scope?.cwd),
     toolCallId,
     ...(runId && { runId }),
     timestamp: Date.now(),
@@ -706,6 +723,8 @@ export function recordToolCallOutcome(
     error?: unknown;
     config?: ToolLoopDetectionConfig;
     runId?: string;
+    cwd?: string;
+    writeTargetHash?: string;
   },
 ): ToolCallRecord | undefined {
   const runId = normalizeRunId(params.runId);
@@ -741,6 +760,10 @@ export function recordToolCallOutcome(
     call.outcomeKind = outcome.outcomeKind;
     call.resultHash = outcome.resultHash;
     call.failureIdentityHash = outcome.failureIdentityHash;
+    if (params.writeTargetHash !== undefined) {
+      // A later final-args hash (e.g. hook rewrite) outranks the admitted one.
+      call.mutationTargetHash = params.writeTargetHash;
+    }
     if (outcome.noProgress) {
       call.noProgress = true;
     } else {
@@ -756,6 +779,9 @@ export function recordToolCallOutcome(
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
+      mutationTargetHash:
+        params.writeTargetHash ??
+        hashWriteMutationTarget(params.toolName, params.toolParams, params.cwd),
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
       outcomeKind: outcome.outcomeKind,

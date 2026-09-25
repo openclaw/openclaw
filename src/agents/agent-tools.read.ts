@@ -588,7 +588,8 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: text } };
 }
 
-function resolveContainerPathCandidate(filePath: string): string | null {
+/** Resolve the writer's container-path candidate, including file:// conversion. */
+export function resolveContainerPathCandidate(filePath: string): string | null {
   let candidate = normalizeFileReferencePrefix(filePath);
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);

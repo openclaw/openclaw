@@ -7,6 +7,7 @@ import type {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
+  emitLoopWarning,
   loadBeforeToolCallRuntime,
   shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
@@ -15,7 +16,12 @@ import {
   releaseBatchAdmittedToolCalls,
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
-import { hashToolCall } from "./tool-loop-detection.js";
+import { hashToolCall, type ToolLoopDetectionScope } from "./tool-loop-detection.js";
+import {
+  computeWriteMutationTargetHash,
+  releaseStagedWriteTargetHashes,
+  takeStagedWriteTargetHash,
+} from "./tool-loop-write-outcome.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
@@ -28,6 +34,26 @@ type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
   commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
+
+async function toolLoopScope(
+  ctx: HookContext,
+  toolName: string,
+  params: unknown,
+): Promise<ToolLoopDetectionScope> {
+  const cwd = ctx.cwd ?? ctx.workspaceDir;
+  const writeTargetHash = ctx.sandbox
+    ? await computeWriteMutationTargetHash({
+        toolName,
+        toolParams: params,
+        cwd,
+        sandbox: ctx.sandbox,
+      })
+    : undefined;
+  return {
+    ...(ctx.runId || cwd ? { runId: ctx.runId, cwd } : {}),
+    ...(writeTargetHash !== undefined ? { writeTargetHash } : {}),
+  };
+}
 
 async function evaluateToolLoopCall(
   call: ToolLoopCall,
@@ -50,7 +76,7 @@ async function evaluateToolLoopCall(
     toolName,
     call.params,
     ctx.loopDetection,
-    ctx.runId ? { runId: ctx.runId } : undefined,
+    await toolLoopScope(ctx, toolName, call.params),
   );
   if (!result.stuck) {
     return undefined;
@@ -93,7 +119,7 @@ async function evaluateToolLoopCall(
       detector: result.detector,
       count: result.count,
       message: result.message,
-      pairedToolName: result.pairedToolName,
+      ...(result.pairedToolName ? { pairedToolName: result.pairedToolName } : {}),
     });
     return {
       kind: "tool-loop-warning",
@@ -115,7 +141,7 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     call.params,
     call.toolCallId,
     ctx.loopDetection,
-    ctx.runId ? { runId: ctx.runId } : undefined,
+    await toolLoopScope(ctx, call.toolName, call.params),
   );
 }
 
@@ -144,7 +170,9 @@ export async function admitToolCallBatch(
     return {};
   }
   const {
+    buildArgumentChurnWarning,
     getDiagnosticSessionState,
+    logToolLoopAction,
     markDiagnosticArgumentChurnObservation,
     reconcileToolCallExecutionParams,
     recordToolCall,
@@ -159,21 +187,21 @@ export async function admitToolCallBatch(
     ...sessionState,
     toolCallHistory: [...(sessionState.toolCallHistory ?? [])],
   };
-  const recordLoopVeto = (state: SessionState, call: InternalToolBatchCall) => {
+  const recordLoopVeto = async (state: SessionState, call: InternalToolBatchCall) => {
     recordToolCall(
       state,
       normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
       ctx.loopDetection,
-      ctx.runId ? { runId: ctx.runId } : undefined,
+      await toolLoopScope(ctx, call.toolCall.name, call.args),
     );
     const projectedCall = state.toolCallHistory?.at(-1);
     if (projectedCall) {
       projectedCall.outcomeKind = "tool-loop-veto";
     }
   };
-  const projectLoopVeto = (call: InternalToolBatchCall) => {
+  const projectLoopVeto = async (call: InternalToolBatchCall) => {
     // A batch is admitted atomically, so unrelated siblings must not evict the
     // real pre-batch history before a later candidate is checked. Build each
     // synthetic record through the canonical recorder, then append it to the
@@ -182,7 +210,7 @@ export async function admitToolCallBatch(
       ...sessionState,
       toolCallHistory: [],
     };
-    recordLoopVeto(scratchState, call);
+    await recordLoopVeto(scratchState, call);
     const projectedCall = scratchState.toolCallHistory?.at(-1);
     if (projectedCall) {
       projectedState.toolCallHistory?.push(projectedCall);
@@ -210,7 +238,7 @@ export async function admitToolCallBatch(
           rejectedCall.args,
         );
         if (rejectedActionKey === intervention.actionKey) {
-          recordLoopVeto(sessionState, rejectedCall);
+          await recordLoopVeto(sessionState, rejectedCall);
         }
       }
       return { intervention };
@@ -219,16 +247,29 @@ export async function admitToolCallBatch(
       warnings.push(intervention);
     }
     // A later sibling must assume this candidate makes no progress.
-    projectLoopVeto(call);
+    await projectLoopVeto(call);
   }
   for (const call of calls) {
     recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
   }
   const admittedById = new Map(
-    calls.map((call) => [
-      call.toolCall.id,
-      { toolName: normalizeToolPolicyName(call.toolCall.name || "tool") },
-    ]),
+    await Promise.all(
+      calls.map(async (call) => [
+        call.toolCall.id,
+        {
+          toolName: normalizeToolPolicyName(call.toolCall.name || "tool"),
+          writeTargetHash: ctx.sandbox
+            ? await computeWriteMutationTargetHash({
+                toolName: normalizeToolPolicyName(call.toolCall.name || "tool"),
+                toolParams: call.args,
+                cwd: ctx.cwd ?? ctx.workspaceDir,
+                sandbox: ctx.sandbox,
+              })
+            : undefined,
+        },
+        // SAFETY: tuple order mirrors the candidate order passed to Promise.all.
+      ]) as Promise<[string, { toolName: string; writeTargetHash: string | undefined }]>[],
+    ),
   );
   const committedIds = new Set<string>();
   const commitReadyCall = (readyCall: { toolCallId: string; args: unknown }) => {
@@ -236,27 +277,61 @@ export async function admitToolCallBatch(
     if (!admitted || committedIds.has(readyCall.toolCallId)) {
       return;
     }
+    const finalWriteTargetHash =
+      takeStagedWriteTargetHash({ runId: ctx.runId, toolCallId: readyCall.toolCallId }) ??
+      admitted.writeTargetHash;
     recordToolCall(
       sessionState,
       admitted.toolName,
       readyCall.args,
       readyCall.toolCallId,
       ctx.loopDetection,
-      ctx.runId ? { runId: ctx.runId } : undefined,
+      {
+        ...(ctx.runId || ctx.cwd || ctx.workspaceDir
+          ? { runId: ctx.runId, cwd: ctx.cwd ?? ctx.workspaceDir }
+          : {}),
+        ...(finalWriteTargetHash !== undefined ? { writeTargetHash: finalWriteTargetHash } : {}),
+      },
     );
     const churn = reconcileToolCallExecutionParams(sessionState, {
       toolName: admitted.toolName,
       toolParams: readyCall.args,
       toolCallId: readyCall.toolCallId,
       runId: ctx.runId,
+      cwd: ctx.cwd ?? ctx.workspaceDir,
       warningThreshold,
+      // Same final-args hash the record above carries; the stale admitted
+      // hash must not clobber it here.
+      ...(finalWriteTargetHash !== undefined ? { writeTargetHash: finalWriteTargetHash } : {}),
     });
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      runId: ctx.runId,
-      active: churn.active,
-    });
+    if (
+      churn.active &&
+      churn.kind === "write_mutation" &&
+      emitLoopWarning({
+        ctx,
+        sessionState,
+        toolName: admitted.toolName,
+        warning: buildArgumentChurnWarning(admitted.toolName, churn),
+        logToolLoopAction,
+      })
+    ) {
+      warnings.push({
+        kind: "tool-loop-warning",
+        toolCallId: readyCall.toolCallId,
+        count: churn.count,
+      });
+    }
+    // Batch admission is advisory until the call completes. Do not let an
+    // inactive partial verdict clear a lease owned by an earlier completed
+    // mutation; recordLoopOutcome owns the authoritative clear.
+    if (churn.active) {
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: ctx.sessionKey,
+        sessionId: ctx.sessionId,
+        runId: ctx.runId,
+        active: true,
+      });
+    }
     committedIds.add(readyCall.toolCallId);
   };
   return {
@@ -276,6 +351,7 @@ export async function admitToolCallBatch(
     },
     releaseSkippedCalls(toolCallIds) {
       // Agent-core only supplies admitted prepared calls suppressed at a steering checkpoint.
+      releaseStagedWriteTargetHashes(toolCallIds, ctx.runId);
       releaseBatchAdmittedToolCalls(toolCallIds, ctx.runId);
     },
   };

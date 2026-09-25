@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  type MemorySyncParams,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -232,6 +235,115 @@ describe("automatic candidates during provenance repair", () => {
       await closing;
       await upgraded.close();
       retryGate.mockRestore();
+    }
+  });
+
+  it("withholds legacy curated candidates until background provenance repair succeeds", async () => {
+    const projectKey = "github.com/openclaw/openclaw";
+    await fs.writeFile(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+      `- Preserve legacy preference. <!-- trigger: legacy preference --> <!-- project: ${projectKey} -->\n`,
+    );
+    const cfg = fixture.createConfig({ provider: "none" });
+    const initialManager = await fixture.getFreshManager(cfg);
+    await initialManager.sync({ reason: "test", force: true });
+    const initialDb = Reflect.get(initialManager, "db") as DatabaseSync;
+    initialDb.exec(`DELETE FROM ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}`);
+    await initialManager.close();
+
+    const upgradedManager = await fixture.getFreshManager(cfg);
+    try {
+      expect(upgradedManager.status().dirty).toBe(true);
+      const upgradedDb = Reflect.get(upgradedManager, "db") as DatabaseSync;
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md' AND source = 'memory'`,
+          )
+          .get(),
+      ).toEqual({ hash: "" });
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT DISTINCT origin_class AS originClass
+             FROM ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}`,
+          )
+          .all(),
+      ).toEqual([{ originClass: "untrusted" }]);
+      if (!upgradedManager.listCuratedProjectCandidates || !upgradedManager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const syncAdmitted = vi
+        .spyOn(
+          upgradedManager as unknown as {
+            syncAdmitted: (
+              params?: MemorySyncParams,
+              options?: { allowEmbeddingBootstrapFallback?: boolean },
+            ) => Promise<void>;
+          },
+          "syncAdmitted",
+        )
+        .mockRejectedValueOnce(new Error("legacy provenance repair unavailable"));
+      await expect(
+        upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+      ).resolves.toEqual([]);
+      expect(syncAdmitted).toHaveBeenCalledWith(
+        { reason: "search" },
+        { allowEmbeddingBootstrapFallback: true },
+      );
+      expect(upgradedManager.status().dirty).toBe(true);
+      syncAdmitted.mockRestore();
+
+      const repairGate = createDeferred<void>();
+      // SAFETY: the test controls the manager's internal sync to keep provenance repair pending.
+      const owner = upgradedManager as unknown as {
+        runSync: (params?: MemorySyncParams) => Promise<void>;
+      };
+      const actualRunSync = owner.runSync.bind(upgradedManager);
+      const runSync = vi.spyOn(owner, "runSync").mockImplementation(async (params) => {
+        await repairGate.promise;
+        return await actualRunSync(params);
+      });
+      try {
+        await expect(
+          Promise.all([
+            upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+            upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+          ]),
+        ).resolves.toEqual([[], []]);
+      } finally {
+        repairGate.resolve();
+      }
+      await upgradedManager.sync({ reason: "test-repair-complete" });
+      const [projectCandidates, triggerCandidates] = await Promise.all([
+        upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+        upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+      ]);
+      expect(projectCandidates).toMatchObject([
+        {
+          projectKey,
+          triggers: "legacy preference",
+          provenance: { originClass: "agent" },
+        },
+      ]);
+      expect(triggerCandidates).toMatchObject([
+        {
+          projectKey,
+          triggers: "legacy preference",
+          provenance: { originClass: "agent" },
+        },
+      ]);
+      expect(runSync).toHaveBeenCalledTimes(1);
+      expect(upgradedManager.status().dirty).toBe(false);
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md' AND source = 'memory'`,
+          )
+          .get(),
+      ).toMatchObject({ hash: expect.not.stringMatching(/^$/u) });
+    } finally {
+      await upgradedManager.close();
     }
   });
 });

@@ -2,18 +2,17 @@
  * Diagnostics, skill telemetry, terminal presentation, and loop outcomes for
  * before_tool_call execution.
  */
-import os from "node:os";
-import path from "node:path";
+import type { ToolLoopWarning as ToolLoopFeedback } from "@openclaw/agent-core";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
 } from "../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
-  emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   type DiagnosticEventInput,
   type DiagnosticEventPrivateData,
+  type DiagnosticToolLoopEvent,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
   type DiagnosticToolTerminalReason,
@@ -26,23 +25,14 @@ import {
   createDiagnosticToolExecutionLiveness,
   markToolExecutionLivenessDiagnosticEvent,
 } from "../infra/diagnostic-tool-execution-liveness.js";
-import {
-  createChildDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
-  type DiagnosticTraceContext,
-} from "../infra/diagnostic-trace-context.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import {
-  resolveSkillTelemetrySource,
-  resolveSkillTelemetrySourceValue,
-} from "../skills/loading/source.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
-import { isPlainObject, truncateUtf16Safe } from "../utils.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
   HookBlockedReason,
@@ -50,18 +40,19 @@ import type {
   ToolOutcomeObservation,
   ToolOutcomeObserver,
 } from "./agent-tools.before-tool-call.types.js";
-import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
-import { normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  computeWriteMutationTargetHash,
+  stageWriteTargetHashForToolCall,
+} from "./tool-loop-write-outcome.js";
 import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "./tool-result-error.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { canonicalizePath } from "./utils/paths.js";
 
 export const beforeToolCallLog = createSubsystemLogger("agents/tools");
 
@@ -295,175 +286,6 @@ export function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosti
   return { toolSource: "core" };
 }
 
-type SkillUsageMatch = {
-  skillFile?: string;
-  skillName: string;
-  skillSource: SkillTelemetrySource;
-  activation: "command" | "read";
-};
-
-function canonicalSkillFile(value: string | undefined): string | undefined {
-  const skillFile = value?.trim();
-  return skillFile && path.isAbsolute(skillFile)
-    ? canonicalizePath(path.resolve(skillFile))
-    : undefined;
-}
-
-function resolvedSkillUsageMatch(params: {
-  activation: SkillUsageMatch["activation"];
-  skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number];
-}): SkillUsageMatch {
-  const skillFile = canonicalSkillFile(params.skill.filePath);
-  return {
-    skillName: params.skill.name.trim(),
-    skillSource: resolveSkillTelemetrySource(params.skill),
-    activation: params.activation,
-    ...(skillFile ? { skillFile } : {}),
-  };
-}
-
-function findResolvedSkillUsageMatch(params: {
-  activation: SkillUsageMatch["activation"];
-  skillName: string;
-  skillSource: SkillTelemetrySource;
-  snapshot?: SkillSnapshot;
-}): SkillUsageMatch | undefined {
-  const skillName = params.skillName.trim();
-  const candidates = (params.snapshot?.resolvedSkills ?? []).filter(
-    (skill) => skill.name.trim() === skillName,
-  );
-  const skill =
-    candidates.find((candidate) => resolveSkillTelemetrySource(candidate) === params.skillSource) ??
-    (candidates.length === 1 ? candidates[0] : undefined);
-  return skill ? resolvedSkillUsageMatch({ activation: params.activation, skill }) : undefined;
-}
-
-function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string | undefined {
-  const trimmed = candidate.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("node://")) {
-    return trimmed;
-  }
-  if (trimmed === "~") {
-    return os.homedir();
-  }
-  if (trimmed.startsWith("~/")) {
-    return path.resolve(os.homedir(), trimmed.slice(2));
-  }
-  if (path.isAbsolute(trimmed)) {
-    return path.resolve(trimmed);
-  }
-  const base = ctx?.workspaceDir ?? ctx?.cwd;
-  return base ? path.resolve(base, trimmed) : undefined;
-}
-
-function readToolPathCandidate(params: unknown, ctx?: HookContext): string | undefined {
-  return isPlainObject(params) && typeof params.path === "string"
-    ? resolveRelativeToolPath(normalizeFileToolPathParam(params.path), ctx)
-    : undefined;
-}
-
-function findSkillInstructionMatch(
-  snapshot: SkillSnapshot,
-  candidate: string,
-): SkillUsageMatch | undefined {
-  const skill = snapshot.resolvedSkills?.findLast((entry) => {
-    if (typeof entry.name !== "string" || !entry.name.trim()) {
-      return false;
-    }
-    const filePath = typeof entry.filePath === "string" ? entry.filePath.trim() : "";
-    const baseDir = typeof entry.baseDir === "string" ? entry.baseDir.trim() : "";
-    return (
-      (filePath &&
-        (filePath.startsWith("node://")
-          ? filePath === candidate
-          : path.isAbsolute(filePath) && path.resolve(filePath) === candidate)) ||
-      (baseDir && path.isAbsolute(baseDir) && path.resolve(baseDir, "SKILL.md") === candidate)
-    );
-  });
-  return skill ? resolvedSkillUsageMatch({ activation: "read", skill }) : undefined;
-}
-
-export function findSkillUsageMatch(params: {
-  toolName: string;
-  toolParams: unknown;
-  ctx?: HookContext;
-}): SkillUsageMatch | undefined {
-  const command = params.ctx?.skillCommand;
-  if (command) {
-    const commandToolName = normalizeToolPolicyName(command.toolName ?? params.toolName);
-    if (!commandToolName || commandToolName === params.toolName) {
-      const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
-      const snapshotMatch = findResolvedSkillUsageMatch({
-        activation: "command",
-        skillName: command.skillName,
-        skillSource,
-        snapshot: params.ctx?.skillsSnapshot,
-      });
-      const skillFile = canonicalSkillFile(command.skillFile) ?? snapshotMatch?.skillFile;
-      return {
-        skillName: command.skillName,
-        skillSource,
-        activation: "command",
-        ...(skillFile ? { skillFile } : {}),
-      };
-    }
-  }
-
-  if (params.toolName !== "read") {
-    return undefined;
-  }
-  const candidate = readToolPathCandidate(params.toolParams, params.ctx);
-  if (!candidate) {
-    return undefined;
-  }
-  if (params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
-    return findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
-  }
-  const match = params.ctx?.skillUsagePaths?.findLast(
-    (entry) => path.resolve(entry.readPath) === candidate,
-  );
-  return match
-    ? {
-        skillFile: match.skillFile,
-        skillName: match.skillName,
-        skillSource: match.skillSource,
-        activation: "read",
-      }
-    : undefined;
-}
-
-export function emitSkillUsedDiagnostic(params: {
-  ctx?: HookContext;
-  match: SkillUsageMatch;
-  toolName: string;
-  toolCallId?: string;
-}): void {
-  const trace = params.ctx?.trace
-    ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))
-    : undefined;
-  // Skill file paths are trusted-internal accounting data. Public diagnostic
-  // payloads stay path-free even when diagnostics are enabled.
-  emitTrustedSkillUsedDiagnosticEvent(
-    {
-      type: "skill.used",
-      ...(params.ctx?.runId && { runId: params.ctx.runId }),
-      ...(params.ctx?.sessionKey && { sessionKey: params.ctx.sessionKey }),
-      ...(params.ctx?.sessionId && { sessionId: params.ctx.sessionId }),
-      ...(params.ctx?.agentId && { agentId: params.ctx.agentId }),
-      ...(trace && { trace }),
-      skillName: params.match.skillName,
-      skillSource: params.match.skillSource,
-      activation: params.match.activation,
-      toolName: params.toolName,
-      ...(params.toolCallId && { toolCallId: params.toolCallId }),
-    },
-    params.match.skillFile ? { skillUsage: { skillFile: params.match.skillFile } } : undefined,
-  );
-}
-
 export function emitToolBlockedSecurityEvent(params: {
   ctx?: HookContext;
   deniedReason: HookBlockedReason;
@@ -590,6 +412,38 @@ export function shouldEmitLoopWarning(
   return true;
 }
 
+type ToolLoopWarning = Pick<
+  DiagnosticToolLoopEvent,
+  "detector" | "count" | "message" | "pairedToolName"
+> & { warningKey?: string };
+
+export function emitLoopWarning(args: {
+  ctx: HookContext;
+  sessionState: SessionState;
+  toolName: string;
+  warning: ToolLoopWarning;
+  logToolLoopAction: typeof import("../logging/diagnostic-tool-loop.js").logToolLoopAction;
+}): boolean {
+  const baseWarningKey = args.warning.warningKey ?? `${args.warning.detector}:${args.toolName}`;
+  const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
+  if (!shouldEmitLoopWarning(args.sessionState, warningKey, args.warning.count)) {
+    return false;
+  }
+  log.warn(`Loop warning for ${args.toolName}: ${args.warning.message}`);
+  args.logToolLoopAction({
+    sessionKey: args.ctx.sessionKey,
+    sessionId: args.ctx.sessionId,
+    toolName: args.toolName,
+    level: "warning",
+    action: "warn",
+    detector: args.warning.detector,
+    count: args.warning.count,
+    message: args.warning.message,
+    ...(args.warning.pairedToolName ? { pairedToolName: args.warning.pairedToolName } : {}),
+  });
+  return true;
+}
+
 /** Reconcile loop liveness with the final post-policy arguments before execution. */
 export async function reconcileLoopCallExecutionParams(args: {
   ctx?: HookContext;
@@ -611,19 +465,41 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
+    const finalWriteTargetHash = args.ctx.sandbox
+      ? await computeWriteMutationTargetHash({
+          toolName: args.toolName,
+          toolParams: args.toolParams,
+          cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
+          sandbox: args.ctx.sandbox,
+        })
+      : undefined;
+    // The batch commit is synchronous and runs after this reconcile, so stage
+    // the final-args hash for it keyed by toolCallId (hook rewrites land here).
+    if (args.toolCallId) {
+      stageWriteTargetHashForToolCall(
+        { runId: args.ctx.runId, toolCallId: args.toolCallId },
+        finalWriteTargetHash,
+      );
+    }
     const churn = reconcileToolCallExecutionParams(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
       warningThreshold: resolveToolLoopWarningThreshold(),
+      ...(finalWriteTargetHash !== undefined ? { writeTargetHash: finalWriteTargetHash } : {}),
     });
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churn.active,
-    });
+    if (churn.active || churn.executionParamsChanged) {
+      // A trusted novel rewrite can clear before execution; unchanged duplicate
+      // preparation cannot, because its completed outcome owns any later clear.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: churn.active,
+      });
+    }
   } catch (err) {
     log.warn(
       `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,
@@ -641,17 +517,21 @@ export async function recordLoopOutcome(args: {
   resultContentSource?: AnyAgentTool["resultContentSource"];
   toolCallOrdinal?: number;
   terminalPresentation?: string;
-}): Promise<void> {
+}): Promise<ToolLoopFeedback | undefined> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
-    return;
+    return undefined;
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
+  let loopWarning: ToolLoopFeedback | undefined;
   try {
     const {
-      getArgumentChurnNoProgressStreak,
+      buildArgumentChurnWarning,
+      getToolArgumentChurnStreak,
       getDiagnosticSessionState,
+      logToolLoopAction,
       markDiagnosticArgumentChurnObservation,
       recordToolCallOutcome,
+      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
@@ -665,21 +545,63 @@ export async function recordLoopOutcome(args: {
       error: args.error,
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
+      ...(args.ctx.sandbox
+        ? {
+            writeTargetHash: await computeWriteMutationTargetHash({
+              toolName: args.toolName,
+              toolParams: args.toolParams,
+              cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
+              sandbox: args.ctx.sandbox,
+            }),
+          }
+        : {}),
     });
-    const churnContinues =
-      record !== undefined &&
-      getArgumentChurnNoProgressStreak(
-        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
-        record.toolName,
-        record.argsHash,
-      ).count > 0;
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churnContinues,
-      existingOnly: true,
-    });
+    if (args.ctx.loopDetection?.enabled === true) {
+      const scopedHistory = record
+        ? (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId)
+        : [];
+      const churn = record
+        ? getToolArgumentChurnStreak(
+            record.outcomeKind === "write-mutation"
+              ? scopedHistory.filter((call) => call !== record)
+              : scopedHistory,
+            record,
+          )
+        : { count: 0, variantCount: 0 };
+      const warningThreshold = resolveToolLoopWarningThreshold();
+      const writeMutationAtWarning =
+        churn.kind === "write_mutation" && churn.count >= warningThreshold;
+      const churnContinues =
+        churn.count > 0 && (churn.kind !== "write_mutation" || writeMutationAtWarning);
+      if (record && writeMutationAtWarning) {
+        const warning = buildArgumentChurnWarning(record.toolName, churn);
+        if (
+          emitLoopWarning({
+            ctx: args.ctx,
+            sessionState,
+            toolName: record.toolName,
+            warning,
+            logToolLoopAction,
+          })
+        ) {
+          loopWarning = {
+            kind: "tool-loop-warning",
+            toolCallId: args.toolCallId ?? "",
+            count: warning.count,
+          };
+        }
+      }
+      // Parallel batches first gain mutation-threshold evidence from completed
+      // outcomes; stable no-progress reconciliation still requires an existing lease.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: churnContinues,
+        existingOnly: !writeMutationAtWarning,
+      });
+    }
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {
         toolName: record.toolName,
@@ -696,6 +618,7 @@ export async function recordLoopOutcome(args: {
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
+  return loopWarning;
 }
 
 /** Run the full before_tool_call policy chain for a pending tool call. */

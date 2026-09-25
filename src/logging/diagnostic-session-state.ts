@@ -22,9 +22,10 @@ export type SessionState = {
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
+  mutationTargetHash?: string;
   toolCallId?: string;
   runId?: string;
-  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
+  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure" | "write-mutation";
   resultHash?: string;
   // Keep the raw result identity while this bounded identity survives alias
   // merges and lets the no-progress owner ignore diagnostic drift.

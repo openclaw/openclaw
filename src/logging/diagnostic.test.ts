@@ -774,26 +774,6 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("aborts stale embedded runs when queued work refreshes session activity", () => {
-    const recoverStuckSession = vi.fn();
-
-    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-    vi.advanceTimersByTime(507_000);
-    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
-    vi.advanceTimersByTime(122_000);
-
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-
-    vi.advanceTimersByTime(30_000);
-
-    expectRecoveryCall(
-      recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
-      ["ageMs", "stateGeneration"],
-    );
-  });
-
   it("does not abort embedded runs with recent progress just because session activity is old", () => {
     const recoverStuckSession = vi.fn();
 

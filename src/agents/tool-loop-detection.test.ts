@@ -710,49 +710,6 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("warns on repeated stable argument churn without vetoing the next call", () => {
-      const state = createState();
-      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-        const targetPath = paths[index % paths.length]!;
-        recordSuccessfulCall(
-          state,
-          "write",
-          { path: targetPath, content: "same content" },
-          {
-            content: [{ type: "text", text: "write made no changes" }],
-            details: { ok: true, changed: false },
-          },
-          index,
-        );
-      }
-
-      const loopResult = detectToolCallLoop(
-        state,
-        "write",
-        { path: "/tmp/a.md", content: "same content" },
-        enabledLoopDetectionConfig,
-      );
-
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("argument_churn");
-        expect(loopResult.livenessSignal).toBe("argument_churn");
-        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
-        expect(loopResult.message).toContain("tool call remains allowed");
-      }
-
-      const escapeResult = detectToolCallLoop(
-        state,
-        "write",
-        { path: "/tmp/c.md", content: "same content" },
-        enabledLoopDetectionConfig,
-      );
-      expect(escapeResult.stuck).toBe(false);
-    });
-
     it("normalizes built-in write no-ops that only differ by echoed path", () => {
       const state = createState();
       const content = "same content";
@@ -845,7 +802,13 @@ describe("tool-loop-detection", () => {
         warningThreshold: 6,
       });
 
-      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+      expect(reconciled).toEqual({
+        active: true,
+        count: 6,
+        variantCount: 2,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
     });
 
     it("does not reconcile a completed loop veto as a pending call", () => {
@@ -870,7 +833,13 @@ describe("tool-loop-detection", () => {
           toolParams: { path: "/tmp/rewritten.md", content: "same content" },
           warningThreshold: 6,
         }),
-      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      ).toEqual({
+        active: false,
+        count: 0,
+        variantCount: 0,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
       expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
       expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
     });

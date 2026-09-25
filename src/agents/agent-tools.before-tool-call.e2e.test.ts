@@ -10,8 +10,6 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayClientRequestError } from "../gateway/client.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -21,7 +19,6 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
-import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
@@ -32,28 +29,22 @@ import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
-import {
-  PluginApprovalResolutions,
-  type PluginApprovalResolution,
-} from "../plugins/hook-before-tool-call-result.js";
+import { PluginApprovalResolutions } from "../plugins/hook-before-tool-call-result.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   getBeforeToolCallFailureDisposition,
-  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { beforeToolCallRuntime } from "./agent-tools.before-tool-call.runtime.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import { createWriteTool } from "./sessions/index.js";
+import { createReadTool, createWriteTool } from "./sessions/index.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -432,46 +423,49 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("does not activate reconciled churn when loop detection is unconfigured", async () => {
-    const sessionId = "write-churn-unconfigured-session";
-    const sessionKey = "main";
-    const runId = "write-churn-unconfigured-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
-    });
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      runId,
-    });
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      await expectUnblockedToolExecution(tool, `write-churn-unconfigured-${index}`, {
-        path: paths[index % paths.length] ?? "/tmp/a.md",
-        content: "same content",
+  it.each([
+    { label: "unconfigured", loopDetection: undefined },
+    { label: "disabled", loopDetection: { enabled: false } },
+  ])(
+    "does not warn or activate changed-write churn when loop detection is $label",
+    async (testCase) => {
+      const sessionId = `write-churn-${testCase.label}-session`;
+      const sessionKey = "main";
+      const runId = `write-churn-${testCase.label}-run`;
+      const execute = vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "write complete" }],
+        details: { changed: true },
       });
-    }
-    await expectUnblockedToolExecution(tool, "write-churn-unconfigured-next", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+      const tool = createWrappedTool("write", execute, {
+        agentId: "main",
+        cwd: "/tmp",
+        sessionId,
+        sessionKey,
+        runId,
+        ...(testCase.loopDetection ? { loopDetection: testCase.loopDetection } : {}),
+      });
+      const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
 
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-  });
+      try {
+        await withToolLoopEvents(async (emitted) => {
+          for (let index = 0; index <= TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+            await expectUnblockedToolExecution(tool, `write-churn-${testCase.label}-${index}`, {
+              path: "draft.md",
+              content: `synthetic revision ${index}`,
+            });
+          }
+          expect(emitted).toHaveLength(0);
+        });
+        expect(markChurn).not.toHaveBeenCalled();
+        expect(
+          getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+        ).not.toBe("tool_loop:argument_churn");
+      } finally {
+        markChurn.mockRestore();
+      }
+    },
+  );
 
   it("does not block known poll loops when output progresses", async () => {
     const execute = vi.fn().mockImplementation(async (toolCallId: string) => {
@@ -610,6 +604,142 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "exec",
       });
     });
+  });
+
+  it("does not activate changed-write liveness below the warning threshold", async () => {
+    const sessionId = "same-target-write-below-threshold-session";
+    const runId = "same-target-write-below-threshold-run";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "write complete" }],
+      details: { changed: true },
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: "/tmp",
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = createWrappedTool("write", execute, loopDetectionContext);
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-below-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      expect(
+        markChurn.mock.calls
+          .map(([observation]) => observation)
+          .filter((observation) => observation.existingOnly),
+      ).not.toContainEqual(expect.objectContaining({ active: true }));
+    } finally {
+      markChurn.mockRestore();
+    }
+  });
+
+  it("warns on same-target changed-write churn while preserving execution and read escape", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-target-churn-"));
+    const sessionId = "same-target-write-churn-session";
+    const runId = "same-target-write-churn-run";
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: tmpDir,
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = wrapToolWithBeforeToolCallHook(
+      createWriteTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+    const readTool = wrapToolWithBeforeToolCallHook(
+      createReadTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-warning", {
+          path: "notes/../draft.md",
+          content: "synthetic next revision",
+        });
+        expect(emitted).toHaveLength(1);
+        expect(emitted.at(-1)).toMatchObject({
+          type: "tool.loop",
+          level: "warning",
+          action: "warn",
+          detector: "argument_churn",
+          toolName: "write",
+          count: TOOL_LOOP_WARNING_THRESHOLD,
+        });
+      });
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey: "main" })).toMatchObject(
+        {
+          lastProgressReason: "tool_loop:argument_churn",
+        },
+      );
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "synthetic next revision",
+      );
+
+      await expectUnblockedToolExecution(readTool, "same-target-write-readback", {
+        path: "draft.md",
+      });
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-after-read", {
+          path: "draft.md",
+          content: "verified revision",
+        });
+        expect(emitted).toHaveLength(0);
+      });
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "verified revision",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("activates stable no-progress churn on the sixth completed outcome", async () => {
+    const sessionId = "stable-churn-completion-session";
+    const runId = "stable-churn-completion-run";
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+    const tool = createWrappedTool(
+      "write",
+      vi.fn().mockResolvedValue(createStableNoProgressWriteResult()),
+      { ...enabledLoopDetectionContext, sessionId, runId },
+    );
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        await expectUnblockedToolExecution(tool, `stable-churn-completion-${index}`, {
+          path: index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md",
+          content: "same content",
+        });
+      }
+      const outcomeObservations = markChurn.mock.calls
+        .map(([observation]) => observation)
+        .filter((observation) => observation.existingOnly === true);
+      expect(outcomeObservations).toHaveLength(6);
+      expect(outcomeObservations.slice(0, 5).every((observation) => !observation.active)).toBe(
+        true,
+      );
+      expect(outcomeObservations.at(-1)?.active).toBe(true);
+    } finally {
+      markChurn.mockRestore();
+    }
   });
 
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
@@ -2113,1358 +2243,6 @@ describe("before_tool_call loop detection behavior", () => {
       expect(execute).toHaveBeenCalledTimes(1);
       expect(execute.mock.calls[0]?.[1]).toBe(params);
     });
-  });
-});
-
-describe("before_tool_call requireApproval handling", () => {
-  let hookRunner: TestHookRunner;
-  const mockCallGateway = vi.mocked(callGatewayTool);
-
-  const requireRecord = createRequireRecord("object", "label-not-object");
-
-  function requireHookCall(
-    index: number,
-  ): [event: Record<string, unknown>, context: Record<string, unknown>] {
-    const call = hookRunner.runBeforeToolCall.mock.calls[index] as unknown[] | undefined;
-    if (!call) {
-      throw new Error(`missing before_tool_call hook call ${index + 1}`);
-    }
-    return [
-      requireRecord(call[0], "before_tool_call event"),
-      requireRecord(call[1], "before_tool_call context"),
-    ];
-  }
-
-  function requireGatewayCall(index: number): unknown[] {
-    const call = mockCallGateway.mock.calls[index] as unknown[] | undefined;
-    if (!call) {
-      throw new Error(`missing gateway call ${index + 1}`);
-    }
-    return call;
-  }
-
-  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-    for (const [key, value] of Object.entries(fields)) {
-      expect(record[key]).toEqual(value);
-    }
-  }
-
-  function registerTelegramPluginApprovalSetup(): void {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-            approvalCapability: {
-              native: {},
-              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
-              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
-              describePluginApprovalSetup: () => "Configure Telegram native approval setup.",
-            },
-          },
-        },
-      ]),
-    );
-  }
-
-  beforeEach(() => {
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticEventsForTest();
-    hookRunner = createTestHookRunner();
-    hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner);
-    // Keep the global singleton aligned as a fallback in case another setup path
-    // preloads hook-runner-global before this test's module reset/mocks take effect.
-    setGlobalHookRunnerForTest(hookRunner);
-    mockCallGateway.mockReset();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  async function runAbortDuringApprovalWait(options?: {
-    abortReason?: unknown;
-    onResolution?: (decision: PluginApprovalResolution) => void | Promise<void>;
-  }) {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Abortable",
-        description: "Will be aborted",
-        onResolution: options?.onResolution,
-      },
-    });
-
-    const controller = new AbortController();
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
-    mockCallGateway.mockImplementationOnce(async (_method, _options, _params, extra) => {
-      const signal = extra?.signal;
-      if (!signal) {
-        throw new Error("Expected approval transport abort signal");
-      }
-      const cancelled = createDeferredCore<never>();
-      const onAbort = () => cancelled.reject(createAbortError("gateway request aborted"));
-      signal.addEventListener("abort", onAbort, { once: true });
-      controller.abort(options?.abortReason ?? new Error("run cancelled"));
-      try {
-        return await cancelled.promise;
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    });
-
-    return await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-      signal: controller.signal,
-    });
-  }
-
-  it("blocks without triggering approval when both block and requireApproval are set", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      block: true,
-      blockReason: "Blocked by security plugin",
-      requireApproval: {
-        title: "Should not reach gateway",
-        description: "This approval should be skipped",
-        pluginId: "lower-priority-plugin",
-      },
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "rm -rf" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Blocked by security plugin");
-    expect(mockCallGateway).not.toHaveBeenCalled();
-  });
-
-  it("blocks when before_tool_call hook execution throws", async () => {
-    hookRunner.runBeforeToolCall.mockRejectedValueOnce(new Error("hook crashed"));
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "ls" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("disposition", "failed");
-    expect(result).toHaveProperty(
-      "reason",
-      "Tool call blocked because before_tool_call hook failed",
-    );
-  });
-
-  it("classifies a loop preflight exception as a before-tool failure", async () => {
-    const ctx = {
-      sessionKey: "main",
-      get loopDetection(): never {
-        throw new Error("loop state unavailable");
-      },
-    };
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "ls" },
-      ctx,
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      kind: "failure",
-      disposition: "failed",
-      reason: "Tool call blocked because before_tool_call hook failed",
-    });
-  });
-
-  it("passes diagnostic trace context to before_tool_call hooks", async () => {
-    const trace = {
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    };
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "pwd" },
-      toolCallId: "tool-1",
-      ctx: { agentId: "main", sessionKey: "main", runId: "run-1", trace },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event, toolContext] = requireHookCall(0);
-    expectRecordFields(event, {
-      toolName: "exec",
-      runId: "run-1",
-      toolCallId: "tool-1",
-    });
-    expectRecordFields(toolContext, {
-      toolName: "exec",
-      runId: "run-1",
-      toolCallId: "tool-1",
-    });
-    expect(toolContext.trace).toEqual(trace);
-    expect(toolContext.trace).not.toBe(trace);
-    expect(Object.isFrozen(toolContext.trace)).toBe(true);
-  });
-
-  it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
-    const cwd = path.join("/tmp", "openclaw-hooks");
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: src/new.ts",
-      "+x",
-      "*** Update File: src/old.ts",
-      "*** Move to: src/renamed.ts",
-      "@@",
-      "+y",
-      "*** Delete File: src/dead.ts",
-      "*** End Patch",
-    ].join("\n");
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: patch },
-      toolCallId: "patch-1",
-      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event, context] = requireHookCall(0);
-    expectRecordFields(event, {
-      toolName: "apply_patch",
-      runId: "run-patch",
-      toolCallId: "patch-1",
-      derivedPaths: [
-        path.join(cwd, "src/new.ts"),
-        path.join(cwd, "src/old.ts"),
-        path.join(cwd, "src/renamed.ts"),
-        path.join(cwd, "src/dead.ts"),
-      ],
-    });
-    expectRecordFields(context, {
-      toolName: "apply_patch",
-      runId: "run-patch",
-      toolCallId: "patch-1",
-    });
-  });
-
-  it("derives sandboxed apply_patch paths through the sandbox bridge", async () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: /workspace/src/new.ts",
-      "+x",
-      "*** End Patch",
-    ].join("\n");
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: patch },
-      toolCallId: "patch-sandbox",
-      ctx: {
-        agentId: "main",
-        cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: {
-            resolvePath: ({ filePath }: { filePath: string }) => ({
-              containerPath: filePath,
-              hostPath: "/host/sandbox/src/new.ts",
-              relativePath: "src/new.ts",
-            }),
-          } as never,
-        },
-        sessionKey: "main",
-        runId: "run-patch",
-      },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event] = requireHookCall(0);
-    expectRecordFields(event, {
-      toolName: "apply_patch",
-      derivedPaths: ["/host/sandbox/src/new.ts"],
-    });
-  });
-
-  it("derives remote apply_patch shorthand and literal paths like execution", async () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: @reference.md",
-      "@@",
-      "+reference",
-      "*** Update File: @literal.md",
-      "@@",
-      "+literal",
-      "*** End Patch",
-    ].join("\n");
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-    const resolvePath = ({ filePath }: { filePath: string }) => ({
-      containerPath: path.posix.resolve("/workspace", filePath),
-      relativePath: filePath,
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: patch },
-      toolCallId: "patch-remote-at",
-      ctx: {
-        agentId: "main",
-        cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: {
-            resolvePath,
-            stat: async ({ filePath }: { filePath: string }) =>
-              filePath === "./@literal.md" ? { type: "file", size: 7, mtimeMs: 0 } : null,
-          } as never,
-        },
-        sessionKey: "main",
-        runId: "run-patch",
-      },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event] = requireHookCall(0);
-    expectRecordFields(event, {
-      toolName: "apply_patch",
-      derivedPaths: ["/workspace/reference.md", "/workspace/@literal.md"],
-    });
-  });
-
-  it("preserves bridge-native absolute apply_patch paths", async () => {
-    const rawPath = "/workspace//src/new.ts";
-    const patch = ["*** Begin Patch", `*** Add File: ${rawPath}`, "+new", "*** End Patch"].join(
-      "\n",
-    );
-    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
-      containerPath: path.posix.normalize(filePath),
-      relativePath: filePath,
-    }));
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: patch },
-      ctx: {
-        cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: { resolvePath } as never,
-        },
-      },
-    });
-
-    expect(result.blocked).toBe(false);
-    expect(resolvePath).toHaveBeenCalledWith({ filePath: rawPath, cwd: "/workspace" });
-  });
-
-  it("cancels remote apply_patch path derivation with the run", async () => {
-    const controller = new AbortController();
-    let reportStatSignal!: (signal: AbortSignal | undefined) => void;
-    const statStarted = new Promise<AbortSignal | undefined>((resolve) => {
-      reportStatSignal = resolve;
-    });
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const running = runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: {
-        input: ["*** Begin Patch", "*** Update File: @remote.md", "*** End Patch"].join("\n"),
-      },
-      signal: controller.signal,
-      ctx: {
-        cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: {
-            resolvePath: ({ filePath }: { filePath: string }) => ({
-              containerPath: path.posix.resolve("/workspace", filePath),
-              relativePath: filePath,
-            }),
-            stat: ({ signal }: { signal?: AbortSignal }) => {
-              reportStatSignal(signal);
-              if (!signal) {
-                return Promise.resolve(null);
-              }
-              return new Promise((_, reject) => {
-                signal.addEventListener(
-                  "abort",
-                  () =>
-                    reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
-                  { once: true },
-                );
-              });
-            },
-          } as never,
-        },
-      },
-    });
-
-    const statSignal = await statStarted;
-    controller.abort();
-    expect(statSignal).toBe(controller.signal);
-    await expect(running).resolves.toMatchObject({
-      blocked: true,
-      kind: "failure",
-      disposition: "cancelled",
-    });
-  });
-
-  it("does not fail hooks when sandbox path derivation rejects a target", async () => {
-    const patch = ["*** Begin Patch", "*** Add File: /outside.ts", "+x", "*** End Patch"].join(
-      "\n",
-    );
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: patch },
-      toolCallId: "patch-sandbox-rejected",
-      ctx: {
-        agentId: "main",
-        cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: {
-            resolvePath: () => {
-              throw new Error("Path escapes sandbox root");
-            },
-          } as never,
-        },
-        sessionKey: "main",
-        runId: "run-patch",
-      },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event, context] = requireHookCall(0);
-    expect(event).not.toHaveProperty("derivedPaths");
-    expectRecordFields(context, {
-      toolName: "apply_patch",
-      runId: "run-patch",
-      toolCallId: "patch-sandbox-rejected",
-    });
-  });
-
-  it("skips derived path extraction when no policies or hooks can consume it", async () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const params = {};
-    Object.defineProperty(params, "input", {
-      enumerable: true,
-      get() {
-        throw new Error("should not derive paths");
-      },
-    });
-
-    await expect(
-      runBeforeToolCallHook({
-        toolName: "apply_patch",
-        params,
-        toolCallId: "patch-no-hooks",
-      }),
-    ).resolves.toEqual({ blocked: false, params });
-    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
-  });
-
-  it("reports trusted policy diagnostics through guarded readers", () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const registry = createEmptyPluginRegistry();
-    const unreadableIdPolicy: Record<string, unknown> = {
-      description: "synthetic trusted policy",
-      evaluate: () => undefined,
-    };
-    Object.defineProperty(unreadableIdPolicy, "id", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin trusted policy id is unreadable");
-      },
-    });
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "fuzzplugin",
-        pluginName: "Fuzz Plugin",
-        source: "test",
-        policy: unreadableIdPolicy as never,
-      },
-      {
-        pluginId: "mockplugin",
-        pluginName: "Mock Plugin",
-        source: "test",
-        policy: {
-          id: "mockpolicy",
-          description: "mock policy",
-          evaluate: () => undefined,
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
-    try {
-      state = getBeforeToolCallPolicyDiagnosticState();
-    } finally {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-
-    expect(state).toEqual({
-      hasBeforeToolCallHook: false,
-      trustedToolPolicies: [
-        {
-          id: "fuzzplugin",
-          pluginId: "fuzzplugin",
-          pluginName: "Fuzz Plugin",
-        },
-        {
-          id: "mockpolicy",
-          pluginId: "mockplugin",
-          pluginName: "Mock Plugin",
-        },
-      ],
-    });
-  });
-
-  it("recomputes host-derived paths after trusted policy param rewrites", async () => {
-    const cwd = path.join("/tmp", "openclaw-hooks");
-    const originalPatch = [
-      "*** Begin Patch",
-      "*** Add File: src/old.ts",
-      "+x",
-      "*** End Patch",
-    ].join("\n");
-    const rewrittenPatch = [
-      "*** Begin Patch",
-      "*** Add File: src/new.ts",
-      "+x",
-      "*** End Patch",
-    ].join("\n");
-    const seenByLaterPolicy: unknown[] = [];
-    const registry = createEmptyPluginRegistry();
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "trusted-rewriter",
-        pluginName: "Trusted Rewriter",
-        source: "test",
-        policy: {
-          id: "rewrite",
-          description: "rewrite",
-          evaluate: () => ({ params: { input: rewrittenPatch } }),
-        },
-      },
-      {
-        pluginId: "trusted-inspector",
-        pluginName: "Trusted Inspector",
-        source: "test",
-        policy: {
-          id: "inspect",
-          description: "inspect",
-          evaluate: (event) => {
-            seenByLaterPolicy.push(event.derivedPaths);
-            return undefined;
-          },
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "apply_patch",
-      params: { input: originalPatch },
-      toolCallId: "patch-rewrite",
-      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
-    });
-
-    expect(result).toEqual({ blocked: false, params: { input: rewrittenPatch } });
-    expect(seenByLaterPolicy).toEqual([[path.join(cwd, "src/new.ts")]]);
-    const [event] = requireHookCall(0);
-    expectRecordFields(event, {
-      params: { input: rewrittenPatch },
-      derivedPaths: [path.join(cwd, "src/new.ts")],
-    });
-  });
-
-  it("calls gateway RPC and unblocks on allow-once", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Sensitive",
-        description: "Sensitive op",
-        pluginId: "sage",
-      },
-    });
-
-    // First call: plugin.approval.request → returns server-generated id
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-1", status: "accepted" });
-    // Second call: plugin.approval.waitDecision → returns allow-once
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-1", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "rm -rf" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(false);
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    requireRecord(requestCall[1], "approval request gateway client");
-    expect(requireRecord(requestCall[2], "approval request params").twoPhase).toBe(true);
-    expect(requestCall[3]).toEqual({ expectFinal: false });
-    const waitCall = requireGatewayCall(1);
-    expect(waitCall[0]).toBe("plugin.approval.waitDecision");
-    requireRecord(waitCall[1], "approval wait gateway client");
-    expect(waitCall[2]).toEqual({ id: "server-id-1" });
-  });
-
-  it("caps oversized plugin approval timeouts before calling gateway", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Oversized timeout",
-        description: "Still valid gateway payload",
-        pluginId: "sage",
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "rm -rf" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(false);
-    const requestCall = requireGatewayCall(0);
-    expect(requireRecord(requestCall[1], "approval request gateway client").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
-    );
-    expect(requireRecord(requestCall[2], "approval request params").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-    );
-    const waitCall = requireGatewayCall(1);
-    expect(requireRecord(waitCall[1], "approval wait gateway client").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
-    );
-  });
-
-  it("uses tool-neutral guidance for a denied plugin tool call", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Dangerous",
-        description: "Dangerous op",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", decision: "deny" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "web_search",
-      params: { query: "OpenClaw" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("disposition", "blocked");
-    expect(result).toHaveProperty(
-      "reason",
-      [
-        "Denied by user. The tool call did not run.",
-        "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
-        "Do not run the tool call again or ask the user to approve it again.",
-        "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
-      ].join("\n"),
-    );
-  });
-
-  it("keeps the generic plugin approval timeout reason unchanged", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Timeout test",
-        description: "Will time out",
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", decision: null });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      kind: "failure",
-      reason: "Approval timed out",
-    });
-  });
-
-  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
-    registerTelegramPluginApprovalSetup();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Timeout test",
-        description: "Will time out",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-3",
-      status: "accepted",
-      deliveryRoute: "turn-source",
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", decision: null });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: {
-        agentId: "main",
-        sessionKey: "main",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "-100123456789",
-        turnSourceAccountId: "default",
-      },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("disposition", "timed_out");
-    expect(result).toHaveProperty(
-      "reason",
-      "Approval timed out\n\nConfigure Telegram native approval setup.",
-    );
-  });
-
-  it.each([
-    ["a timeout", null],
-    ["an explicit timeout decision", PluginApprovalResolutions.TIMEOUT],
-    ["an unknown decision", "approved"],
-    ["a malformed truthy decision", true as unknown as string],
-  ])("blocks on %s even when deprecated timeoutBehavior is allow", async (_label, decision) => {
-    const onResolution = vi.fn();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      params: { command: "safe-command" },
-      requireApproval: {
-        title: "Lenient timeout",
-        description: "Must fail closed",
-        timeoutBehavior: "allow",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", decision });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "rm -rf /" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      kind: "failure",
-      disposition: "timed_out",
-      deniedReason: "plugin-approval",
-      reason: "Approval timed out",
-      params: { command: "rm -rf /" },
-    });
-    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
-  });
-
-  it("blocks exact allow decisions excluded by the request", async () => {
-    const onResolution = vi.fn();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      params: { command: "safe-command" },
-      requireApproval: {
-        title: "Restricted approval",
-        description: "Allow once only",
-        allowedDecisions: ["allow-once", "deny"],
-        onResolution,
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-restricted", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-restricted",
-      decision: "allow-always",
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "unsafe-command" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      disposition: "timed_out",
-      reason: "Approval timed out",
-      params: { command: "unsafe-command" },
-    });
-    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
-  });
-
-  it("blocks a wait decision bound to another approval id", async () => {
-    const onResolution = vi.fn();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      params: { command: "safe-command" },
-      requireApproval: {
-        title: "Bound approval",
-        description: "Must match the request id",
-        onResolution,
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-bound", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-other",
-      decision: "allow-once",
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "unsafe-command" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      disposition: "timed_out",
-      reason: "Approval timed out",
-      params: { command: "unsafe-command" },
-    });
-    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
-  });
-
-  it("falls back to block on gateway error", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Gateway down",
-        description: "Gateway is unavailable",
-      },
-    });
-
-    mockCallGateway.mockRejectedValueOnce(new Error("unknown method plugin.approval.request"));
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
-  });
-
-  it.each([
-    [
-      "surfaces validation rejections",
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message:
-          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
-      }),
-      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
-    ],
-    [
-      "keeps structured service failures on the unavailable fallback",
-      new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        message: "approval service unavailable",
-      }),
-      "Plugin approval required (gateway unavailable)",
-    ],
-  ])("%s", async (_label, error, expectedReason) => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "x".repeat(81),
-        description: "Gateway classification test",
-      },
-    });
-    mockCallGateway.mockRejectedValueOnce(error);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", expectedReason);
-  });
-
-  it("reports an expired accepted approval without calling it a request rejection", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: { title: "Approval", description: "Wait phase classification" },
-    });
-    mockCallGateway
-      .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "approval expired or not found",
-        }),
-      );
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toHaveProperty(
-      "reason",
-      "Plugin approval no longer available: approval expired or not found",
-    );
-  });
-
-  it("blocks when gateway returns no id", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No ID",
-        description: "Registration returns no id",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ status: "error" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Registration returns no id");
-  });
-
-  it("blocks on immediate null decision without calling waitDecision even when timeoutBehavior is allow", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No route",
-        description: "No approval route available",
-        timeoutBehavior: "allow",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-immediate", decision: null });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Plugin approval unavailable (no approval route)");
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-    ]);
-  });
-
-  it("unblocks immediately when abort signal fires during waitDecision", async () => {
-    const result = await runAbortDuringApprovalWait();
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
-  });
-
-  it("classifies non-Error abort reasons as run abort cancellation", async () => {
-    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-  });
-
-  it("calls onResolution with allow-once on approval", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Needs approval",
-        description: "Check this",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(onResolution).toHaveBeenCalledWith("allow-once");
-  });
-
-  it("allows allow-always decisions for tool approvals", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Needs durable approval",
-        description: "Check this durable approval",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-allow-always", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-allow-always",
-      decision: "allow-always",
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "echo ok" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toEqual({
-      blocked: false,
-      params: { command: "echo ok" },
-      approvalResolution: "allow-always",
-    });
-    expect(onResolution).toHaveBeenCalledWith("allow-always");
-  });
-
-  it("does not await onResolution before returning approval outcome", async () => {
-    const onResolution = vi.fn(() => new Promise<void>(() => {}));
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Non-blocking callback",
-        description: "Should not block tool execution",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1-nonblocking", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-r1-nonblocking",
-      decision: "allow-once",
-    });
-
-    let timeoutId: NodeJS.Timeout | undefined;
-    try {
-      const result = await Promise.race([
-        runBeforeToolCallHook({
-          toolName: "bash",
-          params: {},
-          ctx: { agentId: "main", sessionKey: "main" },
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(
-            () => reject(new Error("runBeforeToolCallHook waited for onResolution")),
-            250,
-          );
-        }),
-      ]);
-
-      expect(result).toEqual({
-        blocked: false,
-        params: {},
-        approvalResolution: "allow-once",
-      });
-      expect(onResolution).toHaveBeenCalledWith("allow-once");
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  });
-
-  it("calls onResolution with deny on denial", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Needs approval",
-        description: "Check this",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r2", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r2", decision: "deny" });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(onResolution).toHaveBeenCalledWith("deny");
-  });
-
-  it("calls onResolution with timeout when decision is null", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Timeout resolution",
-        description: "Will time out",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r3", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r3", decision: null });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(onResolution).toHaveBeenCalledWith("timeout");
-  });
-
-  it("calls onResolution with cancelled on gateway error", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Gateway error",
-        description: "Gateway will fail",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockRejectedValueOnce(new Error("gateway down"));
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-  });
-
-  it("calls onResolution with cancelled when abort signal fires", async () => {
-    const onResolution = vi.fn();
-    const result = await runAbortDuringApprovalWait({ onResolution });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-  });
-
-  it("calls onResolution with cancelled when gateway returns no id", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No ID",
-        description: "Registration returns no id",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ status: "error" });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-  });
-
-  it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Channel-routed approval",
-        description: "Must route to telegram",
-        pluginId: "my-plugin",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
-      toolName: "fetch",
-      params: { url: "https://example.com" },
-      ctx: {
-        agentId: "main",
-        sessionKey: "main",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "-100123456789",
-        turnSourceAccountId: "acct-42",
-        turnSourceThreadId: 9001,
-      },
-    });
-
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBe("telegram");
-    expect(requestParams.turnSourceTo).toBe("-100123456789");
-    expect(requestParams.turnSourceAccountId).toBe("acct-42");
-    expect(requestParams.turnSourceThreadId).toBe(9001);
-  });
-
-  it("uses the transport channel when tool policy provider differs", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Transport routed approval",
-        description: "Must use the transport channel",
-        pluginId: "my-plugin",
-      },
-    });
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-route-"));
-    await fs.writeFile(path.join(tempDir, "note.txt"), "hello");
-    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "transport-route-id",
-      decision: "allow-once",
-    });
-
-    const tools = createOpenClawCodingTools({
-      workspaceDir: tempDir,
-      messageProvider: "discord-voice",
-      messageChannel: "discord",
-      currentChannelId: "native-channel-1",
-      currentMessagingTarget: "channel:deliverable-1",
-      agentAccountId: "acct-1",
-      currentThreadTs: "thread-1",
-      approvalReviewerDeviceId: "device-tui-reviewer",
-    });
-    const readTool = tools.find((tool) => tool.name === "read");
-    if (!readTool) {
-      throw new Error("missing read tool");
-    }
-    await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
-
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBe("discord");
-    expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
-    expect(requestParams.turnSourceAccountId).toBe("acct-1");
-    expect(requestParams.turnSourceThreadId).toBe("thread-1");
-    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
-  });
-
-  it("omits turn source routing fields when ctx does not carry them", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No route ctx",
-        description: "Local-only approval",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    const requestCall = requireGatewayCall(0);
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBeUndefined();
-    expect(requestParams.turnSourceTo).toBeUndefined();
-    expect(requestParams.turnSourceAccountId).toBeUndefined();
-    expect(requestParams.turnSourceThreadId).toBeUndefined();
-  });
-
-  it.each([
-    {
-      label: "cron",
-      trigger: "cron",
-      reason: "Plugin approval unavailable: cron runs have no approval-capable initiating surface.",
-    },
-    {
-      label: "heartbeat hook",
-      trigger: "heartbeat",
-      reason:
-        "Plugin approval unavailable: heartbeat runs have no approval-capable initiating surface.",
-    },
-    {
-      label: "non-interactive CLI",
-      trigger: "user",
-      reason:
-        "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.",
-    },
-  ])("fails fast when a $label run requires plugin approval", async ({ trigger, reason }) => {
-    const onResolution = vi.fn();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Unattended approval",
-        description: "Command needs review",
-        onResolution,
-      },
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "gh run view 1" },
-      ctx: { agentId: "main", sessionKey: "main", trigger },
-    });
-
-    expect(result).toEqual({
-      blocked: true,
-      kind: "failure",
-      disposition: "failed",
-      deniedReason: "plugin-approval-unavailable",
-      reason,
-      params: { command: "gh run view 1" },
-    });
-    expect(mockCallGateway).not.toHaveBeenCalled();
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-  });
-
-  it("keeps waiting when an interactive approval surface is bound", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Interactive approval",
-        description: "CLI command needs review",
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "gh run view 1" },
-      ctx: {
-        agentId: "main",
-        sessionKey: "main",
-        trigger: "user",
-        approvalReviewerDeviceId: "device-tui-reviewer",
-      },
-    });
-
-    expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
-    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
   });
 });
 

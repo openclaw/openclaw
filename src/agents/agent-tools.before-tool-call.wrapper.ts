@@ -27,9 +27,7 @@ import {
 } from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
-  emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
-  findSkillUsageMatch,
   prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
@@ -73,6 +71,10 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
+import {
+  emitSkillUsedDiagnostic,
+  findSkillUsageMatch,
+} from "./before-tool-call-skill-telemetry.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
   CODE_MODE_WAIT_TOOL_NAME,
@@ -555,7 +557,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           toolCallOrdinal,
         });
-        await recordLoopOutcome({
+        const loopWarning = await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -604,7 +606,8 @@ export function wrapToolWithBeforeToolCallHook(
           );
         }
         // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
-        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
+        const feedback = loopWarning ?? outcome.loopWarning;
+        return feedback ? appendToolLoopWarning(result, feedback) : result;
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
