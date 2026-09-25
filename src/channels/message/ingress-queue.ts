@@ -222,13 +222,13 @@ export type CreateChannelIngressQueueOptions = {
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
-function normalizePart(value: string | undefined, fallback: string): string {
+export function normalizePart(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
   return normalized ? normalized : fallback;
 }
 
 // Keep inherited lookups for HOME/etc. without enumerating large Kubernetes service envs.
-function createStateDirEnv(
+export function createStateDirEnv(
   stateDir: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
@@ -276,7 +276,7 @@ export function getChannelIngressKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ChannelIngressDatabase>(db);
 }
 
-function affectedRows(result: { numAffectedRows?: bigint }): number {
+export function affectedRows(result: { numAffectedRows?: bigint }): number {
   return Number(result.numAffectedRows ?? 0n);
 }
 
@@ -443,7 +443,7 @@ function normalizedCandidateIds(ids: Iterable<string> | undefined): string[] | u
   return ids === undefined ? undefined : [...ids].map((id) => id.trim()).filter(Boolean);
 }
 
-function queueNameForParts(channelId: string, accountId: string): string {
+export function queueNameForParts(channelId: string, accountId: string): string {
   // JSON tuple encoding keeps channel/account scopes unambiguous even when ids contain separators.
   return JSON.stringify([channelId, accountId]);
 }
