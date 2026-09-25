@@ -3240,13 +3240,10 @@ src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	12
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
-src/skills/loading/config.ts	1
 src/skills/loading/frontmatter.ts	1
-src/skills/loading/source.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
-src/skills/security/clawhub-verdicts.ts	2
 src/skills/workshop/policy.ts	1
 src/skills/workshop/store-record.ts	3
 src/skills/workshop/store-sqlite-event.ts	1
@@ -3333,7 +3330,7 @@ src/tts/tts-settings.ts	4
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	4
 src/tui/components/chat-log.ts	2
-src/tui/embedded-backend.ts	3
+src/tui/embedded-backend.ts	2
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
@@ -3344,7 +3341,7 @@ src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-task-suggestions.ts	6
-src/tui/tui.ts	5
+src/tui/tui.ts	4
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
 src/utils/reaction-level.ts	2
@@ -3362,12 +3359,11 @@ src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
 src/wizard/navigation-prompter.ts	5
 src/wizard/session.ts	3
-src/wizard/setup.gateway-config.ts	4
 src/wizard/setup.migration-canonical.ts	1
 src/wizard/setup.migration-finalize.ts	1
-src/wizard/setup.migration-snapshot.ts	5
+src/wizard/setup.migration-snapshot.ts	3
 src/wizard/setup.migration-stage.ts	9
-src/wizard/setup.plugin-config.ts	5
+src/wizard/setup.plugin-config.ts	4
 src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	1
