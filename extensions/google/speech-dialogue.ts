@@ -119,7 +119,7 @@ export function splitGoogleTtsDialogue(
       }
       continue;
     }
-    if (labeled && speaker && isGoogleTtsUnknownSpeakerLabel(speaker, names)) {
+    if (sawLabel && labeled && speaker && isGoogleTtsUnknownSpeakerLabel(speaker, names)) {
       throw new Error(
         `Unknown Google TTS speaker "${speaker}". Use one of the two configured speaker names.`,
       );

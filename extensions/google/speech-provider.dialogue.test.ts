@@ -252,6 +252,48 @@ describe("Google speech dialogue", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
+  it("speaks colon-prefixed prose before the first speaker label", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: ["Intro: Today's agenda", "Puck: Hello.", "Kore: Hi."].join("\n"),
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.8-flash-tts",
+        speakers: [
+          { speaker: "Puck", voice: "Puck" },
+          { speaker: "Kore", voice: "Kore" },
+        ],
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    expect(requireFirstRecordArg(requestMock, "Google 3.8 colon lead-in request")).toMatchObject({
+      body: {
+        input: [
+          {
+            type: "user_input",
+            content: [
+              {
+                type: "text",
+                text: "Intro: Today's agenda Hello.",
+                annotations: [{ type: "speech_metadata", speaker: "Puck" }],
+              },
+              {
+                type: "text",
+                text: "Hi.",
+                annotations: [{ type: "speech_metadata", speaker: "Kore" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("speaks unlabeled text before the first speaker label", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();
