@@ -4,15 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
 }));
 
-vi.mock("../file-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../file-store.js")>();
+vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
   return {
     ...actual,
     fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {

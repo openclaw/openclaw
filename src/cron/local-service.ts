@@ -25,8 +25,8 @@ export async function withLocalAgentCronJobsRemoved<T>(
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
-    isAgentAvailable: (id) =>
-      !isAgentDeletionBlocked(id) &&
+    isAgentAvailable: (id, database, facts) =>
+      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(id, {}, database)) &&
       listAgentIds(getRuntimeConfig()).some(
         (configuredId) => normalizeAgentId(configuredId) === id,
       ),

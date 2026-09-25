@@ -1378,9 +1378,12 @@ describe("scoped vitest configs", () => {
       {
         name: "plugins",
         pool: "forks",
-        execArgv: process.versions.bun
-          ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
-          : ["--import", expect.any(String)],
+        execArgv: [
+          ...(process.versions.bun
+            ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
+            : ["--import", expect.any(String)]),
+          `--import=${new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url).href}`,
+        ],
       },
       { name: "plugins-native-loader", pool: "forks", execArgv: [] },
     ]);

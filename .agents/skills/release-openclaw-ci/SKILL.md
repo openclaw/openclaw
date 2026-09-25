@@ -49,10 +49,13 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
-  to reserved capacity with unchanged labels. Configure eligible runners and repo
+  and the Release Publish parent plus its publish children to reserved capacity
+  with unchanged labels; credentialed publish and approval jobs stay on default
+  GitHub-hosted labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.
+- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match.
 - Two publication modes (RELEASING.md "Publication modes"). Strict default: a
   stable tag needs stable/full evidence with soak and blocking performance and no
   failed non-proof lane. Operator fast path: `stable_soak_waiver` /
@@ -67,21 +70,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
   pending platforms accurately and repair native-only failures in parallel.
-- Release priority: release runs always beat PR-side hosted-runner work. The
-  repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
-  `pnpm ci:full-release` records the pause window, sets it on dispatch, and
-  clears it when the operation ends; `pnpm frv continue --failed` and
-  `pnpm frv verify` clear it on seal. While set, `CI`, Auto response, PR
-  context and evidence, Labeler, CodeQL, Periphery, Workflow Sanity,
-  ClawSweeper Dispatch, and Maintainer Command Reactions skip at the job level
-  unless dispatched or on a `release*/` branch (Security Review never pauses);
-  deferred CI fails its gate with `Deferred for release <run>`. When release
-  children starve behind queued PR runs, `pnpm frv prioritize --run <parent>`
-  records and cancels the still-queued non-release runs of those workflows;
-  after the seal, `pnpm frv prioritize --restore <record>` clears the variable
-  first and reruns the cancelled and deferred runs, newest per workflow and
-  branch. Never leave the variable set after a release. Keep the required
-  publication proofs and soak gates intact.
+- Release validation does not pause CI or supporting workflows. The legacy
+  `OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
+  admission. Do not use `pnpm frv prioritize --run` for routine validation;
+  it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
+  to recover runs deferred by older workflow revisions and clear their variable.
+  Keep the required publication proofs and soak gates intact.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
@@ -401,6 +395,8 @@ gh workflow run openclaw-performance.yml \
 - Record regressions in release evidence and investigate their product impact.
   Performance results are advisory for beta, stable, and full profiles; no
   performance waiver is needed for npm/ClawHub publication or main closeout.
+- Closeout replay reuses sealed waiver text without retyping; only new operator
+  text must carry the version prefix.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 

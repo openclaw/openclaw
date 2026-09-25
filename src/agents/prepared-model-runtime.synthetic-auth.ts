@@ -5,21 +5,27 @@ import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-a
 import { prepareSyntheticAuthWithProvider } from "../plugins/provider-synthetic-auth.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 
-// Provider-scoped live builds must not fan ambient synthetic-auth discovery out to every
-// registered provider; each unscoped ref can force a full plugin module load on the read path.
-export function scopeSyntheticAuthProviderRefs(
-  refs: readonly string[],
-  providerDiscoveryProviderIds: readonly string[] | undefined,
-): string[] {
-  if (!providerDiscoveryProviderIds) {
-    return [...refs];
-  }
-  const scoped = new Set(providerDiscoveryProviderIds.map((id) => normalizeProviderId(id)));
+/** Auth refresh owns the requested providers and their separate native auth namespaces. */
+export function preparedSyntheticAuthProviderScope(
+  providerIds: readonly string[],
+): ReadonlySet<string> {
+  const scoped = new Set(providerIds.map((id) => normalizeProviderId(id)));
   // OpenAI's native runtime has a separate auth namespace, never a bearer alias.
   if (scoped.has("openai")) {
     scoped.add("codex");
   }
-  return refs.filter((ref) => scoped.has(normalizeProviderId(ref)));
+  return scoped;
+}
+
+// Scoped discovery must not fan ambient auth probes out to every registered provider.
+export function scopeSyntheticAuthProviderRefs(
+  refs: readonly string[],
+  providerDiscoveryProviderIds: readonly string[] | undefined,
+): string[] {
+  const scope =
+    providerDiscoveryProviderIds &&
+    preparedSyntheticAuthProviderScope(providerDiscoveryProviderIds);
+  return refs.filter((ref) => !scope || scope.has(normalizeProviderId(ref)));
 }
 
 export function listPreparedSyntheticAuthProviderRefs(

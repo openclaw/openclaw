@@ -66,6 +66,9 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
           const originalRun = worker.run.bind(worker);
           let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
           const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (params.plan.kind !== "entry" && params.plan.kind !== "historical-generation") {
+              return originalRun(params);
+            }
             return originalRun({
               ...params,
               withWriteAdmission: (performWrite, diagnostics) =>
@@ -145,7 +148,7 @@ describe("SQLite reclamation admission races", () => {
     });
     const writes: Promise<void>[] = [];
     let pendingBeforeAuthorization: Array<string | undefined> = [];
-    archiveMaterializationHook.beforeCommitRequest = () => {
+    archiveMaterializationHook.beforeCommitRequest = vi.fn(() => {
       // Start real asynchronous producers in the observed order, but leave the
       // parent free to authorize the worker whose transaction already owns SQLite.
       for (const recorder of recorders) {
@@ -156,7 +159,7 @@ describe("SQLite reclamation admission races", () => {
         }
       }
       pendingBeforeAuthorization = recorders.map((recorder) => recorder.describeFlushState());
-    };
+    });
     const deletion = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       commitGuard: () => {},
@@ -168,6 +171,7 @@ describe("SQLite reclamation admission races", () => {
     );
     const outcomes = await Promise.allSettled(writes);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(archiveMaterializationHook.beforeCommitRequest).toHaveBeenCalledOnce();
     expect(pendingBeforeAuthorization).toEqual(
       recorders.map(() => expect.stringContaining("pendingRows=1")),
     );

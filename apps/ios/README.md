@@ -106,7 +106,7 @@ Prereqs:
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
-- Ruby 3.4.10 and Bundler 2.6.9 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- Ruby 3.4.10 and Bundler 4.0.21 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -201,7 +201,7 @@ Use this when a clone is missing local iOS release setup and you want the shorte
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
 ```
 
 2. If auth is missing, bootstrap it once on this Mac:

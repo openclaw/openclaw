@@ -121,9 +121,11 @@ function interruptionScript(
     installCliSignalExitHandlers();
     const program = new Command();
     registerMaintenanceCommands(program);
+    // The synthetic prompt has no native input handle; retain its parent-control channel.
+    process.channel.ref();
     try { await withCliProcessScope(() => program.parseAsync(["node", "openclaw", "doctor", "--fix", "--non-interactive"])); }
     catch (error) { if (!(error instanceof ExitError) || error.code !== 0) throw error; }
-    if (process.connected) process.disconnect();
+    finally { if (process.connected) process.disconnect(); }
   `;
 }
 

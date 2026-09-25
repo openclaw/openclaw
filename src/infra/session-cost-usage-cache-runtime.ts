@@ -227,6 +227,11 @@ export async function loadSessionCostSummariesFromCache(params: {
   const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
   if (staleSessionFiles.length > 0 && (refreshRunning || refreshRequested)) {
     cacheStatus.status = "refreshing";
+    for (const summary of summaries) {
+      if (summary?.staleSince !== undefined) {
+        summary.refreshing = true;
+      }
+    }
   }
   return { summaries, cacheStatus };
 }

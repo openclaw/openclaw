@@ -126,6 +126,9 @@ describe("test runtime prerequisites", () => {
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
+    ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
+    ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
+    ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["migrated update process", ["src/cli/update-cli/update-command-migrated.test.ts"], "runtime"],
     ["update rollback", ["src/cli/update-cli/update-command-rollback.test.ts"], "runtime"],
@@ -2861,6 +2864,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
     ],
     [
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
+    ],
+    [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
       "src/state/openclaw-agent-execution-cleanup.test.ts",
     ],
@@ -3180,6 +3187,16 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it.each(["scripts/docker/setup.sh", "scripts/lib/build-metadata.sh"])(
+    "routes stubbed Docker setup checks to tooling for %s",
+    (target) => {
+      const plan = buildVitestRunPlans([target]).find((candidate) =>
+        candidate.includePatterns?.includes("test/scripts/docker-setup.test.ts"),
+      );
+      expect(plan).toMatchObject({ config: "test/vitest/vitest.tooling.config.ts" });
+    },
+  );
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [

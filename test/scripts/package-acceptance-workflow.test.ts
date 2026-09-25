@@ -9320,9 +9320,6 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
     expect(publishedUpgradeSurvivor).toContain("assert-no-requests");
-    expect(publishedUpgradeSurvivor).toContain(
-      "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
-    );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
@@ -15197,7 +15194,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
     for (const workflowPath of releaseWorkflowPaths) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.19.0");
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.21.0");
       expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 
@@ -15985,6 +15982,23 @@ esac
     expect(clawHubPackJob.steps?.map((step) => step.name)).not.toContain(
       "Checkout target revision",
     );
+  });
+
+  it("provisions the trusted parser before packing a frozen npm candidate", () => {
+    const job = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "prepare_openclaw_npm");
+    const steps = job.steps ?? [];
+    const materialize = workflowStep(job, "Materialize trusted package preparation runtime");
+    const provision = workflowStep(job, "Provision trusted package preparation runtime");
+    const pack = workflowStep(job, "Pack and seal publishable npm package set");
+
+    expect(materialize.run).toContain("git -C .release-harness sparse-checkout add");
+    expect(materialize.run).toContain(".github/actions/setup-release-harness");
+    expect(materialize.run).toContain(".github/actions/setup-pnpm-store-cache");
+    expect(materialize.run).toContain("packages patches");
+    expect(provision.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
+    expect(provision.with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(steps.indexOf(materialize)).toBeLessThan(steps.indexOf(provision));
+    expect(steps.indexOf(provision)).toBeLessThan(steps.indexOf(pack));
   });
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {

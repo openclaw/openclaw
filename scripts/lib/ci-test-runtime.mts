@@ -1,5 +1,10 @@
 import { globSync } from "node:fs";
-import { matchesVitestGlob } from "../../test/vitest/vitest.pattern-file.ts";
+import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  matchesVitestCliSelection,
+  matchesVitestGlob,
+  relativizeScopedPatterns,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -31,9 +36,13 @@ export type CiTestRuntimeSelection = {
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Avoid sweeping parked allocator threads between short UI update cycles.
+  MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
+// Measured whole-file admission; the rest of agents-support retains Node.
+const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
 // TypeScript's synchronous native API uses Node child-process pipe handles.
 // Keep these compiler assertions on Node, including those in mixed runtime suites.
 const nativeCompilerTestFiles = [
@@ -66,6 +75,8 @@ const runtimePartitions = new Map<
       nodeRequired: new Set([
         ...nativeCompilerTestFiles,
         "packages/markdown-core/src/render-aware-chunking.test.ts",
+        // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
+        "src/agents/code-mode-node.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.
@@ -219,6 +230,12 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    if (
+      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
+      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+    ) {
+      return completeBun();
+    }
     const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
@@ -241,6 +258,26 @@ export function resolveCiTestRuntimeSelections(
   const config = selection.configs[0]!;
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
+  }
+  if (config === agentVitestProjectOwners.support.config) {
+    const owner = agentVitestProjectOwners.support;
+    const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
+    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    if (
+      includePatterns &&
+      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+        qualifiedPatterns.includes(pattern),
+      )
+    ) {
+      return completeBun();
+    }
+    const bunFiles =
+      policy === "dual"
+        ? bunCompatibleAgentSupportFiles.filter((file) =>
+            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+          )
+        : [];
+    return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
   }
   const partition = runtimePartitions.get(config);
   if (!partition || (partition.includeAfterShard && !uiPartition)) {

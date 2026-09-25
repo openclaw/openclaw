@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 const job = workflow.jobs["android-access-native"];
@@ -14,7 +15,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");
   const verification = step.run.split("python3 - <<'PY'\n")[1]?.split("\nPY")[0];
-  if (!verification) throw new Error("Missing native report verification");
+  if (!verification) {
+    throw new Error("Missing native report verification");
+  }
   return spawnSync(
     "python3",
     [
@@ -49,7 +52,9 @@ with zipfile.ZipFile(apk, 'w') as archive:
 describe("Android Access native workflow", () => {
   it("runs the packaged class on current Android targets and includes its result in CI", () => {
     expect(job.permissions).toEqual({ contents: "read" });
-    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
+      "ubuntu-24.04",
+    );
     expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
       "${{ steps.manifest.outputs.run_android_access_native }}",
     );

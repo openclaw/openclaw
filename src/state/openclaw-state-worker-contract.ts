@@ -18,7 +18,7 @@ import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
-import type { CronStateWorkerOperations } from "../cron/store/dispatch.worker.js";
+import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,
@@ -33,6 +33,7 @@ import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
+import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
@@ -115,6 +116,7 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
   FleetRegistryWriteOperations &
   ProjectRegistryWorkerOperations &
   WorkerEnvironmentWorkerOperations &
+  WorkerInferenceStoreOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TranscriptReadOperations &
@@ -262,6 +264,10 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     "diagnostic.register": {
       input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
       output: void;
+    };
+    "config.snapshot.upsert": {
+      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
+      output: boolean;
     };
   };
 

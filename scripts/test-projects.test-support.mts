@@ -2885,6 +2885,8 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
     [
+      packageAcceptance,
+      "upgrade-survivor-missing-load-path",
       "upgrade-survivor-assertions",
       "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
@@ -3316,7 +3318,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/build-metadata\.sh$/u,
     [
-      "src/docker-setup.e2e.test.ts",
+      "test/scripts/docker-setup.test.ts",
       "apple-release-source-check",
       "ios-version",
       "package-mac-app",
