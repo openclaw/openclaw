@@ -9,6 +9,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
+import { harnessSupportsTurnScopedToolRestrictions } from "./types.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParamsV2,
@@ -87,7 +88,12 @@ function buildRestrictedFinalizationAttempt(
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
     ...BUILTIN_AGENT_HARNESS_METADATA,
-    runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
+    supportsTurnScopedToolRestrictions: true,
+    runAttempt: (params) =>
+      runEmbeddedAttempt({
+        ...(params as EmbeddedRunAttemptParams),
+        supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
+      }),
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific

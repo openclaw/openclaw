@@ -154,7 +154,17 @@ describe("embedded Tool Search prompt parity", () => {
               await input.prepareSystemPrompt(sessionRuntime.state.systemPromptText),
             );
           }
-          return { hookCtx: {}, transcriptLeafId: null };
+          return {
+            hookCtx: {},
+            effectivePrompt: attempt.prompt,
+            effectiveTranscriptPrompt: attempt.prompt,
+            decisionPrefilter: {
+              shouldPruneTools: false,
+              status: "skipped",
+              reason: "fixture-baseline",
+            },
+            transcriptLeafId: null,
+          };
         });
         let submittedPrompt = "";
         mocks.submitPrompt.mockImplementation(async () => {

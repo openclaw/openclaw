@@ -175,6 +175,35 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     forgetPromptBuildDrainCacheForRun("tools-allow-run");
   });
 
+  it("separates verbatim ordinary prompt-build fields from other pending context", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const promptFields = {
+      systemPrompt: "  system  ",
+      prependContext: "prefix\n",
+      appendContext: " suffix",
+      prependSystemContext: "system prefix",
+      appendSystemContext: "system suffix",
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { runId: "decision-fields-run", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => promptFields),
+      },
+    });
+
+    expect(result.decisionPromptBuildFields).toEqual(promptFields);
+    expect(result.hasPendingNonPromptBuildContext).toBe(false);
+    forgetPromptBuildDrainCacheForRun("decision-fields-run");
+  });
+
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
     // Retry attempts reuse the first drain result so plugin-provided next-turn
     // context is not consumed or duplicated multiple times.

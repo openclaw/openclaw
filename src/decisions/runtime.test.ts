@@ -628,6 +628,83 @@ describe("fault settlement and generation health", () => {
       }
     },
   );
+  it.each([
+    { settlement: "resolve", failureReason: "transport" },
+    { settlement: "reject", failureReason: "rate-limited" },
+  ] as const)(
+    "keeps $settlement caller deadlines out of shared health while preserving $failureReason accounting",
+    async ({ settlement, failureReason }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      try {
+        const deadlineStarted = Array.from({ length: 3 }, () => createDeferredCore());
+        let attempt = 0;
+        const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { signal }) => {
+          const current = attempt++;
+          if (current < deadlineStarted.length) {
+            deadlineStarted[current]!.resolve();
+            await new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            if (settlement === "reject") {
+              throw new Error("provider abort detail");
+            }
+          }
+          return answer;
+        });
+        const host = registered(evaluate);
+        const providerHost = host.registry.decisionProviders[0]!.host;
+
+        for (let index = 0; index < deadlineStarted.length; index++) {
+          const pending = host.run({
+            ...options(),
+            purpose: "tool-prefilter.semantic-gate",
+            timeoutMs: 500,
+          });
+          await deadlineStarted[index]!.promise;
+          expect(providerHost.inspect(config).activeRequests).toBe(1);
+          await vi.advanceTimersByTimeAsync(500);
+          expect(await pending).toEqual({ status: "unavailable", reason: "deadline" });
+          expect(providerHost.inspect(config)).toMatchObject({
+            activeRequests: 0,
+            callable: true,
+            reasons: { deadline: index + 1 },
+          });
+        }
+
+        expect(await host.run({ ...options(), purpose: "decision_evaluate" })).toMatchObject({
+          status: "ok",
+        });
+        expect(evaluate).toHaveBeenCalledTimes(4);
+        expect(providerHost.inspect(config)).toMatchObject({
+          activeRequests: 0,
+          callable: true,
+          successCount: 1,
+          reasons: { deadline: 3 },
+        });
+
+        evaluate.mockResolvedValue({ status: "unavailable", reason: failureReason });
+        for (let index = 1; index <= 3; index++) {
+          expect(await host.run({ ...options(), purpose: "decision_evaluate" })).toEqual({
+            status: "unavailable",
+            reason: failureReason,
+          });
+          expect(evaluate).toHaveBeenCalledTimes(4 + index);
+        }
+        expect(await host.run({ ...options(), purpose: "decision_evaluate" })).toEqual({
+          status: "unavailable",
+          reason: "circuit-open",
+        });
+        expect(evaluate).toHaveBeenCalledTimes(7);
+        expect(providerHost.inspect(config)).toMatchObject({
+          activeRequests: 0,
+          callable: false,
+          reasons: { deadline: 3, [failureReason]: 3, "circuit-open": 1 },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("keeps auth failures across model selection changes until provider configuration changes", async () => {
     const callback = vi
       .fn<DecisionProviderV1["evaluate"]>()

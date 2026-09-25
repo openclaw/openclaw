@@ -6,6 +6,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import {
   type DiagnosticTraceContext,
@@ -51,6 +52,10 @@ import {
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
+  evaluateAttemptDecisionToolPrefilter,
+  type DecisionPrefilterResult,
+} from "./attempt-decision-prefilter.js";
+import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
   normalizeMessagesForCurrentPromptBoundary,
@@ -86,6 +91,7 @@ type EmbeddedAttemptSteeringLease = {
 };
 
 type EmbeddedAttemptPromptAssembly = {
+  decisionPrefilter: DecisionPrefilterResult;
   assertHostActive?: () => void;
   hookCtx: PromptBuildHookContext;
   effectivePrompt: string;
@@ -110,12 +116,26 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   sessionAgentId: string;
   runtimeModel: string;
   systemPromptText: string;
-  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  runAbortSignal?: AbortSignal;
+  applyPromptBuildToolsAllow: (
+    toolsAllow: string[] | undefined,
+    decisionIsCurrent?: () => boolean,
+  ) => string[];
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
+  // Capture runtime ownership before hook/steering awaits; explicit scopes stay pinned.
+  const readConfig = createRuntimeConfigReader(attempt.config ?? getRuntimeConfig());
+  const attemptAbortSignal = attempt.abortSignal;
+  const runAbortSignal = input.runAbortSignal;
+  const activeAbortSignal =
+    attemptAbortSignal && runAbortSignal
+      ? AbortSignal.any([attemptAbortSignal, runAbortSignal])
+      : (attemptAbortSignal ?? runAbortSignal);
+  activeAbortSignal?.throwIfAborted();
+
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
   const preserveExactPrompt = input.isRawModelRun || isSettledTurnFinalization;
   let systemPromptText = input.systemPromptText;
@@ -165,7 +185,95 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookRunner: input.hookRunner,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
-  const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+
+  let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
+  let leasedSteeringPrompt: string | undefined;
+  if (attempt.sessionKey && !preserveExactPrompt) {
+    const leaseId = `${attempt.runId}:agent-steering`;
+    const leased = await leasePendingAgentSteeringItems({
+      requesterSessionKey: attempt.sessionKey,
+      leaseId,
+    });
+    if (leased) {
+      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
+      // Transfer cleanup ownership before any prompt mutation can throw.
+      input.setLeasedSteering(leasedSteering);
+      if (!leased.isCurrent()) {
+        throw new Error(
+          "The queued child results lost authority before requester prompt injection.",
+        );
+      }
+      leasedSteeringPrompt = leased.prompt;
+    }
+  }
+
+  const assertHostActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    activeAbortSignal,
+  );
+  assertHostActive?.();
+  const hasPendingActionInstructions = Boolean(
+    // Authorized enrichment runs after policy; do not pre-empt its required actions.
+    input.hookRunner?.hasAuthorizedPromptBuildHooks(hookCtx) ||
+    hookResult?.hasPendingNonPromptBuildContext ||
+    input.orphanRepair?.messageEntry ||
+    leasedSteering,
+  );
+
+  const effectiveToolsAllow = hookResult?.toolsAllow;
+  const guard = preserveExactPrompt
+    ? "exact-prompt"
+    : !assertHostActive || !activeAbortSignal
+      ? "missing-authority"
+      : attempt.supportsTurnScopedToolRestrictions !== true
+        ? "unsupported-harness"
+        : attempt.fallbackActive
+          ? "primary-fallback"
+          : attempt.skipPreparedUserTurnMessage
+            ? "continuation"
+            : attempt.trigger !== "user" || attempt.internalEvents?.length
+              ? "internal-input"
+              : attempt.disableTools
+                ? "tools-disabled"
+                : effectiveToolsAllow !== undefined
+                  ? "hook-tool-policy"
+                  : hasPendingActionInstructions
+                    ? "pending-action-context"
+                    : undefined;
+  let decisionPrefilter: DecisionPrefilterResult = {
+    shouldPruneTools: false,
+    status: "skipped",
+    reason: guard ?? "not-evaluated",
+  };
+  if (!guard && assertHostActive && activeAbortSignal) {
+    decisionPrefilter = await evaluateAttemptDecisionToolPrefilter({
+      config: readConfig(),
+      agentId: input.sessionAgentId,
+      userMessage: effectivePrompt,
+      messages: promptBuildMessages,
+      promptBuildFields: hookResult?.decisionPromptBuildFields,
+      currentInputExcluded: Boolean(
+        attempt.images?.length ||
+        attempt.media?.length ||
+        attempt.inputAttachmentMedia?.length ||
+        (attempt.inputProvenance && attempt.inputProvenance.kind !== "external_user") ||
+        attempt.userTurnTranscriptRecorder?.message?.excludeFromContext ||
+        attempt.isTurnTainted?.(),
+      ),
+      signal: activeAbortSignal,
+      assertActive: assertHostActive,
+      supportsTurnScopedToolRestrictions: attempt.supportsTurnScopedToolRestrictions,
+    });
+    if (decisionPrefilter.shouldPruneTools && decisionPrefilter.isCurrent?.()) {
+      decisionPrefilter.restrictionApplied = true;
+    }
+  }
+  activeAbortSignal?.throwIfAborted();
+  assertHostActive?.();
+  const callableToolNames = input.applyPromptBuildToolsAllow(
+    effectiveToolsAllow,
+    decisionPrefilter.restrictionApplied ? decisionPrefilter.isCurrent : undefined,
+  );
   // Regenerate owned capability guidance before composing hook additions, without
   // rerunning hooks or altering already-recorded conversation messages.
   if (input.prepareSystemPrompt) {
@@ -175,10 +283,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
   const hookRunner = input.hookRunner;
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
-    attempt.admittedRunContext,
-    attempt.abortSignal,
-  );
   const authorizedHookResult =
     preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
@@ -290,35 +394,19 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
-  let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  if (attempt.sessionKey && !preserveExactPrompt) {
-    const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = await leasePendingAgentSteeringItems({
-      requesterSessionKey: attempt.sessionKey,
-      leaseId,
+  if (leasedSteering && leasedSteeringPrompt) {
+    effectivePrompt = prependAgentSteeringPrompt({
+      steeringPrompt: leasedSteeringPrompt,
+      prompt: effectivePrompt,
     });
-    if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
-      // Transfer cleanup ownership before any prompt mutation can throw.
-      input.setLeasedSteering(leasedSteering);
-      if (!leased.isCurrent()) {
-        throw new Error(
-          "The queued child results lost authority before requester prompt injection.",
-        );
-      }
-      effectivePrompt = prependAgentSteeringPrompt({
-        steeringPrompt: leased.prompt,
-        prompt: effectivePrompt,
-      });
-      effectiveTranscriptPrompt = prependAgentSteeringPrompt({
-        steeringPrompt: leased.prompt,
-        prompt: effectiveTranscriptPrompt,
-      });
-      log.debug(
-        `agent steering: injected ${leased.runIds.length} queued item(s) into parent turn ` +
-          `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
-      );
-    }
+    effectiveTranscriptPrompt = prependAgentSteeringPrompt({
+      steeringPrompt: leasedSteeringPrompt,
+      prompt: effectiveTranscriptPrompt,
+    });
+    log.debug(
+      `agent steering: injected ${leasedSteering.runIds.length} queued item(s) into parent turn ` +
+        `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
+    );
   }
 
   const currentUserAdmission =
@@ -336,6 +424,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       : undefined;
 
   return {
+    decisionPrefilter,
     assertHostActive,
     hookCtx,
     effectivePrompt,

@@ -301,6 +301,8 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
+        // The host deadline bounds this request; it is not a provider-reported outage.
+        // Genuine transport, rate-limit, and auth failures are accounted below.
         return this.unavailable("deadline");
       }
       const currentConfig = readConfig();
@@ -344,18 +346,12 @@ export class DecisionProviderHost {
       } catch {
         const stopped = interrupted();
         if (stopped) {
-          if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-            this.fail(health, "transport");
-          }
           return stopped;
         }
         throw new DecisionContractError();
       }
       const stopped = interrupted();
       if (stopped) {
-        if (stopped.status === "unavailable" && stopped.reason === "deadline") {
-          this.fail(health, "transport");
-        }
         return stopped;
       }
       if (outcome?.status === "ok") {

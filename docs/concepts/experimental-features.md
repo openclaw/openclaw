@@ -60,9 +60,12 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This opt-in enables experimental conversational tool filtering in the built-in
+OpenClaw runtime. Before an eligible user turn, the configured Decision provider
+judges whether the request needs tools. A conversational result can omit optional
+tools for that turn. Other harnesses keep their normal tools and perform no
+automatic prefilter inference. The switch does not select a provider, provision
+credentials, download models, or enable unrelated consumer modes.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +85,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -105,7 +108,7 @@ It performs no provider probes, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
-For example, at a future automatic consumer boundary:
+For example, at an automatic consumer boundary:
 
 ```ts
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
@@ -117,15 +120,106 @@ if (!isDecisionAssistanceEligible(preparedConfig, owningAgentId)) {
 // before loading its optional implementation or preparing evaluation evidence.
 ```
 
-Use the existing config publication/refresh lifecycle, not file polling. Future
-consumers must stop admitting automatic work after opt-out takes effect and
+Use the existing config publication/refresh lifecycle, not file polling.
+Consumers must stop admitting automatic work after opt-out takes effect and
 revalidate current config, model selection, and live authority before applying
 awaited results. This helper is not an authority token or a cancellation owner.
 
-Any future consumer must document its evidence transfer, costs, latency, and
-failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
-performance or quality claims.
+### Conversational tool filtering
+
+**Upgrade behavior:** the existing saved `decisionAssistance: true` is opt-in
+intent for future automatic Decision experiments. When this consumer is installed,
+it can run on eligible turns for an agent with an effective Decision model; the
+preference does not select a new provider or grant tool authority. Operators who
+do not want automatic evaluation can turn the preference off or clear that
+agent’s Decision model. The transferred evidence and costs are described below.
+
+The prefilter sends the complete current request and a deterministic, bounded
+projection of recent conversation to the owning agent’s configured Decision
+provider. It retains the nearest complete user/assistant exchange and, when it
+fits, one additional exchange in chronological order. Resolved output from
+ordinary `before_prompt_build` hooks is also sent verbatim in labeled fields when
+present: `prependContext`, `appendContext`, `systemPrompt`,
+`prependSystemContext`, and `appendSystemContext`. Two internal text bounds apply:
+
+- The latest request plus retained user/assistant exchange text is limited to
+  **6,000 UTF-16 code units**. Only whole older exchanges may be omitted.
+- That conversation text plus all five verbatim hook-field values must fit
+  **8,000 UTF-16 code units** in total. Oversized hook fields are not truncated.
+
+These are JavaScript string-length bounds on the evidence text, not a bound on
+serialized JSON, UTF-8 wire bytes, or tokens. Field names, JSON escaping, omission
+facts, tool-result counts, and the fixed rubric add serialization overhead.
+The current request and essential context are never cut to force classification;
+oversized, malformed, missing, or otherwise unsuitable essential context retains
+normal tools. A genuinely fresh session is
+evaluated using the current request alone. Existing incomplete history is not
+treated as a fresh session; missing referents and uncertainty must retain tools.
+
+Only user-visible text, counts of returned/failed tool calls, and the listed
+resolved ordinary hook fields are secondary evidence. Other system/developer
+instructions, hidden reasoning, raw tool arguments or results, internal-event
+envelopes, and media are not sent. Tool return counts do not assert that an
+action succeeded. Hosted providers receive this bounded evidence and can incur
+charges; local providers keep inference local.
+Classification adds work before the primary model request and is not a guaranteed
+latency improvement.
+
+The current internal budget is 500 ms, not a configuration option. One existing
+Decision batch asks two independent Boolean questions: whether the latest request
+has an unresolved contextual reference, and whether fulfilling it requires tools
+in the next response. Both probabilities must be below 0.35 to omit optional tools.
+Missing, affirmative, or uncertain answers preserve tools. These are probabilities
+of yes, not degrees of tool use or separate confidence values.
+
+The structured state names the latest request, chronological recent exchanges,
+and facts about omitted older conversation and raw tool payloads. Each question
+references those fields explicitly. Earlier mentions of tools do not by themselves
+request new actions, and omitted older history alone does not veto filtering.
+This follows [TypeSafe atomic Noul guidance](https://docs.typesafe.ai/primitives/noul)
+while using the provider-neutral Decision contract; it makes no provider-specific
+requests or calibrated-correctness guarantees. There is
+no model-aware input estimator, automatic trimming retry, or second provider.
+Ordinary unavailable results, including a deadline or actual provider input
+rejection, keep the normal tool surface. A caller-budget deadline does not count
+as a provider outage or open the shared health circuit, so repeated optional
+prefilter timeouts do not disable explicit `decision_evaluate` requests. Genuine
+provider transport, authentication, and rate-limit failures retain their shared
+health handling; in-flight work still owns its concurrency slot until it settles.
+Cancellation, closed authority, and contract errors
+remain errors rather than starting fallback work. Cold model loading may exceed
+the budget. Classifier estimates are not guarantees that every action request
+will retain its optional tools.
+
+Filtering skips raw probes, continuations, internal events, queued steering,
+orphan repair, pending tool work, hook-set `toolsAllow` restrictions, and
+authority-dependent prompt-build hooks that require finalized tools. Ordinary
+prompt-build hooks run normally and their resolved fields can inform the Decision
+evaluation without changing the public hook contract. It no longer rejects a
+turn merely because prior assistant or tool messages exist. Complete contextual
+approvals remain action requests, while a conversational acknowledgment can omit
+optional tools on later turns. It uses the existing host tool policy, preserves
+already-required tools without granting denied tools, and keeps submitted schemas,
+discovery, and callability aligned.
+Each subsequent turn starts from its own normal tool baseline. Revoked opt-in or
+changed model selection prevents applying an awaited restriction. Eligibility is
+also rechecked at foreground provider dispatch after awaited preparation; a late
+change withdraws only the optional restriction and restores the current permitted
+tool surface while retaining independent hook caps and required tools. No historical
+transcript is rewritten and no native thread is recreated.
+
+With DEBUG logging enabled for the embedded runner, a safe record at the first
+foreground primary dispatch reports decision status/reason, decision latency,
+context counts and omission flags, visible tool counts, required tools retained,
+and the before/after normalized tool-definition JSON UTF-16 character difference
+(`name`, `description`, and `parameters`). Tool Search and Code Mode count only
+the actually exposed controls/direct tools, including their descriptions—not
+every hidden catalog schema. This schema-only metric is not provider wire bytes,
+full prompt savings, tokens, cost, or proof that a provider accepted the request.
+Tool-related prompt guidance is reported as unmeasured. Unknown measurements
+remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
+No conversation, tool payloads, full schemas, or credentials are logged by this
+record; existing logging and trace-correlation controls apply.
 
 ## Local model lean mode
 

@@ -78,6 +78,7 @@ function createSession() {
     },
   };
   const activeSession = {
+    isCompacting: false,
     [agentSessionQueuePromptContext]: vi.fn(() => () => undefined),
     get messages() {
       return state.messages;

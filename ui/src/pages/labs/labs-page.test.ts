@@ -485,7 +485,10 @@ describe("LabsPage Decision assistance", () => {
       });
       const row = labRow(page, "Decision assistance");
       expect(labToggle(page, "Decision assistance").checked).toBe(expected);
-      expect(row.textContent).toContain("No features use this setting yet");
+      expect(row.textContent).toContain(
+        "Enable experimental assistance from your configured Decision model",
+      );
+      expect(row.textContent).toContain("supported uses, setup, and data handling");
       expect(row.textContent?.includes("Preference saved.")).toBe(expected);
     },
   );

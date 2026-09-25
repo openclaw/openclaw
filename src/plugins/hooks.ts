@@ -1364,6 +1364,17 @@ export function createHookRunner(
     );
   }
 
+  function hasAuthorizedPromptBuildHooks(
+    ctx?: Partial<Parameters<PluginHookHandlerMap["before_prompt_build"]>[1]>,
+  ): boolean {
+    return registry.typedHooks.some(
+      (hook) =>
+        hook.hookName === "before_prompt_build" &&
+        hook.requiresToolAuthority === true &&
+        (ctx === undefined || isHookContextEligible(hook, ctx)),
+    );
+  }
+
   /**
    * Get count of registered hooks for a given hook name.
    */
@@ -1381,6 +1392,7 @@ export function createHookRunner(
     }),
     runBeforePromptBuild,
     runAuthorizedPromptBuild,
+    hasAuthorizedPromptBuildHooks,
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
     runModelCallStarted: bindVoidHook("model_call_started"),
     runModelCallEnded: bindVoidHook("model_call_ended"),

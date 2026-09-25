@@ -202,6 +202,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   degradedReason?: string | null;
   /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
   agentHarnessId?: string;
+  /** Actual embedded harness declaration, supplied by its invocation owner. */
+  supportsTurnScopedToolRestrictions?: boolean;
   /** Non-authorizing expectation; the harness must verify its current private binding. */
   expectedSessionRuntimeOwnership?: {
     model: "native";
