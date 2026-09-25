@@ -1026,23 +1026,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let app = try launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
 
         // Build scrollable history through the paired app before checking reader behavior.
-        var keyboardDismissalText = "What would you like to work on?"
         for index in 0..<3 {
             let seedMarker = "OPENCLAW_E2E_SEED_\(index)_\(Int(Date().timeIntervalSince1970 * 1000))"
             let seedContext = String(repeating: "Reader context \(index). ", count: 6)
             try self.sendLiveGatewayMessage(
                 "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
                 expecting: seedMarker,
-                keyboardDismissalText: keyboardDismissalText,
                 in: app)
-            keyboardDismissalText = seedMarker
         }
 
         let replyMarker = "OPENCLAW_E2E_OK_\(Int(Date().timeIntervalSince1970 * 1000))"
         try self.sendLiveGatewayMessage(
             "Reply exactly with \(replyMarker) and no other text.",
             expecting: replyMarker,
-            keyboardDismissalText: keyboardDismissalText,
             in: app)
         let jumpToLatest = app.buttons["Jump to latest reply"]
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
@@ -1873,16 +1869,8 @@ extension OpenClawSnapshotUITests {
     private func sendLiveGatewayMessage(
         _ text: String,
         expecting replyMarker: String,
-        keyboardDismissalText: String,
         in app: XCUIApplication) throws
     {
-        let jumpToLatest = app.buttons["Jump to latest reply"]
-        if jumpToLatest.exists {
-            XCTAssertTrue(jumpToLatest.isHittable)
-            jumpToLatest.tap()
-            XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        }
-
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
@@ -1891,11 +1879,23 @@ extension OpenClawSnapshotUITests {
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertTrue(send.isEnabled)
-        // Tap known transcript text to dismiss without activating a starter prompt.
+        // Typing can move historical replies off-screen; tap visible text without activating an action.
         let transcript = try self.chatTranscript(in: app)
-        let dismissalText = transcript.staticTexts[keyboardDismissalText]
-        XCTAssertTrue(dismissalText.waitForExistence(timeout: 3))
-        XCTAssertTrue(dismissalText.isHittable)
+        let actionQueries = [transcript.buttons, transcript.links]
+        let dismissalText = try XCTUnwrap(
+            transcript.staticTexts.allElementsBoundByIndex.first { candidate in
+                guard candidate.isHittable,
+                      candidate.buttons.count == 0,
+                      candidate.links.count == 0
+                else {
+                    return false
+                }
+                let label = NSPredicate(format: "label == %@", candidate.label)
+                return actionQueries.allSatisfy {
+                    !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
+                }
+            },
+            "Expected visible noninteractive transcript text")
         dismissalText.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(input.value as? String, text)
