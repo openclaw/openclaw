@@ -224,7 +224,7 @@ export async function readLegacyJsonObjectStream(params: {
   property?: string;
   onEntry?: (key: string, value: unknown) => void;
 }): Promise<LegacyJsonStreamSnapshot> {
-  const opened = await params.stateRoot.open(params.relativePath, {
+  await using opened = await params.stateRoot.open(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
@@ -267,7 +267,5 @@ export async function readLegacyJsonObjectStream(params: {
       throw new Error("legacy JSON store is not valid UTF-8", { cause: error });
     }
     throw error;
-  } finally {
-    await opened[Symbol.asyncDispose]();
   }
 }

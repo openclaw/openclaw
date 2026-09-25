@@ -5,11 +5,11 @@ import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
-import { replaceFileAtomicSync } from "../src/infra/replace-file.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 

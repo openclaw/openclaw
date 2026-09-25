@@ -67,21 +67,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
   pending platforms accurately and repair native-only failures in parallel.
-- Release priority: release runs always beat PR-side hosted-runner work. The
-  repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
-  `pnpm ci:full-release` records the pause window, sets it on dispatch, and
-  clears it when the operation ends; `pnpm frv continue --failed` and
-  `pnpm frv verify` clear it on seal. While set, `CI`, Auto response, PR
-  context and evidence, Labeler, CodeQL, Periphery, Workflow Sanity,
-  ClawSweeper Dispatch, and Maintainer Command Reactions skip at the job level
-  unless dispatched or on a `release*/` branch (Security Review never pauses);
-  deferred CI fails its gate with `Deferred for release <run>`. When release
-  children starve behind queued PR runs, `pnpm frv prioritize --run <parent>`
-  records and cancels the still-queued non-release runs of those workflows;
-  after the seal, `pnpm frv prioritize --restore <record>` clears the variable
-  first and reruns the cancelled and deferred runs, newest per workflow and
-  branch. Never leave the variable set after a release. Keep the required
-  publication proofs and soak gates intact.
+- Release validation does not pause CI or supporting workflows. The legacy
+  `OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
+  admission. Do not use `pnpm frv prioritize --run` for routine validation;
+  it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
+  to recover runs deferred by older workflow revisions and clear their variable.
+  Keep the required publication proofs and soak gates intact.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.

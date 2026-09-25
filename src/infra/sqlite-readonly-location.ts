@@ -2,8 +2,11 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
-import { sameFileContentsSync, sameFileIdentity } from "./fs-safe-advanced.js";
+import {
+  copyFileDescriptorSync,
+  sameFileContentsSync,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";

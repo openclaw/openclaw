@@ -20,6 +20,7 @@ import {
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
   readGitHubPublicationRequest,
@@ -291,6 +292,14 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     observation: observeCronRunRecoveryInDatabase(db, command),
+                  };
+                }
+                if (command.type === "cron.activeReceiptOwners") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
                   };
                 }
                 if (

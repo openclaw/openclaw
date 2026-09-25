@@ -159,6 +159,7 @@ export function createSessionRowProjectionFixture(params: {
       ),
     describe,
     readSource: () => undefined,
+    readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},

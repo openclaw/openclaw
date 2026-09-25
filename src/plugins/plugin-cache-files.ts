@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRootPathSync } from "../infra/boundary-path.js";
 import { FsSafeError } from "../infra/fs-safe.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { openPluginRootFileSync } from "./path-safety.js";
 import type {

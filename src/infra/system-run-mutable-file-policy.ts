@@ -1,7 +1,7 @@
 /** Filesystem heuristics for mutable executable and script operands. */
 import fs from "node:fs";
 import path from "node:path";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 
 function pathComponentsFromRootSync(targetPath: string): string[] {
   const parts: string[] = [];

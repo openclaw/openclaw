@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -434,7 +435,9 @@ describe("read-owned media publication", () => {
         () => {},
         () => saveMediaStream(stream, "application/pdf"),
       ),
-    ).rejects.toThrow(/directory|path|alias/i);
+    ).rejects.toSatisfy(
+      (error: unknown) => error instanceof FsSafeError && error.code === "path-mismatch",
+    );
     await expect(fs.readdir(originalMedia)).resolves.toEqual([]);
     await expect(fs.readFile(preserved, "utf8")).resolves.toBe("existing user attachment");
     await expect(fs.readdir(replacementMedia)).resolves.toEqual(["existing.txt"]);

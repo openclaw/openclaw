@@ -35,7 +35,6 @@ import {
   loadTranscriptEventsSync,
   listSessionPendingInputs,
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -45,10 +44,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import {
-  waitForSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptProjection,
-} from "../config/sessions/session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -99,7 +95,11 @@ import {
   captureChatResult,
   type CapturedChatResponse,
 } from "./server.chat-response.test-support.js";
-import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
+import {
+  createDirectChatSessionStoreFixture,
+  writeMainChatSessionTranscript as writeMainSessionTranscript,
+  type ChatSessionDirectoryOptions,
+} from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
   connectOk,
@@ -170,27 +170,37 @@ type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
 
 const autoCleanupTempDirs = createTempDirTracker();
+const sessionStoreFixture = createDirectChatSessionStoreFixture(autoCleanupTempDirs);
+const openDirectChatSession = sessionStoreFixture.open;
 
 afterEach(async () => {
-  await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
+  await resetDirectChatSession();
   autoCleanupTempDirs.cleanup();
 });
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
+  sessionStoreFixture.prepare();
 });
 
 afterAll(async () => {
-  await harness.close();
+  try {
+    await sessionStoreFixture.dispose();
+  } finally {
+    await harness.close();
+  }
 });
 
 async function withGatewayChatHarness(
-  run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
+  run: (ctx: {
+    ws: GatewaySocket;
+    createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  }) => Promise<void>,
   options?: { headers?: Record<string, string> },
 ) {
   const ws = await harness.openWs(options?.headers);
-  const createSessionDir = async () => openDirectChatSession().sessionDir;
+  const createSessionDir = async (directoryOptions?: ChatSessionDirectoryOptions) =>
+    openDirectChatSession(directoryOptions).sessionDir;
 
   try {
     await run({ ws, createSessionDir });
@@ -240,43 +250,6 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   resetConfigRuntimeState();
 }
 
-async function writeMainSessionTranscript(
-  events: unknown[],
-  sessionId = "sess-main",
-  opts?: {
-    agentId?: string;
-    sessionKey?: string;
-  },
-) {
-  const storePath = testState.sessionStorePath;
-  if (!storePath) {
-    throw new Error("session store path was not initialized");
-  }
-  // These fixtures always seed a complete fresh transcript. Replace it in one
-  // transaction so large history cases do not pay one SQLite commit per event.
-  const transcriptEvents = events
-    .filter((event) => typeof event !== "string" || event.trim())
-    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
-    typeof replaceTranscriptEvents
-  >[1];
-  await replaceTranscriptEvents(
-    {
-      agentId: opts?.agentId ?? "main",
-      sessionId,
-      sessionKey: opts?.sessionKey ?? "agent:main:main",
-      storePath,
-    },
-    transcriptEvents,
-  );
-  // Oversized fixture transcripts take the deferred rebuild path; history
-  // reads need the projection converged before the case under test runs.
-  await waitForSessionTranscriptProjection({
-    agentId: opts?.agentId ?? "main",
-    sessionId,
-    storePath,
-  });
-}
-
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
@@ -290,13 +263,6 @@ async function withDirectChatSession(
 
 type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
 
-function openDirectChatSession() {
-  const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-  const storePath = path.join(sessionDir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return { sessionDir, storePath };
-}
-
 function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
   return getSessionWorkAdmissionRelease({
     scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
@@ -306,7 +272,7 @@ function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
 
 async function resetDirectChatSession() {
   await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
+  await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
 }
@@ -622,17 +588,18 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
 
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
-  createSessionDir: () => Promise<string>;
+  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  freshStore?: boolean;
   sessionId?: string;
 }) {
   await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir();
+  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
   await writeMainSessionStore(params.sessionId);
   return sessionDir;
 }
 
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
-  openDirectChatSession();
+  openDirectChatSession({ fresh: true });
   const sessionKey = `agent:codex:acp:${randomUUID()}`;
   const config: OpenClawConfig = {
     agents: { entries: { main: { default: true } } },
@@ -1035,7 +1002,7 @@ describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
     "%s adopts the in-flight run for a non-default agent alias key",
     async (method) => {
-      const { sessionDir } = openDirectChatSession();
+      const { sessionDir } = openDirectChatSession({ fresh: true });
       try {
         // Per-agent stores: bare keys then carry no persisted fixed-store
         // owner, so an explicit non-default agentId is a valid pairing.
@@ -1302,7 +1269,7 @@ describe("gateway server chat", () => {
   test("chat.history exposes selected and synthetic session metadata for startup hydration", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       const updatedAt = Date.now();
       await writeStoredMainSession({
         updatedAt,
@@ -1468,7 +1435,7 @@ describe("gateway server chat", () => {
       defaults: {},
       list: [{ id: "main", default: true }, { id: "work" }],
     };
-    openDirectChatSession();
+    openDirectChatSession({ fresh: true });
     try {
       await writeSessionStore({
         agentId: "work",
@@ -1956,7 +1923,7 @@ describe("gateway server chat", () => {
       async (state) => {
         const previousAgentConfig = testState.agentConfig;
         const previousAgentsConfig = testState.agentsConfig;
-        openDirectChatSession();
+        openDirectChatSession({ fresh: true });
         try {
           const config = {
             agents: {
@@ -2466,7 +2433,7 @@ describe("gateway server chat", () => {
   test.each(["chat.startup", "chat.history"] as const)(
     "%s scopes metadata to agent session keys without explicit agentId",
     async (method) => {
-      openDirectChatSession();
+      openDirectChatSession({ fresh: true });
       try {
         const fileConfig = {
           agents: {
@@ -3318,7 +3285,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
-    openDirectChatSession();
+    openDirectChatSession({ fresh: true });
     const performDeletion = createDeferred();
     let mutation: Promise<void> | undefined;
     try {
@@ -5519,7 +5486,7 @@ describe("gateway server chat", () => {
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-backfill";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -5629,7 +5596,7 @@ describe("gateway server chat", () => {
   test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-delivery-dedupe";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
       const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
@@ -5724,7 +5691,7 @@ describe("gateway server chat", () => {
       const homeEnvSnapshot = captureEnv(["HOME"]);
       try {
         await connectOk(secondWs);
-        const sessionDir = await createSessionDir();
+        const sessionDir = await createSessionDir({ fresh: true });
         const sessionId = "sess-claude-cli-large-snapshot";
         const cliSessionId = "7b8b202c-f6bb-4046-9475-d2f15fd07533";
         const homeDir = path.join(sessionDir, "home");
@@ -5826,7 +5793,7 @@ describe("gateway server chat", () => {
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-local-prefix";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
       const homeEnvSnapshot = captureEnv(["HOME"]);
@@ -5902,7 +5869,7 @@ describe("gateway server chat", () => {
   test("chat.history keeps offset paging when a claude-cli binding has no import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-missing-import";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       setTestEnvValue("HOME", path.join(sessionDir, "empty-home"));
@@ -5958,7 +5925,7 @@ describe("gateway server chat", () => {
   test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-dedupe-loop";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -7083,7 +7050,12 @@ describe("gateway server chat", () => {
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-archive-backed";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       await fs.writeFile(
         `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
         [
@@ -7119,7 +7091,7 @@ describe("gateway server chat", () => {
         },
       });
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       await writeSessionStore({
         agentId: "work",
         entries: {
@@ -7149,7 +7121,12 @@ describe("gateway server chat", () => {
   test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-oversized-archive";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       const oversizedLine = JSON.stringify(
         createTextTranscriptEvent("assistant", "x".repeat(300 * 1024), {
           id: "msg-oversized",
@@ -8068,7 +8045,7 @@ describe("gateway server chat", () => {
       let aborted = false;
       await connectOk(ws);
 
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       // Keep ACK timing independent of earlier custom-store fixture registrations.
       testState.sessionStorePath = path.join(
         sessionDir,
