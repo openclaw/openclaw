@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
+  materializePreparedControlUiLocaleCatalog,
   mergeControlUiTranslationMaps,
+  prepareControlUiCatalogSource,
 } from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   createControlUiLocaleSyncPlan,
@@ -306,26 +308,89 @@ describe("createControlUiLocaleSyncPlan", () => {
     expect(createPlan(new Map([["group.alias", "Changed"]])).pending).toHaveLength(1);
   });
 
-  it("materializes grouped aliases in source order and discards stale or retired segments", () => {
-    const grouped = memoryEntry({
-      segment_id: "group.first",
-      segment_ids: ["group.second", "removed"],
-      text_hash: hashControlUiTranslationText("Shared"),
-      translated: "Partagé",
+  describe.each([
+    { name: "raw", materialize: materializeControlUiLocaleCatalog },
+    {
+      name: "prepared",
+      materialize: (
+        source: ReadonlyMap<string, string>,
+        memory: ReadonlyMap<string, TranslationMemoryEntry>,
+      ) => materializePreparedControlUiLocaleCatalog(prepareControlUiCatalogSource(source), memory),
+    },
+  ])("$name materialization", ({ materialize }) => {
+    it("keeps aliases independent, source order, and the last valid write", () => {
+      const abcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+      const grouped = memoryEntry({
+        segment_id: "group.second",
+        segment_ids: ["group.first", "removed", "changed"],
+        text: "Stored text is not the freshness authority",
+        text_hash: abcHash,
+        translated: "Partagé",
+      });
+      const replacement = memoryEntry({
+        cache_key: "replacement",
+        segment_id: "group.first",
+        text_hash: abcHash,
+        translated: "Dernier",
+      });
+      const stale = memoryEntry({
+        cache_key: "stale",
+        segment_id: "group.first",
+        text_hash: "stale",
+        translated: "Obsolète",
+      });
+      const memory = new Map([
+        [grouped.cache_key, grouped],
+        [replacement.cache_key, replacement],
+        [stale.cache_key, stale],
+      ]);
+      const source = flattenTranslations({
+        group: { first: "abc", second: "abc" },
+        changed: "Changed",
+        unused: "abc",
+      });
+      const catalog = materialize(source, memory);
+      expect(catalog).toEqual({ group: { first: "Dernier", second: "Partagé" } });
+      expect([...flattenTranslations(catalog)]).toEqual([
+        ["group.first", "Dernier"],
+        ["group.second", "Partagé"],
+      ]);
+      expect(materialize(new Map([["group.first", "abc"]]), new Map())).toEqual({});
+      expect(materialize(new Map(), memory)).toEqual({});
+      expect(materialize(new Map([["group.first", "Changed"]]), memory)).toEqual({});
+      expect(
+        materialize(new Map([["group.first", "abc"]]), new Map([[grouped.cache_key, grouped]])),
+      ).toEqual({ group: { first: "Partagé" } });
     });
-    const source = flattenTranslations({ group: { first: "Shared", second: "Shared" } });
+  });
 
-    expect(
-      materializeControlUiLocaleCatalog(source, new Map([[grouped.cache_key, grouped]])),
-    ).toEqual({
-      group: { first: "Partagé", second: "Partagé" },
+  it("keeps independently prepared source snapshots after the raw map changes", () => {
+    const source = new Map([["title", "abc"]]);
+    const first = prepareControlUiCatalogSource(source);
+    source.set("title", "");
+    source.set("alias", "abc");
+    const second = prepareControlUiCatalogSource(source);
+    const original = memoryEntry({
+      cache_key: "original",
+      segment_id: "title",
+      segment_ids: ["alias"],
+      text_hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      translated: "Original",
     });
-    expect(
-      materializeControlUiLocaleCatalog(
-        new Map([["group.first", "Changed"]]),
-        new Map([[grouped.cache_key, grouped]]),
-      ),
-    ).toEqual({});
+    const changed = memoryEntry({
+      cache_key: "changed",
+      segment_id: "title",
+      text_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      translated: "Changed",
+    });
+    const memory = new Map([
+      [original.cache_key, original],
+      [changed.cache_key, changed],
+    ]);
+    expect(materializePreparedControlUiLocaleCatalog(first, memory)).toEqual({ title: "Original" });
+    const next = materializePreparedControlUiLocaleCatalog(second, memory);
+    expect(next).toEqual({ title: "Changed", alias: "Original" });
+    expect(Object.keys(next)).toEqual(["title", "alias"]);
   });
 
   it("refreshes recorded fallbacks and records translated replacements", () => {

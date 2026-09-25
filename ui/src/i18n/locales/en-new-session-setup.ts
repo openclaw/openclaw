@@ -98,7 +98,8 @@ const enNewSessionSetup = {
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
-    incognitoDescription: "Keep this session only until the Gateway restarts",
+    incognitoDescription:
+      "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",

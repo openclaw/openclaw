@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   sessionStore,
@@ -97,7 +98,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     ];
     findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
       expect(sessionId).toBe("source-reply-session");
-      const event = events.findLast(match);
+      const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);

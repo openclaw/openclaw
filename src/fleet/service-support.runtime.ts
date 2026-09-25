@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import {
   buildCellEnvironment,
@@ -123,6 +123,10 @@ export async function prepareCellConfig(
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
   const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
+  const inheritsPublicOrigin =
+    controlUi.allowedOrigins === undefined &&
+    typeof gateway.publicOrigin === "string" &&
+    gateway.publicOrigin.trim().length > 0;
   origins.add(`http://localhost:${record.hostPort}`);
   origins.add(`http://127.0.0.1:${record.hostPort}`);
 
@@ -135,7 +139,7 @@ export async function prepareCellConfig(
       auth: nextAuth,
       controlUi: {
         ...controlUi,
-        allowedOrigins: [...origins],
+        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
       },
     },
   };

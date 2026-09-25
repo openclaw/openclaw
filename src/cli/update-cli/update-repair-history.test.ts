@@ -218,7 +218,7 @@ describe("public repair historical acknowledgment", () => {
           },
         },
       });
-      await expect(repair()).rejects.toThrow("still in progress");
+      await expect(repair()).rejects.toThrow("remains recorded as running");
       expect(getUpdateRun(old.runId)).toEqual(old);
       expect(mocks.doctor).not.toHaveBeenCalled();
     },
@@ -268,7 +268,7 @@ describe("public repair historical acknowledgment", () => {
     expect(mocks.doctor).not.toHaveBeenCalled();
   });
 
-  it("does not acknowledge terminal history if a captured active run resumes", async () => {
+  it("does not acknowledge terminal history if a captured active run remains unresolved", async () => {
     const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
     const active = createUpdateRun({ trigger: "cli" });
@@ -282,7 +282,7 @@ describe("public repair historical acknowledgment", () => {
       });
       return pluginResult;
     });
-    await expect(repair()).rejects.toThrow("An update resumed");
+    await expect(repair()).rejects.toThrow("did not assume the update resumed");
     expect(getUpdateRun(old.runId)).toEqual(old);
     expect(getUpdateRun(active.runId)?.status).toBe("running");
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();

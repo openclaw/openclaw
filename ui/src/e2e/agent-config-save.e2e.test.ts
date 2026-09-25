@@ -129,9 +129,13 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBeforeReconnect });
         await expect.poll(() => primary.locator(".picker-select__trigger").isEnabled()).toBe(true);
         await expect.poll(() => pickerValue(primary)).toBe("openai/reconnect-draft");
-        await expect
-          .poll(() => indicator.textContent())
-          .toContain("Autosave paused after reconnect");
+        await expect.poll(() => indicator.textContent()).toContain("Save failed");
+        expect(await indicator.getByRole("status").getAttribute("aria-label")).toContain(
+          "The last configuration change could not be confirmed",
+        );
+        expect(
+          await indicator.getByRole("button", { name: "Retry", exact: true }).isEnabled(),
+        ).toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeReconnect + 1);
 
         await gateway.setMethodResponse("config.get", {
@@ -148,9 +152,7 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBeforeDiscard });
         await expect.poll(() => pickerValue(primary)).toBe("");
         await expect.poll(() => primary.locator(".picker-select__trigger").isEnabled()).toBe(true);
-        await expect
-          .poll(() => indicator.textContent())
-          .not.toContain("Autosave paused after reconnect");
+        await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
 
         const writesBeforeFreshEdit = (await gateway.getRequests("config.set")).length;
         expect(writesBeforeFreshEdit).toBe(writesBeforeReconnect + 1);

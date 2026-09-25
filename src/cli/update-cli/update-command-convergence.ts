@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -9,6 +10,7 @@ import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
+import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -30,7 +32,7 @@ import {
 } from "./update-command-post-core.js";
 import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -65,13 +67,13 @@ export async function convergeUpdatePlugins(params: {
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   // Uncommitted target finalization cannot authorize a detached helper restart.
-  const failedTargetRuntime = (): UpdateRunResult => ({
-    ...params.result,
+  const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
+    ...result,
     status: "error",
     reason: "post-core-update-failed",
     recovery:
-      params.result.recovery?.serviceRestartSafe === false
-        ? params.result.recovery
+      result.recovery?.serviceRestartSafe === false
+        ? result.recovery
         : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
   });
   const preUpdateConfig = params.configSnapshot.valid
@@ -140,19 +142,17 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    const compatibilityHostVersion = params.candidateRuntime
-      ? (postUpdateInstalledVersion ?? VERSION)
-      : versionComparison != null && versionComparison > 0
-        ? postUpdateInstalledVersion
-        : null;
-    if (compatibilityHostVersion) {
-      // Downgraded parents and candidate workers both use the installed target,
-      // not a pre-update VERSION or an inherited compatibility-host override.
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityHostVersion;
-    }
-    try {
+  const compatibilityHostVersion = params.candidateRuntime
+    ? (postUpdateInstalledVersion ?? VERSION)
+    : versionComparison != null && versionComparison > 0
+      ? postUpdateInstalledVersion
+      : null;
+  // Downgraded parents and candidate workers select the installed target version.
+  const compatibilityEnv = compatibilityHostVersion
+    ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
+    : {};
+  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
+    withUpdateEnv(compatibilityEnv, async () => {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
       const collectDoctorWarnings = (warnings: string[]) => {
@@ -361,6 +361,31 @@ export async function convergeUpdatePlugins(params: {
           advisory: { kind: "recoverable-maintenance" as const, message },
         })),
       );
+      if (params.result.gitRuntime) {
+        const observed = await readGitRuntimeArtifactIdentity(postUpdateRoot);
+        assertCurrent?.();
+        const matches = isDeepStrictEqual(params.result.gitRuntime, observed);
+        const message = "Activated Git runtime changed before or during post-update verification.";
+        resultWithPostUpdate.steps.push({
+          name: "post-core runtime verification",
+          command: "verify activated Git runtime",
+          cwd: postUpdateRoot,
+          durationMs: 0,
+          exitCode: matches ? 0 : 1,
+          diagnostics: [JSON.stringify({ activated: params.result.gitRuntime, observed })],
+          ...(!matches
+            ? {
+                failureFacts: [{ check: "runtime", code: "runtime-verification-failed", message }],
+              }
+            : {}),
+        });
+        if (!matches) {
+          return {
+            resultWithPostUpdate: failedTargetRuntime(resultWithPostUpdate),
+            detail: message,
+          };
+        }
+      }
       if (
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&
@@ -391,14 +416,6 @@ export async function convergeUpdatePlugins(params: {
       }
 
       return { resultWithPostUpdate, postUpdateConfigSnapshot };
-    } finally {
-      if (compatibilityHostVersion) {
-        if (previousCompatibilityHostVersion === undefined) {
-          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        } else {
-          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-        }
-      }
-    }
-  });
+    }),
+  );
 }

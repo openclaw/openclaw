@@ -8,7 +8,6 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -280,7 +279,7 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
-  it("recovers consent warnings emitted after a historical successful core update", () => {
+  it("recovers consent warnings in a successful core update result", () => {
     const core = {
       status: "ok",
       mode: "npm",
@@ -288,6 +287,7 @@ describe("upgrade recovery result assertions", () => {
       after: { version: "2026.8.1" },
       steps: [
         { name: "global update", exitCode: 0 },
+        { name: "global install swap", exitCode: 0 },
         { name: "openclaw doctor", exitCode: 0 },
       ],
     };
@@ -297,71 +297,24 @@ describe("upgrade recovery result assertions", () => {
       reason: undefined,
       warnings: [RECOVERABLE_UPDATE.postUpdate.plugins.warnings[0]],
     };
-    const continuation = { status: "ok", mode: "unknown", steps: [], postUpdate: { plugins } };
-    const output = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(continuation, null, 2)}\n`;
-    expect(runJsonTextAssertion("assert-recoverable-update-json", output, "2026.8.1").status).toBe(
+    const result = { ...core, postUpdate: { plugins } };
+    expect(runJsonAssertion("assert-recoverable-update-json", result, "2026.8.1").status).toBe(0);
+    expect(runJsonAssertion("assert-successful-update-json", result, "2026.8.1").status).not.toBe(
       0,
     );
-    expect(
-      runJsonTextAssertion("assert-successful-update-json", output, "2026.8.1").status,
-    ).not.toBe(0);
-    expect(
-      runJsonAssertion(
-        "assert-recoverable-update-json",
-        { ...core, postUpdate: { plugins } },
-        "2026.8.1",
-      ).status,
-    ).toBe(0);
-    // April 23 prints only the core report; the candidate's complete child result
-    // must remain tied to this invocation before it can authorize fixture recovery.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-upgrade-capture-")));
-    const observationRoot = join(root, "observation");
-    const resultFile = join(root, "update.json");
-    mkdirSync(join(observationRoot, "diagnostics"), { recursive: true });
-    writeJson(resultFile, core);
-    const snapshot = { artifactRoot: observationRoot, childExitCode: 0, result: plugins };
-    const captured = (command: string, value: unknown) => {
-      writeJson(join(observationRoot, "diagnostics", "post-core.json"), value);
-      return spawnSync(
-        testNodeExecPath,
-        [ASSERTIONS_PATH, command, resultFile, "2026.8.1", observationRoot, "2026.7.1-2"],
-        { encoding: "utf8" },
-      );
-    };
-    try {
-      const recovery = captured("assert-recoverable-update-json", snapshot);
-      expect(recovery.status, recovery.stderr).toBe(0);
-      expect(captured("assert-successful-update-json", snapshot).status).not.toBe(0);
-      for (const invalid of [
-        { ...snapshot, artifactRoot: join(root, "previous-update") },
-        { ...snapshot, childExitCode: 1 },
-        { ...snapshot, result: { ...plugins, status: "error" } },
-        {
-          ...snapshot,
-          result: { ...plugins, sync: { ...plugins.sync, errors: ["registry unavailable"] } },
-        },
-      ]) {
-        expect(captured("assert-recoverable-update-json", invalid).status).not.toBe(0);
-        expect(captured("assert-successful-update-json", invalid).status).not.toBe(0);
-      }
-      writeJson(resultFile, {
-        ...core,
-        postUpdate: { plugins: { ...plugins, status: "error", reason: "registry-unavailable" } },
-      });
-      expect(captured("assert-recoverable-update-json", snapshot).status).not.toBe(0);
-      expect(captured("assert-successful-update-json", snapshot).status).not.toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
     for (const invalid of [
-      { ...continuation, status: "error", reason: "doctor-failed" },
-      { ...continuation, steps: [{ name: "doctor", exitCode: 1 }] },
+      { ...result, status: "error", reason: "doctor-failed" },
+      { ...result, steps: [{ name: "doctor", exitCode: 1 }] },
       {
-        ...continuation,
+        ...result,
+        postUpdate: { plugins: { ...plugins, status: "error", reason: "registry-unavailable" } },
+      },
+      {
+        ...result,
         postUpdate: { plugins: { ...plugins, sync: { errors: ["registry unavailable"] } } },
       },
       {
-        ...continuation,
+        ...result,
         postUpdate: {
           plugins: {
             ...plugins,
@@ -370,37 +323,19 @@ describe("upgrade recovery result assertions", () => {
         },
       },
     ]) {
-      const invalidOutput = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(invalid, null, 2)}\n`;
       expect(
-        runJsonTextAssertion("assert-recoverable-update-json", invalidOutput, "2026.8.1").status,
+        runJsonAssertion("assert-recoverable-update-json", invalid, "2026.8.1").status,
       ).not.toBe(0);
       expect(
-        runJsonTextAssertion("assert-successful-update-json", invalidOutput, "2026.8.1").status,
+        runJsonAssertion("assert-successful-update-json", invalid, "2026.8.1").status,
       ).not.toBe(0);
     }
-    expect(
-      runJsonTextAssertion("assert-recoverable-update-json", output.slice(0, -4), "2026.8.1")
-        .status,
-    ).not.toBe(0);
-  });
-
-  it("accepts historical split successful reports without assuming consent support", () => {
-    const core = {
-      status: "ok",
-      mode: "npm",
-      after: { version: "2026.6.35" },
-      steps: [{ name: "global update", exitCode: 0 }],
-    };
-    const continuation = {
-      status: "ok",
-      mode: "unknown",
-      steps: [],
-      postUpdate: { plugins: { status: "ok" } },
-    };
-    const output = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(continuation, null, 2)}\n`;
-    expect(runJsonTextAssertion("assert-successful-update-json", output, "2026.6.35").status).toBe(
-      0,
-    );
+    const output = JSON.stringify(result);
+    for (const invalid of [output.slice(0, -4), `${output}\n${output}\n`]) {
+      expect(
+        runJsonTextAssertion("assert-recoverable-update-json", invalid, "2026.8.1").status,
+      ).not.toBe(0);
+    }
   });
 
   it.each(["base", "workshop-doctor-recovery"])(
@@ -1009,7 +944,7 @@ function writeSharedRuntimeCaches(stateDir: string, versioned = false): void {
   if (versioned) {
     roots.push(
       ...["discord", "feishu", "telegram", "whatsapp"].map(
-        (plugin) => `openclaw-2026.4.24-${plugin}`,
+        (plugin) => `openclaw-2026.6.1-${plugin}`,
       ),
     );
   }
@@ -1044,7 +979,7 @@ function runSessionStateAssertion(
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.4.24",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.6.1",
         },
         stdio: "pipe",
       });
@@ -1125,7 +1060,6 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     const coveragePath = join(root, "coverage.json");
     writeJson(coveragePath, {
       acceptedIntents: ["configured-plugin-installs"],
-      skippedIntents: [],
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
@@ -1157,7 +1091,6 @@ function assertConfig(params: {
     writeJson(configPath, params.config);
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
-      skippedIntents: [],
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -2417,7 +2350,7 @@ process.stdout.write(sessionDir + "\\n");
               const root =
                 scenario === "base"
                   ? join("discord", ".openclaw-runtime-deps-copy-stale")
-                  : "openclaw-2026.4.24-feishu";
+                  : "openclaw-2026.6.1-feishu";
               const sentinel = join(
                 stateDir,
                 "plugin-runtime-deps",

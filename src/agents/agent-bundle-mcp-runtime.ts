@@ -11,6 +11,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createCombinedSessionMcpRuntime,
   mergeMcpToolCatalogs,
@@ -89,14 +90,7 @@ const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
 type BundleMcpTestState = { disposeTimeoutMs?: number };
 
 function getBundleMcpTestState(): BundleMcpTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[BUNDLE_MCP_TEST_STATE_KEY] as BundleMcpTestState | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: BundleMcpTestState = {};
-  globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
-  return state;
+  return resolveGlobalSingleton(BUNDLE_MCP_TEST_STATE_KEY, () => ({}));
 }
 
 type McpServerBackoffState = {

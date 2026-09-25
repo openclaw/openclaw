@@ -26,13 +26,13 @@ export function readFileDraft(content: FileSidebarContent): RetainedFileDraft | 
 
 export function captureFileEditorDraft(
   content: FileSidebarContent,
-  edit: { editing: boolean; content: string; savedContent: string; expectedHash: string },
+  edit: { editing: boolean; content: string; dirty: boolean; expectedHash: string },
 ): { dirty: boolean; expectedHash: string } | null {
   // Read-only rendering may normalize line endings; only edits own drafts.
   if (!edit.editing) {
     return null;
   }
-  const dirty = edit.content !== edit.savedContent;
+  const { dirty } = edit;
   const expectedHash = dirty ? edit.expectedHash : (content.edit?.hash ?? "");
   setFileDraft(content, dirty ? { content: edit.content, expectedHash } : null);
   return { dirty, expectedHash };

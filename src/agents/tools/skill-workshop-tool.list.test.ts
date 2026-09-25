@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
+import type { SkillWorkshopStoreOptions } from "../../skills/workshop/store-sqlite-schema.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
@@ -20,23 +21,40 @@ const createSkillWorkshopTool = (
   },
 ) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
-vi.mock("../../skills/workshop/target-lock.js", () => ({
-  withSkillCollectionLock: async (fn: () => Promise<unknown>) => await fn(),
-  withSkillProposalTargetLock: async (_record: unknown, fn: () => Promise<unknown>) => await fn(),
-  withSkillProposalCommitLock: async (_record: unknown, fn: () => Promise<unknown>) => {
-    if (commitLockState.active) {
-      throw new Error("skill proposal reconciliations overlapped");
-    }
-    commitLockState.active = true;
-    commitLockState.calls += 1;
-    await Promise.resolve();
-    try {
-      return await fn();
-    } finally {
-      commitLockState.active = false;
-    }
-  },
-}));
+vi.mock("../../skills/workshop/target-lock.js", async () => {
+  const { captureSkillWorkshopStoreOptions } =
+    await import("../../skills/workshop/store-client.js");
+  type CapturedStore = ReturnType<typeof captureSkillWorkshopStoreOptions>;
+  return {
+    withSkillCollectionLock: async (
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => await fn(captureSkillWorkshopStoreOptions(options)),
+    withSkillProposalTargetLock: async (
+      _record: unknown,
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => await fn(captureSkillWorkshopStoreOptions(options)),
+    withSkillProposalCommitLock: async (
+      _record: unknown,
+      fn: (store: CapturedStore) => Promise<unknown>,
+      options: SkillWorkshopStoreOptions = {},
+    ) => {
+      const store = captureSkillWorkshopStoreOptions(options);
+      if (commitLockState.active) {
+        throw new Error("skill proposal reconciliations overlapped");
+      }
+      commitLockState.active = true;
+      commitLockState.calls += 1;
+      await Promise.resolve();
+      try {
+        return await fn(store);
+      } finally {
+        commitLockState.active = false;
+      }
+    },
+  };
+});
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;

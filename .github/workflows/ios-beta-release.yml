@@ -35,7 +35,7 @@ permissions: {}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   authorize:
@@ -197,10 +197,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -208,9 +208,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.239.0"
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Select Xcode 27
         run: |
@@ -436,10 +436,10 @@ jobs:
             apps/ios/CHANGELOG.md
 
       - name: Setup trusted Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -447,9 +447,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.239.0"
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Revalidate inspection authority immediately before credential access
         id: inspection-authority

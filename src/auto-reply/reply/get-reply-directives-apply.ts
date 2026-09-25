@@ -42,22 +42,6 @@ const directivePersistLoader = createLazyImportLoader(
   () => import("./directive-handling.persist.runtime.js"),
 );
 
-function loadCommandsStatus() {
-  return commandsStatusLoader.load();
-}
-
-function loadDirectiveLevels() {
-  return directiveLevelsLoader.load();
-}
-
-function loadDirectiveImpl() {
-  return directiveImplLoader.load();
-}
-
-function loadDirectivePersist() {
-  return directivePersistLoader.load();
-}
-
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   return (
     directives.hasModelDirective &&
@@ -293,12 +277,8 @@ export async function applyInlineDirectiveOverrides(params: {
     );
   }
 
-  if (
-    directives.hasModelDirective &&
-    effectiveModelDirective &&
-    isModelSelectionLocked(sessionEntry)
-  ) {
-    const lockedModelResolution = resolveModelSelectionFromDirective({
+  const resolveEffectiveModelSelection = () =>
+    resolveModelSelectionFromDirective({
       directives: {
         ...directives,
         rawModelDirective: effectiveModelDirective,
@@ -316,6 +296,12 @@ export async function applyInlineDirectiveOverrides(params: {
       agentId,
       requesterProfileId,
     });
+  if (
+    directives.hasModelDirective &&
+    effectiveModelDirective &&
+    isModelSelectionLocked(sessionEntry)
+  ) {
+    const lockedModelResolution = resolveEffectiveModelSelection();
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
       return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
@@ -371,7 +357,7 @@ export async function applyInlineDirectiveOverrides(params: {
   ) => {
     let rejected = false;
     const currentLevels = await (
-      await loadDirectiveLevels()
+      await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
       agentEntry: persistenceState ? undefined : agentEntry,
@@ -383,7 +369,7 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const reply = await (
-      await loadDirectiveImpl()
+      await directiveImplLoader.load()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       ...currentLevels,
@@ -411,24 +397,7 @@ export async function applyInlineDirectiveOverrides(params: {
     // Only the exact model-only case uses the focused service; mixed directives
     // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveModelSelectionFromDirective({
-        directives: {
-          ...directives,
-          rawModelDirective: effectiveModelDirective,
-        },
-        cfg,
-        agentDir,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        modelPolicy: modelState.modelPolicy,
-        operatorAuthority: modelState.operatorAuthority,
-        allowedModelKeys: modelState.allowedModelKeys,
-        allowedModelCatalog: modelState.allowedModelCatalog,
-        provider,
-        agentId,
-        requesterProfileId,
-      });
+      const modelResolution = resolveEffectiveModelSelection();
       if (modelResolution.errorText) {
         typing.cleanup();
         return directiveRejection("model-selection-rejected", modelResolution.errorText);
@@ -446,7 +415,7 @@ export async function applyInlineDirectiveOverrides(params: {
           return directiveRejection("model-runtime-invalid", runtime.errorText);
         }
         const applied = await (
-          await loadDirectivePersist()
+          await directivePersistLoader.load()
         ).applySessionModelSelection({
           cfg,
           agentId,
@@ -524,7 +493,7 @@ export async function applyInlineDirectiveOverrides(params: {
     } = currentLevels;
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
-      const { buildStatusReply } = await loadCommandsStatus();
+      const { buildStatusReply } = await commandsStatusLoader.load();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,

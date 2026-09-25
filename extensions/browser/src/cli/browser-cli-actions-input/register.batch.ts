@@ -10,7 +10,7 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { runBrowserAction, readActionsPayload, resolveBrowserActionContext } from "./shared.js";
+import { runBrowserAction, readActionsPayload } from "./shared.js";
 
 /** Registers the Browser CLI batch command. */
 export function registerBrowserBatchCommands(
@@ -25,7 +25,7 @@ export function registerBrowserBatchCommands(
     .option("--continue", "Continue through all actions instead of stopping on first error")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (opts.actions !== undefined && opts.actionsFile !== undefined) {
         defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
         defaultRuntime.exit(1);
@@ -66,7 +66,6 @@ export function registerBrowserBatchCommands(
         } as BrowserActRequest;
         await runBrowserAction({
           parent,
-          profile,
           body: request,
           successMessage: `batch ran ${actions.length} action(s)`,
         });

@@ -20,6 +20,7 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -49,7 +50,10 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
   const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
-  return listCoreToolSections({ swarmEnabled }).map((section) => ({
+  return listCoreToolSections({
+    swarmEnabled,
+    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
+  }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",

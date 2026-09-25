@@ -2,74 +2,25 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
-  type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import {
+  capturePluginStateErrorCause,
+  type PluginStateErrorCause,
+} from "./plugin-state-error-cause.js";
 import {
   PluginStateStoreError,
   type PluginStateStoreErrorCode,
   type PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 
-type PluginStateWorkerCause =
-  | { canonical: OpenClawStateWorkerErrorPayload }
-  | {
-      name: string;
-      message: string;
-      code?: string | number;
-      errcode?: number;
-      cause?: PluginStateWorkerCause;
-    };
-
 export type PluginStateWorkerFailure = {
   message: string;
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
   path?: string;
-  cause?: PluginStateWorkerCause;
+  owner: PluginStateStoreError["owner"];
+  cause?: PluginStateErrorCause;
 };
-
-// Preserve classification fields and causal messages, not arbitrary error properties or stacks.
-function captureCause(
-  value: unknown,
-  seen = new Set<object>(),
-): PluginStateWorkerCause | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const canonical = encodeOpenClawStateWorkerError(value);
-  if (canonical) {
-    return { canonical };
-  }
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return { name: "Error", message: String(value) };
-  }
-  if (typeof value !== "object") {
-    return { name: "Error", message: "Unknown SQLite error cause" };
-  }
-  if (seen.has(value) || seen.size >= 8) {
-    return { name: "Error", message: "Additional SQLite error cause omitted" };
-  }
-  seen.add(value);
-  const name = "name" in value && typeof value.name === "string" ? value.name : "Error";
-  const message = "message" in value && typeof value.message === "string" ? value.message : name;
-  const code = "code" in value ? value.code : undefined;
-  const errcode = "errcode" in value ? value.errcode : undefined;
-  const cause = "cause" in value ? captureCause(value.cause, seen) : undefined;
-  return {
-    name,
-    message,
-    ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
-    ...(typeof errcode === "number" ? { errcode } : {}),
-    ...(cause ? { cause } : {}),
-  };
-}
 
 const errorConstructors = new Map<string, ErrorConstructor>([
   ["Error", Error],
@@ -81,18 +32,19 @@ const errorConstructors = new Map<string, ErrorConstructor>([
   ["EvalError", EvalError],
 ]);
 
-function restoreCause(value: PluginStateWorkerCause | undefined): Error | undefined {
+function restoreCause(value: PluginStateErrorCause | undefined): Error | undefined {
   if (value && "canonical" in value) {
     const retained = new Error("SQLite worker error cause");
     retainOpenClawStateWorkerErrorPayload(retained, value.canonical);
-    return hydrateOpenClawStateWorkerError(retained);
+    return hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true });
   }
   const Constructor = value ? (errorConstructors.get(value.name) ?? Error) : Error;
   return value
     ? Object.assign(new Constructor(value.message, { cause: restoreCause(value.cause) }), {
         name: value.name,
-        ...(value.code === undefined ? {} : { code: value.code }),
+        ...(value.errorCode === undefined ? {} : { code: value.errorCode }),
         ...(value.errcode === undefined ? {} : { errcode: value.errcode }),
+        ...(value.errno === undefined ? {} : { errno: value.errno }),
       })
     : undefined;
 }
@@ -100,11 +52,14 @@ function restoreCause(value: PluginStateWorkerCause | undefined): Error | undefi
 export function capturePluginStateWorkerFailure(
   error: PluginStateStoreError,
 ): PluginStateWorkerFailure {
-  const cause = captureCause(error.cause);
+  const cause = capturePluginStateErrorCause(error.cause, (value) =>
+    encodeOpenClawStateWorkerError(value, { includeOrdinary: value instanceof AggregateError }),
+  );
   return {
     message: error.message,
     code: error.code,
     operation: error.operation,
+    owner: error.owner,
     ...(error.path === undefined ? {} : { path: error.path }),
     ...(cause ? { cause } : {}),
   };
@@ -116,6 +71,7 @@ export function restorePluginStateWorkerFailure(
   return new PluginStateStoreError(error.message, {
     code: error.code,
     operation: error.operation,
+    owner: error.owner,
     ...(error.path === undefined ? {} : { path: error.path }),
     cause: restoreCause(error.cause),
   });

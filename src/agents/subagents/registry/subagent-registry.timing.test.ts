@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
@@ -83,7 +84,7 @@ describe("subagent timing completion", () => {
     envSnapshot.restore();
   });
 
-  it.each(["wait-only", "sequential", "overlap"] as const)("%s", async (mode) => {
+  it.for(["wait-only", "sequential", "overlap"] as const)("%s", async (mode, { signal }) => {
     const runId = `timing-repro-${mode}`;
     const childSessionKey = `agent:main:subagent:${mode}`;
     const requesterSessionKey = "agent:main:main";
@@ -114,7 +115,7 @@ describe("subagent timing completion", () => {
         skipMaintenance: true,
       });
     }
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey,
@@ -147,8 +148,8 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
-      await vi.waitFor(() => expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number)));
       await settleSubagentRegistryPersistenceWork();
+      expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
     if (mode === "overlap") {
       const entered = createDeferred();
@@ -166,14 +167,34 @@ describe("subagent timing completion", () => {
       );
       try {
         await entered.promise;
-        const queueDepth = () =>
-          SQLITE_SESSION_WRITER_QUEUES.get(resolveOpenClawAgentSqlitePath({ agentId: "main" }))
-            ?.pending.length ?? 0;
-        expect(queueDepth()).toBe(0);
-        emitTerminal();
-        await vi.waitFor(() => expect(queueDepth()).toBe(1));
-        waiting.resolve(terminal);
-        await vi.waitFor(() => expect(queueDepth()).toBe(2));
+        const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
+        if (!queue) {
+          throw new Error("session writer did not retain its queue");
+        }
+        const lifecycleQueued = createDeferred();
+        const waiterQueued = createDeferred();
+        const push = queue.pending.push.bind(queue.pending);
+        // Task finalization awaits a worker before these writes reach the FIFO.
+        const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+          const depth = push(...tasks);
+          if (depth === 1) {
+            lifecycleQueued.resolve();
+          } else if (depth === 2) {
+            waiterQueued.resolve();
+          }
+          return depth;
+        });
+        try {
+          expect(queue.pending.length).toBe(0);
+          emitTerminal();
+          await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+          expect(queue.pending.length).toBe(1);
+          waiting.resolve(terminal);
+          await racePromiseWithAbortSignal(waiterQueued.promise, signal);
+          expect(queue.pending.length).toBe(2);
+        } finally {
+          enqueueObserver.mockRestore();
+        }
       } finally {
         waiting.resolve(terminal);
         released.resolve();

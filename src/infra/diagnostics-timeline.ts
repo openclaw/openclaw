@@ -4,11 +4,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
+import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
-import { appendRegularFileSync } from "./regular-file.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 const MAX_PENDING_TIMELINE_BYTES = 64 * 1024;
@@ -342,38 +342,30 @@ function runInDiagnosticsTimelineSpan<T>(span: StartedDiagnosticsTimelineSpan, r
   );
 }
 
-function emitFinishedDiagnosticsTimelineSpan(span: StartedDiagnosticsTimelineSpan): void {
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
-}
-
-function emitFailedDiagnosticsTimelineSpan(
+function emitFinishedDiagnosticsTimelineSpan(
   span: StartedDiagnosticsTimelineSpan,
-  error: unknown,
+  failure?: { error: unknown },
 ): void {
   emitDiagnosticsTimelineEvent(
     {
-      type: "span.error",
+      type: failure ? "span.error" : "span.end",
       name: span.name,
       phase: span.phase,
       spanId: span.spanId,
       parentSpanId: span.parentSpanId,
       durationMs: performance.now() - span.startedAt,
       attributes: span.attributes,
-      errorName: error instanceof Error ? error.name : typeof error,
-      ...(span.omitErrorMessage
-        ? {}
-        : { errorMessage: error instanceof Error ? error.message : String(error) }),
+      ...(failure
+        ? {
+            errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
+            ...(span.omitErrorMessage
+              ? {}
+              : {
+                  errorMessage:
+                    failure.error instanceof Error ? failure.error.message : String(failure.error),
+                }),
+          }
+        : {}),
     },
     { config: span.config, env: span.env },
   );
@@ -394,7 +386,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitFailedDiagnosticsTimelineSpan(span, error);
+    emitFinishedDiagnosticsTimelineSpan(span, { error });
     throw error;
   }
 }
@@ -414,7 +406,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitFailedDiagnosticsTimelineSpan(span, error);
+    emitFinishedDiagnosticsTimelineSpan(span, { error });
     throw error;
   }
 }

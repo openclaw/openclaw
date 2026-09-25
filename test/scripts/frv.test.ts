@@ -81,6 +81,13 @@ function preflightMethods(
   };
 }
 
+// Advisory children fail only ordinary lanes; blocking children fail a required proof.
+function blockingChildJobName(childKey: string | undefined) {
+  return childKey === "npmTelegram" || childKey === "productPerformance"
+    ? "test"
+    : "Run install smoke";
+}
+
 function controllerClient(
   children: ReturnType<typeof child>[],
   childRuns: Map<string, { attempt: number; conclusion: string | null }>,
@@ -91,7 +98,7 @@ function controllerClient(
     ...preflightMethods(children, (entry) => runFor(entry, 1, "failure")),
     getAttemptJobs: async (runId: string, attempt: number) => [
       job(
-        "test",
+        blockingChildJobName(byRunId.get(runId)?.key),
         attempt === childRuns.get(runId)?.attempt
           ? (childRuns.get(runId)?.conclusion ?? "")
           : "failure",
@@ -212,15 +219,23 @@ function rerunScenario(options: {
 }
 
 describe("FRV immutable plan eligibility", () => {
-  it("accepts current v2 all-group plans", async () => {
-    await expect(
-      loadPlan({ repository: REPOSITORY, runId: "77" }, async () => executionPlanArtifact()),
-    ).resolves.toMatchObject({
-      attemptEvidenceVersion: 2,
-      parentRunId: "77",
-      rerunGroup: "all",
-    });
-  });
+  it.each([false, true])(
+    "accepts all-group plans with retired empty metadata=%s",
+    async (retained) => {
+      const artifact = executionPlanArtifact();
+      if (retained) {
+        Object.assign(artifact, { knownFlakyJobs: [] });
+        artifact.sha256 = releaseExecutionPlanSha256(artifact);
+      }
+      await expect(
+        loadPlan({ repository: REPOSITORY, runId: "77" }, async () => artifact),
+      ).resolves.toMatchObject({
+        attemptEvidenceVersion: 2,
+        parentRunId: "77",
+        rerunGroup: "all",
+      });
+    },
+  );
 
   it("keeps historical plan verification but rejects it for continuation", async () => {
     const historical = historicalExecutionPlanArtifact();
@@ -820,7 +835,7 @@ describe("FRV same-parent recovery", () => {
     expect(scenario.counters.posts.child).toBe(0);
   });
 
-  it("reruns blocking children concurrently, preserves green and advisory children, then reruns the parent once", async () => {
+  it("reruns blocking children concurrently, preserves green children, then reruns the parent once", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
@@ -872,6 +887,7 @@ describe("FRV same-parent recovery", () => {
         _deadline?: number,
         attempts?: Record<string, number>,
       ) => {
+        // The advisory Telegram child is not rerun; only blocking children get a second attempt.
         expect(attempts?.["505"]).toBe(1);
         events.push("verify");
         return "{}";
@@ -880,8 +896,9 @@ describe("FRV same-parent recovery", () => {
     const result = await continueFailed(selectedPlan, "77", client);
     expect(result).toMatchObject({ action: "reran-parent", finalRunId: "77" });
     expect(events.slice(0, 2).toSorted()).toEqual(["child:101", "child:202"]);
-    expect(events).not.toContain("child:303");
     expect(events).not.toContain("child:505");
+    expect(events).not.toContain("child:303");
+    // The advisory Telegram child passes on its first attempt without a rerun.
     expect(result.status.children).toContainEqual(
       expect.objectContaining({
         key: "npmTelegram",
@@ -1528,6 +1545,40 @@ describe("FRV same-parent recovery", () => {
       continueFailed(plan([selected]), "77", client, { dryRun: true }),
     ).resolves.toMatchObject({ action: "would-rerun" });
     expect(mutations).toBe(0);
+  });
+});
+
+describe("FRV manual retry admission", () => {
+  it("checks common parent provenance after all final child reads and before any POST", async () => {
+    const children = [child("normalCi", "101"), child("pluginPrerelease", "202")];
+    const childRuns = new Map(
+      children.map((entry) => [entry.runId, { attempt: 1, conclusion: "failure" }]),
+    );
+    const parent = { attempt: 1, conclusion: "failure" as string | null };
+    const base = controllerClient(children, childRuns, parent);
+    let parentSha = SHA;
+    let siblingReads = 0;
+    const client = {
+      ...base,
+      getRun: async (id: string) => {
+        const run = await base.getRun(id);
+        if (id === "202" && ++siblingReads === 3) {
+          parentSha = "f".repeat(40);
+        }
+        return { ...run, ...(id === "77" ? { head_sha: parentSha } : {}) };
+      },
+      rerunFailed: vi.fn(async () => {
+        throw new Error("unexpected mutation");
+      }),
+      rerunParent: vi.fn(async () => {
+        throw new Error("unexpected mutation");
+      }),
+    };
+    await expect(continueFailed(plan(children), "77", client)).rejects.toMatchObject({
+      code: "FRV_PARENT_PROVENANCE",
+    });
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.rerunParent).not.toHaveBeenCalled();
   });
 });
 

@@ -9,10 +9,21 @@ read_when:
 
 ## Concurrency
 
-Sub-agents use a dedicated in-process queue lane:
+Each spawning session has its own in-process sub-agent queue. The setting
+`agents.defaults.subagents.maxConcurrent` limits concurrent child runs for that
+session (default `8`). Independent sessions have independent budgets, so one
+busy session does not consume another session's sub-agent slots. A nested
+orchestrator's children use that orchestrator's budget, not its parent's.
 
-- **Lane name:** `subagent`
-- **Concurrency:** `agents.defaults.subagents.maxConcurrent` (default `8`)
+The budget belongs to the child's immediate spawning/controller session.
+Changing where a child's completion is delivered does not move its execution
+to another session's budget. Accepted runs above the execution limit queue until
+a slot is available.
+
+`maxChildrenPerAgent` is a separate admission limit on active children per
+session (default `5`); increasing execution concurrency does not raise that
+limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
+and limits independently of these OpenClaw queues.
 
 Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
@@ -55,6 +66,11 @@ run or admitted work owning that session. Live executions and queued collectors
 keep their existing owners. Orphaned runs settle their background task before
 cleanup, so retained child sessions do not leave phantom running activity. If the
 task update fails, completion remains available for retry.
+
+Startup session maintenance reports retained run/task owners in one informational
+summary. Those rows remain with registry recovery; the session-only orphan repair
+does not compete for their ownership. Ownership changes during a repair and failed
+ownership checks still produce warnings.
 
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
@@ -124,7 +140,7 @@ timeout. Those events do not automatically cancel them.
 ## Limitations
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
-- Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
+- Sub-agents still share the same Gateway process resources; `maxConcurrent` bounds each spawning session's execution, not total Gateway concurrency.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.

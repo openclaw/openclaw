@@ -58,7 +58,7 @@ Recommended, supported, and provisioned are three different things.
 | Platform        | Installer path                              | Node provisioned                                                                           |
 | --------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Linux           | `install.sh`: apt/dnf/yum via NodeSource    | Node 24.x LTS.                                                                             |
-| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.19.0 by default; existing runtime reuse and explicit version selection can differ. |
+| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.21.0 by default; existing runtime reuse and explicit version selection can differ. |
 | macOS           | `install.sh`: Homebrew `node`               | Node 26; no exact patch pinned, and an existing supported Node can be retained.            |
 | Windows         | `install.ps1`: Chocolatey, Scoop, or winget | LTS package; no exact patch pinned, validated after installation.                          |
 | Windows         | `install.ps1`: portable fallback            | Latest 26.x Windows zip.                                                                   |

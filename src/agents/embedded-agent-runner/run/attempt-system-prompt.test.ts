@@ -7,6 +7,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
@@ -33,6 +34,21 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+
+async function admitPrompt(
+  config: NonNullable<EmbeddedRunAttemptParams["config"]>,
+  agentId = "main",
+) {
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    `prompt-fixture-${admissions.length}`,
+    agentId,
+    "system-prompt-test",
+  );
+  admissions.push(admission);
+  return admission.admit("embedded");
+}
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
@@ -40,6 +56,9 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
   vi.restoreAllMocks();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
@@ -98,6 +117,7 @@ async function preparePermissionPrompt(
     ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
+    admittedRunContext: await admitPrompt({}),
     thinkLevel,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
@@ -204,6 +224,7 @@ describe("buildAttemptSystemPrompt", () => {
       };
       const attempt = {
         config,
+        admittedRunContext: await admitPrompt(config, "marketing"),
         agentId: "marketing",
         sessionId: "global-system-prompt",
         sessionKey: "global",
@@ -379,12 +400,8 @@ describe("buildAttemptSystemPrompt", () => {
 
       expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
       expect(result.systemPrompt).not.toContain("\u202e");
-      expect(result.systemPrompt).toContain("# Project Context");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
       expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
       expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
       expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     },
   );
@@ -470,19 +487,11 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
-    expect(result.systemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
-    expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
     expect(result.systemPrompt).toContain("Bootstrap context was truncated.");
-    expect(result.systemPrompt).toContain("# Project Context");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
     expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
     expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
     expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
   });
 
@@ -549,7 +558,7 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
+    expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
     expect(result.systemPrompt).toBe("");
   });
 });

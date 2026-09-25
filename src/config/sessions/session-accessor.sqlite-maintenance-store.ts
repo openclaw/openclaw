@@ -86,10 +86,10 @@ export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan 
 }
 
 /** Only a current age fact can avoid planning; pressure and force still require a pass. */
-export function canSkipSessionEntryMaintenanceInDatabase(
+function canSkipSessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
-  entryCount?: number,
+  entryCount: number,
 ): boolean {
   if (params.maintenance.mode === "warn") {
     return true;
@@ -102,7 +102,7 @@ export function canSkipSessionEntryMaintenanceInDatabase(
     ageFact !== undefined &&
     Date.now() < ageFact.next.at &&
     !shouldRunSessionEntryMaintenance({
-      entryCount: entryCount ?? readSessionEntryCount(database, { includeArchived: false }),
+      entryCount,
       maxEntries: params.maintenance.maxEntries,
       force: params.forceMaintenance,
     })
@@ -229,6 +229,7 @@ export function applySessionEntryMaintenanceInDatabase(
     database,
     excludedSessionKeys: removals.map((removal) => removal.sessionKey),
     projectedStore: {},
+    candidateSessionIds: [...removedSessionIds],
   });
   const deletePlans: SessionStateDeletePlan[] = [];
   for (const sessionId of removedSessionIds) {

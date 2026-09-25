@@ -269,6 +269,16 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
 
     const database = createGlobalDatabase();
     try {
+      const authorizationIndex = database
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_user_profile_identities_authorization'",
+        )
+        .get()?.sql;
+      if (typeof authorizationIndex !== "string") {
+        throw new Error("Canonical channel authorization index is missing");
+      }
+      // A schema predating the authorization columns also predates their index.
+      database.exec("DROP INDEX idx_user_profile_identities_authorization;");
       for (const {
         columnName,
         dataType,
@@ -287,6 +297,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       }
 
       ensureAdditiveStateColumns(database, "runtime");
+      database.exec(authorizationIndex);
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
           pathname: "global.sqlite",

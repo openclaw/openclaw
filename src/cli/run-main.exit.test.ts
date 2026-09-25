@@ -9,7 +9,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
-import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -22,6 +21,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
+import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
 import { getPendingCliDisposers } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -31,7 +31,7 @@ const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
-let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
+let shouldStartProxyForCli: typeof import("./run-main-policy.js").shouldStartProxyForCli;
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -399,7 +399,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/command-registry.js", () => ({
+vi.mock("./program/command-registry-core.js", () => ({
   registerCoreCliByName: registerCoreCliByNameMock,
 }));
 
@@ -564,7 +564,7 @@ describe("runCli exit behavior", () => {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
-    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+    ({ shouldStartProxyForCli } = await import("./run-main-policy.js"));
   });
 
   afterAll(() => {
@@ -2398,32 +2398,12 @@ describe("runCli exit behavior", () => {
     },
   );
 
-  it.each([
-    ["worker", { observe: false, pluginValidation: "core-only" }],
-    ["run", { observe: false, skipPluginValidation: true }],
-  ])(
-    "preserves node %s config ownership when startup tracing is enabled",
-    async (subcommand, readOptions) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
-      const timelinePath = path.join(root, "timeline.jsonl");
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
-      try {
-        await withEnvAsync(
-          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
-          async () => {
-            await runCli(["node", "openclaw", "node", subcommand]);
-          },
-        );
-        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
-        flushDiagnosticsTimeline();
-        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
-      } finally {
-        flushDiagnosticsTimeline();
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    },
-  );
+  registerRunMainTimelineTests({
+    runCli: (argv) => runCli(argv),
+    loadConfigMock,
+    readSourceConfigBestEffortMock,
+    tryRouteCliMock,
+  });
 
   it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],

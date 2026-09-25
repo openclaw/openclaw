@@ -1,7 +1,8 @@
 // Control-plane facade; codecs, WebRTC sockets and packet clocks live in the worker.
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createCpuTrackedWorker,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -56,7 +57,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         distWorkerPath: "realtime-quicksilver-audio.worker.js",
       },
     });
-    const worker = new Worker(url, {
+    const worker = createCpuTrackedWorker(url, {
       workerData: {
         iceServers: params.iceServers,
         reportMediaErrors: Boolean(params.callbacks.onMediaError),

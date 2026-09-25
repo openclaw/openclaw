@@ -1,16 +1,11 @@
-import fsSync from "node:fs";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   hasAnyAuthProfileStoreSource,
   hasAuthProfileStoreSourceForProvider,
@@ -25,32 +20,17 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import {
-  resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
-} from "../memory-host-sdk/dreaming.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
-import {
-  auditDreamingArtifacts,
-  auditShortTermPromotionArtifacts,
-  getMissingLocalMemoryEmbeddingProviderMessage,
-  repairDreamingArtifacts,
-  repairShortTermPromotionArtifacts,
-  type DreamingArtifactsAuditSummary,
-  type ShortTermAuditSummary,
-} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   resolveManifestOwnerBasePolicyBlock,
   type ManifestOwnerBasePolicyBlockReason,
 } from "../plugins/manifest-owner-policy.js";
-import {
-  getActiveMemorySearchManagerCore,
-  resolveActiveMemoryBackendConfig,
-} from "../plugins/memory-runtime.js";
+import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listProviderPolicyOwners,
@@ -60,34 +40,16 @@ import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  formatMemoryDoctorAgentMessage,
+  resolveMemoryDoctorAgentScopes,
+  type MemoryDoctorAgentScope,
+} from "./doctor-memory-scope.js";
+import {
   formatLocalRuntimeDoctorNote,
   resolveLocalProviderPolicyBlockGuidance,
 } from "./doctor-memory-search-local.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
-import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
+import { noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
-
-type RuntimeMemoryAuditContext = {
-  workspaceDir?: string;
-};
-
-type MemoryDoctorAgentScope = {
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-};
-
-function resolveMemoryDoctorAgentScopes(cfg: OpenClawConfig): MemoryDoctorAgentScope[] {
-  return listAgentIds(cfg).map((agentId) => ({
-    agentId,
-    agentDir: resolveAgentDir(cfg, agentId),
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
-}
-
-function formatAgentMessage(agentId: string, labelAgent: boolean, message: string): string {
-  return `${labelAgent ? `Agent "${agentId}": ` : ""}${message}`;
-}
 
 const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
   ["github-copilot", "github-copilot"],
@@ -155,214 +117,6 @@ function isKeyOptionalMemoryProvider(providerId: string, cfg: OpenClawConfig): b
   );
 }
 
-async function resolveRuntimeMemoryAuditContext(
-  cfg: OpenClawConfig,
-  agentId: string,
-): Promise<RuntimeMemoryAuditContext | null> {
-  const result = await getActiveMemorySearchManagerCore({
-    cfg,
-    agentId,
-    purpose: "status",
-  });
-  const manager = result.manager;
-  if (!manager) {
-    return null;
-  }
-  try {
-    const status = manager.status();
-    return {
-      workspaceDir: status.workspaceDir?.trim(),
-    };
-  } finally {
-    await manager.close?.().catch(() => undefined);
-  }
-}
-
-function buildMemoryRecallIssueNote(audit: ShortTermAuditSummary): string | null {
-  if (audit.issues.length === 0) {
-    return null;
-  }
-  const issueLines = audit.issues.map((issue) => `- ${issue.message}`);
-  const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
-  const guidance = hasFixableIssue
-    ? `Fix: ${formatCliCommand("openclaw doctor --fix")} or ${formatCliCommand("openclaw memory status --fix")}`
-    : `Verify: ${formatCliCommand("openclaw memory status --deep")}`;
-  return [
-    "Memory recall artifacts need attention:",
-    ...issueLines,
-    `Recall store: ${audit.storePath}`,
-    guidance,
-  ].join("\n");
-}
-
-function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): string | null {
-  if (audit.issues.length === 0) {
-    return null;
-  }
-  const issueLines = audit.issues.map((issue) => `- ${issue.message}`);
-  const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
-  return [
-    "Dreaming artifacts need attention:",
-    ...issueLines,
-    `Dream corpus: ${audit.sessionCorpusDir}`,
-    hasFixableIssue
-      ? `Fix: ${formatCliCommand("openclaw doctor --fix")} or ${formatCliCommand("openclaw memory status --fix")}`
-      : `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-  ].join("\n");
-}
-
-export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
-  const scopes = resolveMemoryDoctorAgentScopes(cfg);
-  const labelAgents = scopes.length > 1;
-  const dreaming = resolveMemoryDreamingConfig({
-    cfg,
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-  });
-  for (const scope of scopes) {
-    try {
-      const context = await resolveRuntimeMemoryAuditContext(cfg, scope.agentId);
-      const workspaceDir = context?.workspaceDir?.trim();
-      if (!workspaceDir) {
-        continue;
-      }
-      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-      const message = buildMemoryRecallIssueNote(audit);
-      if (message) {
-        note(formatAgentMessage(scope.agentId, labelAgents, message), "Memory search");
-      }
-      const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
-      const dreamingMessage = buildDreamingArtifactIssueNote(dreamingAudit);
-      if (dreamingMessage) {
-        note(formatAgentMessage(scope.agentId, labelAgents, dreamingMessage), "Memory search");
-      }
-    } catch (err) {
-      note(
-        formatAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Memory recall audit could not be completed: ${formatErrorMessage(err)}`,
-        ),
-        "Memory search",
-      );
-    } finally {
-      note(
-        formatAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
-        ),
-        "Memory search",
-      );
-    }
-  }
-}
-
-export async function maybeRepairMemoryRecallHealth(params: {
-  cfg: OpenClawConfig;
-  prompter: DoctorPrompter;
-}): Promise<void> {
-  const scopes = resolveMemoryDoctorAgentScopes(params.cfg);
-  const labelAgents = scopes.length > 1;
-  for (const scope of scopes) {
-    await maybeRepairWorkspaceMemoryHealth({
-      ...params,
-      scope: {
-        agentId: scope.agentId,
-        workspaceDir: scope.workspaceDir,
-        labelAgent: labelAgents,
-      },
-    });
-    try {
-      const context = await resolveRuntimeMemoryAuditContext(params.cfg, scope.agentId);
-      const workspaceDir = context?.workspaceDir?.trim();
-      if (!workspaceDir) {
-        continue;
-      }
-      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-      const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
-      if (hasFixableRecallIssue) {
-        const approved = await params.prompter.confirmRuntimeRepair({
-          message: formatAgentMessage(
-            scope.agentId,
-            labelAgents,
-            "Remove dangling memory recalls, normalize recall artifacts, and remove stale promotion locks?",
-          ),
-          initialValue: true,
-        });
-        if (approved) {
-          const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-          if (repair.changed) {
-            const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-            const details = [
-              repair.removedInvalidEntries > 0
-                ? `-${repair.removedInvalidEntries} invalid entries`
-                : null,
-              (repair.removedDanglingEntries ?? 0) > 0
-                ? `-${repair.removedDanglingEntries} dangling entries`
-                : null,
-              removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
-            ]
-              .filter(Boolean)
-              .join(", ");
-            const lines = [
-              "Memory recall artifacts repaired:",
-              repair.rewroteStore
-                ? `- rewrote recall store${details ? ` (${details})` : ""}`
-                : null,
-              repair.removedStaleLock ? "- removed stale promotion lock" : null,
-              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-            ].filter(Boolean);
-            note(
-              formatAgentMessage(scope.agentId, labelAgents, lines.join("\n")),
-              "Doctor changes",
-            );
-          }
-        }
-      }
-
-      const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
-      const hasFixableDreamingIssue = dreamingAudit.issues.some((issue) => issue.fixable);
-      if (!hasFixableDreamingIssue) {
-        continue;
-      }
-      const approvedDreamingRepair = await params.prompter.confirmRuntimeRepair({
-        message: formatAgentMessage(
-          scope.agentId,
-          labelAgents,
-          "Archive contaminated dreaming artifacts and reset derived dream corpus state?",
-        ),
-        initialValue: true,
-      });
-      if (!approvedDreamingRepair) {
-        continue;
-      }
-      const dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
-      if (!dreamingRepair.changed) {
-        continue;
-      }
-      const lines = [
-        "Dreaming artifacts repaired:",
-        dreamingRepair.archivedSessionCorpus ? "- archived session corpus" : null,
-        dreamingRepair.archivedSessionIngestion ? "- archived session-ingestion state" : null,
-        dreamingRepair.archivedDreamsDiary ? "- archived dream diary" : null,
-        dreamingRepair.archiveDir ? `- archive dir: ${dreamingRepair.archiveDir}` : null,
-        ...dreamingRepair.warnings.map((warning) => `- warning: ${warning}`),
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].filter(Boolean);
-      note(formatAgentMessage(scope.agentId, labelAgents, lines.join("\n")), "Doctor changes");
-    } catch (err) {
-      note(
-        formatAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Memory artifact repair could not be completed: ${formatErrorMessage(err)}`,
-        ),
-        "Memory search",
-      );
-    }
-  }
-}
-
 function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
   if (!plugins.enabled) {
@@ -424,10 +178,22 @@ function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig): {
   };
 }
 
-function noteRememberAcrossConversationsHealth(params: {
+type MemorySearchHealthPath =
+  | "memory.search.provider"
+  | "plugins.slots.memory"
+  | "memory.search.remote.baseUrl"
+  | "memory.search.model";
+
+type MemorySearchHealthReporter = (
+  message: string,
+  path?: MemorySearchHealthPath,
+  disabled?: boolean,
+) => void;
+
+function inspectRememberAcrossConversationsHealth(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  noteFn: typeof note;
+  report: MemorySearchHealthReporter;
 }): { enabled: boolean } {
   const enabled = resolveRememberAcrossConversations(params.cfg, params.agentId);
   if (!enabled) {
@@ -436,20 +202,17 @@ function noteRememberAcrossConversationsHealth(params: {
   const activeMemoryAvailable = isActiveMemoryPluginAvailable(params.cfg);
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
   if (!activeMemoryAvailable) {
-    params.noteFn(
+    params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.`,
-      "Memory search",
     );
   }
   if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
-    params.noteFn(
+    params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
-      "Memory search",
     );
   } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
-    params.noteFn(
+    params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
-      "Memory search",
     );
   }
   return { enabled: true };
@@ -467,7 +230,6 @@ type MemorySearchHealthOptions = {
     skipped?: boolean;
     runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
   };
-  noteFn?: typeof note;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -477,52 +239,108 @@ export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: MemorySearchHealthOptions,
 ): Promise<void> {
+  await inspectMemorySearchHealth(cfg, opts ?? {}, ({ text }) => note(text, "Memory search"));
+}
+
+export async function collectMemorySearchHealthFindings(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  await inspectMemorySearchHealth(
+    ctx.cfg,
+    {
+      env: ctx.env,
+      includeWorkspaceMemoryHealth: false,
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    },
+    ({ finding }) => {
+      if (finding) {
+        findings.push(finding);
+      }
+    },
+  );
+  return findings;
+}
+
+async function inspectMemorySearchHealth(
+  cfg: OpenClawConfig,
+  opts: MemorySearchHealthOptions,
+  emit: (diagnostic: { text: string; finding: HealthFinding | null }) => void,
+): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
-    if (opts?.includeWorkspaceMemoryHealth !== false) {
+    if (opts.includeWorkspaceMemoryHealth !== false) {
       await noteWorkspaceMemoryHealth(cfg, {
         agentId: scope.agentId,
         workspaceDir: scope.workspaceDir,
         labelAgent: labelAgents,
       });
     }
-    const outputNote = opts?.noteFn ?? note;
-    const noteFn: typeof note = (message, title) =>
-      outputNote(formatAgentMessage(scope.agentId, labelAgents, String(message)), title);
-    await noteMemorySearchHealthForAgent(cfg, scope, {
-      ...opts,
-      noteFn,
-      includeWorkspaceMemoryHealth: false,
-      gatewayMemoryProbe:
-        scope.agentId === defaultAgentId || opts?.gatewayMemoryProbe?.skipped
-          ? opts?.gatewayMemoryProbe
-          : undefined,
-    });
+    const report: MemorySearchHealthReporter = (
+      message,
+      path = "memory.search.provider",
+      disabled = false,
+    ) => {
+      const text = formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
+      const [firstLine, ...details] = text.split("\n");
+      const fixHint = details
+        .map((line) => line.trimEnd())
+        .join("\n")
+        .trim();
+      emit({
+        text,
+        // Labeled disabled-agent notes have historically remained lint warnings.
+        finding:
+          disabled && !labelAgents
+            ? null
+            : {
+                checkId: "core/doctor/memory-search",
+                severity: "warning",
+                message: (firstLine ?? text).trim(),
+                path,
+                ...(fixHint ? { fixHint } : {}),
+              },
+      });
+    };
+    await inspectMemorySearchHealthForAgent(
+      cfg,
+      scope,
+      {
+        ...opts,
+        gatewayMemoryProbe:
+          scope.agentId === defaultAgentId || opts.gatewayMemoryProbe?.skipped
+            ? opts.gatewayMemoryProbe
+            : undefined,
+      },
+      report,
+    );
   }
 }
 
-async function noteMemorySearchHealthForAgent(
+async function inspectMemorySearchHealthForAgent(
   cfg: OpenClawConfig,
   scope: MemoryDoctorAgentScope,
   opts: MemorySearchHealthOptions,
+  report: MemorySearchHealthReporter,
 ): Promise<void> {
   const { agentId, agentDir } = scope;
-  const noteFn = opts.noteFn ?? note;
   const resolved = resolveMemorySearchConfig(cfg, agentId);
 
   if (!resolved) {
-    const recallHealth = noteRememberAcrossConversationsHealth({
+    const recallHealth = inspectRememberAcrossConversationsHealth({
       cfg,
       agentId,
-      noteFn,
+      report,
     });
-    noteFn(
+    report(
       recallHealth.enabled
         ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.`
         : "Memory search is explicitly disabled (enabled: false).",
-      "Memory search",
+      "memory.search.provider",
+      !recallHealth.enabled,
     );
     return;
   }
@@ -531,7 +349,7 @@ async function noteMemorySearchHealthForAgent(
 
   if (provider === "local" && !normalizedPlugins.enabled) {
     const policyBlock = resolveLocalProviderPolicyBlockGuidance("plugins-disabled", provider);
-    noteFn(
+    report(
       [
         policyBlock.message,
         "",
@@ -539,14 +357,13 @@ async function noteMemorySearchHealthForAgent(
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
-      "Memory search",
     );
     return;
   }
-  noteRememberAcrossConversationsHealth({
+  inspectRememberAcrossConversationsHealth({
     cfg,
     agentId,
-    noteFn,
+    report,
   });
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
 
@@ -558,7 +375,7 @@ async function noteMemorySearchHealthForAgent(
     if (hasActiveAlternateMemoryPluginSlot(cfg)) {
       return;
     }
-    noteFn("No active memory plugin is registered for the current config.", "Memory search");
+    report("No active memory plugin is registered for the current config.", "plugins.slots.memory");
     return;
   }
   if (provider === "none") {
@@ -569,7 +386,7 @@ async function noteMemorySearchHealthForAgent(
     const runtimeFacts = opts?.gatewayMemoryProbe?.runtimeFacts;
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       if (runtimeFacts) {
-        noteFn(formatLocalRuntimeDoctorNote(runtimeFacts), "Memory search");
+        report(formatLocalRuntimeDoctorNote(runtimeFacts));
       }
       return;
     }
@@ -586,7 +403,7 @@ async function noteMemorySearchHealthForAgent(
     });
     const installedOwners = listProviderPolicyOwners(provider, manifestRegistry);
     if (installedOwners.length === 0) {
-      noteFn(getMissingLocalMemoryEmbeddingProviderMessage(), "Memory search");
+      report(getMissingLocalMemoryEmbeddingProviderMessage());
       return;
     }
     const ownerPolicies = installedOwners.map((owner) => ({
@@ -638,7 +455,7 @@ async function noteMemorySearchHealthForAgent(
       return;
     }
     const hasRuntimeFailureDetail = Boolean(gatewayDetail || runtimeFacts?.loadError);
-    noteFn(
+    report(
       [
         runtimeFacts ? formatLocalRuntimeDoctorNote(runtimeFacts) : null,
         runtimeFacts ? "" : null,
@@ -666,7 +483,6 @@ async function noteMemorySearchHealthForAgent(
       ]
         .filter(Boolean)
         .join("\n"),
-      "Memory search",
     );
     return;
   }
@@ -675,7 +491,7 @@ async function noteMemorySearchHealthForAgent(
     isOpenAICompatibleMemoryProvider(provider, cfg) &&
     !resolveOpenAICompatibleMemoryBaseUrl(provider, cfg, resolved.remote?.baseUrl)
   ) {
-    noteFn(
+    report(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
         "Set memory.search.remote.baseUrl to the /v1 endpoint for your embeddings server.",
@@ -685,13 +501,13 @@ async function noteMemorySearchHealthForAgent(
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
-      "Memory search",
+      "memory.search.remote.baseUrl",
     );
     return;
   }
 
   if (isOpenAICompatibleMemoryProvider(provider, cfg) && !normalizeOptionalString(resolved.model)) {
-    noteFn(
+    report(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
         "Set memory.search.model to the embedding model id your server expects.",
@@ -701,7 +517,7 @@ async function noteMemorySearchHealthForAgent(
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
-      "Memory search",
+      "memory.search.model",
     );
     return;
   }
@@ -721,7 +537,7 @@ async function noteMemorySearchHealthForAgent(
       return;
     }
     const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-    noteFn(
+    report(
       [
         gatewayProbeWarning
           ? `Memory search provider "${provider}" is configured, but the gateway reports embeddings are not ready.`
@@ -731,7 +547,6 @@ async function noteMemorySearchHealthForAgent(
       ]
         .filter(Boolean)
         .join("\n"),
-      "Memory search",
     );
     return;
   }
@@ -747,20 +562,19 @@ async function noteMemorySearchHealthForAgent(
   }
 
   if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
-    noteFn(
+    report(
       [
         `Memory search provider is set to "${provider}" but the API key was not found in the CLI environment.`,
         "The running gateway reports memory embeddings are ready for the default agent.",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
-      "Memory search",
     );
     return;
   }
   const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
   const envVar = resolvePrimaryMemoryProviderEnvVar(provider);
 
-  noteFn(
+  report(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
       `Semantic recall will not work without a valid API key.`,
@@ -773,7 +587,6 @@ async function noteMemorySearchHealthForAgent(
       "",
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
     ].join("\n"),
-    "Memory search",
   );
 }
 
@@ -793,11 +606,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
     return true;
   }
   const resolved = resolveUserPath(modelPath);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(resolved)?.isFile() ?? false;
 }
 
 async function hasApiKeyForProvider(
@@ -867,4 +676,3 @@ function buildGatewayProbeWarning(
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

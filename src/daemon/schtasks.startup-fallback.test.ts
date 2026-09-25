@@ -146,6 +146,14 @@ const NODE_PROCESS_QUERY =
 const STARTUP_GATEWAY_COMMAND =
   '"C:\\Program Files\\nodejs\\node.exe" "C:\\openclaw\\dist\\index.js" gateway --port 18789';
 
+async function writeGatewayPackageCommand(root: string): Promise<string> {
+  const entry = path.join(root, "dist", "index.js");
+  await fs.mkdir(path.dirname(entry), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+  await fs.writeFile(entry, "export {};\n");
+  return `"${process.execPath}" "${entry}" gateway --port 18789`;
+}
+
 async function writeRunningGatewayScript(
   env: Record<string, string>,
   processId: number,
@@ -1061,9 +1069,10 @@ describe("Windows startup fallback", () => {
   });
 
   it("refuses migration when another gateway owns the fallback port", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env);
+      const commandLine = await writeGatewayPackageCommand(path.join(tmpDir, "other-install"));
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       spawnSync.mockImplementation((command, args) => {
         if (
@@ -1077,11 +1086,7 @@ describe("Windows startup fallback", () => {
                 ProcessId: 3131,
                 CommandLine: "C:\\manual\\openclaw.cmd gateway --port 18789",
               },
-              {
-                ProcessId: 4242,
-                CommandLine:
-                  '"C:\\Program Files\\nodejs\\node.exe" "C:\\other\\dist\\index.js" gateway --port 18789',
-              },
+              { ProcessId: 4242, CommandLine: commandLine },
               { ProcessId: 9999, CommandLine: "powershell.exe" },
             ]),
           });
@@ -1091,14 +1096,7 @@ describe("Windows startup fallback", () => {
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,
         status: "busy",
-        listeners: [
-          {
-            pid: 4242,
-            command: "node.exe",
-            commandLine:
-              '"C:\\Program Files\\nodejs\\node.exe" "C:\\other\\dist\\index.js" gateway --port 18789',
-          },
-        ],
+        listeners: [{ pid: 4242, command: "node.exe", commandLine }],
         hints: [],
       });
 
@@ -2217,19 +2215,14 @@ describe("Windows startup fallback", () => {
   });
 
   it("reports runtime from a verified gateway listener when using the Startup fallback", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
       taskProbe.mockReturnValue({ status: 1, stdout: "-2147024894" });
       await writeStartupFallbackEntry(env);
+      const commandLine = await writeGatewayPackageCommand(path.join(tmpDir, "listener-install"));
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,
         status: "busy",
-        listeners: [
-          {
-            pid: 4242,
-            command: "node.exe",
-            commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
-          },
-        ],
+        listeners: [{ pid: 4242, command: "node.exe", commandLine }],
         hints: [],
       });
 

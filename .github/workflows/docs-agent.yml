@@ -10,25 +10,91 @@ on:
 
 permissions:
   actions: read
-  contents: write
-
-concurrency:
-  group: docs-agent-main
-  cancel-in-progress: false
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  update-docs:
-    if: >
+  verify-ci:
+    # Cheap admission keeps default security-only push completions out of cadence
+    # history. Job evidence below, not the mutable opt-in variable, grants writes.
+    if: >-
       github.repository == 'openclaw/openclaw' &&
-      github.actor != 'github-actions[bot]' &&
-      (github.event_name != 'workflow_run' ||
-        (github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main' &&
-          github.event.workflow_run.actor.login != 'github-actions[bot]'))
+      ((github.event_name == 'workflow_dispatch' && github.actor != 'github-actions[bot]') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        ((github.event.workflow_run.event == 'push' && vars.OPENCLAW_CI_ON_PUSH == 'true' &&
+          github.event.workflow_run.actor.login != 'github-actions[bot]') ||
+         github.event.workflow_run.event == 'schedule')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.verify.outputs.allowed }}
+    steps:
+      - name: Verify successful full CI for current main
+        id: verify
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            core.setOutput("allowed", "false");
+            if (context.eventName === "workflow_dispatch") {
+              core.setOutput("allowed", "true");
+              return;
+            }
+            const expected = context.payload.workflow_run;
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...context.repo, run_id: expected.id,
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const push = run.event === "push" && run.actor?.login !== "github-actions[bot]";
+            const hourly = run.event === "schedule";
+            if (run.id !== expected.id || !run.actor?.login ||
+                run.repository.full_name !== repository || run.head_repository.full_name !== repository ||
+                run.path !== ".github/workflows/ci.yml" || run.head_branch !== "main" ||
+                run.head_sha !== expected.head_sha || run.run_attempt !== expected.run_attempt ||
+                run.status !== "completed" || run.conclusion !== "success" || (!push && !hourly)) {
+              core.info("CI completion does not identify a successful canonical main run.");
+              return;
+            }
+            const { data: main } = await github.rest.repos.getBranch({ ...context.repo, branch: "main" });
+            if (main.commit.sha !== run.head_sha) {
+              core.info("CI was superseded by newer main.");
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...context.repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+            });
+            const gates = jobs.filter((job) => job.name === "openclaw/ci-gate");
+            if (gates.length !== 1 || gates[0].head_sha !== run.head_sha ||
+                gates[0].conclusion !== "success" ||
+                !gates[0].steps.some((step) => step.name === "Confirm validated workflow revision" &&
+                  step.conclusion === "success")) {
+              core.info("CI lacks the successful full-validation revision confirmation.");
+              return;
+            }
+            const { data: latest } = await github.rest.actions.getWorkflowRun({
+              ...context.repo, run_id: run.id,
+            });
+            if (latest.run_attempt !== run.run_attempt || latest.head_sha !== run.head_sha ||
+                latest.status !== "completed" || latest.conclusion !== "success") {
+              core.info("CI changed while full-validation evidence was being verified.");
+              return;
+            }
+            core.setOutput("allowed", "true");
+
+  update-docs:
+    needs: verify-ci
+    if: needs.verify-ci.outputs.allowed == 'true'
+    permissions:
+      actions: read
+      contents: write
+    # Only admitted write jobs occupy this slot; skipped push events cannot
+    # replace pending hourly/manual documentation work.
+    concurrency:
+      group: docs-agent-main
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -186,7 +252,7 @@ jobs:
 
       - name: Run Codex docs agent
         if: steps.gate.outputs.run_agent == 'true'
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
         env:
           DOCS_AGENT_BASE_SHA: ${{ steps.gate.outputs.review_base_sha }}
           DOCS_AGENT_HEAD_SHA: ${{ steps.gate.outputs.review_head_sha }}
@@ -197,7 +263,6 @@ jobs:
           effort: medium
           sandbox: workspace-write
           safety-strategy: drop-sudo
-          codex-args: '["--full-auto"]'
 
       - name: Enforce existing-docs-only patch
         if: steps.gate.outputs.run_agent == 'true'

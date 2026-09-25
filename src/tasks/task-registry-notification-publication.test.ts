@@ -12,12 +12,17 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as deliveryRuntime from "./task-registry-delivery-runtime.js";
+import {
+  maybeDeliverTaskStateChangeUpdate,
+  maybeDeliverTaskTerminalUpdate,
+} from "./task-registry-delivery.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { invalidateTaskRegistryProjection, taskRegistryLog, tasks } from "./task-registry-state.js";
 import { recordTaskProgressByRunId } from "./task-registry.js";
 import { getTaskRegistryStore } from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
-import { createTaskFixture } from "./task-registry.test-support.js";
+import { createTaskFixture, finishTaskFixture } from "./task-registry.test-support.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -35,6 +40,72 @@ async function joinEvents() {
   await setImmediate();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 }
+
+it.each(["state", "terminal"] as const)(
+  "delivers %s notification after concurrent publications invalidate prepared snapshots",
+  async (kind) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const origin = { channel: "telegram", to: "synthetic-contended-recipient" };
+      const eventAt = Date.now();
+      const task = createTaskFixture("cli", {
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        requesterOrigin: origin,
+        runId: `contended-notification-${kind}`,
+        task: "Notification during publication contention",
+        notifyPolicy: kind === "state" ? "state_changes" : "done_only",
+        deliveryStatus: "pending",
+        lastEventAt: eventAt,
+      });
+      if (kind === "terminal") {
+        finishTaskFixture({ taskId: task.taskId, status: "succeeded", endedAt: eventAt });
+      }
+      await prepareTaskRegistryRead();
+      const store = getTaskRegistryStore();
+      const read = store.loadMutationSnapshotAsync.bind(store);
+      let invalidations = 4;
+      vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+        const snapshot = await read(...args);
+        if (invalidations > 0) {
+          invalidations -= 1;
+          invalidateTaskRegistryProjection();
+        }
+        return snapshot;
+      });
+      const sent: MessageSendResult = {
+        ...origin,
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "sent",
+        result: { messageId: "synthetic-contended-message" },
+      };
+      const sendMessage = vi.spyOn(deliveryRuntime, "sendMessage").mockResolvedValue(sent);
+      using deliveries = captureTaskDeliveryWork();
+      try {
+        invalidateTaskRegistryProjection();
+        await (kind === "state"
+          ? maybeDeliverTaskStateChangeUpdate(task, {
+              kind: "progress",
+              at: eventAt,
+              summary: "Progress during publication contention",
+            })
+          : maybeDeliverTaskTerminalUpdate(task.taskId));
+        await deliveries.settle();
+        expect(invalidations).toBe(0);
+        expect(sendMessage).toHaveBeenCalledOnce();
+        const durable = loadTaskRegistryStateFromSqliteReadOnly();
+        if (kind === "state") {
+          expect(durable.deliveryStates.get(task.taskId)?.lastNotifiedEventAt).toBe(eventAt);
+        } else {
+          expect(durable.tasks.get(task.taskId)?.deliveryStatus).toBe("delivered");
+        }
+      } finally {
+        await Promise.allSettled([deliveries.settle()]);
+        await joinEvents();
+      }
+    });
+  },
+);
 
 it.each(["start", "end"] as const)(
   "delivers published %s after its accepted prefix while retaining independent cleanup roots",
@@ -129,7 +200,7 @@ it.each(["start", "end"] as const)(
 
         releaseSibling.resolve();
         await withTestTimeout(
-          deliveries.settle(),
+          deliveries.settleResults(),
           2_000,
           "Published notification joined its producer or transport cleanup",
         );

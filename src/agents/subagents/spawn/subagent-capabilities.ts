@@ -249,9 +249,11 @@ function isStoredSubagentEnvelopeSession(
   if (!spawnedBy) {
     return false;
   }
-  const parentStore = isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
-    ? params.store
-    : undefined;
+  const parentStore =
+    isSameAgentSessionStore(normalizedSessionKey, spawnedBy) ||
+    (isSessionCapabilityLookup(params.store) && params.store.authoritative)
+      ? params.store
+      : undefined;
   // Follow parent links across stored ACP envelopes to recover subagent identity
   // for resumed sessions, while `visited` prevents malformed cycles.
   return isStoredSubagentEnvelopeSession(

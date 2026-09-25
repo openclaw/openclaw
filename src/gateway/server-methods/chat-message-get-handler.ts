@@ -14,6 +14,7 @@ import {
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -85,7 +86,13 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
@@ -106,6 +113,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
     const canReadSession = (current: typeof session): boolean => {
+      sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
         current.agentId !== session.agentId ||
@@ -125,7 +133,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         );
         return false;
       }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg: context.getCommittedRuntimeConfig?.() ?? current.cfg,
+      });
       if (entryFilter?.(current.canonicalKey, current.entry) === false) {
         respond(false, undefined, hiddenSessionNotFound(canonicalKey));
         return false;
@@ -234,7 +245,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       true,
       jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
         ? { ok: false, unavailableReason: "oversized" }
-        : { ok: true, message: projected },
+        : projectOperatorModelRead(
+            { context, client, agentId: sessionAgentId },
+            { ok: true, message: projected },
+          ),
     );
   },
 };

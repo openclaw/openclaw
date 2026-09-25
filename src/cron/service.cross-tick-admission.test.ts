@@ -10,9 +10,11 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { stop } from "./service/ops-lifecycle.js";
+import { observeCronTimerAdmissions } from "./service/run-recovery.test-support.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -351,13 +353,17 @@ describe("cron service cross-tick bounded admission", () => {
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
 
+    const unrelated = tryBeginGatewayIndependentRootWorkAdmission("test:concurrent-request");
+    expect(unrelated).not.toBeNull();
+    const admissions = observeCronTimerAdmissions(state);
+
     try {
       await onTimer(state);
 
       expect(peakTicks).toBe(1);
       expect(state.stopped).toBe(false);
       expect(state.activeTimerTicks).toBe(0);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await admissions.expectReleased(1);
       expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(state.timer).not.toBeNull();
@@ -366,6 +372,8 @@ describe("cron service cross-tick bounded admission", () => {
       finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       await onTimer(state);
 
+      // The resumed tick rechecks capacity to run the second due job.
+      await admissions.expectReleased(3);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
       expect(state.activeTimerTicks).toBe(0);
       expect(
@@ -374,6 +382,7 @@ describe("cron service cross-tick bounded admission", () => {
         ),
       ).toBe(true);
     } finally {
+      unrelated!.release();
       finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       stop(state);
     }
