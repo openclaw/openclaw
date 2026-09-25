@@ -484,7 +484,7 @@ function openAgentDatabaseBackend(
             }
             admit("transaction");
             const result = replace(current, command.input, () => {});
-            const publication = preparePublication(result);
+            const publication = preparePublication(result, current);
             deferSqliteWorkerCommitReceipt(current.db, publication);
             admit("commit", publication);
             return result;

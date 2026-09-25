@@ -3,7 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import * as records from "./session-row-projection-record.js";
 
 type SessionRowScopeTarget = {
@@ -14,6 +16,87 @@ type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
+
+/** The projection retains registry authority only for its current physical-store snapshot. */
+export function createSessionRowRegistryRead(owner: {
+  stores: () => ReadonlyMap<string, records.SessionRowStore>;
+  isActive: () => boolean;
+  runAsOwner: <T>(run: () => T) => T;
+}) {
+  let ready: { stores: ReturnType<typeof owner.stores>; assertCurrent: () => void } | undefined;
+  let pending: Promise<void> | undefined;
+  return {
+    prepare(): Promise<void> | undefined {
+      if (!owner.isActive() || ready?.stores === owner.stores()) {
+        return undefined;
+      }
+      pending ??= owner
+        .runAsOwner(async () => {
+          const stores = owner.stores();
+          const assertCurrent = await prepareSessionRowRegistryRead(stores);
+          if (owner.isActive() && owner.stores() === stores) {
+            ready = { stores, assertCurrent };
+          }
+        })
+        .finally(() => {
+          pending = undefined;
+        });
+      return pending;
+    },
+    isCurrent() {
+      if (!owner.isActive() || !ready || ready.stores !== owner.stores()) {
+        return false;
+      }
+      try {
+        ready.assertCurrent();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    dispose() {
+      ready = undefined;
+    },
+  };
+}
+
+/** Full-roster discovery can ignore only repeated registration of an already captured store. */
+async function prepareSessionRowRegistryRead(stores: ReadonlyMap<string, records.SessionRowStore>) {
+  const captured = [...stores.values()];
+  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+    { includeIncompatibleSchemaVersions: true },
+    (mutation, entries) =>
+      mutation.kind === "upsert" &&
+      mutation.sources.every(
+        (source) =>
+          entries?.some(
+            (entry) =>
+              entry.agentId === source.agentId &&
+              entry.schemaVersion === source.schemaVersion &&
+              (entry.path === source.path || entry.path === source.physicalPath),
+          ) &&
+          captured.some((store) => {
+            if (
+              typeof store.identity !== "string" ||
+              `file:${store.identity}` !== source.identity ||
+              store.target.agentId !== source.agentId
+            ) {
+              return false;
+            }
+            try {
+              return [...new Set([store.filename, source.path])].every((filename) => {
+                const file = readDatabasePathIdentitySync(filename);
+                return file.key === source.identity && file.birthtime === store.birthtime;
+              });
+            } catch {
+              // Uninspectable aliases cannot certify a repeated physical generation.
+              return false;
+            }
+          }),
+      ),
+  );
+  return (await registry.read()).assertCurrent;
+}
 
 /** Early publications retain literal paths until topology has prepared their aliases. */
 export function createSessionRowScopeMatcher(

@@ -86,6 +86,17 @@ it("defers a capture refusal until the registry is actually demanded", async () 
   await expect(prepared.read()).rejects.toBe(failure);
 });
 
+it("retains scoped revocation before native registry rows are needed", async () => {
+  const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
+  expect(() => prepared.assertCurrent()).not.toThrow();
+  expect(mocks.read).not.toHaveBeenCalled();
+  invalidateRegisteredAgentDatabasesMemo(options);
+  expect(() => prepared.assertCurrent()).toThrow("registry changed");
+  await expect(prepared.read()).rejects.toThrow("registry changed");
+  expect(() => prepared.assertCurrent()).toThrow("registry changed");
+  expect(mocks.read).not.toHaveBeenCalled();
+});
+
 it("publishes full successful rows into the existing canonical memo", async () => {
   const incompatible = {
     ...entry,

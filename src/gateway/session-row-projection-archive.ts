@@ -95,13 +95,6 @@ export function createSessionRowProjectionArchive(params: {
   return {
     demote,
     markRelated,
-    deferAcquisition(row: records.Row) {
-      const id = records.identity(row);
-      params.put(row);
-      params.dirty.add(id);
-      params.enqueue(id);
-      return undefined;
-    },
     isCurrentMaterialization(row: records.Row) {
       const current = params.rows.get(records.identity(row));
       return (

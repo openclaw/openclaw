@@ -1,9 +1,13 @@
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { projectSessionEntryCacheUpdate } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
-  projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
   type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache.js";
+} from "./session-accessor.sqlite-entry-cache-publication.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
@@ -50,10 +54,18 @@ export type SessionEntryReplacementCommitted = {
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
 export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
+  database?: OpenClawAgentDatabase,
 ): SessionEntryReplacementPublication {
+  const archived = new Set(result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys));
+  const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   return {
     kind: "session-entry-replacements",
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
+    sharingUnchangedKeys: [...result.current].flatMap(([key, entry]) =>
+      !invalidated.has(key) && sessionSharingEntriesEqual(result.previous.get(key), entry)
+        ? [key]
+        : [],
+    ),
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
         key,
@@ -61,8 +73,25 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current: new Map(
-      [...result.current].map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
+      [...result.current].map(([key, entry]) => {
+        // Inline maintenance can change a replacement after its initial write result.
+        const current =
+          database && archived.has(key) ? readExactSessionEntryRow(database, key)?.entry : entry;
+        const metadata = current && projectSessionEntryCacheUpdate(current, undefined);
+        if (!metadata) {
+          throw new Error(`Session publication lost its committed metadata: ${key}`);
+        }
+        return [key, metadata];
+      }),
     ),
+    ...(database && getAdmittedSqliteSchemaFacts(database.db)
+      ? {
+          source: {
+            ...readOpenClawAgentDatabaseIdentity(database),
+            revision: readSessionNodesGeneration(database.db),
+          },
+        }
+      : {}),
     changedKeys: [
       ...new Set([
         ...result.previous.keys(),

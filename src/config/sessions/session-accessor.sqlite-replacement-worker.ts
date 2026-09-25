@@ -249,8 +249,10 @@ export async function commitSessionEntryReplacementsInWorker(
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ) {
+  const unknownMessage =
+    "Session replacement has no confirmed native completion and commit receipt";
   const publication = retainSessionEntryWorkerPublication({
-    agentId: options.agentId,
+    agentId: lifecycle.identityAgentId,
     storePath: options.path,
     databaseIdentity,
   });
@@ -271,17 +273,28 @@ export async function commitSessionEntryReplacementsInWorker(
     } else if (committed) {
       receipt = prepareSessionEntryReplacementPublication(committed);
     }
-    if (receipt) {
-      lifecycle.onLifecycleCommitted?.();
-    }
     const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
-    const published = publication.settle(receipt, unknown);
-    if (published) {
-      publishCommittedSessionIdentity(
-        lifecycle.identityAgentId,
-        published.previous,
-        published.current,
-      );
+    try {
+      try {
+        if (receipt) {
+          lifecycle.onLifecycleCommitted?.();
+        }
+      } finally {
+        const published = publication.settle(receipt, unknown);
+        if (published) {
+          publishCommittedSessionIdentity(
+            lifecycle.identityAgentId,
+            published.previous,
+            published.current,
+            published.prepared,
+          );
+        }
+      }
+    } catch (error) {
+      if (unknown) {
+        rejectUnknownSessionEntryOutcome(unknownMessage, error);
+      }
+      throw error;
     }
     return unknown;
   };
@@ -303,7 +316,7 @@ export async function commitSessionEntryReplacementsInWorker(
           // Close joins this callback; a delayed result cannot borrow a successor owner.
           if (await settle()) {
             rejectUnknownSessionEntryOutcome(
-              "Session replacement has no confirmed native completion and commit receipt",
+              unknownMessage,
               outcome.ok ? undefined : outcome.error,
             );
           }
@@ -329,12 +342,20 @@ export async function commitSessionEntryReplacementsInWorker(
         !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
         !facts.publication.membershipInvalidatedKeys.every(
           (key): key is string => typeof key === "string",
+        ) ||
+        !Array.isArray(facts.publication.sharingUnchangedKeys) ||
+        !facts.publication.sharingUnchangedKeys.every(
+          (key): key is string => typeof key === "string",
         )
       ) {
         throw new Error("Session replacement commit omitted its publication keys");
       }
       admitted = { admission, retained };
-      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+      publication.begin(
+        facts.publication.changedKeys,
+        facts.publication.membershipInvalidatedKeys,
+        facts.publication.sharingUnchangedKeys,
+      );
     },
     retainedExecution,
   );

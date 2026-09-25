@@ -1,9 +1,60 @@
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
-import { first, identity, type Row } from "./session-row-projection-record.js";
+import { first, identity, renewGeneration, type Row } from "./session-row-projection-record.js";
+
+export function applySessionRowIdentityMutation(
+  mutation: SessionIdentityMutation,
+  owner: {
+    matching: (query: { key: string; agentId: string }) => Row[];
+    markRelated: (row: Row) => void;
+    put: (row: Row) => void;
+    remove: (id: string) => void;
+    mark: (
+      change: SessionRowChange,
+      prepared?: ReturnType<typeof readPreparedSessionEntryChange>,
+    ) => void;
+    ensureMaterialized: () => Promise<void>;
+  },
+) {
+  for (const key of mutation.previous.sessionKeys) {
+    for (const row of owner.matching({ key, agentId: mutation.agentId })) {
+      if (mutation.previous.sessionId && row.entry?.sessionId !== mutation.previous.sessionId) {
+        continue;
+      }
+      owner.markRelated(row);
+      if ("current" in mutation && mutation.current.sessionKeys.includes(row.key)) {
+        const prepared = readPreparedSessionEntryChange(mutation, row.key);
+        const current = prepared?.sharing;
+        if (
+          !prepared ||
+          (current &&
+            (row.entry?.sessionId !== current.sessionId ||
+              row.entry.lifecycleRevision !== current.lifecycleRevision))
+        ) {
+          owner.put(renewGeneration(row));
+        }
+      } else {
+        owner.remove(identity(row));
+      }
+    }
+  }
+  if ("current" in mutation) {
+    for (const sessionKey of mutation.current.sessionKeys) {
+      owner.mark(
+        { agentId: mutation.agentId, sessionKey },
+        readPreparedSessionEntryChange(mutation, sessionKey),
+      );
+    }
+  } else {
+    void owner.ensureMaterialized().catch(() => {});
+  }
+}
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";

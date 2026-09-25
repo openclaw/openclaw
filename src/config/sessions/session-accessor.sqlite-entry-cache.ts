@@ -11,6 +11,7 @@ import {
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -25,6 +26,7 @@ import {
 import {
   emitPreparedSessionSharingChange,
   publishSessionSharingEntryChange,
+  recordCommittedSessionMetadataPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   publishTrackedCacheUpdate,
@@ -320,7 +322,12 @@ function publishSqliteSessionEntryCacheUpsert(
 
 export function publishSessionEntryCacheInvalidation(
   database: SessionEntryCacheDatabase & { path: string },
-  update: { sessionKey: string; entry?: SessionEntry; facts?: SessionRowFacts },
+  update: {
+    sessionKey: string;
+    entry?: SessionEntry;
+    facts?: SessionRowFacts;
+    sharingUnchanged?: boolean;
+  },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   let facts = update.facts;
@@ -340,7 +347,35 @@ export function publishSessionEntryCacheInvalidation(
     // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
   }
-  emitPreparedSessionSharingChange(database, update.sessionKey, database.agentId, facts);
+  const identity = findOpenClawAgentDatabaseIdentity(database);
+  // Cold writes have no captured revision; their row facts need a fresh read.
+  const entry =
+    identity && writeGeneration && update.entry
+      ? projectSessionEntryCacheUpdate(update.entry, undefined)
+      : undefined;
+  const sharingChange =
+    update.sharingUnchanged ||
+    facts?.kind === "unchanged" ||
+    facts?.kind === "participants" ||
+    facts?.kind === "category"
+      ? "unchanged"
+      : "changed";
+  emitPreparedSessionSharingChange(
+    database,
+    update.sessionKey,
+    database.agentId,
+    facts,
+    identity && writeGeneration && entry
+      ? {
+          kind: "metadata",
+          sharingChange,
+          prepared: {
+            source: { ...identity, revision: writeGeneration.after },
+            entries: new Map([[update.sessionKey, entry]]),
+          },
+        }
+      : { kind: "marker", sharingChange },
+  );
 }
 
 /** The category worker publishes only its changed field; native freshness tokens still expose other commits. */
@@ -352,6 +387,7 @@ export function publishSessionEntryCacheCategoryUpdate(
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     for (const { sessionKey, sessionId } of rows) {
+      recordCommittedSessionMetadataPublication(database, sessionKey);
       const current = cached?.entries.get(sessionKey);
       if (!current || current.sessionId !== sessionId) {
         continue;

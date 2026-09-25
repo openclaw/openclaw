@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -6,7 +7,10 @@ import {
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCacheSnapshot,
+  SessionSharingEntry,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   hasSqliteSessionOwnerColumns,
   readSqliteSessionOwner,
@@ -110,4 +114,29 @@ export function projectSessionEntryCacheUpdate(
   const { skillsSnapshot: _skills, systemPromptReport: _report, ...metadata } = sourceEntry;
   const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata) });
   return parsedEntry ? { ...parsedEntry, ...sideMetadata } : undefined;
+}
+
+export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandbox: entry.sandbox,
+  };
+}
+
+/** Timestamp-only metadata cannot change the sharing entry seen by a retained reader. */
+export function sessionSharingEntriesEqual(
+  previous: SessionEntry | undefined,
+  current: SessionEntry | undefined,
+): boolean {
+  if (!previous || !current) {
+    return false;
+  }
+  const { updatedAt: _previousUpdatedAt, ...before } = projectSessionSharingEntry(previous);
+  const { updatedAt: _currentUpdatedAt, ...after } = projectSessionSharingEntry(current);
+  return isDeepStrictEqual(before, after);
 }

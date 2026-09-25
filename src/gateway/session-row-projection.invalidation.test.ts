@@ -43,6 +43,7 @@ import * as projectionWork from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowRegistryRead } from "./session-row-scope.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -212,6 +213,44 @@ it("reuses descendants after parent progress while keeping inherited models curr
   });
 });
 
+it.each([false, true])(
+  "retains repeated registration only for the captured birthtime (replaced=%s)",
+  async (replaced) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database);
+      const stores = new Map([
+        [
+          database.path,
+          {
+            target: { agentId: "main", storePath: database.path },
+            agentId: "main",
+            discoveryAgentId: "main",
+            identity: identity.identity,
+            filename: identity.filename,
+            birthtime: replaced
+              ? (BigInt(identity.birthtime ?? "0") + 1n).toString()
+              : identity.birthtime,
+          },
+        ],
+      ]);
+      const registry = createSessionRowRegistryRead({
+        stores: () => stores,
+        isActive: () => true,
+        runAsOwner: (run) => run(),
+      });
+      try {
+        await registry.prepare();
+        expect(registry.isCurrent()).toBe(true);
+        registerOpenClawAgentDatabase({ agentId: "main", path: database.path });
+        expect(registry.isCurrent()).toBe(!replaced);
+      } finally {
+        registry.dispose();
+      }
+    });
+  },
+);
+
 it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -313,6 +352,71 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
     }
   });
 });
+
+it.each([false, true])(
+  "retains newer native metadata through reentrant identity publication (cache=%s)",
+  async (cache) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const scope = { agentId: "main", sessionKey: "agent:main:identity-publication-reentry" };
+      const updatedAt = Date.now();
+      replaceSessionEntrySync(scope, { sessionId: "original", updatedAt });
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      if (cache) {
+        readSessionEntryCache(database, { cache: true });
+      }
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const list = () => listProjectedSessions({ projection, opts: {} });
+      let stopRows = () => {};
+      try {
+        await list();
+        expect(Boolean(readCommittedSessionEntryCache(database.db))).toBe(cache);
+        const originalGeneration = projection.capture({
+          agentId: scope.agentId,
+          key: scope.sessionKey,
+        })?.generation;
+        expect(originalGeneration).toBeDefined();
+        const newer = { sessionId: "replacement", updatedAt: updatedAt + 1, label: "Newer label" };
+        let reentered = false;
+        const callbackErrors: unknown[] = [];
+        stopRows = sessionChanges.subscribe((change) => {
+          if (reentered || !("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
+            return;
+          }
+          reentered = true;
+          try {
+            replaceSessionEntrySync(scope, newer);
+          } catch (error) {
+            callbackErrors.push(error);
+          }
+        });
+        replaceSessionEntrySync(scope, { ...newer, label: "Older label" });
+        expect(reentered).toBe(true);
+        expect(callbackErrors).toEqual([]);
+        expect(loadSessionEntry(scope)?.label).toBe(newer.label);
+        const current = projection.capture({ agentId: scope.agentId, key: scope.sessionKey });
+        expect(current).toBeDefined();
+        expect(current?.generation).not.toBe(originalGeneration);
+        if (cache) {
+          expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
+        } else {
+          expect(current?.entry).toBeUndefined();
+        }
+        expect((await list()).sessions).toEqual([
+          expect.objectContaining({
+            key: scope.sessionKey,
+            sessionId: newer.sessionId,
+            label: newer.label,
+          }),
+        ]);
+      } finally {
+        stopRows();
+        await projection.ensureMaterialized();
+        projection.dispose();
+      }
+    });
+  },
+);
 
 it.each(["maintenance-finalize", "lifecycle-artifacts"] as const)(
   "publishes %s removals before row listeners recreate the key",

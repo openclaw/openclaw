@@ -1,13 +1,16 @@
 import { performance } from "node:perf_hooks";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { getSubagentSessionListReadSnapshotIdentity } from "../agents/subagents/registry/subagent-registry-state.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
@@ -333,4 +336,103 @@ export function lookupSessionRow(
   }
   const candidates = owner.matching({ ...query, key }).filter((row) => row.agentId === agentId);
   return records.first(candidates, owner.storePaths);
+}
+
+/** Install committed metadata inside the resident owner; missing facts keep its worker refresh pending. */
+export function createSessionRowPublication(owner: {
+  store: (path: string) => records.SessionRowStore | undefined;
+  runAsOwner: <T>(run: () => T) => T;
+  acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
+  markRelated: (row: records.Row, includeChildren: boolean) => void;
+  invalidatePlacement: (sessionId: string) => void;
+  enqueue: (row: records.Row) => void;
+  defer: (row: records.Row) => void;
+  remove: (id: string) => void;
+}) {
+  return function markStoredRow(
+    row: records.Row,
+    change: SessionRowChange,
+    prepared = readPreparedSessionEntryChange(change, row.key),
+  ) {
+    const store = owner.store(row.storeTarget.storePath);
+    const source = prepared?.source;
+    const previousSource = row.publishedSource;
+    if (
+      source &&
+      previousSource?.incarnation === source.incarnation &&
+      previousSource.revision !== undefined &&
+      source.revision !== undefined &&
+      previousSource.revision > source.revision
+    ) {
+      return;
+    }
+    const current =
+      prepared &&
+      source &&
+      store?.identity === source.identity &&
+      store.birthtime === source.birthtime &&
+      store.filename === source.filename
+        ? prepared
+        : undefined;
+    if (prepared && !current) {
+      return;
+    }
+    const facts = "sessionKey" in change ? change.facts : undefined;
+    if (facts?.kind === "removed") {
+      owner.remove(records.identity(row));
+      return;
+    }
+    if (current && !current.entry && !current.sharing) {
+      return;
+    }
+    records.invalidateDatabaseFacts(row);
+    if (row.entry) {
+      owner.invalidatePlacement(row.entry.sessionId);
+    }
+    if (current?.entry) {
+      const entry = current.entry;
+      owner.markRelated(row, records.changesSessionRowDependents(row.storedEntry, entry));
+      const acquired = owner.runAsOwner(() => {
+        const next = { ...row, publishedSource: current.source };
+        if (entry.archivedAt !== undefined && !getSubagentSessionListReadSnapshotIdentity()) {
+          // Committed metadata survives while its independent lineage facts refill.
+          next.sharingEntry = entry;
+          owner.defer(next);
+          return undefined;
+        }
+        return owner.acquireEntry(next, entry);
+      });
+      if (acquired) {
+        owner.enqueue(acquired);
+      }
+      return;
+    }
+    if (current?.sharing) {
+      const next =
+        row.entry?.sessionId !== current.sharing.sessionId ||
+        row.entry.lifecycleRevision !== current.sharing.lifecycleRevision
+          ? (owner.runAsOwner(() =>
+              owner.acquireEntry(records.renewGeneration(row), current.sharing),
+            ) ?? row)
+          : row;
+      next.sharingEntry = current.sharing;
+      owner.defer(next);
+      return;
+    }
+    if (prepared) {
+      // A bound identity notification may outlive metadata superseded by another publication.
+      return;
+    }
+    // Unknown storage facts cannot retain sharing permission while their worker read is pending.
+    if (
+      !facts ||
+      facts.kind === "entry" ||
+      change.factsInvalidated ||
+      ((facts.kind === "member" || facts.kind === "category") &&
+        row.sharingEntry?.sessionId !== facts.sessionId)
+    ) {
+      row.sharingEntry = undefined;
+    }
+    owner.defer(row);
+  };
 }

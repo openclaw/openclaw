@@ -118,8 +118,12 @@ rereads comparison bytes and current rows, and the host rechecks caller authorit
 at admission and commit. Exact database locators reserve their existing writer
 FIFO before asynchronous schema-owner discovery; unresolved logical stores first
 select their physical target without borrowing another store's queue. Committed
-receipts invalidate retained entry projections and publish sharing facts before
-observers. Missing databases are prepared by the same worker owner. Incognito
+receipts invalidate retained entry caches and carry sanitized metadata and sharing
+facts to resident rows before observers. The projection checks physical source,
+incarnation, and revision before installing them; unknown outcomes use its
+existing asynchronous refill. Identity notifications retain the same prepared
+facts, and repeated registration of an unchanged physical store preserves the
+resident inventory. Missing databases are prepared by the same worker owner. Incognito
 stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.

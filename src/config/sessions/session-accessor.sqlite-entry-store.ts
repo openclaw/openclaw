@@ -16,6 +16,7 @@ import {
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
@@ -633,6 +634,9 @@ export function writeSessionEntry(
     {
       sessionKey,
       entry: normalizedEntry,
+      sharingUnchanged:
+        !options.allowStoredAliases &&
+        sessionSharingEntriesEqual(canonicalPreviousEntry, normalizedEntry),
       ...(!options.allowStoredAliases
         ? {
             facts: {

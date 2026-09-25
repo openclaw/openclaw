@@ -110,8 +110,9 @@ export function readExactSessionEntriesWithLifecycle(
                 throw selected.error;
               }
               if (request.projection === "sharing") {
-                const { identity } = readOpenClawAgentDatabaseIdentity(database);
-                if (typeof identity !== "string") {
+                const source = readOpenClawAgentDatabaseIdentity(database);
+                const { identity } = source;
+                if (typeof identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
                   throw new Error("Private session facts require their process-held owner");
                 }
                 const presentKeys = new Set(selected.value.map(({ sessionKey }) => sessionKey));
@@ -149,6 +150,9 @@ export function readExactSessionEntriesWithLifecycle(
                   : [];
                 return {
                   kind: "session-exact-entries" as const,
+                  ...(request.includeAuthorization
+                    ? { databaseIdentity: { ...source, identity } }
+                    : {}),
                   entries: selected.value,
                   lifecycleTimestamps: {},
                   sharing: {

@@ -17,6 +17,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-sta
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
@@ -47,6 +48,12 @@ it("creates with prepared label facts, header and atomic owner without host data
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stopFacts = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === key) {
+        publications.push(readPreparedSessionEntryChange(change, key));
+      }
+    });
     const stop = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         order.push(order.includes("committed") ? "published" : "header");
@@ -86,6 +93,16 @@ it("creates with prepared label facts, header and atomic owner without host data
         },
       );
       expect(result).toMatchObject({ ok: true, entry: { sessionId: "created" } });
+      expect(publications).toEqual([
+        undefined,
+        expect.objectContaining({
+          entry: expect.objectContaining({ sessionId: "created", category: "Created" }),
+          source: expect.objectContaining({
+            identity: expect.any(String),
+            revision: expect.any(Number),
+          }),
+        }),
+      ]);
       const firstUse = await createSessionEntryWithTranscript(
         {
           agentId: "main",
@@ -98,6 +115,7 @@ it("creates with prepared label facts, header and atomic owner without host data
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
+      stopFacts();
       stop();
     }
     expect(order).toEqual(["header", "committed", "published", "registered"]);
