@@ -70,6 +70,19 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   try {
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
+    // Shallow PR checkouts can contain a prepared base as a direct merge parent
+    // while Git cannot walk a merge-base through the shallow boundary.
+    try {
+      for (const parent of ["HEAD^1", "HEAD^2"]) {
+        if (readGitText(root, ["rev-parse", "--verify", parent + "^{commit}"]).trim() ===
+          readGitText(root, ["rev-parse", resolved]).trim()) {
+          return parent.replace("HEAD", readGitText(root, ["rev-parse", "HEAD"]).trim());
+        }
+      }
+    } catch {
+      // Fall through to the disconnected-history recovery below.
+    }
+
     // CI can report a base outside the checkout's history (for example after a
     // fork history is recreated). Prefer the second parent of the most recent
     // first-parent merge: a branch-sync merge preserves the complete local change
