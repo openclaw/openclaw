@@ -643,6 +643,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:

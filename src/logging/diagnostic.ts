@@ -1,4 +1,3 @@
-// Diagnostic logger records structured runtime events, timings, and health snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
@@ -8,6 +7,7 @@ import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   isDiagnosticsEnabled,
+  type DiagnosticEventPayload,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
@@ -548,11 +548,12 @@ function isIdleQueuedRecoverableSessionStall(params: {
   );
 }
 
-export function logWebhookReceived(params: {
-  channel: string;
-  updateType?: string;
-  chatId?: number | string;
-}) {
+type DiagnosticLogParams<T extends DiagnosticEventPayload["type"]> = Omit<
+  Extract<DiagnosticEventPayload, { type: T }>,
+  "type" | "seq" | "ts" | "trace"
+>;
+
+export function logWebhookReceived(params: DiagnosticLogParams<"webhook.received">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -574,12 +575,7 @@ export function logWebhookReceived(params: {
   markActivity();
 }
 
-export function logWebhookProcessed(params: {
-  channel: string;
-  updateType?: string;
-  chatId?: number | string;
-  durationMs?: number;
-}) {
+export function logWebhookProcessed(params: DiagnosticLogParams<"webhook.processed">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -603,12 +599,7 @@ export function logWebhookProcessed(params: {
   markActivity();
 }
 
-export function logWebhookError(params: {
-  channel: string;
-  updateType?: string;
-  chatId?: number | string;
-  error: string;
-}) {
+export function logWebhookError(params: DiagnosticLogParams<"webhook.error">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -628,23 +619,13 @@ export function logWebhookError(params: {
   markActivity();
 }
 
-export function logMessageQueued(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  channel?: string;
-  source: string;
-}) {
+export function logMessageQueued(
+  params: Omit<DiagnosticLogParams<"message.queued">, "queueDepth">,
+) {
   logMessageQueuedWithBacklogPolicy(params, true);
 }
 
-export function logMessageReceived(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  channel?: string;
-  messageId?: number | string;
-  chatId?: number | string;
-  source: string;
-}) {
+export function logMessageReceived(params: DiagnosticLogParams<"message.received">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -669,12 +650,7 @@ export function logMessageReceived(params: {
   markActivity();
 }
 
-export function logMessageDispatchStarted(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  channel?: string;
-  source: string;
-}) {
+export function logMessageDispatchStarted(params: DiagnosticLogParams<"message.dispatch.started">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -695,16 +671,9 @@ export function logMessageDispatchStarted(params: {
   markActivity();
 }
 
-export function logMessageDispatchCompleted(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  channel?: string;
-  source: string;
-  durationMs: number;
-  outcome: "completed" | "skipped" | "error";
-  reason?: string;
-  error?: string;
-}) {
+export function logMessageDispatchCompleted(
+  params: DiagnosticLogParams<"message.dispatch.completed">,
+) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -736,18 +705,7 @@ export function logMessageDispatchCompleted(params: {
   markActivity();
 }
 
-export function logMessageProcessed(params: {
-  channel: string;
-  messageId?: number | string;
-  chatId?: number | string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  durationMs?: number;
-  outcome: "completed" | "skipped" | "error";
-  reason?: string;
-  error?: string;
-}) {
+export function logMessageProcessed(params: DiagnosticLogParams<"message.processed">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -784,14 +742,7 @@ export function logMessageProcessed(params: {
   markActivity();
 }
 
-export function logSessionTurnCreated(params: {
-  runId: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  channel?: string;
-  trigger: "user" | "heartbeat";
-}) {
+export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.created">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -965,41 +916,22 @@ function logSessionAttention(
       ? { classification, allowActiveAbort }
       : undefined;
   // Warning backoff throttles reports, never recovery justified by this observation.
-  let suppressWarning = false;
-  if (classification.eventType === "session.stuck") {
+  const warningAgeField =
+    classification.eventType === "session.stuck"
+      ? "lastStuckWarnAgeMs"
+      : classification.eventType === "session.long_running"
+        ? "lastLongRunningWarnAgeMs"
+        : undefined;
+  if (warningAgeField) {
+    const lastWarnAgeMs = state[warningAgeField];
     const nextWarnAgeMs =
-      state.lastStuckWarnAgeMs === undefined
+      lastWarnAgeMs === undefined
         ? params.thresholdMs
-        : Math.max(state.lastStuckWarnAgeMs + params.thresholdMs, state.lastStuckWarnAgeMs * 2);
+        : Math.max(lastWarnAgeMs + params.thresholdMs, lastWarnAgeMs * 2);
     if (params.ageMs < nextWarnAgeMs) {
-      if (!recovery) {
-        return undefined;
-      }
-      suppressWarning = true;
-    } else {
-      state.lastStuckWarnAgeMs = params.ageMs;
+      return recovery;
     }
-  }
-  if (classification.eventType === "session.long_running") {
-    const nextWarnAgeMs =
-      state.lastLongRunningWarnAgeMs === undefined
-        ? params.thresholdMs
-        : Math.max(
-            state.lastLongRunningWarnAgeMs + params.thresholdMs,
-            state.lastLongRunningWarnAgeMs * 2,
-          );
-    if (params.ageMs < nextWarnAgeMs) {
-      if (!recovery) {
-        return undefined;
-      }
-      suppressWarning = true;
-    } else {
-      state.lastLongRunningWarnAgeMs = params.ageMs;
-    }
-  }
-  if (suppressWarning) {
-    // Warning backoff must not delay a recovery already justified by this observation.
-    return recovery;
+    state[warningAgeField] = params.ageMs;
   }
   const label =
     classification.eventType === "session.stuck"

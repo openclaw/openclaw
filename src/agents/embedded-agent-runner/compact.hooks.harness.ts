@@ -149,7 +149,7 @@ export const resolveSessionAgentIdsMock = vi.fn<
 export const resolveAgentConfigMock = vi.fn(
   (_config?: unknown, _agentId?: string): unknown => undefined,
 );
-let fixtureWorkspaceDir: string;
+let fixture: { workspaceDir: string; sessionId: string };
 export const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
@@ -199,7 +199,7 @@ export const resolveCliBackendConfigMock = vi.fn(() => null as Record<string, un
 function createMockCompactionSession() {
   let onContextReplaced: ((tokensAfter: number, tokensBefore: number) => void) | undefined;
   const session = {
-    sessionId: "session-1",
+    sessionId: fixture.sessionId,
     messages: sessionMessages.map((message) => structuredClone(message)),
     agent: {
       streamFn: vi.fn(),
@@ -548,8 +548,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSkillsPromptMock.mockReturnValue(undefined);
 }
 
-export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
-  fixtureWorkspaceDir = workspaceDir;
+export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = "session-1"): void {
+  fixture = { workspaceDir, sessionId };
   runCliAgentMock.mockClear();
   resolveCliBackendConfigMock.mockReset();
   resolveCliBackendConfigMock.mockReturnValue(null);
@@ -964,10 +964,10 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       listAgentIds,
       resolveAgentConfig: resolveAgentConfigMock,
       resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
-        join(fixtureWorkspaceDir, "agents", agentId, "agent"),
+        join(fixture.workspaceDir, "agents", agentId, "agent"),
       ),
       resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
-      resolveAgentWorkspaceDir: vi.fn(() => fixtureWorkspaceDir),
+      resolveAgentWorkspaceDir: vi.fn(() => fixture.workspaceDir),
       resolveDefaultAgentDir: resolveDefaultAgentDirMock,
       resolveDefaultAgentId: vi.fn(() => "main"),
       resolveAgentIdFromSessionKey: vi.fn(

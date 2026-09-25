@@ -47,4 +47,3 @@ Common tasks
 Notes
 
 - API is unofficial and rate-limited; avoid repeated logins.
-- Confirm before changing temperature or alarms.

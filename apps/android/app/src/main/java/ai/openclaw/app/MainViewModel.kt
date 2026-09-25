@@ -528,6 +528,8 @@ class MainViewModel private constructor(
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
+  val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
+    runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
@@ -1655,6 +1657,10 @@ class MainViewModel private constructor(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun approveNodeCapabilities(requestId: String) {
+    ensureRuntime().approveNodeCapabilities(requestId)
   }
 
   fun approveDevicePairing(

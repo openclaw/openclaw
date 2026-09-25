@@ -126,6 +126,18 @@ export async function assertSessionSectionCountAlignment(
   if (expected === undefined || rightEdges.some((edge) => Math.abs(edge - expected) > 0.1)) {
     throw new Error(`Expected aligned section count edges, received ${rightEdges.join(", ")}`);
   }
+  for (const section of sections) {
+    await section.locator(".sidebar-session-group-count").click();
+    const toggle = section.locator(".sidebar-session-group-toggle");
+    await page.waitForFunction(
+      (id) =>
+        document
+          .querySelector(`[data-session-section="${id}"] .sidebar-session-group-toggle`)
+          ?.getAttribute("aria-expanded") === "true",
+      await section.getAttribute("data-session-section"),
+    );
+    await toggle.click();
+  }
   for (const [index, sectionId] of sectionIds.entries()) {
     const section = sections[index];
     if (!section || !sectionId.startsWith("catalog:")) {

@@ -50,17 +50,15 @@ export class GithubClient {
       this.cfg.token ? message.replaceAll(this.cfg.token, "[redacted]") : message,
     );
     this.status.stale = true;
+    this.status.ok = false;
   }
 
-  async attempt(scope: string, action: () => Promise<void>, required = false): Promise<void> {
+  async attempt(scope: string, action: () => Promise<void>): Promise<void> {
     checkAbort(this.runtime.signal, ABORT_LABEL);
     try {
       await action();
     } catch (error) {
       this.warn(scope, error);
-      if (required) {
-        this.status.ok = false;
-      }
     }
   }
 
@@ -124,7 +122,7 @@ export class GithubClient {
           } catch {
             throw new GithubSourceError("Invalid JSON API response");
           }
-        } else if (response.status === 403) {
+        } else if (response.status === 403 || response.status === 409) {
           try {
             data = JSON.parse(body);
           } catch {
@@ -186,6 +184,16 @@ export class GithubClient {
         continue;
       }
       if (!response.ok) {
+        // GitHub returns this 409 for an empty repository's commit list. Other
+        // conflicts remain acquisition failures; never publish their partial counts.
+        if (
+          response.status === 409 &&
+          /^repos\/[^/]+\/[^/]+\/commits$/u.test(url.pathname.slice(this.base.pathname.length)) &&
+          errorBody.success &&
+          errorBody.data.message === "Git Repository is empty."
+        ) {
+          return { data: [] };
+        }
         throw new GithubHttpError(response.status);
       }
       const next = response.headers

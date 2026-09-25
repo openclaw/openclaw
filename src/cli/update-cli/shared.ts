@@ -36,11 +36,8 @@ import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
-import type {
-  UpdateRunResult,
-  UpdateStepProgress,
-  UpdateStepResult,
-} from "../../infra/update-runner-types.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";

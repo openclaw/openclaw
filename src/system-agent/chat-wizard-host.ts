@@ -386,11 +386,10 @@ export class ChatWizardHost {
       kind: "skills",
       label: "skills",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSkillsSetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedSkillsSetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
   }
 
@@ -400,11 +399,10 @@ export class ChatWizardHost {
       kind: "search",
       label: "web search",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSearchSetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedSearchSetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
   }
 
@@ -414,11 +412,10 @@ export class ChatWizardHost {
       kind: "gateway",
       label: "gateway",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedGatewaySetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedGatewaySetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
     if (this.options.surface !== "gateway" || !this.bridge) {
       return result;
@@ -438,15 +435,11 @@ export class ChatWizardHost {
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            )
-          : await (
-              await loadHostedRuntime()
-            ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            ),
+        await (run ?? (await loadHostedRuntime()).runHostedMemoryImport)(
+          prompter,
+          this.options.beforePersistentApply,
+          (value) => providers.push(value),
+        ),
     });
   }
 

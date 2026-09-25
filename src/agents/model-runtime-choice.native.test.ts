@@ -5,7 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
-import { setPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
@@ -104,7 +104,7 @@ it.each(["catalog", "configured", "literal"] as const)(
       pluginRegistry: registry,
       modelCatalog: { entries, routeVariants: entries },
     });
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
     published.owner = owner;
     const checks: Array<() => string | undefined> = [];
     for (const [i, entry] of entries.entries()) {

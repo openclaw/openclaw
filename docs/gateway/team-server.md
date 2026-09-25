@@ -5,6 +5,7 @@ read_when:
   - Connecting Cloudflare sign-in to Gateway profiles and GitHub identities
   - Operating separate collaboration and release Gateways
 title: "Deploy a team server"
+doc-schema-version: 1
 ---
 
 This guide connects the pieces of a production team deployment: a persistent
@@ -17,6 +18,33 @@ For the shorter collaboration walkthrough, see [Team setup](/start/teams).
 This guide uses `team.example.com` for collaboration and
 `release.example.com` for an optional second Gateway. Replace them with your
 own hostnames; each Gateway needs its own configuration and state.
+
+## How we build OpenClaw with OpenClaw
+
+We use [team.openclaw.ai](https://team.openclaw.ai) as a shared development
+workspace for OpenClaw itself. Maintainers and agents work through repository
+changes in the same conversations:
+
+1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+   and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
+   Give the agent a concrete change and the checks that demonstrate it works.
+2. **Work together.** Teammates with access can open the session, add context,
+   and steer the next turn. [Assign an owner](/concepts/multi-user#assigning-an-owner)
+   for follow-through; creator and participant attribution remain separate.
+3. **Review the work.** Inspect the agent's results and the checkout diff, run
+   the relevant tests, and resolve review findings before landing.
+4. **Publish and follow CI.** Use **Publish PR** after checking the selected
+   [GitHub publication account](/concepts/user-model#github-connections).
+   The linked pull request and its CI details stay available in the conversation.
+
+![An OpenClaw development task on the Team server, with analysis, test results, and a published pull request](https://github.com/user-attachments/assets/b64f4d3a-3988-4f59-ac73-27552b6bdd30)
+
+The screenshot shows a live repository task, cropped to its conversation.
+See [Chat and code review](/web/control-ui/chat) for the diff, file, and PR controls.
+
+Building the next version does not replace the running server. We keep
+deployment under its own approval and lifecycle owner, with coordinated
+activation and verification. See [Keep operations recoverable](/gateway/team-server#keep-operations-recoverable).
 
 ## Before you begin
 
@@ -95,9 +123,6 @@ models, and channels:
     bind: "loopback",
     publicOrigin: "https://team.example.com",
     trustedProxies: ["127.0.0.1", "::1"],
-    controlUi: {
-      allowedOrigins: ["https://team.example.com"],
-    },
     auth: {
       mode: "trusted-proxy",
       password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
@@ -156,10 +181,19 @@ private origin. Do not run hostile workloads with access to this listener. See
 [Trusted-proxy auth](/gateway/trusted-proxy-auth) for header and client-address
 requirements.
 
-### Set both URL settings
+<a id="set-both-url-settings" />
 
-`allowedOrigins` permits browser connections. `publicOrigin` tells OpenClaw which
-external URL to advertise. One does not substitute for the other.
+### Set the public URL once
+
+`publicOrigin` tells OpenClaw which external URL to advertise and supplies the
+default browser-origin allowlist. For a Control UI served from that same origin,
+leave `gateway.controlUi.allowedOrigins` unset.
+
+Set an explicit `allowedOrigins` list only when you need a different browser
+policy, such as a separately hosted Control UI. An explicit list replaces the
+public-origin default; include the public origin too if both should connect.
+An explicit empty list does not inherit `publicOrigin`. Existing local and
+private-network origin rules still apply.
 
 Without `gateway.publicOrigin`, the browser can work while an agent's session
 lookup has no link-building rule and its runtime context has no session URL.
@@ -173,10 +207,18 @@ openclaw config set gateway.publicOrigin https://team.example.com --expect-curre
 ```
 
 This conditional write refuses to overwrite an existing value. With live config
-reload enabled, the public origin applies without a Gateway restart. Newly
+reload enabled, the public origin applies without a Gateway restart. When the
+allowlist is inherited, browsers using the old origin must reconnect from an
+accepted origin. An explicit allowlist remains unchanged. Newly
 prepared tool contexts receive the link rule; an already-running turn can retain
 its earlier context. Set `https://release.example.com` on the second server,
 rather than copying the first server's URL.
+
+Existing installations retain their explicit allowlists, including values saved
+by earlier setup or Doctor runs. After upgrading to a version with this default,
+remove the list with `openclaw config unset gateway.controlUi.allowedOrigins` if
+you want it to follow `publicOrigin`; check that no additional UI origin is needed
+first. Startup and Doctor leave the inherited default out of saved config.
 
 ## 3. Bootstrap administrators and assign roles
 

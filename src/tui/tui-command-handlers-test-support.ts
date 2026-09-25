@@ -2,6 +2,7 @@ import type { OverlayHandle } from "@earendil-works/pi-tui";
 import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
 import type { SessionInfo, TuiOptions } from "./tui-types.js";
@@ -13,6 +14,8 @@ type AbortActiveMock = ReturnType<typeof vi.fn> &
 export type SelectableOverlay = {
   items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
+  render: (width: number) => string[];
+  handleInput: (data: string) => void;
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 export type SetSessionMock = ReturnType<typeof vi.fn> &
@@ -81,6 +84,7 @@ export function createTuiCommandHandlersHarness(params?: {
   getGatewayStatus?: ReturnType<typeof vi.fn>;
   listSessions?: ReturnType<typeof vi.fn>;
   listModels?: ReturnType<typeof vi.fn>;
+  getKnownModels?: TuiBackend["getKnownModels"];
   patchSession?: ReturnType<typeof vi.fn>;
   createSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
@@ -145,11 +149,6 @@ export function createTuiCommandHandlersHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
-  const pendingSystemNotices = new Map<string, string>();
-  const addPendingSystem = vi.fn((runId: string, text: string) => {
-    pendingSystemNotices.set(runId, text);
-  });
-  const dismissPendingSystem = vi.fn((runId: string) => pendingSystemNotices.delete(runId));
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -196,6 +195,20 @@ export function createTuiCommandHandlersHarness(params?: {
     sessionInfo: params?.sessionInfo ?? {},
   };
 
+  const modelEvents: Pick<TuiBackend, "onModelsChanged"> = {};
+  const client = {
+    ...modelEvents,
+    sendChat,
+    getGatewayStatus,
+    listSessions,
+    listModels,
+    getKnownModels: params?.getKnownModels,
+    patchSession,
+    createSession,
+    resetSession,
+    runGoalCommand,
+    runUsageCostCommand,
+  };
   const {
     handleCommand,
     sendMessage,
@@ -204,25 +217,13 @@ export function createTuiCommandHandlersHarness(params?: {
     reportBlockedMessageSubmit,
     openSessionSelector,
   } = createCommandHandlers({
-    client: {
-      sendChat,
-      getGatewayStatus,
-      listSessions,
-      listModels,
-      patchSession,
-      createSession,
-      resetSession,
-      runGoalCommand,
-      runUsageCostCommand,
-    } as never,
+    client: client as never,
     chatLog: {
       addUser,
       addPendingUser,
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
-      addPendingSystem,
-      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -238,7 +239,6 @@ export function createTuiCommandHandlersHarness(params?: {
     refreshAgents,
     abortActive,
     setActivityStatus,
-    formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     applySessionMutationResult: applySessionMutationResult as never,
     noteLocalRunId,
@@ -255,6 +255,7 @@ export function createTuiCommandHandlersHarness(params?: {
   });
 
   return {
+    client,
     handleCommand,
     sendMessage,
     captureMessageAdmission,
@@ -279,9 +280,6 @@ export function createTuiCommandHandlersHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
-    addPendingSystem,
-    dismissPendingSystem,
-    pendingSystemNotices,
     clearTools,
     reserveAssistantSlot,
     requestRender,

@@ -79,7 +79,7 @@ it.each(["end", "error"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -306,7 +306,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "rearm-rollback-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -405,7 +405,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     sessionKey: childSessionKey,
     defaultSessionId: "interrupted-task-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
     requesterSessionKey,

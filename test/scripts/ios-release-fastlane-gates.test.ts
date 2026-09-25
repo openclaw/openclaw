@@ -61,7 +61,7 @@ function runIosScreenshotsCommand(
   writeExecutable(
     "bundle",
     '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-      '[[ "${1:-}" == "_2.6.9_" ]] || exit 92\n' +
+      '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
       `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
       'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
       `exit ${options.bundleExit ?? 0}`,
@@ -156,8 +156,8 @@ describe("iOS Fastlane release upload gates", () => {
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
     expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
     expect(iosJob).not.toContain("BUNDLE_GEMFILE");
     expect(iosJob).not.toContain("ruby/setup-ruby@");
@@ -166,12 +166,12 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
     expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
-    expect(shardJob).toContain('bundler: "2.6.9"');
+    expect(shardJob).toContain('bundler: "4.0.21"');
     expect(shardJob).toContain("bundler-cache: false");
     expect(shardJob).toContain("working-directory: apps/ios");
-    expect(shardJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-    expect(shardJob).toContain("bundle _2.6.9_ check");
-    expect(shardJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(shardJob).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _4.0.21_ check");
+    expect(shardJob).toContain("bundle _4.0.21_ exec fastlane --version");
     expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
     expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
@@ -186,7 +186,7 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(documentedCommands).toHaveLength(7);
     for (const command of documentedCommands) {
-      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
+      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane');
     }
   });
 
@@ -221,7 +221,7 @@ describe("iOS Fastlane release upload gates", () => {
     try {
       const result = spawnSync(
         "bash",
-        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check'],
+        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check'],
         {
           cwd: path.join(process.cwd(), "apps", "ios"),
           encoding: "utf8",
@@ -245,14 +245,14 @@ describe("iOS Fastlane release upload gates", () => {
     const { result, trace } = runIosScreenshotsCommand();
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository bundle fails", () => {
     const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
 
     expect(result.status).toBe(42);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("prints the pinned setup command when the repository bundle is unavailable", () => {
@@ -261,15 +261,15 @@ describe("iOS Fastlane release upload gates", () => {
     expect(result.status).toBe(1);
     expect(trace).toBe("");
     expect(result.stderr).toContain("Install Ruby 3.4.10");
-    expect(result.stderr).toContain("gem install bundler -v 2.6.9");
-    expect(result.stderr).toContain("bundle _2.6.9_ install");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
+    expect(result.stderr).toContain("bundle _4.0.21_ install");
   });
 
   it("ignores a conflicting inherited Gemfile on the pinned path", () => {
     const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository Gemfile is absent", () => {
@@ -309,7 +309,7 @@ describe("iOS Fastlane release upload gates", () => {
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _2.6.9_ install");
+      expect(result.stderr).toContain("bundle _4.0.21_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }

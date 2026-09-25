@@ -1,6 +1,7 @@
 // Hook install service installs hook packages from archives and local sources.
 
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import {
@@ -9,7 +10,6 @@ import {
 } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
   scanPackageInstallSource,
@@ -124,10 +124,31 @@ function localHookInstallPolicySource(kind: "plugin-archive" | "plugin-dir"): In
 
 async function runHookInstallScan(params: {
   hookPackId: string;
-  scan: () => ReturnType<typeof scanPackageInstallSource>;
+  packageDir: string;
+  forward: HookInstallForwardParams;
+  logger: HookInstallLogger;
+  mode: "install" | "update";
+  scan: (
+    request: Parameters<typeof scanInstalledPackageDependencyTree>[0],
+  ) => ReturnType<typeof scanPackageInstallSource>;
 }): Promise<Extract<InstallHooksResult, { ok: false }> | null> {
+  const request = params.forward.installPolicyRequest;
+  if (!request) {
+    return null;
+  }
   try {
-    const result = await params.scan();
+    const result = await params.scan({
+      config: params.forward.config,
+      onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
+      trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
+      packageDir: params.packageDir,
+      pluginId: params.hookPackId,
+      logger: params.logger,
+      requestKind: request.kind,
+      requestedSpecifier: request.requestedSpecifier,
+      source: request.source,
+      mode: params.mode,
+    });
     if (!result?.blocked) {
       return null;
     }
@@ -143,70 +164,6 @@ async function runHookInstallScan(params: {
       code: "security_scan_failed",
     };
   }
-}
-
-async function runHookInstallPolicy(params: {
-  hookPackId: string;
-  hookEntries: string[];
-  packageName?: string;
-  version?: string;
-  packageDir: string;
-  forward: HookInstallForwardParams;
-  logger: HookInstallLogger;
-  mode: "install" | "update";
-}): Promise<Extract<InstallHooksResult, { ok: false }> | null> {
-  const request = params.forward.installPolicyRequest;
-  if (!request) {
-    return null;
-  }
-  return await runHookInstallScan({
-    hookPackId: params.hookPackId,
-    scan: async () =>
-      await scanPackageInstallSource({
-        config: params.forward.config,
-        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
-        trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
-        packageDir: params.packageDir,
-        pluginId: params.hookPackId,
-        extensions: params.hookEntries,
-        ...(params.packageName ? { packageName: params.packageName } : {}),
-        ...(params.version ? { version: params.version } : {}),
-        logger: params.logger,
-        requestKind: request.kind,
-        requestedSpecifier: request.requestedSpecifier,
-        source: request.source,
-        mode: params.mode,
-      }),
-  });
-}
-
-async function runHookInstalledDependencyPolicy(params: {
-  hookPackId: string;
-  installedDir: string;
-  forward: HookInstallForwardParams;
-  logger: HookInstallLogger;
-  mode: "install" | "update";
-}): Promise<Extract<InstallHooksResult, { ok: false }> | null> {
-  const request = params.forward.installPolicyRequest;
-  if (!request) {
-    return null;
-  }
-  return await runHookInstallScan({
-    hookPackId: params.hookPackId,
-    scan: async () =>
-      await scanInstalledPackageDependencyTree({
-        config: params.forward.config,
-        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
-        trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
-        packageDir: params.installedDir,
-        pluginId: params.hookPackId,
-        logger: params.logger,
-        requestKind: request.kind,
-        requestedSpecifier: request.requestedSpecifier,
-        source: request.source,
-        mode: params.mode,
-      }),
-  });
 }
 
 function validateHookId(hookId: string): string | null {
@@ -291,20 +248,6 @@ function resolveHookInstallTargetPath(
   return result.ok ? { ok: true, targetDir: result.path } : result;
 }
 
-async function resolveInstallTargetDir(
-  id: string,
-  hooksDir?: string,
-): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
-  const runtime = await loadHookInstallRuntime();
-  const baseHooksDir = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
-  return await runtime.resolveCanonicalInstallTarget({
-    baseDir: baseHooksDir,
-    id,
-    invalidNameMessage: "invalid hook name: path traversal detected",
-    boundaryLabel: "hooks directory",
-  });
-}
-
 type PreparedHookInstallTarget = {
   targetDir: string;
   effectiveMode: "install" | "update";
@@ -317,7 +260,12 @@ async function resolvePreparedHookInstallTarget(params: {
   alreadyExistsError: (targetDir: string) => string;
 }): Promise<{ ok: true; target: PreparedHookInstallTarget } | { ok: false; error: string }> {
   const runtime = await loadHookInstallRuntime();
-  const targetDirResult = await resolveInstallTargetDir(params.id, params.hooksDir);
+  const targetDirResult = await runtime.resolveCanonicalInstallTarget({
+    baseDir: params.hooksDir ? resolveUserPath(params.hooksDir) : path.join(CONFIG_DIR, "hooks"),
+    id: params.id,
+    invalidNameMessage: "invalid hook name: path traversal detected",
+    boundaryLabel: "hooks directory",
+  });
   if (!targetDirResult.ok) {
     return targetDirResult;
   }
@@ -437,15 +385,19 @@ async function installValidatedHookDirectory(
   }
   const { targetDir, effectiveMode } = preparedTarget.target;
 
-  const policyFailure = await runHookInstallPolicy({
+  const policyFailure = await runHookInstallScan({
     hookPackId,
-    hookEntries: source.hookEntries,
-    packageName: source.packageName,
-    version,
     packageDir: source.directory,
     forward: params,
     logger,
     mode: effectiveMode,
+    scan: (request) =>
+      scanPackageInstallSource({
+        ...request,
+        extensions: source.hookEntries,
+        ...(source.packageName ? { packageName: source.packageName } : {}),
+        ...(version ? { version } : {}),
+      }),
   });
   if (policyFailure) {
     return policyFailure;
@@ -469,12 +421,13 @@ async function installValidatedHookDirectory(
       sourceHardlinks: hasDeps ? "package-manager" : "reject",
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
-        const failure = await runHookInstalledDependencyPolicy({
+        const failure = await runHookInstallScan({
           hookPackId,
-          installedDir,
+          packageDir: installedDir,
           forward: params,
           logger,
           mode: effectiveMode,
+          scan: scanInstalledPackageDependencyTree,
         });
         return failure ?? { ok: true };
       },
@@ -662,19 +615,9 @@ async function installHooksFromArchive(
 export async function installHooksFromNpmSpec(
   params: {
     spec: string;
-    hooksDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
-    logger?: HookInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedHookPackId?: string;
-    expectedPackageKind?: "hook-only";
-    inspection?: "package-kind";
-    beforePersistentApply?: () => void;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-  } & InstallSafetyOverrides,
+  } & Omit<HookInstallForwardParams, "installPolicyRequest">,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
   const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(

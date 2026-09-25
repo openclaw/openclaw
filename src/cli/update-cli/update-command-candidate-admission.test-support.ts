@@ -10,6 +10,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { commandTransport } from "../update-cli-mocks.test-support.js";
 import { packageTargetStatus } from "./update-cli-package.test-support.js";
 import {
   createCandidateAdmissionFixtures,
@@ -232,65 +233,90 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     },
   );
 
-  it("candidate admission: skips reported candidate-owned checks but retains installed Node preflight", async () => {
-    const verdict = candidateAdmissionVerdict();
-    verdict.warnings = [
-      {
-        code: "missing-plugin-load-path",
-        message: "A custom plugin path is missing; its configuration is preserved.",
-      },
-    ];
-    verdict.facts.checks[0] = {
-      name: "config",
-      status: "warn",
-      detail: verdict.warnings[0]!.message,
-    };
-    const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
-      marker: true,
-      verdict,
-    });
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ schemaVersions: { state: 3, agent: 9 } }),
-    );
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
-      incompatible: [
-        { kind: "agent", path: "/fixture/agent.sqlite", foundVersion: 11, supportedVersion: 9 },
-      ],
-      indeterminate: [],
-    });
-    pluginAvailabilityPreflight.mockRejectedValue(new Error("Installed plugin catalog is stale."));
+  it.each([undefined, "17"])(
+    "candidate admission: retains work deadline %s and installed Node preflight",
+    async (timeout) => {
+      const verdict = candidateAdmissionVerdict();
+      verdict.warnings = [
+        {
+          code: "missing-plugin-load-path",
+          message: "A custom plugin path is missing; its configuration is preserved.",
+        },
+      ];
+      verdict.facts.checks[0] = {
+        name: "config",
+        status: "warn",
+        detail: verdict.warnings[0]!.message,
+      };
+      const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
+        marker: true,
+        verdict,
+        pendingLifecycle: true,
+      });
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ schemaVersions: { state: 3, agent: 9 } }),
+      );
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+        incompatible: [
+          { kind: "agent", path: "/fixture/agent.sqlite", foundVersion: 11, supportedVersion: 9 },
+        ],
+        indeterminate: [],
+      });
+      pluginAvailabilityPreflight.mockRejectedValue(
+        new Error("Installed plugin catalog is stale."),
+      );
 
-    await invokeUpdateCli({ admission: "auto", yes: true, restart: false, json: true });
+      await invokeUpdateCli({ admission: "auto", yes: true, restart: false, json: true, timeout });
 
-    expect(stages).toHaveLength(1);
-    expect(contexts).toHaveLength(1);
-    expect(contexts[0]).toMatchObject({
-      installation: {
-        root: pkgRoot,
-        canonicalRoot: resolveUpdateInstallRoot(pkgRoot),
-        version: "1.0.0",
-        installKind: "package",
-        packageManager: "npm",
-      },
-      target: { version: "9999.0.0", source: "registry" },
-      request: { yes: true, noRestart: true, json: true },
-    });
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalled();
-    expect(pluginAvailabilityPreflight).not.toHaveBeenCalled();
-    expect(JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8"))).toMatchObject(
-      { version: "9999.0.0" },
-    );
-    expect(stages.every((root) => !fsSync.existsSync(root))).toBe(true);
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "ok",
-      run: {
-        admission: { owner: "candidate", checks: verdict.facts.checks },
-        origin: { candidateAdmission: verdict },
-      },
-    });
-    expect(getErrorOutput()).toContain(verdict.warnings[0]!.message);
-  });
+      expect(packageInstallCommandCall()?.[1].timeoutMs).toBe(
+        timeout === undefined ? undefined : 17_000,
+      );
+
+      const lifecycleCommands = commandTransport.run.mock.calls.filter(([argv]) =>
+        /(?:preinstall-package-manager-warning|postinstall-bundled-plugins)\.mjs$/.test(
+          argv[1] ?? "",
+        ),
+      );
+      expect(lifecycleCommands).toHaveLength(2);
+      expect(
+        lifecycleCommands.map(([, options]) =>
+          typeof options === "number" ? options : options.timeoutMs,
+        ),
+      ).toEqual([
+        timeout === undefined ? undefined : 17_000,
+        timeout === undefined ? undefined : 17_000,
+      ]);
+
+      expect(stages).toHaveLength(1);
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]).toMatchObject({
+        installation: {
+          root: pkgRoot,
+          canonicalRoot: resolveUpdateInstallRoot(pkgRoot),
+          version: "1.0.0",
+          installKind: "package",
+          packageManager: "npm",
+        },
+        target: { version: "9999.0.0", source: "registry" },
+        request: { yes: true, noRestart: true, json: true },
+      });
+      expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+      expect(nodeVersionSatisfiesEngine).toHaveBeenCalled();
+      expect(pluginAvailabilityPreflight).not.toHaveBeenCalled();
+      expect(
+        JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
+      ).toMatchObject({ version: "9999.0.0" });
+      expect(stages.every((root) => !fsSync.existsSync(root))).toBe(true);
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "ok",
+        run: {
+          admission: { owner: "candidate", checks: verdict.facts.checks },
+          origin: { candidateAdmission: verdict },
+        },
+      });
+      expect(getErrorOutput()).toContain(verdict.warnings[0]!.message);
+    },
+  );
 
   it.each(["existing", "fresh"] as const)(
     "candidate admit with warn does not bypass runtime recovery (%s profile)",

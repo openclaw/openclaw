@@ -102,22 +102,6 @@ function attachmentTypeLabel(
   return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
 }
 
-export function renderAttachmentCardIcon(options: {
-  label: string;
-  mimeType?: string;
-  visualMode?: AttachmentFileVisualMode;
-  unavailable?: boolean;
-  loading?: boolean;
-}) {
-  return renderAttachmentFileIcon({
-    filename: options.label,
-    mimeType: options.mimeType,
-    mode: options.visualMode ?? "large-placeholder",
-    unavailable: options.unavailable,
-    loading: options.loading,
-  });
-}
-
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
@@ -139,10 +123,10 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
       }"
     >
       <div class="chat-assistant-attachment-card__identity">
-        ${renderAttachmentCardIcon({
-          label: options.label,
+        ${renderAttachmentFileIcon({
+          filename: options.label,
           mimeType: options.mimeType,
-          visualMode: options.visualMode,
+          mode: options.visualMode ?? "large-placeholder",
           loading: options.loading,
         })}
         <span

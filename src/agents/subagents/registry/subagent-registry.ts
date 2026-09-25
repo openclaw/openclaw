@@ -58,7 +58,10 @@ import {
   persistSubagentRunsToDiskOrThrow,
   persistSubagentRunsToDiskAsyncOrThrow,
 } from "./subagent-registry-state.js";
-import { resolveSubagentTaskForRun } from "./subagent-registry-sweep-kill.js";
+import {
+  resolveSubagentTaskForRun,
+  resolveSubagentTaskForRunAsync,
+} from "./subagent-registry-sweep-kill.js";
 import {
   createSubagentRegistrySweeper,
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
@@ -160,6 +163,11 @@ const subagentLifecycleController = new SubagentLifecycleController({
   getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
   suppressAnnounceForSteerRestart: contextCleanup.suppressAnnounceForSteerRestart,
   resolveSubagentTask: findSubagentTaskForRun,
+  resolveSubagentTaskAsync: (entry) =>
+    resolveSubagentTaskForRunAsync(
+      () => getSubagentRunsForChildSession(entry.childSessionKey),
+      entry,
+    ),
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun: contextCleanup.emitSubagentEndedHookForRun,
   emitSubagentProgressEndedForRun: emitSubagentProgressEndedHook,
@@ -629,15 +637,6 @@ const subagentRunManager = createSubagentRunManager({
 export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
-export function registerSubagentRun(
-  params: RegisterSubagentRunParams &
-    ({ queued?: false } | { taskRowOwnership?: "gateway_best_effort" }),
-  options?: RegisterSubagentRunOptions,
-): void;
-export function registerSubagentRun(
-  params: RegisterSubagentRunParams,
-  options?: RegisterSubagentRunOptions,
-): void | Promise<void>;
 export function registerSubagentRun(
   params: RegisterSubagentRunParams,
   options?: RegisterSubagentRunOptions,

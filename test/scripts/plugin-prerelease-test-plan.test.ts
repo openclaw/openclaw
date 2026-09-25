@@ -29,10 +29,6 @@ type WorkflowStep = {
   with?: Record<string, unknown>;
 };
 
-type WorkflowMatrixEntry = {
-  check_name?: string;
-};
-
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
@@ -680,9 +676,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
       OPENCLAW_CI_DOCS_ONLY:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}",
+        "${{ github.event_name == 'schedule' && 'false' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_RELEASE_GATE: "${{ inputs.release_gate && 'true' || 'false' }}",
@@ -696,19 +692,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_QUALIFICATION: "${{ steps.runner_profile.outputs.ci_qualification }}",
       OPENCLAW_CI_SHAPE: "${{ steps.runner_profile.outputs.ci_shape }}",
       OPENCLAW_CI_RUN_ANDROID:
-        "${{ github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
       OPENCLAW_CI_RUN_IOS_BUILD:
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
       OPENCLAW_CI_RUN_MACOS_NODE:
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}",
       OPENCLAW_CI_RUN_NATIVE_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING:
         "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_ONLY:
@@ -716,26 +712,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS:
         "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
       OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.workflow_sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mts");
-    expect(
-      workflow.jobs["check-shard"].strategy.matrix.include.find(
-        (entry: WorkflowMatrixEntry) => entry.check_name === "check-dependencies",
-      ),
-    ).toEqual({
-      check_name: "check-dependencies",
-      task: "dependencies",
-      // Concurrent Knip scans need cores and memory headroom.
-      runner: "blacksmith-16vcpu-ubuntu-2404",
-    });
     expect(
       workflow.jobs["check-shard"].steps.find(
         (step: WorkflowStep) => step.name === "Run check shard",

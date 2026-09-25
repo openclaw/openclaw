@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -195,8 +196,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   params.signal?.throwIfAborted();
   assertCurrent();
-  const receiveInstallResult = (stdout: string) => {
-    const response = safeParseJsonRecord(stdout);
+  const receiveInstallResult = (response: Record<string, unknown> | undefined) => {
     if (!installing || !response) {
       return;
     }
@@ -322,13 +322,11 @@ export async function runUpdatedInstallGatewayCommand(
     res.cleanup !== "uncertain";
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  if (complete) {
-    receiveInstallResult(res.stdout);
-  }
+  receiveInstallResult(response);
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {
-    const receipt = response && safeParseJsonRecord(JSON.stringify(response.rebind));
+    const receipt = asOptionalRecord(response?.rebind);
     if (
       receipt?.before === original.definition.fingerprint &&
       typeof receipt.after === "string" &&

@@ -1,7 +1,9 @@
 // Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { modeBits } from "@openclaw/fs-safe/permissions";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
+import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
@@ -9,28 +11,15 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
-type SecurityFixChmodAction = {
-  kind: "chmod";
+type SecurityFixAction = {
   path: string;
-  mode: number;
   ok: boolean;
   skipped?: string;
   error?: string;
-};
-
-type SecurityFixIcaclsAction = {
-  kind: "icacls";
-  path: string;
-  command: string;
-  ok: boolean;
-  skipped?: string;
-  error?: string;
-};
-
-type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
+} & ({ kind: "chmod"; mode: number } | { kind: "icacls"; command: string });
 
 type SecurityFixResult = {
   ok: boolean;
@@ -48,146 +37,55 @@ type SecurityPermissionTarget = {
   require: "dir" | "file";
 };
 
-async function safeChmod(params: {
-  path: string;
-  mode: number;
-  require: "dir" | "file";
-}): Promise<SecurityFixChmodAction> {
+async function applyPermissionFix(
+  target: SecurityPermissionTarget,
+  options: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; exec: ExecFn },
+): Promise<SecurityFixAction> {
+  const action: SecurityFixAction =
+    options.platform === "win32"
+      ? {
+          kind: "icacls",
+          path: target.path,
+          command: formatIcaclsResetCommand(target.path, {
+            isDir: target.require === "dir",
+            env: options.env,
+          }),
+          ok: false,
+        }
+      : { kind: "chmod", path: target.path, mode: target.mode, ok: false };
   try {
-    const st = await fs.lstat(params.path);
+    const st = await fs.lstat(target.path);
     if (st.isSymbolicLink()) {
-      return {
-        kind: "chmod",
-        path: params.path,
-        mode: params.mode,
-        ok: false,
-        skipped: "symlink",
-      };
+      return { ...action, skipped: "symlink" };
     }
-    if (params.require === "dir" && !st.isDirectory()) {
-      return {
-        kind: "chmod",
-        path: params.path,
-        mode: params.mode,
-        ok: false,
-        skipped: "not-a-directory",
-      };
+    if (target.require === "dir" && !st.isDirectory()) {
+      return { ...action, skipped: "not-a-directory" };
     }
-    if (params.require === "file" && !st.isFile()) {
-      return {
-        kind: "chmod",
-        path: params.path,
-        mode: params.mode,
-        ok: false,
-        skipped: "not-a-file",
-      };
+    if (target.require === "file" && !st.isFile()) {
+      return { ...action, skipped: "not-a-file" };
     }
-    const current = st.mode & 0o777;
-    if (current === params.mode) {
-      return {
-        kind: "chmod",
-        path: params.path,
-        mode: params.mode,
-        ok: false,
-        skipped: "already",
-      };
+    if (action.kind === "chmod") {
+      if (modeBits(st.mode) === target.mode) {
+        return { ...action, skipped: "already" };
+      }
+      await fs.chmod(target.path, target.mode);
+    } else {
+      const cmd = createIcaclsResetCommand(target.path, {
+        isDir: st.isDirectory(),
+        env: options.env,
+      });
+      if (!cmd) {
+        return { ...action, skipped: "missing-user" };
+      }
+      await options.exec(cmd.command, cmd.args);
+      action.command = cmd.display;
     }
-    await fs.chmod(params.path, params.mode);
-    return { kind: "chmod", path: params.path, mode: params.mode, ok: true };
+    return { ...action, ok: true };
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return {
-        kind: "chmod",
-        path: params.path,
-        mode: params.mode,
-        ok: false,
-        skipped: "missing",
-      };
-    }
-    return {
-      kind: "chmod",
-      path: params.path,
-      mode: params.mode,
-      ok: false,
-      error: String(err),
-    };
-  }
-}
-
-async function safeAclReset(params: {
-  path: string;
-  require: "dir" | "file";
-  env: NodeJS.ProcessEnv;
-  exec?: ExecFn;
-}): Promise<SecurityFixIcaclsAction> {
-  const display = formatIcaclsResetCommand(params.path, {
-    isDir: params.require === "dir",
-    env: params.env,
-  });
-  try {
-    const st = await fs.lstat(params.path);
-    if (st.isSymbolicLink()) {
-      return {
-        kind: "icacls",
-        path: params.path,
-        command: display,
-        ok: false,
-        skipped: "symlink",
-      };
-    }
-    if (params.require === "dir" && !st.isDirectory()) {
-      return {
-        kind: "icacls",
-        path: params.path,
-        command: display,
-        ok: false,
-        skipped: "not-a-directory",
-      };
-    }
-    if (params.require === "file" && !st.isFile()) {
-      return {
-        kind: "icacls",
-        path: params.path,
-        command: display,
-        ok: false,
-        skipped: "not-a-file",
-      };
-    }
-    const cmd = createIcaclsResetCommand(params.path, {
-      isDir: st.isDirectory(),
-      env: params.env,
-    });
-    if (!cmd) {
-      return {
-        kind: "icacls",
-        path: params.path,
-        command: display,
-        ok: false,
-        skipped: "missing-user",
-      };
-    }
-    const exec = params.exec ?? runExec;
-    await exec(cmd.command, cmd.args);
-    return { kind: "icacls", path: params.path, command: cmd.display, ok: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return {
-        kind: "icacls",
-        path: params.path,
-        command: display,
-        ok: false,
-        skipped: "missing",
-      };
-    }
-    return {
-      kind: "icacls",
-      path: params.path,
-      command: display,
-      ok: false,
-      error: String(err),
-    };
+    return code === "ENOENT"
+      ? { ...action, skipped: "missing" }
+      : { ...action, error: String(err) };
   }
 }
 
@@ -233,20 +131,6 @@ function setGroupPolicyAllowlist(params: {
   }
 }
 
-function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }): {
-  cfg: OpenClawConfig;
-  changes: string[];
-} {
-  const next = structuredClone(params.cfg ?? {});
-  const changes: string[] = [];
-
-  for (const channel of Object.keys(next.channels ?? {})) {
-    setGroupPolicyAllowlist({ cfg: next, channel, changes });
-  }
-
-  return { cfg: next, changes };
-}
-
 async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -260,10 +144,14 @@ async function applySecurityFixConfigMutations(params: {
     env: params.env,
     channelPlugins: params.channelPlugins,
   });
-  const fixed = applyConfigFixes({ cfg: channelFixes.cfg, env: params.env });
+  const cfg = structuredClone(channelFixes.cfg ?? {});
+  const changes: string[] = [];
+  for (const channel of Object.keys(cfg.channels ?? {})) {
+    setGroupPolicyAllowlist({ cfg, channel, changes });
+  }
   return {
-    cfg: fixed.cfg,
-    changes: [...fixed.changes, ...channelFixes.changes],
+    cfg,
+    changes: [...changes, ...channelFixes.changes],
   };
 }
 
@@ -323,38 +211,28 @@ async function collectSecurityPermissionTargets(params: {
   ];
   const credsDir = resolveOAuthDir(params.env, params.stateDir);
   targets.push({ path: credsDir, mode: 0o700, require: "dir" });
-
-  const credsEntries = await fs.readdir(credsDir, { withFileTypes: true }).catch(() => []);
-  for (const entry of credsEntries) {
-    if (!entry.isFile()) {
-      continue;
+  const collectFiles = async (directory: string, suffix: string) => {
+    const { entries } = await walkDirectory(directory, {
+      maxDepth: 1,
+      symlinks: "skip",
+      include: (entry) => entry.kind === "file" && entry.name.endsWith(suffix),
+    }).catch(() => ({ entries: [] }));
+    for (const entry of entries) {
+      targets.push({ path: path.join(directory, entry.name), mode: 0o600, require: "file" });
     }
-    if (!entry.name.endsWith(".json")) {
-      continue;
-    }
-    const p = path.join(credsDir, entry.name);
-    targets.push({ path: p, mode: 0o600, require: "file" });
-  }
+  };
+  await collectFiles(credsDir, ".json");
 
-  const ids = new Set<string>();
-  ids.add(LEGACY_IMPLICIT_AGENT_ID);
+  const ids = new Set([LEGACY_IMPLICIT_AGENT_ID]);
   const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   if (defaultAgentId) {
     ids.add(defaultAgentId);
   }
-  for (const agent of listAgentEntries(params.cfg)) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
-    if (id) {
-      ids.add(id);
-    }
+  for (const id of listAgentIds(params.cfg)) {
+    ids.add(id);
   }
 
-  for (const agentId of ids) {
-    const normalizedAgentId = normalizeAgentId(agentId);
+  for (const normalizedAgentId of ids) {
     const agentRoot = path.join(params.stateDir, "agents", normalizedAgentId);
     const agentDir = path.join(agentRoot, "agent");
     const sessionsDir = path.join(agentRoot, "sessions");
@@ -373,18 +251,7 @@ async function collectSecurityPermissionTargets(params: {
     const storePath = path.join(sessionsDir, "sessions.json");
     targets.push({ path: storePath, mode: 0o600, require: "file" });
 
-    // Fix permissions on session transcript files (*.jsonl)
-    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of sessionEntries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      if (!entry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      const p = path.join(sessionsDir, entry.name);
-      targets.push({ path: p, mode: 0o600, require: "file" });
-    }
+    await collectFiles(sessionsDir, ".jsonl");
   }
   return targets;
 }
@@ -400,7 +267,6 @@ export async function fixSecurityFootguns(opts?: {
   const env = opts?.env ?? process.env;
   const platform = opts?.platform ?? process.platform;
   const exec = opts?.exec ?? runExec;
-  const isWindows = platform === "win32";
   const stateDir = opts?.stateDir ?? resolveStateDir(env);
   const configPath = opts?.configPath ?? resolveConfigPath(env, stateDir);
   const actions: SecurityFixAction[] = [];
@@ -438,10 +304,6 @@ export async function fixSecurityFootguns(opts?: {
     }
   }
 
-  const applyPerms = (params: { path: string; mode: number; require: "dir" | "file" }) =>
-    isWindows
-      ? safeAclReset({ path: params.path, require: params.require, env, exec })
-      : safeChmod({ path: params.path, mode: params.mode, require: params.require });
   let includePaths: string[] = [];
   if (snap.exists) {
     includePaths = await collectIncludePathsRecursive({
@@ -462,7 +324,7 @@ export async function fixSecurityFootguns(opts?: {
     return [] as SecurityPermissionTarget[];
   });
   for (const target of permissionTargets) {
-    actions.push(await applyPerms(target));
+    actions.push(await applyPermissionFix(target, { env, platform, exec }));
   }
 
   return {

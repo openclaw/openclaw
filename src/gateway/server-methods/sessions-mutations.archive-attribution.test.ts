@@ -6,6 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -162,12 +163,18 @@ describe("sessions.patch archive attribution", () => {
           },
           client("profile-ada", "Ada"),
         );
-        await projection.ensureMaterialized();
-        expect(projection.snapshot({ key: canonicalKey, agentId: "main" }).row).toMatchObject({
-          archived: true,
-          archivedAt: expect.any(Number),
-          archivedBy: { type: "human", id: "profile-ada" },
-        });
+        const query = { key: canonicalKey, agentId: "main" };
+        await withReadySessionRows(
+          projection,
+          () => [query],
+          () => {
+            expect(projection.snapshot(query).row).toMatchObject({
+              archived: true,
+              archivedAt: expect.any(Number),
+              archivedBy: { type: "human", id: "profile-ada" },
+            });
+          },
+        );
       } finally {
         projection.dispose();
       }

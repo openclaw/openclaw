@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -7,8 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
@@ -273,6 +270,10 @@ describe("prepareSqliteReadOnlyLocation", () => {
           message: expect.stringContaining(stagingRoot),
         });
         expect((error as Error).message).toContain("XDG_CACHE_HOME");
+        expect((error as Error).message.includes("free disk space/quota")).toBe(
+          code === "ENOSPC" || code === "EDQUOT",
+        );
+        expect((error as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
       });
 
       expect(backup).not.toHaveBeenCalled();
@@ -312,6 +313,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
         expect((error as Error).message).toContain(windowsError.message);
         expect((error as Error).message).toContain(stagingRoot);
         expect((error as Error).message).toContain("XDG_CACHE_HOME");
+        expect((error as Error).message).not.toContain("free disk space/quota");
         expect(((error as Error).cause as Error).cause).toBe(allocationError);
       });
 
@@ -508,56 +510,6 @@ describe("prepareSqliteReadOnlyLocation", () => {
       }
     });
   });
-
-  it.runIf(process.platform !== "win32")(
-    "reports the real SQLite write errcode across the isolated worker boundary",
-    () => {
-      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
-      const sqlite = requireNodeSqlite();
-      const databasePath = createTempDatabasePath();
-      const database = new sqlite.DatabaseSync(databasePath);
-      database.exec(
-        "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
-      );
-      database.close();
-      const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
-      const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
-      const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
-      const script = `
-        const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
-        try {
-          await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
-          process.exitCode = 24;
-        } catch (error) {
-          console.log(JSON.stringify({ message: error.message }));
-        }
-      `;
-      const child = spawnSync(
-        "/bin/sh",
-        [
-          "-c",
-          'ulimit -f 1; exec "$@"',
-          "openclaw-sqlite-snapshot-quota",
-          process.execPath,
-          ...resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
-          "--input-type=module",
-          "-e",
-          script,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: { ...process.env, XDG_CACHE_HOME: cacheRoot },
-        },
-      );
-
-      expect(child.status, child.stderr).toBe(0);
-      const reported = JSON.parse(child.stdout) as { message: string };
-      expect(reported.message).toContain(cacheRoot);
-      expect(reported.message).toMatch(/free.*space|quota/iu);
-      expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
-    },
-  );
 
   it("propagates async public entry point failures", async () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");

@@ -34,6 +34,12 @@ type AgentDatabaseRegistryMemo = {
   token: symbol;
   entries?: readonly OpenClawRegisteredAgentDatabase[];
 };
+
+export class AgentDatabaseRegistryChangedError extends Error {
+  constructor() {
+    super("Agent database registry changed during discovery; retry the read.");
+  }
+}
 // A plugin may first open a hot-created agent; its registration must invalidate
 // native discovery even when subsequent callers reuse the shared connection.
 const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
@@ -64,13 +70,19 @@ export function readOpenClawAgentDatabaseRegistryToken(
   return activateRegisteredAgentDatabasesMemo(options).token;
 }
 
+/** An in-process witness from the canonical invalidator, never serialized as authority. */
+export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
+
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
-): void {
+): AgentDatabaseRegistryChange | undefined {
   const pathname = resolveAgentDatabaseRegistryPath(options);
   if (registry.memo?.pathname === pathname) {
+    const previous = registry.memo.token;
     registry.memo = { pathname, token: Symbol(pathname) };
+    return { previous, current: registry.memo.token };
   }
+  return undefined;
 }
 
 /** Publish only registration witnessed at COMMIT, under its original shared generation. */
@@ -78,6 +90,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   agentId: string;
   agentPath: string;
   admission: OpenClawStateDatabaseReadAdmission;
+  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
 }) {
   const options = { path: params.admission.databasePath };
   let active = false;
@@ -90,7 +103,10 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       }
       if (!active) {
         active = true;
-        invalidateRegisteredAgentDatabasesMemo(options);
+        const change = invalidateRegisteredAgentDatabasesMemo(options);
+        if (change) {
+          params.onRegistryChange?.(change);
+        }
       }
     },
     recordCommitted(receipt: OpenClawAgentDatabaseRegistrationCommit) {
@@ -119,11 +135,15 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
         }
         throw error;
       }
-      if (active) {
-        invalidateRegisteredAgentDatabasesMemo(options);
-      }
-      if (committed) {
-        sessionChanges.emit({ all: true, scope: "stores" });
+      try {
+        const change = active ? invalidateRegisteredAgentDatabasesMemo(options) : undefined;
+        if (change) {
+          params.onRegistryChange?.(change);
+        }
+      } finally {
+        if (committed) {
+          sessionChanges.emit({ all: true, scope: "stores" });
+        }
       }
     },
   };
@@ -246,6 +266,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   read(): Promise<{
     result: OpenClawAgentDatabaseRegistryReadResult;
     assertCurrent: () => void;
+    followRegistration: (change: AgentDatabaseRegistryChange) => void;
   }>;
 } {
   try {
@@ -263,14 +284,27 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       assertCurrent: () => assertPreparedCurrent(),
       async read() {
         context.admission.assertCurrent();
-        const memo = activateRegisteredAgentDatabasesMemo(options);
+        let memo = activateRegisteredAgentDatabasesMemo(options);
         let invalidated = false;
         const assertCurrent = () => {
           context.admission.assertCurrent();
           if (invalidated || registry.memo !== memo) {
             invalidated = true;
-            throw new Error("Agent database registry changed during discovery; retry the read.");
+            throw new AgentDatabaseRegistryChangedError();
           }
+        };
+        const followRegistration = (change: AgentDatabaseRegistryChange) => {
+          context.admission.assertCurrent();
+          if (
+            invalidated ||
+            memo.token !== change.previous ||
+            registry.memo?.pathname !== memo.pathname ||
+            registry.memo.token !== change.current
+          ) {
+            invalidated = true;
+            throw new Error("Agent registration cannot replace an invalidated registry read");
+          }
+          memo = registry.memo;
         };
         // Install the witness before the first await, including a read that later rejects.
         assertPreparedCurrent = assertCurrent;
@@ -289,7 +323,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             result?.status === "unavailable" ||
             (result === undefined && hasUnavailableMissingSqlitePath(options.path))
           ) {
-            return { result: { status: "unavailable" }, assertCurrent };
+            return { result: { status: "unavailable" }, assertCurrent, followRegistration };
           }
           memo.entries ??= result?.entries ?? [];
         }
@@ -303,6 +337,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
           },
           assertCurrent,
+          followRegistration,
         };
       },
     };
