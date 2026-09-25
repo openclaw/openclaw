@@ -98,10 +98,15 @@ describe("isUnscopedSessionKeySentinel", () => {
 });
 
 describe("agentSessionKeysMatchByRequestKey", () => {
-  it("matches canonical agent keys against their request-key aliases", () => {
-    expect(agentSessionKeysMatchByRequestKey("agent:main:main", "main")).toBe(true);
-    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "incident-42")).toBe(true);
-    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "main")).toBe(false);
+  it.each([
+    ["agent:main:main", "main", true],
+    ["agent:ops:incident-42", "incident-42", true],
+    ["incident-42", "agent:ops:incident-42", true],
+    ["agent:OPS:incident-42", "agent:ops:incident-42", true],
+    ["agent:ops:incident-42", "agent:research:incident-42", false],
+    ["agent:ops:incident-42", "main", false],
+  ] as const)("compares %s with %s without losing a qualified owner", (left, right, expected) => {
+    expect(agentSessionKeysMatchByRequestKey(left, right)).toBe(expected);
   });
 });
 

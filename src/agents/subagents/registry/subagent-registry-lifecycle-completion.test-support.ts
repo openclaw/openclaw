@@ -288,6 +288,25 @@ export function registerTaskFinalizationAuthorityTests({
   expectFields: (value: unknown, expected: Record<string, unknown>) => void;
   firstCall: (mock: Mock) => ReadonlyArray<unknown>;
 }) {
+  it("emits one progress end event at the canonical terminal transition", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: false });
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    };
+
+    await controller.completeSubagentRun(completion);
+    await controller.completeSubagentRun(completion);
+
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledWith(entry);
+  });
+
   it("keeps provisional cancellation when a repeated success has no producer reply evidence", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: true,

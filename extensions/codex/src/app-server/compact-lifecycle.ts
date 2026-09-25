@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isCodexNoActiveTurnInterruptError } from "./attempt-client-cleanup.js";
@@ -24,6 +25,7 @@ export function watchCodexNativeCompactionCompletion(params: {
   timeoutMs: number;
   interruptGraceMs: number;
   retireUnconfirmed: () => Promise<void>;
+  onCompactionTurn?: (turnId: string) => void;
 }) {
   const runOutsideBindingLease = AsyncLocalStorage.snapshot();
   let settled = false;
@@ -35,6 +37,7 @@ export function watchCodexNativeCompactionCompletion(params: {
   let compactionItemId: string | undefined;
   let compactionItemCompleted = false;
   let tokensAfter: number | undefined;
+  let admissionFailure: string | undefined;
   const { promise: completion, resolve: resolveCompletion } =
     createDeferred<CodexNativeCompactionCompletion>();
   let removeNotificationHandler = () => {};
@@ -176,6 +179,15 @@ export function watchCodexNativeCompactionCompletion(params: {
     if (item?.type === "contextCompaction") {
       if (notification.method === "item/started") {
         compactionTurnId = compactionTurnId ?? notificationTurnId;
+        if (!compactionItemId && compactionTurnId) {
+          try {
+            params.onCompactionTurn?.(compactionTurnId);
+          } catch (error) {
+            admissionFailure = coerceErrorMessage(error);
+            abortRequested = true;
+            beginInterruptGrace();
+          }
+        }
         compactionItemId = item.id;
         requestInterrupt();
         return;
@@ -194,6 +206,10 @@ export function watchCodexNativeCompactionCompletion(params: {
     }
     const turn = isJsonObject(notification.params.turn) ? notification.params.turn : undefined;
     const status = typeof turn?.status === "string" ? turn.status : undefined;
+    if (admissionFailure) {
+      fail(admissionFailure);
+      return;
+    }
     if (status !== "completed") {
       fail(`codex app-server compaction turn ended with status ${status ?? "unknown"}`);
       return;
@@ -250,31 +266,38 @@ export async function runExclusiveCodexNativeCompaction<T>(
   signal: AbortSignal | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  signal?.throwIfAborted();
-  let started = false;
-  const queued = withCodexAppServerThreadMutation(threadId, async () => {
-    started = true;
+  return await runWithAsyncWorkResources(async (onAcquired) => {
     signal?.throwIfAborted();
-    return run();
+    let started = false;
+    const queued = withCodexAppServerThreadMutation(threadId, async () => {
+      started = true;
+      signal?.throwIfAborted();
+      return run();
+    });
+    onAcquired({
+      release: async () => {
+        await Promise.allSettled([queued]);
+      },
+    });
+    if (!signal) {
+      return queued;
+    }
+    let removeAbortListener = () => {};
+    const aborted = new Promise<never>((_, reject) => {
+      const onAbort = () => {
+        if (!started) {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
+        }
+      };
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // The canceled promise settles immediately, but its queued task remains
+      // behind its predecessor so later compactions cannot overtake active work.
+      return await Promise.race([queued, aborted]);
+    } finally {
+      removeAbortListener();
+    }
   });
-  if (!signal) {
-    return queued;
-  }
-  let removeAbortListener = () => {};
-  const aborted = new Promise<never>((_, reject) => {
-    const onAbort = () => {
-      if (!started) {
-        reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
-      }
-    };
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    // The canceled promise settles immediately, but its queued task remains
-    // behind its predecessor so later compactions cannot overtake active work.
-    return await Promise.race([queued, aborted]);
-  } finally {
-    removeAbortListener();
-  }
 }

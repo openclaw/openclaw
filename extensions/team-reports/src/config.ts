@@ -3,7 +3,6 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
-import type { DiscordSourceConfig, GithubSourceConfig, Person } from "./types.js";
 
 const nonempty = z.string().min(1).regex(/\S/);
 const secretInputSchema = z.union([
@@ -142,7 +141,7 @@ export function parseTeamReportsConfig(
 const peopleFileSchema = z.strictObject({ people: z.array(personSchema) });
 const MAX_PEOPLE_FILE_BYTES = 2 * 1024 * 1024;
 
-async function readPeopleFile(filePath: string): Promise<Person[]> {
+async function readPeopleFile(filePath: string) {
   const handle = await open(filePath, "r");
   const invalidFileMessage =
     "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.";
@@ -165,7 +164,7 @@ async function readPeopleFile(filePath: string): Promise<Person[]> {
 export async function resolveTeamReportsConfig(
   config: TeamReportsConfig,
   fullConfig: OpenClawConfig,
-): Promise<{ github: GithubSourceConfig; discord?: DiscordSourceConfig; people: Person[] }> {
+) {
   const people = config.peopleFile
     ? await readPeopleFile(config.peopleFile)
     : (config.people ?? []);

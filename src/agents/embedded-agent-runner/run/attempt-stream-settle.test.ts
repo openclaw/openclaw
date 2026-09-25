@@ -3,8 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  anthropicModel,
+  context as anthropicContext,
+  anthropicEvents,
+  createAnthropicResponse,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
@@ -38,7 +46,10 @@ import {
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
-import { testing as extraParamsTesting } from "../extra-params.test-support.js";
+import {
+  testing as extraParamsTesting,
+  type WrapProviderStreamFnParams,
+} from "../extra-params.test-support.js";
 import { log } from "../logger.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -740,6 +751,101 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(session.agent.transport).toBe("sse");
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
+  });
+
+  it.each([
+    { source: "stored profile", resolvedApiKey: undefined },
+    { source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" },
+  ])(
+    "gives provider wrappers the $source credential the Anthropic transport sends",
+    async ({ resolvedApiKey }) => {
+      await import("../../ai-transport-runtime-host.js");
+      const previousHost = getAiTransportHost();
+      const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async (_input, init) => {
+          if (typeof init?.body !== "string") {
+            throw new Error("expected a JSON Anthropic request body");
+          }
+          requests.push({
+            headers: new Headers(init.headers),
+            payload: JSON.parse(init.body) as Record<string, unknown>,
+          });
+          return createAnthropicResponse(anthropicEvents);
+        },
+      });
+      const wrapperApiKeys: unknown[] = [];
+      // Stands in for the Anthropic plugin, which publishes installed Claude CLI
+      // evidence only after classifying the request credential as OAuth.
+      const wrapProviderStreamFn = vi.fn(({ context }: WrapProviderStreamFnParams) => {
+        const streamFn = context.streamFn;
+        if (!streamFn) {
+          throw new Error("expected a provider stream to wrap");
+        }
+        return ((model, streamContext, options) => {
+          wrapperApiKeys.push(options?.apiKey);
+          return streamFn(
+            model,
+            streamContext,
+            isAnthropicOAuthApiKey(options?.apiKey)
+              ? { ...options, headers: { ...options?.headers, "user-agent": "claude-cli/2.1.400" } }
+              : options,
+          );
+        }) satisfies StreamFn;
+      });
+      extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn });
+      const { input, session } = createTransportFixture({
+        compaction: false,
+        pruning: false,
+        apiKey: "sk-ant-oat01-synthetic-profile",
+      });
+      input.attempt.model = anthropicModel;
+      input.attempt.resolvedApiKey = resolvedApiKey;
+      const expectedApiKey = resolvedApiKey ?? "sk-ant-oat01-synthetic-profile";
+
+      try {
+        await prepareEmbeddedAttemptTransport(input);
+        // Agent turns send no credential; the attempt owns it.
+        const stream = await session.agent.streamFn(anthropicModel, anthropicContext, {});
+        expect((await stream.result()).stopReason).toBe("stop");
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+
+      expect(wrapProviderStreamFn).toHaveBeenCalledOnce();
+      expect(wrapperApiKeys).toEqual([expectedApiKey]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headers.get("authorization")).toBe(`Bearer ${expectedApiKey}`);
+      expect(requests[0]?.headers.get("user-agent")).toBe("claude-cli/2.1.400");
+      expect(requests[0]?.payload.system).toContainEqual({
+        type: "text",
+        text: "x-anthropic-billing-header: cc_version=2.1.400; cc_entrypoint=sdk-cli;",
+      });
+    },
+  );
+
+  it("keeps the run credential out of session-owned fallback streams", async () => {
+    // Session-owned streams resolve their own auth; the run credential is not theirs.
+    const sessionStream = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    bindStreamLlmRuntime(sessionStream, {
+      streamSimple: vi.fn<StreamFn>(),
+      registry: { getApiProvider: () => undefined },
+    } as never);
+    const { input, session } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "stored-profile-key",
+    });
+    session.agent.streamFn = sessionStream;
+    input.attempt.model = { ...input.attempt.model, api: "test-api" };
+
+    const result = await prepareEmbeddedAttemptTransport(input);
+    await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+
+    expect(result.streamStrategy).toBe("session-custom");
+    expect(sessionStream).toHaveBeenCalledOnce();
+    expect(sessionStream.mock.calls[0]?.[2]?.apiKey).toBeUndefined();
   });
 
   describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {

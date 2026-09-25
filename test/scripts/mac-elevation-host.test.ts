@@ -4673,7 +4673,7 @@ describe("mac elevation host command contract", () => {
         "mac-elevation-host.sh verifies the signed app, so its duplicated signing constants must match codesign-mac-app.sh",
       ).toEqual([
         constant(codesignScript, "ELEVATION_TEAM_ID"),
-        constant(codesignScript, "ELEVATION_IDENTITY"),
+        constant(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8"), "ELEVATION_IDENTITY"),
       ]);
     }));
 

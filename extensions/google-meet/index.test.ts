@@ -310,8 +310,8 @@ const voiceCallMocks = vi.hoisted(() => ({
     dtmfSent: true,
     introSent: true,
   })),
-  endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
-  getMeetVoiceCallGatewayCall: vi.fn(
+  endMeetingVoiceCallGatewayCall: vi.fn(async () => {}),
+  getMeetingVoiceCallGatewayCall: vi.fn(
     async (): Promise<{
       found: boolean;
       call?: { callId: string; state?: string; endedAt?: number; endReason?: string };
@@ -320,8 +320,10 @@ const voiceCallMocks = vi.hoisted(() => ({
       call: { callId: "call-1" },
     }),
   ),
-  isVoiceCallMissingError: vi.fn((error: unknown) => String(error).includes("Call not found")),
-  speakMeetViaVoiceCallGateway: vi.fn(async () => {}),
+  isMeetingVoiceCallMissingError: vi.fn((error: unknown) =>
+    String(error).includes("Call not found"),
+  ),
+  speakMeetingViaVoiceCallGateway: vi.fn(async () => {}),
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
@@ -350,11 +352,18 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 vi.mock("./src/voice-call-gateway.js", () => ({
   createVoiceCallGateway: voiceCallMocks.createVoiceCallGateway,
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
-  endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
-  getMeetVoiceCallGatewayCall: voiceCallMocks.getMeetVoiceCallGatewayCall,
-  isVoiceCallMissingError: voiceCallMocks.isVoiceCallMissingError,
-  speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
+
+vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  return {
+    ...actual,
+    endMeetingVoiceCallGatewayCall: voiceCallMocks.endMeetingVoiceCallGatewayCall,
+    getMeetingVoiceCallGatewayCall: voiceCallMocks.getMeetingVoiceCallGatewayCall,
+    isMeetingVoiceCallMissingError: voiceCallMocks.isMeetingVoiceCallMissingError,
+    speakMeetingViaVoiceCallGateway: voiceCallMocks.speakMeetingViaVoiceCallGateway,
+  };
+});
 
 let localBrowserGatewayRequestHandler: NonNullable<
   Parameters<typeof setupGoogleMeetPlugin>[2]
@@ -965,20 +974,9 @@ async function captureMeetLeaveScript() {
 describe("google-meet plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    voiceCallMocks.joinMeetViaVoiceCallGateway.mockResolvedValue({
-      callId: "call-1",
-      dtmfSent: true,
-      introSent: true,
-    });
-    voiceCallMocks.endMeetVoiceCallGatewayCall.mockResolvedValue(undefined);
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValue({
-      found: true,
-      call: { callId: "call-1" },
-    });
-    voiceCallMocks.isVoiceCallMissingError.mockImplementation((error: unknown) =>
-      String(error).includes("Call not found"),
-    );
-    voiceCallMocks.speakMeetViaVoiceCallGateway.mockResolvedValue(undefined);
+    for (const mock of Object.values(voiceCallMocks)) {
+      mock.mockReset();
+    }
   });
 
   afterEach(() => {
@@ -996,6 +994,7 @@ describe("google-meet plugin", () => {
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/meeting-runtime");
     vi.doUnmock("./src/voice-call-gateway.js");
     vi.resetModules();
   });
@@ -2298,19 +2297,19 @@ describe("google-meet plugin", () => {
 
     await tool.execute("id", { action: "leave", sessionId: joined.details.session.id });
 
-    const [endParams] = mockCall(voiceCallMocks.endMeetVoiceCallGatewayCall) as [
+    const [endParams] = mockCall(voiceCallMocks.endMeetingVoiceCallGatewayCall) as [
       Record<string, unknown>,
     ];
     expect(endParams.gateway).toBeDefined();
     expect(endParams.callId).toBe("call-1");
-    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledWith({
+    expect(voiceCallMocks.endMeetingVoiceCallGatewayCall).toHaveBeenCalledWith({
       gateway: endParams.gateway,
       callId: "call-1",
     });
   });
 
   it("does not reuse Twilio Meet sessions whose delegated call is no longer active", async () => {
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce({ found: false });
+    voiceCallMocks.getMeetingVoiceCallGatewayCall.mockResolvedValueOnce({ found: false });
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = getMeetTool({ tools });
     const first = await tool.execute("id", {
@@ -2342,7 +2341,7 @@ describe("google-meet plugin", () => {
       call: { callId: "call-1", state: "completed", endReason: "completed" },
     },
   ])("redials a persisted completed Twilio call identified by $name", async ({ call }) => {
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce({ found: true, call });
+    voiceCallMocks.getMeetingVoiceCallGatewayCall.mockResolvedValueOnce({ found: true, call });
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = getMeetTool({ tools });
     const request = {
@@ -2375,7 +2374,7 @@ describe("google-meet plugin", () => {
       result: { found: true },
     },
   ])("reuses the active Meet session for $name", async ({ result }) => {
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce(result);
+    voiceCallMocks.getMeetingVoiceCallGatewayCall.mockResolvedValueOnce(result);
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = getMeetTool({ tools });
     const request = {
@@ -2394,7 +2393,7 @@ describe("google-meet plugin", () => {
   });
 
   it("reuses the active Meet session when delegated call status temporarily rejects", async () => {
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockRejectedValueOnce(
+    voiceCallMocks.getMeetingVoiceCallGatewayCall.mockRejectedValueOnce(
       new Error("temporary voice gateway failure"),
     );
     const { tools } = setup({ defaultTransport: "twilio" });
@@ -2463,13 +2462,13 @@ describe("google-meet plugin", () => {
     });
 
     expect(requireRecord(spoken.details, "spoken details").spoken).toBe(true);
-    const [speakParams] = voiceCallMocks.speakMeetViaVoiceCallGateway.mock.calls.at(
+    const [speakParams] = voiceCallMocks.speakMeetingViaVoiceCallGateway.mock.calls.at(
       0,
     ) as unknown as [Record<string, unknown>];
     expect(speakParams.gateway).toBeDefined();
     expect(speakParams.callId).toBe("call-1");
     expect(speakParams.message).toBe("Say exactly: hello after joining.");
-    expect(voiceCallMocks.speakMeetViaVoiceCallGateway).toHaveBeenCalledWith({
+    expect(voiceCallMocks.speakMeetingViaVoiceCallGateway).toHaveBeenCalledWith({
       gateway: speakParams.gateway,
       callId: "call-1",
       message: "Say exactly: hello after joining.",
@@ -2486,7 +2485,7 @@ describe("google-meet plugin", () => {
     });
     const sessionId = requireRecord(joined.details.session, "joined Twilio session").id;
     await tool.execute("id", { action: "leave", sessionId });
-    voiceCallMocks.speakMeetViaVoiceCallGateway.mockClear();
+    voiceCallMocks.speakMeetingViaVoiceCallGateway.mockClear();
 
     const spoken = await tool.execute("id", {
       action: "speak",
@@ -2496,7 +2495,7 @@ describe("google-meet plugin", () => {
 
     expect(spoken.details.found).toBe(true);
     expect(spoken.details.spoken).toBe(false);
-    expect(voiceCallMocks.speakMeetViaVoiceCallGateway).not.toHaveBeenCalled();
+    expect(voiceCallMocks.speakMeetingViaVoiceCallGateway).not.toHaveBeenCalled();
   });
 
   it("reports setup status through the tool", async () => {
