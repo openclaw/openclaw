@@ -74,9 +74,11 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
     // while Git cannot walk a merge-base through the shallow boundary.
     try {
       for (const parent of ["HEAD^1", "HEAD^2"]) {
-        if (readGitText(root, ["rev-parse", "--verify", parent + "^{commit}"]).trim() ===
-          readGitText(root, ["rev-parse", resolved]).trim()) {
-          return parent.replace("HEAD", readGitText(root, ["rev-parse", "HEAD"]).trim());
+        if (
+          readGitText(root, ["rev-parse", "--verify", parent + "^{commit}"]).trim() ===
+          readGitText(root, ["rev-parse", resolved]).trim()
+        ) {
+          return resolved;
         }
       }
     } catch {
