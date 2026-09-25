@@ -4,7 +4,8 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
@@ -92,7 +93,7 @@ const mocks = vi.hoisted(() => ({
   fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsRealpath: vi.fn(async (p: string) => p),
-  fsReadlink: vi.fn(async () => ""),
+  fsReadlink: vi.fn(async (_pathname: string) => ""),
   fsRm: vi.fn(async () => undefined),
   fsOpen: vi.fn(async () => ({}) as unknown),
   rootRead: vi.fn(async (_params: { rootDir: string; relativePath: string }) => ({
@@ -404,6 +405,7 @@ vi.mock("node:fs/promises", async () => {
 /* ------------------------------------------------------------------ */
 
 const { agentsHandlers } = await import("./agents.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -647,6 +649,7 @@ beforeEach(() => {
     throw createEnoentError();
   });
   mocks.fsRealpath.mockImplementation(async (p: string) => p);
+  mocks.fsReadlink.mockReset().mockResolvedValue("");
   mocks.fsOpen.mockImplementation(
     async () =>
       ({
@@ -2606,20 +2609,37 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
-  it("trashes a dangling workspace symlink before deleting its state", async () => {
-    mocks.fsAccess.mockRejectedValueOnce(
-      Object.assign(new Error("missing target"), { code: "ENOENT" }),
-    );
+  it.skipIf(process.platform === "win32")(
+    "does not trash a lexical decoy for a dangling workspace symlink",
+    async () => {
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const base = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-dangling-"));
+      const workspaceLink = path.join(base, "workspace-link");
+      const decoy = path.join(base, "missing");
+      await actualFs.mkdir(path.join(base, "physical", "child"), { recursive: true });
+      await actualFs.mkdir(decoy);
+      await actualFs.symlink("physical/child", path.join(base, "alias"));
+      await actualFs.symlink("alias/../missing", workspaceLink);
+      mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+        agentId === "test-agent" ? workspaceLink : `/workspace/${agentId ?? "unknown"}`,
+      );
+      mocks.fsRealpath.mockImplementation(async (pathname) =>
+        pathname.startsWith(base) ? await actualFs.realpath(pathname) : pathname,
+      );
+      mocks.fsLstat.mockImplementation(async (pathname) =>
+        String(pathname).startsWith(base) ? await actualFs.lstat(String(pathname)) : makeFileStat(),
+      );
+      mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
 
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "test-agent",
-    });
-    await promise;
+      const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+      await promise;
 
-    expectRespondOk(respond, { ok: true });
-    expectTrashedWithinParent("/workspace/test-agent");
-    expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
-  });
+      expectRespondOk(respond, { ok: true });
+      expectNotTrashed(decoy);
+      expectTrashedWithinParent(workspaceLink);
+      expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
+    },
+  );
 
   it("keeps workspace state when another agent still owns the workspace", async () => {
     mocks.pruneAgentConfig.mockReturnValue({
