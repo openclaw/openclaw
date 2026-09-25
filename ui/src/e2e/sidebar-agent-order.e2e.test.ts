@@ -149,8 +149,10 @@ suite.define(() => {
         '[data-agent-group="main"] .sidebar-recent-sessions__head',
       );
       await researchHeader.dragTo(mainHeader, {
-        sourcePosition: { x: 3, y: 24 },
-        targetPosition: { x: 8, y: 46 },
+        // Start in the gap after the collapse button; controls intentionally cannot start a drag.
+        sourcePosition: { x: 22, y: 24 },
+        // The lower half inserts after Main, reversing the keyboard move above.
+        targetPosition: { x: 8, y: 40 },
       });
       await expect.poll(order).toEqual(["main", "research", "writing"]);
       await research.getByRole("button", { name: "Options for Research" }).click();
