@@ -58,7 +58,8 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
     if (!snapshot) {
       throw new Error("Session creation lost its initialized database");
     }
-    const { normalizedKey, legacyKeys, labels, databaseIdentity, ...context } = snapshot;
+    const { normalizedKey, legacyKeys, labels, databaseIdentity, databasePath, ...context } =
+      snapshot;
     const assertDatabaseCurrent = () => {
       reader.assertCurrent();
       assertExistingDatabaseIdentity(scope.path, `file:${databaseIdentity}`);
@@ -70,7 +71,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
         agentId: scope.agentId,
         sessionKey: normalizedKey,
         file: {
-          path: scope.path,
+          path: databasePath,
           agentId: databaseOptions.agentId,
           databaseIdentity,
           assertCurrent: assertDatabaseCurrent,
