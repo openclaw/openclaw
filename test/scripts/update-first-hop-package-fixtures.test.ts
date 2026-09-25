@@ -547,8 +547,20 @@ describe("first-hop package fixtures", () => {
       fs.mkdirSync(bin);
       fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
       const sourceTarballs: Record<string, string> = {};
+      let releases: Array<{
+        version: string;
+        integrity: string;
+        chunks: Array<{
+          path: string;
+          imports: Array<{ owner: string; exports: string[] }>;
+        }>;
+      }> = [];
       if (sourceMode === "recorded") {
-        const releases = ["2026.9.1", "2026.9.2", "2026.9.3"].map((version) => {
+        releases = ["2026.9.1", "2026.9.2", "2026.9.3"].map((version, index) => {
+          const expectedChunk = LEGACY_UPDATE_COMPAT_CHUNKS[index];
+          if (!expectedChunk) {
+            throw new Error(`missing recorded compatibility chunk fixture ${index}`);
+          }
           const sourceRoot = path.join(root, version);
           writeJson(path.join(sourceRoot, "package/package.json"), { name: "openclaw", version });
           writeJson(path.join(sourceRoot, "package/dist/build-info.json"), { version });
@@ -558,11 +570,21 @@ describe("first-hop package fixtures", () => {
           return {
             version,
             integrity: `sha512-${createHash("sha512").update(fs.readFileSync(sourceTarball)).digest("base64")}`,
-            chunks: [],
+            chunks: [
+              {
+                path: expectedChunk,
+                imports: [
+                  {
+                    owner: "src/cli/update-cli/update-command-service-command.ts",
+                    exports: ["resolveNodeRunner"],
+                  },
+                ],
+              },
+            ],
           };
         });
-        writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
       }
+      writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
       execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
       writeJson(path.join(registry, "prepublish-plugin-registry.json"), {
         candidateVersion: "2026.8.1",
@@ -636,9 +658,6 @@ process.stdout.write(JSON.stringify([{ filename }]));
       const firstFixture = JSON.parse(
         fs.readFileSync(path.join(root, "artifacts/first-hop-fixture.json"), "utf8"),
       );
-      const negativeFixture = JSON.parse(
-        fs.readFileSync(path.join(root, "artifacts/negative-fixture.json"), "utf8"),
-      );
       const secondFixture = JSON.parse(
         fs.readFileSync(path.join(root, "artifacts/second-hop-fixture.json"), "utf8"),
       );
@@ -649,27 +668,43 @@ process.stdout.write(JSON.stringify([{ filename }]));
         "dist/build-info.json",
         "package.json",
       ]);
-      expect(negativeFixture.sourceSha256).toBe(firstFixture.targetSha256);
       expect(secondFixture.sourceSha256).toBe(firstFixture.targetSha256);
-      expect(negativeFixture.sourceVersion).toBe(negativeFixture.targetVersion);
+      expect(secondFixture.removedCompatibilityChunks).toEqual([]);
+      expect(secondFixture.retainedLegacyCompatibilityChunks).toEqual(LEGACY_UPDATE_COMPAT_CHUNKS);
       const recorded = JSON.parse(
         fs.readFileSync(path.join(root, "artifacts/summary.json"), "utf8"),
       );
       const packages = sourceMode === "recorded" ? recorded.sources : [recorded];
       for (const artifact of packages) {
+        const fixtureDirectory =
+          sourceMode === "recorded"
+            ? path.join(root, "artifacts", artifact.source.version)
+            : path.join(root, "artifacts");
+        const negativeFixture = JSON.parse(
+          fs.readFileSync(path.join(fixtureDirectory, "negative-fixture.json"), "utf8"),
+        );
+        expect(
+          JSON.parse(
+            fs.readFileSync(path.join(fixtureDirectory, "second-hop-fixture.json"), "utf8"),
+          ),
+        ).toEqual(secondFixture);
+        expect(negativeFixture.sourceSha256).toBe(firstFixture.targetSha256);
+        expect(negativeFixture.sourceVersion).toBe(negativeFixture.targetVersion);
+        expect(negativeFixture.removedCompatibilityChunks).toEqual([
+          `dist/${artifact.source.expectedMissingChunk}`,
+        ]);
         expect(artifact.candidate.version).toBe("2026.9.99-first-hop.0");
         expect(artifact.negative.version).toBe("2026.9.99-first-hop.0");
         expect(artifact.future.version).toBe("2026.9.99-first-hop.1");
         expect(artifact.original.version).toBe("2026.8.1");
         for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
           expect(artifact.candidate.entries).toContain(`package/dist/${bridge}`);
-          if (sourceMode === "recorded") {
-            expect(artifact.negative.entries).toContain(`package/dist/${bridge}`);
-            expect(artifact.future.entries).toContain(`package/dist/${bridge}`);
-          } else {
+          if (bridge === artifact.source.expectedMissingChunk) {
             expect(artifact.negative.entries).not.toContain(`package/dist/${bridge}`);
-            expect(artifact.future.entries).not.toContain(`package/dist/${bridge}`);
+          } else {
+            expect(artifact.negative.entries).toContain(`package/dist/${bridge}`);
           }
+          expect(artifact.future.entries).toContain(`package/dist/${bridge}`);
         }
       }
       for (const args of invocations) {
@@ -690,10 +725,15 @@ process.stdout.write(JSON.stringify([{ filename }]));
           summary.sources.map((entry: { source: { version: string } }) => entry.source.version),
         ).toEqual(["2026.9.1", "2026.9.2", "2026.9.3"]);
         expect(
-          invocations.every((args) =>
-            args.includes("OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="),
+          invocations.map((args) =>
+            args.find((arg) => arg.startsWith("OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=")),
           ),
-        ).toBe(true);
+        ).toEqual(
+          summary.sources.map(
+            (entry: { source: { expectedMissingChunk: string } }) =>
+              `OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=${entry.source.expectedMissingChunk}`,
+          ),
+        );
       }
     },
   );
