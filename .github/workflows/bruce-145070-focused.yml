@@ -1,0 +1,39 @@
+name: Bruce 145070 Focused Proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-anthropic-version-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+
+jobs:
+  proof:
+    name: Synthetic real-Gateway version probe proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout proof commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build CI runtime artifacts
+        run: pnpm build:ci-artifacts
+      - name: Run synthetic Gateway proof
+        run: pnpm test test/e2e/qa-lab/runtime/anthropic-version-probe-warning.proof.e2e.test.ts
