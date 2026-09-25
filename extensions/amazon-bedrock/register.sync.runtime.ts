@@ -586,8 +586,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               const omitTemperature = heuristicMatch
                 ? shouldOmitTemperature ||
                   ("temperature" in merged &&
-                    (await resolveAppProfileTraits(modelId, region, merged.signal))
-                      .omitTemperature)
+                    (await resolveAppProfileTraits(modelId, region, merged.signal)).omitTemperature)
                 : traits?.omitTemperature;
               if (omitTemperature) {
                 omitUnsupportedClaudePayloadTemperature(payloadRecord);

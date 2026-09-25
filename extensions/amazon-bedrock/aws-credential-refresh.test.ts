@@ -65,18 +65,18 @@ describe("Bedrock shared credential rotation", () => {
         const credentials = await client.config.credentials();
         resolved.push(`${credentials.accessKeyId}/${credentials.sessionToken}`);
       };
-      vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
-        function (this: BedrockRuntimeClient) {
-          pendingCredentials.push(capture(this));
-          return {
-            $metadata: {},
-            body: new TextEncoder().encode('{"embedding":[1,0]}'),
-            stream: (async function* () {
-              yield { messageStop: { stopReason: "end_turn" } };
-            })(),
-          };
-        },
-      );
+      vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
+        this: BedrockRuntimeClient,
+      ) {
+        pendingCredentials.push(capture(this));
+        return {
+          $metadata: {},
+          body: new TextEncoder().encode('{"embedding":[1,0]}'),
+          stream: (async function* () {
+            yield { messageStop: { stopReason: "end_turn" } };
+          })(),
+        };
+      });
       vi.spyOn(BedrockClient.prototype, "send").mockImplementation(function (this: BedrockClient) {
         pendingCredentials.push(capture(this));
         return { $metadata: {}, modelSummaries: [] };

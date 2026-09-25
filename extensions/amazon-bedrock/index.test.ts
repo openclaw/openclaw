@@ -1111,7 +1111,6 @@ describe("amazon-bedrock provider plugin", () => {
       ]);
     });
 
-
     it.each(["anthropic.claude-3-opus-20240229-v1:0", "amazon.nova-pro-v1:0"])(
       "keeps opaque profile caching disabled for resolved target %s",
       async (target) => {
