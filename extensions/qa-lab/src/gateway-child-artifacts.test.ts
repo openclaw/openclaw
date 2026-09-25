@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -53,8 +54,10 @@ describe("cleanupQaGatewayTempRoots", () => {
         expect(cleanupTempRoot).toHaveBeenCalledOnce();
         await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
-        await fs.chmod(stateDir, 0o700).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") throw error;
+        await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+          if (extractErrorCode(error) !== "ENOENT") {
+            throw error;
+          }
         });
       }
     },

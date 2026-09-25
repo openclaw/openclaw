@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQaStagedBundledPluginsRoot } from "./bundled-plugin-staging.js";
 import { createQaGatewayChild } from "./gateway-child.js";
@@ -44,8 +45,8 @@ afterEach(async () => {
   owners.length = 0;
   groups.length = 0;
   for (const stateDir of privateStateDirs.splice(0)) {
-    await fs.chmod(stateDir, 0o700).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") {
+    await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+      if (extractErrorCode(error) !== "ENOENT") {
         throw error;
       }
     });
