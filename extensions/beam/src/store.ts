@@ -3,9 +3,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { BeamStoredSession, BeamUpload } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
-export type BeamSessionSummary = Pick<
-  BeamStoredSession,
-  "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt"
+export type BeamSessionSummary = Readonly<
+  Pick<BeamStoredSession, "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt">
 >;
 
 export type BeamStore = {
@@ -167,13 +166,15 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       }
     },
     async list() {
-      while (!inventory) {
+      for (;;) {
+        if (inventory) {
+          const now = Date.now();
+          return inventory
+            .filter((entry) => entry.expiresAt === undefined || entry.expiresAt > now)
+            .map(({ value }) => value);
+        }
         await refresh();
       }
-      const now = Date.now();
-      return inventory
-        .filter((entry) => entry.expiresAt === undefined || entry.expiresAt > now)
-        .map(({ value }) => ({ ...value }));
     },
   };
 }

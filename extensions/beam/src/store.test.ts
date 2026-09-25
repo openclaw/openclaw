@@ -43,7 +43,12 @@ it("does not publish an inventory read overtaken by an upload", async () => {
 it("expires cached summaries at storage expiry without rereading transcripts", async () => {
   const store = memoryStore();
   await store.upload(sampleUpload(), { receivedAt: 1 });
-  const rows = (await store.keyedStore.entries()).map((entry) => ({ ...entry, expiresAt: 200 }));
+  const rows = (await store.keyedStore.entries()).map(({ key, value, createdAt }) => ({
+    key,
+    value,
+    createdAt,
+    expiresAt: 200,
+  }));
   const entries = vi.spyOn(store.keyedStore, "entries").mockResolvedValue(rows);
   const clock = vi.spyOn(Date, "now").mockReturnValue(199);
   try {
