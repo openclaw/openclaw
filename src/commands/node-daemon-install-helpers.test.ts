@@ -1,5 +1,5 @@
 // Node daemon install helper tests cover node daemon install plans and runtime warnings.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolvePreferredBunPath: vi.fn(),
@@ -33,13 +33,13 @@ afterEach(() => {
 });
 
 describe("buildNodeInstallPlan", () => {
-  it("passes the selected node bin directory into the node service environment", async () => {
+  beforeEach(() => {
     mocks.resolveNodeProgramArguments.mockResolvedValue({
       programArguments: ["node", "node-host"],
       workingDirectory: "/Users/me",
     });
     mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node/bin/node",
+      path: "/usr/bin/node",
       version: "26.8.1",
       status: "supported",
     });
@@ -47,7 +47,9 @@ describe("buildNodeInstallPlan", () => {
     mocks.buildNodeServiceEnvironment.mockReturnValue({
       OPENCLAW_SERVICE_MARKER: "openclaw",
     });
+  });
 
+  it("passes the selected node bin directory into the node service environment", async () => {
     const plan = await buildNodeInstallPlan({
       env: {},
       host: "127.0.0.1",
@@ -105,20 +107,6 @@ describe("buildNodeInstallPlan", () => {
   });
 
   it("does not prepend '.' when runtimePath is a bare executable name", async () => {
-    mocks.resolveNodeProgramArguments.mockResolvedValue({
-      programArguments: ["node", "node-host"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/usr/bin/node",
-      version: "26.8.1",
-      status: "supported",
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
-    mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-    });
-
     await buildNodeInstallPlan({
       env: {},
       host: "127.0.0.1",
@@ -153,16 +141,6 @@ describe("buildNodeInstallPlan", () => {
   });
 
   it("marks node gateway credentials as file-backed service env", async () => {
-    mocks.resolveNodeProgramArguments.mockResolvedValue({
-      programArguments: ["node", "node-host"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/usr/bin/node",
-      version: "26.8.1",
-      status: "supported",
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
       OPENCLAW_GATEWAY_TOKEN: "node-token",
       OPENCLAW_GATEWAY_PASSWORD: "node-password",

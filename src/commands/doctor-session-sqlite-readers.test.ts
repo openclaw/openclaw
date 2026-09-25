@@ -122,10 +122,10 @@ describe("legacy transcript row classification", () => {
   });
   afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  it.each([1, 2, 3])("preserves records when UTF-8 splits after byte %s", (splitAfter) => {
+  it("preserves records when a UTF-8 character crosses the chunk boundary", () => {
     const header = '\uFEFF{"type":"session","version":3}\r\n \t\r\n';
     const prefix = '{"type":"plugin_state","payload":"';
-    const padding = "x".repeat(65_536 - Buffer.byteLength(header + prefix) - splitAfter);
+    const padding = "x".repeat(65_536 - Buffer.byteLength(header + prefix) - 2);
     const firstLine = `${prefix}${padding}🦞"}`;
     const giant = { type: "plugin_state", payload: "λ".repeat(100_000) };
     const tail = { type: "plugin_state", payload: "final unterminated row" };

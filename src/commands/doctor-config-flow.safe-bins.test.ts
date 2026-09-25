@@ -34,23 +34,7 @@ describe("doctor config flow safe bins", () => {
       },
     });
 
-    const cfg = result.config as {
-      tools?: {
-        exec?: {
-          safeBinProfiles?: Record<string, object>;
-        };
-      };
-      agents?: {
-        list?: Array<{
-          id: string;
-          tools?: {
-            exec?: {
-              safeBinProfiles?: Record<string, object>;
-            };
-          };
-        }>;
-      };
-    };
+    const cfg = result.config;
     expect(cfg.tools?.exec?.safeBinProfiles?.myfilter).toStrictEqual({});
     expect(cfg.tools?.exec?.safeBinProfiles?.python3).toBeUndefined();
     const ops = cfg.agents?.list?.find((entry) => entry.id === "ops");

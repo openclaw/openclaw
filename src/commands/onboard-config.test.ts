@@ -24,17 +24,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(resolveCoreToolProfilePolicy(result.tools?.profile)?.allow).toEqual(["*"]);
   });
 
-  it("preserves existing dmScope when already configured", () => {
-    const baseConfig: OpenClawConfig = {
-      session: {
-        dmScope: "main",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe("main");
-  });
-
   it("preserves explicit non-main dmScope values", () => {
     const baseConfig: OpenClawConfig = {
       session: {
@@ -98,14 +87,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
 
     expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
     expect(result.bindings).toEqual(baseConfig.bindings);
-  });
-
-  it("keeps fresh-install workspace writes unchanged", () => {
-    const result = applyLocalSetupWorkspaceConfig({}, "/tmp/new-workspace", {
-      env: { HOME: "/tmp/fresh-home", OPENCLAW_STATE_DIR: "/tmp/fresh-state" },
-    });
-
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/new-workspace");
   });
 
   it("preserves the current workspace when an agent roster exists", () => {

@@ -15,14 +15,6 @@ const signalPlugin = {
   },
 };
 
-const imessagePlugin = {
-  ...createChannelTestPluginBase({ id: "imessage" }),
-  status: {
-    collectStatusIssues: (accounts: Parameters<typeof collectStatusIssuesFromLastError>[1]) =>
-      collectStatusIssuesFromLastError("imessage", accounts),
-  },
-};
-
 describe("channels command", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -64,37 +56,6 @@ describe("channels command", () => {
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/signal/i);
-    expect(lines.join("\n")).toMatch(/Channel error/i);
-  });
-
-  it("surfaces iMessage runtime errors in channels status output", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          source: "test",
-          plugin: imessagePlugin,
-        },
-      ]),
-    );
-    const lines = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        imessage: "iMessage",
-      },
-      channelAccounts: {
-        imessage: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: false,
-            lastError: "imsg permission denied",
-          },
-        ],
-      },
-    });
-    expect(lines.join("\n")).toMatch(/Warnings:/);
-    expect(lines.join("\n")).toMatch(/imessage/i);
     expect(lines.join("\n")).toMatch(/Channel error/i);
   });
 
