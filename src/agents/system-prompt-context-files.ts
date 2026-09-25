@@ -42,9 +42,10 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
       const rawBasename = path.slice(path.lastIndexOf("/") + 1);
-      const basename = options.trimBasename === false
-        ? rawBasename.toLowerCase()
-        : normalizeLowercaseStringOrEmpty(rawBasename);
+      const basename =
+        options.trimBasename === false
+          ? rawBasename.toLowerCase()
+          : normalizeLowercaseStringOrEmpty(rawBasename);
       return {
         file,
         path,

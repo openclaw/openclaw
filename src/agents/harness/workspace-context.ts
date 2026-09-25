@@ -127,7 +127,9 @@ export async function prepareAgentWorkspaceContext(
           if (params.onMemoryPreparationError) {
             params.onMemoryPreparationError(error);
           } else {
-            params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
+            params.warn?.(
+              `failed to prepare workspace memory recall instructions: ${String(error)}`,
+            );
           }
           return undefined;
         })
@@ -168,9 +170,11 @@ function sortContextFiles(
   files: readonly EmbeddedContextFile[],
   order?: ReadonlyMap<string, number>,
 ): EmbeddedContextFile[] {
-  return prepareContextFilesForPrompt(files, { order, caseInsensitivePathOrder: true, trimBasename: false }).map(
-    ({ file }) => file,
-  );
+  return prepareContextFilesForPrompt(files, {
+    order,
+    caseInsensitivePathOrder: true,
+    trimBasename: false,
+  }).map(({ file }) => file);
 }
 
 function toContextFile(file: BootstrapFile): EmbeddedContextFile {

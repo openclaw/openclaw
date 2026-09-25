@@ -188,13 +188,25 @@ describe("agent workspace context preparation", () => {
   });
 
   it("preserves native project ordering for hook filenames with leading whitespace", async () => {
-    const paddedSoul = { ...bootstrapFile("SOUL.md", "Hook project context."), path: path.join(workspaceDir, "pkg", " SOUL.md") };
-    const bootstrap = { ...bootstrapFile("BOOTSTRAP.md", "Setup guidance."), path: path.join(workspaceDir, "pkg", "BOOTSTRAP.md") };
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([paddedSoul, bootstrap]);
+    const paddedSoul = {
+      ...bootstrapFile("SOUL.md", "Hook project context."),
+      path: path.join(workspaceDir, "pkg", " SOUL.md"),
+    };
+    const bootstrap = {
+      ...bootstrapFile("BOOTSTRAP.md", "Setup guidance."),
+      path: path.join(workspaceDir, "pkg", "BOOTSTRAP.md"),
+    };
+    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
+      paddedSoul,
+      bootstrap,
+    ]);
     const context = await prepareAgentWorkspaceContext({
       workspaceDir,
       scope: "full",
-      contextFileOrder: new Map([["soul.md", 10], ["bootstrap.md", 50]]),
+      contextFileOrder: new Map([
+        ["soul.md", 10],
+        ["bootstrap.md", 50],
+      ]),
     });
     expect(context.promptContextFiles).toEqual([contextFile(bootstrap), contextFile(paddedSoul)]);
   });
