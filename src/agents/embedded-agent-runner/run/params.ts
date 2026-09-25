@@ -77,6 +77,8 @@ export type RunEmbeddedAgentParams = {
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
+  /** Host-verified owner used only to prepare agent-scoped memory prompt supplements. */
+  memoryPromptAgentId?: string;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Raw peer observed by the inbound routing owner, before identity linking. */

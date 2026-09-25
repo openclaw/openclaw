@@ -6,7 +6,6 @@ import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
-import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
@@ -33,6 +32,7 @@ import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
+import { createAttemptTrajectoryRecorder } from "./attempt-trajectory-recorder.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -194,36 +194,32 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     runtimePlan,
   });
-  const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID &&
-    !params.disableTrajectory &&
-    params.sessionPersistence !== "detached"
-      ? createTrajectoryRuntimeRecorder({
-          cfg: params.config,
-          env: process.env,
-          runId: params.runId,
-          sessionId: sessionPromptState.sessionId,
-          sessionKey: resolvedSessionKey,
-          sessionFile: trajectorySessionFile,
-          ...(resolvedSessionTarget?.agentId &&
-          resolvedSessionTarget.sessionId &&
-          resolvedSessionTarget.sessionKey &&
-          resolvedSessionTarget.storePath
-            ? {
-                sessionTarget: {
-                  agentId: resolvedSessionTarget.agentId,
-                  sessionId: resolvedSessionTarget.sessionId,
-                  sessionKey: resolvedSessionTarget.sessionKey,
-                  storePath: resolvedSessionTarget.storePath,
-                },
-              }
-            : {}),
-          provider: trajectoryAttribution.provider,
-          modelId: trajectoryAttribution.modelId,
-          modelApi: trajectoryAttribution.modelApi,
-          workspaceDir,
-        })
-      : undefined;
+  const trajectoryRecorder = createAttemptTrajectoryRecorder({
+    enabled:
+      runtime.agentHarness.id === CODEX_HARNESS_ID &&
+      !params.disableTrajectory &&
+      params.sessionPersistence !== "detached",
+    cfg: params.config,
+    runId: params.runId,
+    sessionId: sessionPromptState.sessionId,
+    sessionKey: resolvedSessionKey,
+    sessionFile: trajectorySessionFile,
+    ...(resolvedSessionTarget?.agentId &&
+    resolvedSessionTarget.sessionId &&
+    resolvedSessionTarget.sessionKey &&
+    resolvedSessionTarget.storePath
+      ? {
+          sessionTarget: {
+            agentId: resolvedSessionTarget.agentId,
+            sessionId: resolvedSessionTarget.sessionId,
+            sessionKey: resolvedSessionTarget.sessionKey,
+            storePath: resolvedSessionTarget.storePath,
+          },
+        }
+      : {}),
+    attribution: trajectoryAttribution,
+    workspaceDir,
+  });
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -405,6 +401,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
     contextEngineAgentId: runInput.contextEngineAgentId,
+    memoryPromptAgentId: params.memoryPromptAgentId,
     ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId,
