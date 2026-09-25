@@ -27,6 +27,7 @@ type CompletionContext = Pick<
 >;
 
 const TRACKED_COMPLETIONS = 512;
+const PENDING_PREFERENCE_TIMEOUT_MS = 30_000;
 const notices = new WeakMap<
   GatewayBrowserClient,
   {
@@ -34,6 +35,7 @@ const notices = new WeakMap<
     seen: Map<string, { backgroundStart: boolean; discardedForOptOut: boolean }>;
   }
 >();
+const pendingPreferenceNotices = new WeakMap<GatewayBrowserClient, Map<string, () => void>>();
 
 export function parseSessionCompletionNotice(payload: unknown): SessionCompletionNotice | null {
   if (
@@ -84,12 +86,44 @@ export function showSessionCompletionNotice(params: {
   const { context, client } = params;
   const notice = parseSessionCompletionNotice(params.payload);
   const snapshot = context.gateway.snapshot;
-  if (
-    !notice ||
-    snapshot.client !== client ||
-    snapshot.phase !== "connected" ||
-    (!params.backgroundStart && !context.inAppNotifications?.snapshot.enabled)
-  ) {
+  if (!notice || snapshot.client !== client || snapshot.phase !== "connected") {
+    return;
+  }
+  const key = JSON.stringify([notice.agentId, notice.sessionKey, notice.runId]);
+  if (!params.backgroundStart && !context.inAppNotifications.snapshot.enabled) {
+    // The preference can still be loading when a settled run arrives. Keep the
+    // receipt's pane visibility and owner, then admit it only if opt-in resolves.
+    if (context.inAppNotifications.snapshot.loading) {
+      let pending = pendingPreferenceNotices.get(client);
+      if (!pending) {
+        pending = new Map();
+        pendingPreferenceNotices.set(client, pending);
+      }
+      if (pending.has(key)) {
+        return;
+      }
+      if (pending.size >= TRACKED_COMPLETIONS) {
+        pending.values().next().value?.();
+      }
+      const isCurrentOwner = captureSessionNoticeOwner(context);
+      let stop = () => {};
+      const retire = () => {
+        stop();
+        clearTimeout(timeout);
+        pending.delete(key);
+      };
+      pending.set(key, retire);
+      stop = context.inAppNotifications.subscribe(() => {
+        if (context.inAppNotifications.snapshot.loading) {
+          return;
+        }
+        retire();
+        if (isCurrentOwner() && context.inAppNotifications.snapshot.enabled) {
+          showSessionCompletionNotice(params);
+        }
+      });
+      const timeout = setTimeout(retire, PENDING_PREFERENCE_TIMEOUT_MS);
+    }
     return;
   }
   const profileId = snapshot.selfUser?.id ?? null;
@@ -99,7 +133,6 @@ export function showSessionCompletionNotice(params: {
     tracker = { profileId, seen: new Map() };
     notices.set(client, tracker);
   }
-  const key = JSON.stringify([notice.agentId, notice.sessionKey, notice.runId]);
   const previous = tracker.seen.get(key);
   if (previous) {
     // A lifecycle event can arrive before the explicit background wait resolves.

@@ -56,6 +56,58 @@ describe("session completion notice admission", () => {
     f.emit(notice, true);
     expect(f.show).toHaveBeenCalledOnce();
   });
+  it("waits for a pending opt-in without replaying under a replacement owner", () => {
+    const f = fixture(false);
+    const listeners = new Set<() => void>();
+    const preference = f.context.inAppNotifications;
+    preference.snapshot.loading = true;
+    preference.subscribe = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    f.emit();
+    f.emit();
+    expect(f.show).not.toHaveBeenCalled();
+    expect(listeners.size).toBe(1);
+    preference.snapshot.enabled = true;
+    preference.snapshot.loading = false;
+    for (const listener of listeners) {
+      listener();
+    }
+    expect(f.show).toHaveBeenCalledOnce();
+    expect(listeners.size).toBe(0);
+
+    preference.snapshot.enabled = false;
+    preference.snapshot.loading = true;
+    f.emit({ ...notice, runId: "run-2" });
+    Object.defineProperty(f.context.gateway, "connectionRevision", { value: 2 });
+    preference.snapshot.enabled = true;
+    preference.snapshot.loading = false;
+    for (const listener of listeners) {
+      listener();
+    }
+    expect(f.show).toHaveBeenCalledOnce();
+    expect(listeners.size).toBe(0);
+  });
+  it("bounds completion receipts while the opt-in preference is loading", () => {
+    const f = fixture(false);
+    const listeners = new Set<() => void>();
+    const preference = f.context.inAppNotifications;
+    preference.snapshot.loading = true;
+    preference.subscribe = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    for (let index = 0; index < 513; index++) {
+      f.emit({ ...notice, runId: `run-${index}` });
+    }
+    expect(listeners.size).toBe(512);
+    preference.snapshot.loading = false;
+    for (const listener of listeners) {
+      listener();
+    }
+    expect(listeners.size).toBe(0);
+  });
   it.each([false, true])(
     "deduplicates general and background events regardless of order (%s)",
     (backgroundFirst) => {
