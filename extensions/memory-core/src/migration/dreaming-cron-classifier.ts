@@ -16,7 +16,7 @@ type DreamingCronIdentifiers = Pick<
 
 export type DreamingCronKind = "declared" | "legacy" | "phase" | "ambiguous";
 
-/** Doctor owns historical recognition; runtime may use the result only to request repair. */
+/** Doctor owns historical recognition; runtime may use the result only for diagnosis. */
 export function classifyDreamingCronJob(
   raw: Record<string, unknown>,
   constants: DreamingCronIdentifiers,

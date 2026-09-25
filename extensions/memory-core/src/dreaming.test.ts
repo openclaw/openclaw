@@ -733,7 +733,7 @@ describe("dreaming service reconciliation", () => {
       schedule: { kind: "cron", expr },
       sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "agentTurn", message: "legacy-dreaming-payload" },
+      payload: { kind: "agentTurn", message: constants.DREAMING_SYSTEM_EVENT_TEXT },
       delivery: { mode: "none" },
       createdAtMs,
     });

@@ -4,8 +4,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
@@ -206,6 +208,11 @@ function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
     make(active, "dreaming-foreign-declaration", 25, {
       declarationKey: "another-plugin:owned-job",
     }),
+    make(active, "dreaming-authored-tagged", 24, {
+      name: "Authored tagged maintenance",
+      description: `${dreamingTag} An operator-authored reminder`,
+      payload: { kind: "systemEvent", text: "Keep this authored reminder unchanged" },
+    }),
   ];
   const db = new DatabaseSync(databasePath);
   try {
@@ -280,6 +287,7 @@ function assertRepaired(fixture, rows) {
   const preservedIds = [
     "dreaming-authored-lookalike",
     "dreaming-foreign-declaration",
+    "dreaming-authored-tagged",
     ...fixture.baselineRows.map((row) => row.job_id),
   ];
   assert.deepEqual(
@@ -481,6 +489,198 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
   });
 }
 
+function prepareRuntime(artifacts) {
+  const fixture = readJson(path.join(artifacts, "dreaming-cron-fixture.json"));
+  const before = snapshot(fixture);
+  assert.deepEqual(before, readJson(path.join(artifacts, "dreaming-cron-updated.json")));
+  const config = readJson(process.env.OPENCLAW_CONFIG_PATH);
+  const scheduled = new Date(Date.now() + 7 * 24 * 60 * 60_000);
+  scheduled.setUTCHours(12, 17, 0, 0);
+  const frequency = `17 12 ${scheduled.getUTCDate()} ${scheduled.getUTCMonth() + 1} *`;
+  // Only this post-Doctor runtime fixture runs the scheduler. Keep model work dormant.
+  config.cron.enabled = true;
+  config.agents.entries.main.heartbeat = { every: "0m" };
+  config.skills ??= {};
+  config.skills.workshop ??= {};
+  config.skills.workshop.autonomous = { mode: "off" };
+  const dreaming = config.plugins.entries["memory-core"].config.dreaming;
+  dreaming.frequency = frequency;
+  dreaming.timezone = "UTC";
+  writeJson(process.env.OPENCLAW_CONFIG_PATH, config);
+  writeJson(path.join(artifacts, "dreaming-cron-runtime.json"), {
+    before,
+    frequency,
+    storeKey: fixture.baselineRows[0].store_key,
+    jobId: "dreaming-active-declared",
+  });
+  for (const name of ["dreaming-cron-runtime-reload.json", "dreaming-cron-runtime-reload.err"]) {
+    fs.writeFileSync(path.join(artifacts, name), "", { mode: 0o600 });
+  }
+}
+
+function assertRuntimeCanonical(row, runtime) {
+  const before = runtime.before.rows.find((entry) => entry.job_id === runtime.jobId);
+  assert(row, "Runtime lost the declared dreaming job");
+  for (const field of ["store_key", "job_id"]) {
+    assert.equal(row[field], before[field], `Runtime changed canonical ${field}`);
+  }
+  assert.equal(row.declaration_key, declarationKey);
+  assert.equal(row.enabled, 1);
+  const definition = JSON.parse(row.job_json);
+  assert.equal(definition.name, dreamingName);
+  assert.equal(definition.enabled, true);
+  assert.equal(definition.schedule.kind, "cron");
+  assert.equal(definition.schedule.expr, runtime.frequency);
+  assert.equal(definition.schedule.tz, "UTC");
+  assert.equal(definition.sessionTarget, "isolated");
+  assert.equal(definition.wakeMode, "now");
+  assert.equal(definition.payload.kind, "agentTurn");
+  assert.equal(definition.payload.message, dreamingMessage);
+  assert.equal(definition.payload.lightContext, true);
+  assert.equal(definition.delivery.mode, "none");
+  const state = JSON.parse(row.state_json);
+  assert.equal(state.lastRunAtMs, JSON.parse(before.state_json).lastRunAtMs);
+  assert(
+    state.nextRunAtMs > Date.now() + 24 * 60 * 60_000,
+    "Dreaming must stay scheduled in the future",
+  );
+}
+
+async function waitRuntime(artifacts) {
+  const fixture = readJson(path.join(artifacts, "dreaming-cron-fixture.json"));
+  const runtime = readJson(path.join(artifacts, "dreaming-cron-runtime.json"));
+  const deadline =
+    Date.now() + readPositiveIntEnv("OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", 90) * 1000;
+  // Plugin services start after HTTP readiness; the committed cron row is the barrier.
+  while (Date.now() < deadline) {
+    const row = inspectRows(fixture.databasePath).find((entry) => entry.job_id === runtime.jobId);
+    if (row?.enabled === 1) {
+      assertRuntimeCanonical(row, runtime);
+      writeJson(path.join(artifacts, "dreaming-cron-runtime-converged.json"), row);
+      return;
+    }
+    await delay(100);
+  }
+  writeJson(
+    path.join(artifacts, "dreaming-cron-runtime-unconverged.json"),
+    inspectRows(fixture.databasePath),
+  );
+  assert.fail("Canonical dreaming did not converge while an authored tagged row was retained");
+}
+
+function assertRuntime(artifacts, gatewayLog) {
+  const fixture = readJson(path.join(artifacts, "dreaming-cron-fixture.json"));
+  const runtime = readJson(path.join(artifacts, "dreaming-cron-runtime.json"));
+  const reloadText = fs.readFileSync(
+    path.join(artifacts, "dreaming-cron-runtime-reload.json"),
+    "utf8",
+  );
+  const reload = JSON.parse(reloadText.slice(reloadText.indexOf("{")));
+  assert.equal(reload.ok, true);
+  assert.equal(reload.restartRequired, false);
+  assert.deepEqual(reload.pluginIds, ["memory-core"]);
+  const current = snapshot(fixture);
+  writeJson(path.join(artifacts, "dreaming-cron-runtime-after.json"), current);
+  process.stdout.write(
+    `DREAMING_CRON_RUNTIME_INVENTORY ${JSON.stringify(
+      current.rows.map((row) => ({
+        id: row.job_id,
+        storeKey: row.store_key,
+        declarationKey: row.declaration_key,
+        enabled: row.enabled,
+        name: row.name,
+      })),
+    )}\n`,
+  );
+  const managed = current.rows.filter(
+    (row) => row.store_key === runtime.storeKey && row.declaration_key === declarationKey,
+  );
+  assert.equal(managed.length, 1);
+  assertRuntimeCanonical(managed[0], runtime);
+  assert.deepEqual(
+    managed[0],
+    readJson(path.join(artifacts, "dreaming-cron-runtime-converged.json")),
+    "Settled plugin reload rewrote an already-converged dreaming job",
+  );
+  // Gateway retains a disabled Workshop monitor even when autonomous work is off.
+  const workshop = current.rows.filter(
+    (row) =>
+      row.store_key === runtime.storeKey && row.declaration_key === "skill-collection-review:main",
+  );
+  assert.equal(workshop.length, 1);
+  assert.equal(workshop[0].enabled, 0);
+  const workshopJob = JSON.parse(workshop[0].job_json);
+  assert.equal(workshopJob.name, "skill-collection-review-main");
+  assert.equal(workshopJob.agentId, "main");
+  assert.equal(workshopJob.enabled, false);
+  assert.equal(workshopJob.payload.kind, "agentTurn");
+  assert.equal(workshopJob.sessionTarget, "isolated");
+  assert.equal(workshopJob.delivery.mode, "none");
+  const workshopState = JSON.parse(workshop[0].state_json);
+  assert.equal(workshopState.nextRunAtMs, undefined);
+  assert.equal(workshopState.lastRunAtMs, undefined);
+  assert.deepEqual(
+    current.rows.filter((row) => row !== workshop[0]).map((row) => [row.store_key, row.job_id]),
+    runtime.before.rows.map((row) => [row.store_key, row.job_id]),
+    "Runtime changed cron row membership or order",
+  );
+  const activeRows = current.rows.filter((row) => row.store_key === runtime.storeKey);
+  for (const before of runtime.before.rows) {
+    // The active heartbeat belongs to its own config owner after explicit runtime enablement.
+    if (before.job_id === runtime.jobId || before.job_id === fixture.baselineRows[0].job_id) {
+      continue;
+    }
+    const row = current.rows.find(
+      (entry) => entry.store_key === before.store_key && entry.job_id === before.job_id,
+    );
+    if (before.store_key !== runtime.storeKey) {
+      assert.deepEqual(row, before, `Runtime changed inactive cron row ${before.job_id}`);
+      continue;
+    }
+    assert(row, `Runtime lost active cron row ${before.job_id}`);
+    // Enabled saves compact ordinals and project the retained runtime timestamp into config.
+    assert.deepEqual(
+      { ...row, job_json: JSON.parse(row.job_json) },
+      {
+        ...before,
+        sort_order: activeRows.findIndex((entry) => entry.job_id === before.job_id),
+        updated_at: before.runtime_updated_at_ms,
+        grant_definition_updated_at: before.runtime_updated_at_ms,
+        job_json: JSON.parse(before.job_json),
+      },
+      `Runtime changed authored cron row ${before.job_id}`,
+    );
+  }
+  assert.deepEqual(
+    current.backups,
+    runtime.before.backups,
+    "Runtime changed Doctor backup evidence",
+  );
+  const lines = fs.readFileSync(gatewayLog, "utf8").split("\n");
+  assert(
+    lines.some(
+      (line) =>
+        line.includes("dreaming-authored-tagged") &&
+        line.includes("Review their ownership manually"),
+    ),
+    "Runtime did not identify the authored tagged row for manual ownership review",
+  );
+  const proof = {
+    status: "passed",
+    candidate: fixture.candidate,
+    canonicalId: managed[0].job_id,
+    canonicalSortOrder: managed[0].sort_order,
+    frequency: runtime.frequency,
+    authoredTaggedUnchanged: true,
+    inactiveRowsUnchanged: true,
+    doctorBackupUnchanged: true,
+    settledPluginReloadNoop: true,
+    pluginGeneration: reload.runtime.generation,
+  };
+  writeJson(path.join(artifacts, "dreaming-cron-runtime-proof.json"), proof);
+  process.stdout.write(`DREAMING_CRON_RUNTIME_PROOF ${JSON.stringify(proof)}\n`);
+}
+
 async function reportUpdateFailure(file, packageRoot) {
   const raw = fs.readFileSync(file, "utf8");
   const jsonStart = raw.indexOf("{");
@@ -512,6 +712,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     seed(stateDir, artifacts, ...args);
   } else if (command === "assert-updated") {
     assertUpdated(artifacts, ...args);
+  } else if (command === "prepare-runtime") {
+    prepareRuntime(artifacts);
+  } else if (command === "wait-runtime") {
+    await waitRuntime(artifacts);
+  } else if (command === "assert-runtime") {
+    assertRuntime(artifacts, ...args);
   } else if (command === "report-update-failure") {
     await reportUpdateFailure(...args);
   } else {

@@ -76,7 +76,7 @@ type Fixture = {
 
 async function withCronFixture(
   run: (fixture: Fixture) => Promise<void>,
-  options: { activeDreaming?: boolean } = {},
+  options: { activeDreaming?: boolean; additionalActiveJobs?: CronStoredJob[] } = {},
 ) {
   await withOpenClawTestState({ label: "cron-doctor" }, async (state) => {
     const activeStore = state.statePath("cron", "jobs.json");
@@ -103,6 +103,7 @@ async function withCronFixture(
           makeJob("operator", {
             schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
           }),
+          ...(options.additionalActiveJobs ?? []),
         ],
       ],
       [retiredStore, [makeJob("retired", legacyFields), makeJob("malformed")]],
@@ -585,7 +586,7 @@ describe("host Cron Doctor repair", () => {
     { layout: "inactive only", activeDreaming: false, enabled: false },
     { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
-    "keeps $layout history in place after Doctor and runtime dreaming enabled=$enabled",
+    "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
     async ({ activeDreaming, enabled }) => {
       await withCronFixture(
         async (fixture) => {
@@ -606,9 +607,29 @@ describe("host Cron Doctor repair", () => {
               retiredStore,
             );
           });
+          const taggedBeforeDoctor = readRows(fixture.db()).jobs.find(
+            (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+          );
+          expect(taggedBeforeDoctor).toBeDefined();
           const migrated = await migration.migrateLegacyState(migrationInput(fixture));
           expect(migrated.changes.length).toBeGreaterThan(0);
+          expect(migrated.warnings).toEqual(
+            expect.arrayContaining([expect.stringMatching(/authored-lookalike.*review.*manually/)]),
+          );
           const beforeRuntime = readRows(fixture.db());
+          expect(
+            beforeRuntime.jobs.filter(
+              (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+            ),
+          ).toEqual([taggedBeforeDoctor]);
+          expect(
+            beforeRuntime.jobs.filter(
+              (row) =>
+                row.store_key === activeStore &&
+                JSON.parse(String(row.job_json)).declarationKey ===
+                  "memory-core:memory-dreaming-promotion",
+            ),
+          ).toHaveLength(activeDreaming ? 1 : 0);
           const migratedSurvivors = beforeRuntime.jobs.filter(
             (row) =>
               (row.store_key === activeStore && row.job_id === "survivor") ||
@@ -652,6 +673,11 @@ describe("host Cron Doctor repair", () => {
                   ? [{ jobId: "survivor", action: "removed" }]
                   : [],
             );
+            expect(logger.warn).toHaveBeenCalledWith(
+              expect.stringContaining(
+                "cron jobs authored-lookalike retain historical dreaming tags",
+              ),
+            );
             const jobs = await cron.list({ includeDisabled: true });
             const managed = jobs.filter(
               (job) => job.declarationKey === "memory-core:memory-dreaming-promotion",
@@ -680,6 +706,12 @@ describe("host Cron Doctor repair", () => {
             expect(JSON.parse(String(authoredAfter?.job_json))).toEqual(
               JSON.parse(String(authoredBefore?.job_json)),
             );
+            const taggedAfter = afterRuntime.jobs.find(
+              (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+            );
+            expect(JSON.parse(String(taggedAfter?.job_json))).toEqual(
+              JSON.parse(String(taggedBeforeDoctor?.job_json)),
+            );
             for (const table of ["jobs", "scratch", "authority"] as const) {
               expect(afterRuntime[table].filter(inactive)).toEqual(
                 beforeRuntime[table].filter(inactive),
@@ -694,7 +726,18 @@ describe("host Cron Doctor repair", () => {
             cron.stop();
           }
         },
-        { activeDreaming },
+        {
+          activeDreaming,
+          additionalActiveJobs: [
+            makeJob("authored-lookalike", {
+              description: "[managed-by=memory-core.short-term-promotion] operator note",
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
+              sessionTarget: "isolated",
+              payload: { kind: "agentTurn", message: "Summarize my authored project notes." },
+              delivery: { mode: "none" },
+            }),
+          ],
+        },
       );
     },
   );

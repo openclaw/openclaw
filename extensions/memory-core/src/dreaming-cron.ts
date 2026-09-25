@@ -219,10 +219,21 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const allJobs = await cron.list({ includeDisabled: true });
   const managed = allJobs.filter((job) => job.declarationKey === MANAGED_DREAMING_DECLARATION_KEY);
   // Diagnosis reuses Doctor's classifier on the active rows already listed; it never grants ownership.
-  const unresolvedLegacy = allJobs.some((job) => {
+  let unresolvedLegacy = false;
+  const ambiguousIds: string[] = [];
+  for (const job of allJobs) {
     const kind = classifyDreamingCronJob(job, dreamingCronIdentifiers);
-    return kind === "legacy" || kind === "phase" || kind === "ambiguous";
-  });
+    if (kind === "ambiguous") {
+      ambiguousIds.push(job.id);
+    } else if (kind === "legacy" || kind === "phase") {
+      unresolvedLegacy = true;
+    }
+  }
+  if (ambiguousIds.length > 0) {
+    params.logger.warn(
+      `memory-core: cron jobs ${ambiguousIds.join(", ")} retain historical dreaming tags with authored payloads; rows left unchanged. Review their ownership manually.`,
+    );
+  }
   const needsDoctor = (removed: number): ReconcileResult => {
     params.logger.warn(
       "memory-core: historical dreaming cron jobs require repair; run openclaw doctor --fix. Runtime reconciliation left legacy jobs unchanged.",

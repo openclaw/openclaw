@@ -175,9 +175,12 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 
 Runtime reconciliation owns only jobs declared as
 `memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier
-on the active jobs already listed to report historical rows. While those rows
-remain, enabled reconciliation requests Doctor repair without creating another
-job or converting a declared legacy payload. Disabling dreaming still removes
+on the active jobs already listed to report historical rows. Recognized legacy
+or phase jobs require Doctor repair before runtime creates or updates the managed
+job. Declared jobs with retired payload formats also require Doctor repair.
+Jobs with historical tags and authored
+payloads remain untouched and produce a manual-review warning; they do not block
+creation or updates of the declared dreaming job. Disabling dreaming still removes
 only explicitly declared jobs and reports any remaining historical work.
 
 Run `openclaw doctor --fix` to adopt

@@ -2180,8 +2180,18 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   phase dreaming-cron-repeat-doctor openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     openclaw doctor --repair --non-interactive >"$DOCTOR_LOG" 2>&1
   phase assert-dreaming-idempotence node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs assert-idempotent
+  phase prepare-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs prepare-runtime
+  OPENCLAW_SKIP_CRON=0 phase dreaming-runtime-gateway-start start_gateway
+  phase dreaming-runtime-gateway-probes check_gateway_probes
+  phase wait-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs wait-runtime
+  phase reload-dreaming-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw plugins reload memory-core --json \
+    >"$ARTIFACT_ROOT/dreaming-cron-runtime-reload.json" 2>"$ARTIFACT_ROOT/dreaming-cron-runtime-reload.err"
+  phase dreaming-runtime-gateway-stop stop_gateway
+  phase assert-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs \
+    assert-runtime "$GATEWAY_LOG"
   run_completed="1"
-  echo "Dreaming cron survivor passed: published updater child repaired active and inactive partitions, retained a verified backup, and repeated Doctor made no cron changes."
+  echo "Dreaming cron survivor passed: published updater child repaired active and inactive partitions, retained a verified backup, repeated Doctor made no cron changes, and the installed Gateway converged despite an authored tagged row."
   exit 0
 fi
 if [ "$WORKER_CELL" = "1" ]; then
