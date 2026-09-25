@@ -9,7 +9,7 @@ read_when:
 ---
 
 CI continues during Full Release Validation; the legacy release-priority variable
-does not pause workflow admission. See [release recovery](/reference/RELEASING#release-priority)
+does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
 This page is an index. CI is documented on nine pages, one per reader

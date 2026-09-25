@@ -1,4 +1,11 @@
+# Regular beta and stable release
+
 ## Orchestrated stable release
+
+Use the [manual publication flow](#publish-and-verify) when activation must wait for the
+selected publisher's gates. The current orchestrator activates GitHub as soon
+as npm is visible; it does not enforce that finalizer ordering. Do not use it
+without explicit operator approval for that early activation.
 
 `pnpm release:stable YYYY.M.PATCH` runs the fast path as one resumable state
 machine with the phases `cut → validate → publish → sync-beta → flip-github →
@@ -111,7 +118,7 @@ never does. Tooling,
 credentials, infrastructure or wrapper failure keeps the candidate and recovers
 the failed surface. Use [publication recovery](publication-recovery.md) for
 classification. Keep PR CI and supporting workflows running while the parent
-runs. Use the [release CI recovery guidance](../../release-openclaw-ci/SKILL.md#guardrails)
+runs. Use the [release CI recovery guidance](../../release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 only for runs already deferred by historical workflows.
 
 An early `OpenClaw Performance` run is optional beta confidence:

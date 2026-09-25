@@ -94,11 +94,34 @@ packages. These records identify the tested version and the files that shipped.
 Later documentation updates may improve the release notes without rebuilding
 or replacing packages.
 
-For dependency review and downstream packaging, see
-[Dependency locking](/gateway/security/dependency-locking). Release dependency
-archives include npm-format locks separately from the package tarballs. Use
-only a lock for the exact package version and source commit, and reject entries
-that report omitted workspace dependencies.
+For dependency review, see [Dependency locking](/gateway/security/dependency-locking).
+Release dependency archives include npm-format locks separately from the
+package tarballs.
+
+### Downstream packaging
+
+To consume a release lock:
+
+1. Download `openclaw-<version>-dependency-evidence.zip` from the GitHub release.
+   Open `dependency-evidence/npm-package-locks.json` (`schemaVersion: 1`) and
+   select the `packages` entry matching the exact package `name` and `version`.
+2. Reject entries with a nonempty `omittedWorkspaceDependencies` array. These
+   are partial locks: the generator omits sibling `workspace:` runtime dependencies
+   that publish in the same release. The report counts these entries in
+   `packagesWithOmittedWorkspaceDependencies`.
+3. Verify that `dependency-evidence/dependency-evidence-manifest.json`'s
+   `releaseSha`, the report's `sourceSha`, and the OpenClaw commit you pin all
+   match. The report also records the source `pnpm-lock.yaml` SHA-256.
+4. Serialize `entry.lock` as `package-lock.json` using two-space JSON indentation
+   and a trailing newline, then verify its SHA-256 against `entry.lockSha256`.
+5. Before `npm ci`, carry the source `pnpm-workspace.yaml` overrides into the
+   consuming `package.json`, or rewrite nested `dependencies` and
+   `optionalDependencies` specs to their locked versions. The generated locks
+   encode workspace overrides, so unmodified specs can fail npm's lock-sync check.
+
+The companion `npm-package-locks.md` includes counts and a package table. Each
+entry records `bundleRuntimeDependencies` and direct dependency counts so
+packagers can identify lockless packages that need an external lock.
 
 <a id="linux-companion-publication" />
 <a id="release-changelog-artifacts" />
