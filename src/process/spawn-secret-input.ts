@@ -77,9 +77,7 @@ export function prepareSecretInputStdio(
   // while preserving one-shot consumption without credential files or shell relays.
   const pipe = process.platform === "win32" ? undefined : createSecretPipe();
   let [readFd, writeFd] = pipe?.fds ?? [];
-  // Windows fd readers use ReadFile without OVERLAPPED. The child handle must be
-  // synchronous; libuv still keeps the parent writing end asynchronous.
-  stdio[secretInput.fd] = readFd ?? "pipe";
+  stdio[secretInput.fd] = readFd ?? "overlapped";
   // Numeric secret descriptors keep this launch in-process; IPC cannot transfer them.
   const closeRead = () => {
     if (readFd !== undefined) {

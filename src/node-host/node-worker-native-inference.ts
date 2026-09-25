@@ -14,6 +14,11 @@ export function snapshotNodeWorkerNativeInference(
   if (configPath === undefined) {
     return undefined;
   }
+  if (process.platform === "win32") {
+    throw new Error(
+      "Worker-local inference is not supported on Windows yet; use a Gateway-inference profile and leave nodeHost.workerRuns.nativeInferenceConfig unset.",
+    );
+  }
   if (!path.isAbsolute(configPath) || configPath.includes("\0")) {
     throw new Error("Node worker native inference configuration requires an absolute path");
   }

@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fstatSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
@@ -44,23 +43,6 @@ function writeSecret(stream: ControlledSecretStream): Promise<void> {
 }
 
 describe("Windows secret input delivery", () => {
-  it("creates a synchronous child handle for file-descriptor readers", () => {
-    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    try {
-      const stdio: SpawnStdioEntry[] = ["pipe", "pipe", "pipe"];
-      using prepared = prepareSecretInputStdio(stdio, {
-        fd: 3,
-        createData: () => Buffer.from("synthetic-secret"),
-      });
-      void prepared;
-      // Node maps overlapped to FILE_FLAG_OVERLAPPED, which readSync cannot consume.
-      expect(stdio).toEqual(["pipe", "pipe", "pipe", "pipe"]);
-    } finally {
-      Object.defineProperty(process, "platform", original);
-    }
-  });
-
   it("consumes pipe errors after delivery until the stream closes", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
@@ -109,41 +91,6 @@ describe("Windows secret input delivery", () => {
     expect(stream.listenerCount("error")).toBe(0);
   });
 });
-
-it.skipIf(process.platform !== "win32")(
-  "delivers large private input to a Windows synchronous fd reader",
-  async () => {
-    const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
-    const data = Buffer.alloc(256 * 1024, 0x5a);
-    const expectedHash = createHash("sha256").update(data).digest("hex");
-    using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data });
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        'const fs = require("node:fs"); const value = fs.readFileSync(3); fs.closeSync(3); let closed = false; try { fs.fstatSync(3); } catch (error) { closed = error.code === "EBADF"; } process.stdout.write(JSON.stringify({hash: require("node:crypto").createHash("sha256").update(value).digest("hex"), closed}));',
-      ],
-      { stdio },
-    );
-    const output = new Promise<string>((resolve, reject) => {
-      let text = "";
-      child.stdout!.on("data", (chunk) => {
-        text += chunk;
-      });
-      child.once("error", reject);
-      child.once("close", (code) =>
-        code === 0 ? resolve(text) : reject(new Error("Windows fd reader exited " + code)),
-      );
-    });
-    try {
-      await prepared!.deliverTo(child);
-      expect(JSON.parse(await output)).toEqual({ hash: expectedHash, closed: true });
-      expect(data.every((byte) => byte === 0)).toBe(true);
-    } finally {
-      child.kill("SIGKILL");
-    }
-  },
-);
 
 function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatSync>) {
   let current: ReturnType<typeof fstatSync>;

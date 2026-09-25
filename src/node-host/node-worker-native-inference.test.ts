@@ -112,7 +112,22 @@ function nativeInput(workspaceDir: string, turnId = "native-turn", prompt = "suc
   return input;
 }
 
-describe("node-local native inference startup custody", () => {
+it("leaves Windows defaults unchanged and rejects only native inference opt-in", () => {
+  const { configPath, env } = createFixture();
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+  try {
+    expect(snapshotNodeWorkerNativeInference(undefined, env)).toBeUndefined();
+    expect(() => snapshotNodeWorkerNativeInference(configPath, env)).toThrow(
+      "Worker-local inference is not supported on Windows yet",
+    );
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
+// Windows native startup is deferred; its opt-in refusal and unchanged default are tested above.
+describe.skipIf(process.platform === "win32")("node-local native inference startup custody", () => {
   it("projects only the admitted agent grant and its model credentials", () => {
     const f = createFixture();
     const startup = snapshotNodeWorkerNativeInference(f.configPath, f.env)!;
@@ -374,20 +389,21 @@ const mode = descriptor.assignment.prompt;`,
             (feature) => feature !== WORKER_LINEAGE_START_PROTOCOL_FEATURE,
           );
       }
-      const markRunning = NodeWorkerLaunchStore.prototype.markRunning;
-      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
-        this: NodeWorkerLaunchStore,
-        params,
-      ) {
+      let checkedJournalGate = false;
+      const markRunning = vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning");
+      markRunning.mockImplementation(async function (this: NodeWorkerLaunchStore, params) {
         expect(fs.existsSync(path.join(f.workspaceDir, "native-turn.started.json"))).toBe(false);
         expect(params.cleanupMode).toBe(lineage ? "owned-anchor" : "process-group");
-        return await markRunning.call(this, params);
+        checkedJournalGate = true;
+        markRunning.mockRestore();
+        return await this.markRunning(params);
       });
       try {
         await supervisor.launch(input, TEST_WORKER_ENDPOINT);
         expect((await waitForNodeWorkerTerminal(supervisor, input.launchId)).state).toBe(
           "completed",
         );
+        expect(checkedJournalGate).toBe(true);
         expect(
           JSON.parse(
             fs.readFileSync(path.join(f.workspaceDir, "native-turn.carrier.json"), "utf8"),

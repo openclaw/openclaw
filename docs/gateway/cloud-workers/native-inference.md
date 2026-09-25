@@ -22,6 +22,12 @@ that account has its normal filesystem and process access.
 
 ## Provision the node
 
+Windows worker-local inference is deferred. A Windows node rejects
+`nodeHost.workerRuns.nativeInferenceConfig` before reading the registry or
+credentials. Leave that setting unset and use Gateway inference on Windows;
+existing Gateway-proxied workers retain their current behavior. Windows support
+needs a separate, opt-in credential-transport implementation and native validation.
+
 Install matching Gateway and node builds and pair the node normally. Keep provider
 credentials in the node service's externally provisioned startup environment, not
 Gateway configuration or profile settings. In the **node's** configuration:
