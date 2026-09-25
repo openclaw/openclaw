@@ -34,6 +34,8 @@ type CliModelResolveHookInput = {
   modelId: string;
   sessionEntry?: SessionEntry;
   config?: OpenClawConfig;
+  /** Auth profile the caller selected the backend through, when one was resolved. */
+  authProfileId?: string;
   agentId?: string;
   runId?: string;
   jobId?: string;
@@ -110,6 +112,10 @@ async function resolveCliModelOverrideForTurn(
       cfg: params.config,
       agentId: params.agentId,
       modelId: hookSelection.modelId,
+      // The caller selected this backend through the same profile-aware
+      // resolution; the override must resolve through it too, or the runtimes
+      // being compared are not the same selection.
+      authProfileId: params.authProfileId,
     }) === params.executionProvider;
   if (!overrideResolvesToSelectedBackend) {
     return {
@@ -168,6 +174,7 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     modelId: params.model ?? "",
     sessionEntry: params.sessionEntry,
     config: params.config,
+    authProfileId: params.authProfileId,
     agentId: params.agentId,
     runId: params.runId,
     jobId: params.jobId,

@@ -8,7 +8,10 @@ import { applyCliModelResolveHookForRun } from "./model-resolve-hook.js";
 const hookRunnerStub = vi.hoisted(() => ({
   hasHooks: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeModelResolve: vi.fn(
-    async () => undefined as { providerOverride?: string; modelOverride?: string } | undefined,
+    async (
+      _event: { prompt: string },
+      _ctx: { modelProviderId?: string; channelId?: string; accountId?: string },
+    ) => undefined as { providerOverride?: string; modelOverride?: string } | undefined,
   ),
 }));
 
