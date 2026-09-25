@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/client.js";
 import { VoicePlugin } from "../internal/voice.js";
@@ -55,6 +57,57 @@ function fixture(sendPayload = vi.fn(() => true)) {
 }
 
 describe("Discord audio worker control boundary", () => {
+  it.each(["complete", "file-error", "worker-exit"] as const)(
+    "settles a credited stream and releases its source on %s",
+    async (outcome) => {
+      const { audio, worker } = fixture();
+      const chunk = createDeferred<Extract<DiscordAudioCommand, { type: "stream-chunk" }>>();
+      const ended = createDeferred<void>();
+      const post = worker.postMessage.bind(worker);
+      vi.spyOn(worker, "postMessage").mockImplementation((command) => {
+        post(command);
+        if (command.type === "stream-chunk") {
+          chunk.resolve(command);
+          if (outcome === "complete") {
+            queueMicrotask(() => worker.message({ type: "stream-drain", id: command.id }));
+          }
+        } else if (command.type === "stream-end") {
+          ended.resolve();
+        }
+      });
+      const input = Readable.from([Buffer.alloc(128 * 1024)]);
+      const playback = audio.play(input);
+      const command = await chunk.promise;
+      expect(command.audio.byteLength).toBe(64 * 1024);
+      expect(worker.sent.filter((sent) => sent.type === "stream-chunk")).toHaveLength(1);
+      if (outcome === "complete") {
+        await ended.promise;
+      }
+      if (outcome === "worker-exit") {
+        worker.emit("exit", 1);
+      } else {
+        worker.message({
+          type: "file-end",
+          id: command.id,
+          ...(outcome === "file-error"
+            ? { error: { name: "Error", message: "decoder failed" } }
+            : {}),
+        });
+      }
+      if (outcome === "complete") {
+        await expect(playback).resolves.toBeUndefined();
+      } else {
+        await expect(playback).rejects.toThrow(
+          outcome === "file-error" ? "decoder failed" : "exited",
+        );
+      }
+      expect(input.destroyed).toBe(true);
+      expect(worker.sent.filter((sent) => sent.type === "stream-chunk")).toHaveLength(
+        outcome === "complete" ? 2 : 1,
+      );
+    },
+  );
+
   it("rejects startup and retires owned adapter state when the worker fails", async () => {
     const { audio, worker, destroy } = fixture();
     const stopped = vi.fn();

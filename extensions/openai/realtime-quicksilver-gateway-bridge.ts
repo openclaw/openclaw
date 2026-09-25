@@ -34,12 +34,11 @@ import {
   openAIQuicksilverConnectAbortError,
   waitForOpenAIQuicksilverConnectStep,
 } from "./realtime-quicksilver-sideband.js";
-import {
-  type OpenAIQuicksilverSocket,
-  type OpenAIQuicksilverSocketFactory,
-  QuicksilverSocketAudioQueue,
-  type QuicksilverMediaSocket,
-  type QuicksilverMediaSocketFactory,
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocket,
+  QuicksilverMediaSocketFactory,
 } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -111,7 +110,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private audioOutput: RealtimeVoiceAudioOutputPort | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
-  private readonly pendingRawAudio: QuicksilverSocketAudioQueue;
+  private readonly pendingRawAudio: OpenAIQuicksilverPendingAudio;
   private directSocket: QuicksilverMediaSocket | undefined;
   private ready = false;
   private sideband: ActiveSideband | undefined;
@@ -124,8 +123,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     private readonly runtime: OpenAIRealtimeHost,
   ) {
     this.audio = new OpenAIQuicksilverAudioAdapter(config);
-    this.pendingRawAudio = new QuicksilverSocketAudioQueue(
+    this.pendingRawAudio = new OpenAIQuicksilverPendingAudio(
       config.audioFormat?.encoding === "g711_ulaw" ? 40_000 : 240_000,
+      1,
     );
   }
 

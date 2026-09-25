@@ -1,11 +1,9 @@
 import { EventEmitter, once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverSocketRuntime } from "./realtime-quicksilver-socket.runtime.js";
-import {
-  QuicksilverSocketAudioQueue,
-  type QuicksilverSocketMessage,
-} from "./realtime-quicksilver-socket.shared.js";
+import type { QuicksilverSocketMessage } from "./realtime-quicksilver-socket.shared.js";
 
 class WireSocket extends EventEmitter {
   readyState = 1;
@@ -41,7 +39,7 @@ function owner(paced = true, bufferedAmount = () => 0) {
 
 describe("GPT-Live socket media owner", () => {
   it("keeps a copied newest raw-byte tail without truncating odd telephony chunks", () => {
-    const pending = new QuicksilverSocketAudioQueue(5);
+    const pending = new OpenAIQuicksilverPendingAudio(5, 1);
     const capture = Buffer.from([1, 2, 3]);
     pending.append(capture);
     capture.fill(0);

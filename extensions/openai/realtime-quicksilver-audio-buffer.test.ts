@@ -17,6 +17,14 @@ function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
 }
 
 describe("GPT-Live pending microphone audio", () => {
+  it("takes only complete PCM samples and retains the remainder", () => {
+    const pending = new OpenAIQuicksilverPendingAudio();
+    pending.append(Buffer.from([1, 2, 3, 4]));
+    expect(pending.take(3)).toEqual(Buffer.from([1, 2]));
+    expect(pending.take()).toEqual(Buffer.from([3, 4]));
+    expect(pending.length).toBe(0);
+  });
+
   it("copies caller-owned PCM16 and drops an incomplete sample", () => {
     const source = Buffer.from([0x01, 0x02, 0x03]);
     const pending = new OpenAIQuicksilverPendingAudio();
