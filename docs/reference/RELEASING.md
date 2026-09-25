@@ -261,7 +261,9 @@ identity; it does not publish Docker images.
 Run the shared release orchestrator from a protected lightweight tooling tag
 at the frozen trusted-main Tooling SHA, selecting the extended-stable npm track.
 With publication/tag-push authority, create and push that tooling tag before
-dispatch; keep it distinct from the immutable product release tag:
+dispatch (regular releases mint it from `--workflow-sha`, see
+[Check publication gates](#check-publication-gates)); keep it distinct from the
+immutable product release tag:
 
 ```bash
 TOOLING_SHA="<recorded-full-main-ancestor-sha>"
@@ -1291,7 +1293,7 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 ### Check publication gates
 
-Run the read-only publish preflight before regular beta or stable publication
+Run the publish preflight before regular beta or stable publication
 through the protected `OpenClaw Release Publish` route, including after a failed
 attempt. Alpha uses its matching Tideclaw workflow branch; extended-stable uses
 the shared publisher with its dedicated track inputs but is not admitted by
@@ -1309,6 +1311,10 @@ pnpm release:publish-preflight \
   --plugin-publish-scope all-publishable \
   --workflow-ref release-publish/<tooling-sha12>-<epoch>
 ```
+
+Alternatively, replace `--workflow-ref` with `--workflow-sha <tooling-sha>` to
+reuse or mint the protected tooling tag; minting requires tag-creation authority
+and is the preflight's only mutation.
 
 The sealed manifest supplies the SDK evidence digest, npm publication decisions,
 and any approved soak-waiver text. A release whose SDK API report contains changes
@@ -1602,8 +1608,12 @@ npm-only qualification is rejected before core publication for those targets.
 
 For real core npm, plugin npm, or ClawHub publication, run the parent from a
 protected lightweight `release-publish/<sha12>-<epoch>` tag at the frozen Tooling
-SHA. Parent and child provenance must carry that same full ref. Create and push
-the tooling tag before running the publish command:
+SHA. Parent and child provenance must carry that same full ref.
+For regular releases, `pnpm release:publish-preflight -- --workflow-sha <tooling-sha>` (or
+`pnpm release:candidate -- --workflow-sha <tooling-sha>`) reuses an existing
+`release-publish/<sha12>-*` tag at that SHA or mints one through the git refs API,
+verifies it, and prints the dispatch with `--ref <tag>`.
+With tag-creation authority, manual creation remains the fallback:
 
 ```bash
 TOOLING_SHA="<recorded-full-tooling-sha>"

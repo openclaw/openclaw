@@ -565,7 +565,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.indexOf("|") + 1);
+      const selected = row.slice(row.lastIndexOf("|") + 1);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -586,7 +586,7 @@ describe("release fast lane label", () => {
     expect(rows.map((row) => row.split("=")[0])).toEqual(gate.needs);
     for (const row of rows) {
       const name = row.split("=")[0];
-      expect(row).toContain(`${name}=\${{ needs.${name}.result }}|`);
+      expect(row.slice(0, row.lastIndexOf("|")), row).toContain(`needs.${name}.result`);
     }
   });
 });
@@ -1326,7 +1326,7 @@ AFTER_CD
       ["OPENCLAW_CI_RUN_MACOS", "run_macos"],
       ["OPENCLAW_CI_RUN_IOS_BUILD", "run_ios_build"],
     ] as const) {
-      for (const [eventName, releaseGate, selected, expected] of [
+      for (const [eventName, isReleaseGate, selected, expected] of [
         ["schedule", false, false, true],
         ["workflow_dispatch", false, false, true],
         ["workflow_dispatch", true, false, false],
@@ -1335,12 +1335,12 @@ AFTER_CD
         expect(
           evaluateWorkflowExpression(manifestEnv[environmentKey], {
             eventName,
-            releaseGate,
+            releaseGate: isReleaseGate,
             repository: "openclaw/openclaw",
             runAttempt: 1,
             steps: { changed_scope: { outputs: { [scopeKey]: String(selected) } } },
           }),
-          `${environmentKey}/${eventName}/${releaseGate}/${selected}`,
+          `${environmentKey}/${eventName}/${isReleaseGate}/${selected}`,
         ).toBe(String(expected));
       }
     }
@@ -1454,13 +1454,17 @@ AFTER_CD
         qualification_runner_backend: "hybrid",
       },
     };
+    // The PR cancellation monitor has no runner contract on main or qualification runs.
+    for (const context of [push, qualification]) {
+      expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
+    }
     for (const [name, rawJob] of Object.entries(workflow.jobs)) {
       const job = rawJob as {
         "runs-on": string;
         "timeout-minutes"?: string | number;
         needs?: string[] | string;
       };
-      if (!String(job.needs).includes("preflight")) {
+      if (name === "pr-fail-fast" || !String(job.needs).includes("preflight")) {
         continue;
       }
       for (const key of ["runs-on", "timeout-minutes"] as const) {
@@ -3820,7 +3824,6 @@ setImmediate(() => {
       runAttempt: 1,
       runnerBackend: "hybrid",
     } as const;
-
     for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
@@ -4054,6 +4057,7 @@ setImmediate(() => {
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "runs-on": unknown }>;
     const expectedHostedRunners = {
+      "pr-fail-fast": "ubuntu-24.04",
       android: "ubuntu-24.04",
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
@@ -4083,6 +4087,7 @@ setImmediate(() => {
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
+      "pr-fail-fast": "blacksmith-4vcpu-ubuntu-2404",
       preflight: "blacksmith-16vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
@@ -4100,12 +4105,14 @@ setImmediate(() => {
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
+      "pr-fail-fast": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
     } as const;
     const configurableJobs = Object.entries(jobs)
       .filter(
         ([, job]) =>
           String(job["runs-on"]).includes("OPENCLAW_CI_RUNNER_BACKEND") ||
+          String(job["runs-on"]).includes("needs.preflight.outputs.runner_profile") ||
           String(job["runs-on"]).includes("matrix.runner"),
       )
       .map(([jobName]) => jobName)

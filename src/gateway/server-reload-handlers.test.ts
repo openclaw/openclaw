@@ -96,7 +96,12 @@ import {
 } from "./config-reload-plan.js";
 import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
-import { prepareConfigReloadTest, waitForReloadState } from "./config-reload.test-support.js";
+import {
+  captureNextPluginLifecycleLease,
+  createRecoveryRestartMock,
+  prepareConfigReloadTest,
+  waitForReloadState,
+} from "./config-reload.test-support.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
 import { createChannelManager } from "./server-channels.js";
@@ -166,15 +171,6 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function createRecoveryRestartMock() {
-  const emitted = createDeferred();
-  const requestRecoveryRestart = vi.fn(() => {
-    emitted.resolve();
-    return { status: "emitted" as const };
-  });
-  return { requestRecoveryRestart, restartEmitted: emitted.promise };
 }
 
 const tempDirs: string[] = [];
@@ -6146,6 +6142,7 @@ describe("gateway Gmail hot reload handlers", () => {
     async (holdPromotion) => {
       vi.useFakeTimers();
       const harness = await createManagedRestartSequenceHarness();
+      const waitForReloadLease = captureNextPluginLifecycleLease();
       const promotionGate = createDeferred();
       if (holdPromotion) {
         const promote = harness.promoteSnapshot.getMockImplementation();
@@ -6178,9 +6175,8 @@ describe("gateway Gmail hot reload handlers", () => {
           expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         }
         promotionGate.resolve();
-        // Promotion signals inside reload:config; join its admission before advancing
-        // the restart poll, or that poll can correctly defer instead of reaching preflight.
-        await waitForReloadState(() => getActiveGatewayRootWorkCount() === 0);
+        // Restart preparation reacquires the outer plugin lease after reload root admission ends.
+        await waitForReloadLease();
         expect(harness.assertRestartReady).not.toHaveBeenCalled();
         hoisted.activeTaskBlockers.length = 0;
         const retryScheduled = harness.nextReloadWarning(

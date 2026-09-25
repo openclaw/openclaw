@@ -106,14 +106,20 @@ describe("hourly main CI admission", () => {
         const scheduled = { ...shared, eventName: "schedule" as const };
         const push = { ...shared, eventName: "push" as const };
         for (const [name, raw] of Object.entries(ci.jobs)) {
+          if (name === "pr-fail-fast") {
+            expect(evaluate(ci.jobs[name].if, scheduled), name).toBe(false);
+            expect(evaluate(ci.jobs[name].if, push), name).toBe(false);
+            continue;
+          }
           const job = raw as { "runs-on"?: string; steps?: { with?: Record<string, unknown> }[] };
-          if (job["runs-on"])
+          if (job["runs-on"]) {
             expect(evaluate(job["runs-on"], scheduled), name).toEqual(
               evaluate(job["runs-on"], push),
             );
+          }
           for (const step of job.steps ?? []) {
             const cache = step.with?.["dependency-cache"];
-            if (typeof cache === "string" && cache.startsWith("$" + "{{")) {
+            if (typeof cache === "string" && cache.startsWith("${{")) {
               expect(evaluate(cache, scheduled), name).toBe(evaluate(cache, push));
               expect(
                 evaluate(cache, { ...scheduled, runnerEnvironment: "github-hosted" }),
@@ -162,8 +168,11 @@ describe("hourly main CI admission", () => {
           ...context,
           preflightOutputs: { ["strict_" + surface + "_i18n"]: value },
         };
-        if (surface === "native") expect(evaluate(parity.if, finalContext)).toBe(manualStrict);
-        else expect(evaluate(parity["continue-on-error"], finalContext)).toBe(!manualStrict);
+        if (surface === "native") {
+          expect(evaluate(parity.if, finalContext)).toBe(manualStrict);
+        } else {
+          expect(evaluate(parity["continue-on-error"], finalContext)).toBe(!manualStrict);
+        }
       }
     }
   });

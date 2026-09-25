@@ -107,8 +107,11 @@ its delta is release metadata only; record the skip, it is not a blocker. A
 prepare-only request does not
 authorize pushing publication tags: use an existing matching protected tooling
 ref where available, otherwise report that qualification still needs one.
-With publication/tag-push authority, create and push the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tooling tag at the recorded
-Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
+With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
+`pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
+mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
+through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
+Manual tag creation remains the fallback (see `docs/reference/RELEASING.md`). The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
@@ -124,18 +127,18 @@ pnpm release:candidate -- \
   --npm-dist-tag <beta-or-latest> \
   --publication-route <normal-or-prepared> \
   --full-release-run <release-sha-validation-run-id> \
-  --publish-workflow-ref release-publish/<tooling-sha12>-<epoch> \
+  --workflow-sha <tooling-sha> \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
 
 Match `--npm-dist-tag` and `--publication-route` to the frozen validation
 selection; the helper defaults to `beta` and `normal`.
-`--publish-workflow-ref` selects the publication tag, not the helper checkout.
-The same-checkout bootstrap fetches the workflow branch tip. Verify that the
-executing helper's Tooling SHA matches the recorded tag; if it differs, use
-only an owner-supported exact-tooling entry path, without moving the protected
-tag or silently changing qualification identity.
+`--workflow-sha` pins both the helper checkout and publication tag to the recorded
+Tooling SHA. Alternatively, `--publish-workflow-ref` selects an existing
+publication tag while the same-checkout bootstrap fetches the workflow branch
+tip; verify that the executing helper's Tooling SHA matches that tag, without
+moving it or silently changing qualification identity.
 
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
