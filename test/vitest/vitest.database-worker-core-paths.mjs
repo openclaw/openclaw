@@ -571,6 +571,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/device-bootstrap.test.ts",
   "src/infra/device-bootstrap.worker.test.ts",
   "src/infra/device-pairing-approval-policy.test.ts",
+  "src/infra/device-pairing-bootstrap.test.ts",
   "src/infra/device-pairing-churn.test.ts",
   "src/infra/device-pairing-migration.test.ts",
   "src/infra/device-pairing-node-desktop-migration.test.ts",
