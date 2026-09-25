@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
 import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
+import { isExternallyOwnedCdpEndpoint } from "./cdp-endpoint-ownership.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
@@ -275,10 +276,28 @@ export async function navigateViaPlaywright(opts: {
           ? { assertPageCurrent: opts.assertCurrent }
           : {}),
     });
+  // A browser OpenClaw did not launch keeps its own download handling and loses
+  // Playwright's default-context overrides, so Playwright can never emit a
+  // download event for that endpoint (openclaw/openclaw#157547). Arming a
+  // passive capture there would only stall the failure path.
+  const playwrightCanCaptureDownload = !isExternallyOwnedCdpEndpoint(opts.cdpUrl);
   const navigateWithDownloadCapture = async (): Promise<{
     response: Awaited<ReturnType<typeof navigate>> | null;
     download?: BrowserDownloadResult;
   }> => {
+    if (!playwrightCanCaptureDownload) {
+      try {
+        return { response: await navigate() };
+      } catch (err) {
+        if (isDownloadStartingNavigationError(err, url)) {
+          throw new Error(
+            'navigating to a download URL needs a browser OpenClaw launches, such as the managed "openclaw" profile; this profile attaches to an existing browser, which keeps its own download destination, so the file is saved by the browser itself and OpenClaw cannot capture it.',
+            { cause: err },
+          );
+        }
+        throw err;
+      }
+    }
     const downloadCapture = createDownloadCaptureForPage(page, pageState, timeout, {
       mode: "passive",
       timeoutMessage: "Timeout waiting for navigation download",

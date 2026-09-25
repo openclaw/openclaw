@@ -2,6 +2,8 @@ import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 // Browser tests cover pw tools core.snapshot.navigate guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
+import { publishCdpEndpointOwnership } from "./cdp-endpoint-ownership.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwSessionConnection from "./pw-session-connection.js";
@@ -15,6 +17,30 @@ import {
 
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.snapshot.js");
+// Imported after the harness registers its mock so the shared spy instance is
+// the one the module under test calls.
+const pwDownloadCapture = await import("./pw-download-capture.js");
+const createDownloadCaptureSpy = vi.mocked(pwDownloadCapture.createDownloadCaptureForPage);
+
+// A throwaway high port keeps this suite's ownership fact off the endpoints
+// other browser suites publish (9222/9333/19422-19450).
+const ATTACH_ONLY_CDP_URL = "http://127.0.0.1:19522";
+const MANAGED_CDP_URL = "http://127.0.0.1:18792";
+const DOWNLOAD_STARTING_ERROR = "page.goto: Download is starting";
+
+/** Publish the attach-only (externally owned) fact for this suite's endpoint. */
+function publishAttachOnlyOwnership(cdpUrl: string): void {
+  const profile = resolveProfile(
+    resolveBrowserConfig({
+      profiles: { attach: { driver: "openclaw", attachOnly: true, cdpUrl } },
+    }),
+    "attach",
+  );
+  if (!profile) {
+    throw new Error("attach profile missing");
+  }
+  publishCdpEndpointOwnership(profile);
+}
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -150,6 +176,57 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       url: download.url,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
+  });
+
+  it("explains the attached browser's own download destination instead of arming a capture", async () => {
+    publishAttachOnlyOwnership(ATTACH_ONLY_CDP_URL);
+    const downloadStartingError = new Error(DOWNLOAD_STARTING_ERROR);
+    setPwToolsCoreCurrentPage({
+      goto: vi.fn(async () => {
+        throw downloadStartingError;
+      }),
+      url: vi.fn(() => "https://example.com/start"),
+    });
+
+    const navigation = mod.navigateViaPlaywright({
+      cdpUrl: ATTACH_ONLY_CDP_URL,
+      targetId: "tab-1",
+      url: "https://example.com/export.csv",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await expect(navigation).rejects.toThrow(/keeps its own download destination/u);
+    await expect(navigation).rejects.toHaveProperty("cause", downloadStartingError);
+    expect(createDownloadCaptureSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Playwright download capture for an endpoint with no published fact", async () => {
+    const download = {
+      url: "https://example.com/export.csv",
+      suggestedFilename: "export.csv",
+      path: "/tmp/openclaw/downloads/export.csv",
+    };
+    setPwToolsCoreDownloadCapture({
+      armed: true,
+      promise: Promise.resolve(download),
+      cancel: vi.fn(),
+    });
+    setPwToolsCoreCurrentPage({
+      goto: vi.fn(async () => {
+        throw new Error(DOWNLOAD_STARTING_ERROR);
+      }),
+      url: vi.fn(() => "https://example.com/start"),
+    });
+
+    const result = await mod.navigateViaPlaywright({
+      cdpUrl: MANAGED_CDP_URL,
+      targetId: "tab-1",
+      url: "https://example.com/export.csv",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result).toEqual({ url: download.url, download });
+    expect(createDownloadCaptureSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns managed download metadata for matching ERR_ABORTED attachment navigations", async () => {

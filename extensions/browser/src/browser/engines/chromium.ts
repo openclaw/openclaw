@@ -12,9 +12,21 @@ export const chromiumEngine: BrowserEngineAdapter = {
   canReconnectForSafeReads: true,
   supportsRequest: () => true,
   capabilities(profile) {
+    // A browser OpenClaw only attaches to drops Playwright's default-context
+    // overrides (openclaw/openclaw#157547). This engine is managed-or-attach, so
+    // the managed-local rule reduces to a loopback non-attach-only profile; it is
+    // inlined rather than imported to avoid the import cycle
+    // config -> engines/registry -> engines/chromium -> config. The reduction is
+    // equivalent to config.ts isOpenClawLaunchedBrowser for chromium profiles
+    // (this engine's launchMode is managed-or-attach, so the engine-side term is
+    // constant), and config.test.ts's capability matrix pins that equivalence.
+    const keepsDefaultContextOverrides =
+      profile.driver !== "openclaw" ||
+      profile.launchedByOpenClaw === true ||
+      (profile.cdpIsLoopback && !profile.attachOnly);
     const driverCapabilities = {
       supportsBatchActions: profile.driver !== "existing-session",
-      supportsDownloads: profile.driver !== "existing-session",
+      supportsDownloads: profile.driver !== "existing-session" && keepsDefaultContextOverrides,
       supportsPdf: profile.driver !== "existing-session",
       supportsRequests: profile.driver !== "existing-session",
       supportsErrors: profile.driver !== "existing-session",

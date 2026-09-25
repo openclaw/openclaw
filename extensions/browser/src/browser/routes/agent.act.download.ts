@@ -5,6 +5,7 @@
  * page download while keeping files scoped to the configured downloads root.
  */
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { isExternallyOwnedCdpEndpoint } from "../cdp-endpoint-ownership.js";
 import { ensureOutputDirectory } from "../output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -29,6 +30,14 @@ function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: n
     timeoutMs: timeoutMs ?? undefined,
   };
 }
+
+/**
+ * A CDP endpoint OpenClaw only attaches to keeps the browser's own download
+ * behavior, so Playwright's download event never fires there. Fail fast instead
+ * of waiting for the action timeout (openclaw/openclaw#157547).
+ */
+const EXTERNAL_ENDPOINT_DOWNLOAD_UNSUPPORTED =
+  'download capture needs a browser OpenClaw launches, such as the managed "openclaw" profile; this profile attaches to an existing browser, which keeps its own download destination.';
 
 /** Register download action endpoints on the browser control server. */
 export function registerBrowserAgentActDownloadRoutes(
@@ -55,6 +64,9 @@ export function registerBrowserAgentActDownloadRoutes(
       run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.waitUnsupported);
+        }
+        if (isExternallyOwnedCdpEndpoint(profileCtx.profile.cdpUrl)) {
+          return jsonError(res, 501, EXTERNAL_ENDPOINT_DOWNLOAD_UNSUPPORTED);
         }
         const pw = await requirePwAi(res, "wait for download");
         if (!pw) {
@@ -129,6 +141,9 @@ export function registerBrowserAgentActDownloadRoutes(
       run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.downloadUnsupported);
+        }
+        if (isExternallyOwnedCdpEndpoint(profileCtx.profile.cdpUrl)) {
+          return jsonError(res, 501, EXTERNAL_ENDPOINT_DOWNLOAD_UNSUPPORTED);
         }
         const pw = await requirePwAi(res, "download");
         if (!pw) {

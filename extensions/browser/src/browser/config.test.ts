@@ -12,6 +12,7 @@ import {
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
+  type ResolvedBrowserConfig,
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
@@ -19,6 +20,14 @@ const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 function resolveRequiredProfile(config: BrowserConfig, profileName: string) {
   const profile = resolveProfile(resolveBrowserConfig(config), profileName);
+  if (!profile) {
+    throw new Error(`Expected resolved browser profile ${profileName}`);
+  }
+  return profile;
+}
+
+function requireProfile(resolved: ResolvedBrowserConfig, profileName: string) {
+  const profile = resolveProfile(resolved, profileName);
   if (!profile) {
     throw new Error(`Expected resolved browser profile ${profileName}`);
   }
@@ -984,6 +993,72 @@ describe("browser config", () => {
     const work = resolveProfile(resolved, "work")!;
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
+
+  it("propagates launchedByOpenClaw to the resolved profile only when declared", () => {
+    const config = { attachOnly: true, cdpUrl: "http://127.0.0.1:19521" };
+
+    const plain = resolveRequiredProfile(config, "openclaw");
+    expect(Object.hasOwn(plain, "launchedByOpenClaw")).toBe(false);
+
+    const launched = { ...resolveBrowserConfig(config), launchedByOpenClaw: true };
+    const profile = resolveProfile(launched, "openclaw");
+    expect(profile?.launchedByOpenClaw).toBe(true);
+    expect(profile?.attachOnly).toBe(true);
+  });
+
+  // Download capture is backed by Playwright's default-context override, so the
+  // Browser tool schema must not advertise it where the CDP transport drops those
+  // overrides (openclaw/openclaw#157547).
+  it.each([
+    {
+      name: "an attach-only endpoint OpenClaw did not launch",
+      profile: { driver: "openclaw" as const, attachOnly: true, cdpUrl: "http://127.0.0.1:19531" },
+      launchedByOpenClaw: false,
+      supportsDownloads: false,
+    },
+    {
+      name: "the managed local profile",
+      profile: { cdpPort: 19532 },
+      launchedByOpenClaw: false,
+      supportsDownloads: true,
+    },
+    {
+      name: "a launched bridge browser that still attaches over CDP",
+      profile: { driver: "openclaw" as const, attachOnly: true, cdpUrl: "http://127.0.0.1:19533" },
+      launchedByOpenClaw: true,
+      supportsDownloads: true,
+    },
+    {
+      name: "an extension relay profile",
+      profile: { driver: "extension" as const, cdpPort: 19534 },
+      launchedByOpenClaw: false,
+      supportsDownloads: true,
+    },
+    {
+      name: "a remote endpoint OpenClaw did not launch",
+      profile: { driver: "openclaw" as const, cdpUrl: "https://cdp.example.com:19535" },
+      launchedByOpenClaw: false,
+      supportsDownloads: false,
+    },
+    {
+      name: "a launched bridge browser on a remote endpoint",
+      profile: { driver: "openclaw" as const, cdpUrl: "https://cdp.example.com:19536" },
+      launchedByOpenClaw: true,
+      supportsDownloads: true,
+    },
+  ])(
+    "advertises download capture for $name",
+    ({ profile, launchedByOpenClaw, supportsDownloads }) => {
+      const resolved = resolveBrowserConfig(withProfile("probe", profile));
+      if (launchedByOpenClaw) {
+        resolved.launchedByOpenClaw = true;
+      }
+
+      const admitted = requireProfile(resolved, "probe");
+
+      expect(getBrowserProfileCapabilities(admitted).supportsDownloads).toBe(supportsDownloads);
+    },
+  );
 
   it("resolves a configured custom default profile", () => {
     const resolved = resolveBrowserConfig({

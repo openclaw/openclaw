@@ -35,8 +35,8 @@ one per reader job. Open the page that matches your task.
 - Deterministic tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
 - Question answering over readable page text without returning a full snapshot.
-- Playwright-backed profiles save direct attachment navigations under the managed downloads directory and return `{ url, suggestedFilename, path }` metadata after final-URL policy validation.
-- Playwright-backed agent actions return a `downloads` array with the same managed metadata when the action immediately starts one or more downloads.
+- Playwright-backed profiles of [a browser OpenClaw launches](/tools/browser/remote) save direct attachment navigations under the managed downloads directory and return `{ url, suggestedFilename, path }` metadata after final-URL policy validation.
+- Playwright-backed agent actions on a browser OpenClaw launches return a `downloads` array with the same managed metadata when the action immediately starts one or more downloads.
 - A bundled `browser-automation` skill that teaches agents the snapshot,
   stable-tab, stale-ref, and manual-blocker recovery loop when the browser
   plugin is enabled.

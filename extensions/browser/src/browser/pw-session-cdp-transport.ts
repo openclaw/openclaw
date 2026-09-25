@@ -40,6 +40,8 @@ type CdpTransportOptions = {
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
   engine?: BrowserEngineId;
+  /** Leave the existing default browser context at the browser's own settings. */
+  noDefaults?: boolean;
 };
 
 async function openCdpTransportSocket(
@@ -257,7 +259,10 @@ export async function connectOverCdpTransport(
       onclose: (reason?: string) =>
         scheduleTransportClosed(closingReason ?? reason ?? "CDP socket closed"),
     });
-    return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
+    return await getPlaywrightCore().chromium.connectOverCDP(transport, {
+      timeout: opts.timeout,
+      ...(opts.noDefaults ? { noDefaults: true } : {}),
+    });
   } catch (error) {
     normalizer?.clear();
     wire.close();

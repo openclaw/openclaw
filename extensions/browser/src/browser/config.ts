@@ -88,6 +88,12 @@ export type ResolvedBrowserConfig = {
   headlessSource?: "config" | "default";
   noSandbox: boolean;
   attachOnly: boolean;
+  /**
+   * True when every profile in this resolved config describes a browser OpenClaw
+   * launched outside the managed launcher (sandbox container browser, worker
+   * browser launcher) while the connection still attaches over CDP.
+   */
+  launchedByOpenClaw?: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   tabCleanup: ResolvedBrowserTabCleanupConfig;
@@ -215,6 +221,15 @@ export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean 
     profile.cdpIsLoopback &&
     !profile.attachOnly
   );
+}
+
+/**
+ * True when OpenClaw launched this browser: the managed local profile or a
+ * bridge browser whose runtime declared `launchedByOpenClaw`. Only these keep
+ * Playwright's default-context overrides (openclaw/openclaw#157547).
+ */
+export function isOpenClawLaunchedBrowser(profile: ResolvedBrowserProfile): boolean {
+  return isLocalManagedProfile(profile) || profile.launchedByOpenClaw === true;
 }
 
 function resolveBrowserTabCleanupConfig(
@@ -558,6 +573,9 @@ export function resolveProfile(
     throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
   }
 
+  const launchedByOpenClaw =
+    resolved.launchedByOpenClaw === true ? { launchedByOpenClaw: true } : {};
+
   return {
     name: profileName,
     engine,
@@ -571,6 +589,7 @@ export function resolveProfile(
     headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    ...launchedByOpenClaw,
   };
 }
 

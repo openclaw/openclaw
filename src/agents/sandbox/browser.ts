@@ -150,6 +150,9 @@ function buildSandboxBrowserResolvedConfig(params: {
     headless: params.headless,
     noSandbox: false,
     attachOnly: true,
+    // The sandbox runtime launches this container browser, so its CDP
+    // connection keeps Playwright's default-context overrides.
+    launchedByOpenClaw: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
     tabCleanup: {

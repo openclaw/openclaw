@@ -57,6 +57,9 @@ describe("attached Browser tool runtime", () => {
       resolved: {
         enabled: true,
         attachOnly: true,
+        // The worker browser launcher owns this browser, so the CDP attach path
+        // keeps Playwright's default-context overrides (openclaw/openclaw#157547).
+        launchedByOpenClaw: true,
         defaultProfile: "worker",
         profiles: {
           worker: {

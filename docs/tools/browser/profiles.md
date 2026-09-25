@@ -69,3 +69,7 @@ preserve the active Chrome tab when OpenClaw can verify that the attached browse
 is running with a visible window. Headless browsers and browsers whose mode cannot
 be verified keep the existing activation behavior so screenshots remain reliable.
 Explicit tab-focus actions still activate the requested tab.
+
+An attach-only profile attaches to a browser OpenClaw did not launch, so it keeps
+the browser's own download destination and OpenClaw does not capture its downloads
+(see [remote CDP](/tools/browser/remote)).

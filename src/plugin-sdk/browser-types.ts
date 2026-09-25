@@ -45,6 +45,13 @@ export type ResolvedBrowserConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  /**
+   * Set by the core runtime for a browser it launches outside the managed
+   * launcher (the sandbox container browser and the worker attached browser), so
+   * a plugin seeing it true knows the CDP attach path keeps Playwright's
+   * default-context overrides.
+   */
+  launchedByOpenClaw?: boolean;
   defaultProfile: string;
   profiles: Record<string, ResolvedBrowserProfileConfig>;
   tabCleanup: ResolvedBrowserTabCleanupConfig;

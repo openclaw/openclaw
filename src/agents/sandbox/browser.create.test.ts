@@ -354,6 +354,20 @@ describe("ensureSandboxBrowser create args", () => {
     });
   });
 
+  // The sandbox runtime launches this container browser, so the CDP attach path
+  // must keep Playwright's default-context overrides (openclaw/openclaw#157547).
+  it("marks the sandbox bridge config as a browser OpenClaw launched", async () => {
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: harness.testWorkspaceDir,
+      agentWorkspaceDir: harness.testWorkspaceDir,
+      cfg: buildConfig(false),
+    });
+
+    expect(latestBridgeResolved().launchedByOpenClaw).toBe(true);
+    expect(latestBridgeResolved().attachOnly).toBe(true);
+  });
+
   it("recreates a cached bridge when the SSRF policy changes", async () => {
     const existingBridge = {
       server: { listening: true } as never,

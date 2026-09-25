@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
+import { isExternallyOwnedCdpEndpoint } from "./cdp-endpoint-ownership.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -416,6 +417,9 @@ export async function connectBrowser(
   engine?: BrowserEngineId,
 ): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
+  // A browser OpenClaw did not launch keeps its own download handling and
+  // default-context state (openclaw/openclaw#157547).
+  const externallyOwnedEndpoint = isExternallyOwnedCdpEndpoint(normalized);
   const relay = getBorrowedRelayCdpAccess(normalized);
   if (relayReference) {
     if (!relay) {
@@ -501,6 +505,7 @@ export async function connectBrowser(
                 lookup,
                 resolveWebSocketUrl,
                 ...(engine ? { engine } : {}),
+                ...(externallyOwnedEndpoint ? { noDefaults: true } : {}),
               });
             }),
           );

@@ -18,4 +18,6 @@ export type ResolvedBrowserProfile = {
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
   attachOnly: boolean;
+  /** Set for a browser OpenClaw launched that still attaches over CDP. */
+  launchedByOpenClaw?: boolean;
 };

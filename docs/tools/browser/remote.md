@@ -19,6 +19,19 @@ read_when:
 - For externally managed CDP services on loopback (for example Browserless in
   Docker published to `127.0.0.1`), also set `attachOnly: true`. Loopback CDP
   without `attachOnly` is treated as a local OpenClaw-managed browser profile.
+- OpenClaw applies Playwright's default-context overrides only to a browser it
+  launches: download interception, focus emulation, and media emulation. An
+  attach-only or remote CDP profile keeps the browser's own download destination
+  and its default-context state, so download capture is not available there:
+  `download` and `waitfordownload` return an error naming the missing capability,
+  because the bytes belong to the browser you run. That browser saves a
+  click-triggered download to its own configured directory; OpenClaw does not
+  move it, and navigating straight to a download URL can take the full navigation
+  timeout before it reports `Download is starting` (measured 15012ms with a 15s
+  timeout) while the file still lands there. An agent that needs the bytes must
+  use a browser OpenClaw launches, such as the managed `openclaw` profile or the
+  sandbox browser. Explicit `browser emulate` settings are separate and are
+  released by `openclaw browser stop`.
 - `headless` only affects local managed profiles that OpenClaw launches. It does not restart or change existing-session or remote CDP browsers.
 - `executablePath` follows the same local managed profile rule. Changing it on a
   running local managed profile marks that profile for restart/reconcile so the

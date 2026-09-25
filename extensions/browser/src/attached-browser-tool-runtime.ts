@@ -103,6 +103,8 @@ export async function createAttachedBrowserToolRuntime(
       cdpUrl,
     },
   };
+  // The worker browser launcher owns this browser.
+  resolved.launchedByOpenClaw = true;
   resolved.extensionRelayPorts = {};
   resolved.extensionRelayInternalTokens = {};
 

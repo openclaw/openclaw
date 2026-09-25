@@ -6,6 +6,7 @@
  * transition can still abort and drain all previously admitted work.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { publishCdpEndpointOwnership } from "./cdp-endpoint-ownership.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
@@ -216,6 +217,10 @@ export function getOrCreateProfileRuntime(
   profile: ResolvedBrowserProfile,
 ): ProfileRuntimeState {
   assertRuntimeAdmission(state);
+  // Every profile-scoped operation admits its profile here before it can
+  // connect, and forProfile resolves that profile from the live resolved
+  // config, so the CDP connection path sees current endpoint ownership.
+  publishCdpEndpointOwnership(profile);
   const current = state.profiles.get(profile.name);
   if (current) {
     getProfileLifecycle(current);
