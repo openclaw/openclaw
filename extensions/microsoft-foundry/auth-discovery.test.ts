@@ -27,13 +27,17 @@ function registerProvider() {
     }),
   );
   const provider = providers[0];
-  if (!provider) throw new Error("expected Microsoft Foundry provider");
+  if (!provider) {
+    throw new Error("expected Microsoft Foundry provider");
+  }
   return provider;
 }
 
 function requireFoundryProviderPatch(result: ReturnType<typeof buildFoundryAuthResult>) {
   const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-  if (!provider) throw new Error("expected Microsoft Foundry config patch");
+  if (!provider) {
+    throw new Error("expected Microsoft Foundry config patch");
+  }
   return provider;
 }
 
@@ -117,10 +121,18 @@ describe("Microsoft Foundry discovered model metadata", () => {
       tenantId: "tenant-id",
     };
     execFileSyncMock.mockImplementation((_command, args) => {
-      if (!Array.isArray(args)) throw new Error("expected Azure CLI arguments");
-      if (args[0] === "version") return "";
-      if (args[0] === "account" && args[1] === "show") return JSON.stringify(account);
-      if (args[0] === "account" && args[1] === "list") return JSON.stringify([account]);
+      if (!Array.isArray(args)) {
+        throw new Error("expected Azure CLI arguments");
+      }
+      if (args[0] === "version") {
+        return "";
+      }
+      if (args[0] === "account" && args[1] === "show") {
+        return JSON.stringify(account);
+      }
+      if (args[0] === "account" && args[1] === "list") {
+        return JSON.stringify([account]);
+      }
       if (args[0] === "cognitiveservices") {
         return JSON.stringify(
           args[2] === "deployment"
@@ -141,7 +153,9 @@ describe("Microsoft Foundry discovered model metadata", () => {
     });
     const provider = registerProvider();
     const auth = provider.auth.find((method: ProviderAuthMethod) => method.id === "entra-id");
-    if (!auth) throw new Error("expected Entra ID auth");
+    if (!auth) {
+      throw new Error("expected Entra ID auth");
+    }
     const result = await auth.run({
       config: {},
       agentDir: "/tmp/test-agent",
