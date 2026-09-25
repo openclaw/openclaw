@@ -390,11 +390,10 @@ function buildModelsCommandReply(
       channelData: interactiveChannelData,
     };
   }
-  models.sort(
-    (left, right) =>
-      Number(params.currentModel === `${provider}/${right}`) -
-      Number(params.currentModel === `${provider}/${left}`),
-  );
+  const currentIndex = models.findIndex((model) => params.currentModel === `${provider}/${model}`);
+  if (currentIndex > 0) {
+    models.unshift(...models.splice(currentIndex, 1));
+  }
 
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;

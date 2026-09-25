@@ -42,13 +42,13 @@ export function renderModelPicker(params: ModelPickerParams) {
   }
   const currentIsKnown = params.options.some((option) => option.value === params.value);
   const options: Array<ModelPickerOption & { description?: string }> = [
-    ...params.options
-      .map((option) => ({ ...option, description: option.detail }))
-      .sort(
-        (left, right) => Number(right.value === params.value) - Number(left.value === params.value),
-      ),
+    ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
+  const selectedIndex = options.findIndex((option) => option.value === params.value);
+  if (selectedIndex > 0) {
+    options.unshift(...options.splice(selectedIndex, 1));
+  }
   return html`
     <div class="model-picker">
       ${renderPicker({
