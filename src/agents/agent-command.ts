@@ -428,7 +428,6 @@ async function agentCommandInternal(
             sessionAgentId,
             lifecycleGeneration,
             runId,
-            workspaceDir,
             executionWorkspaceDir:
               sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
             watchSkills,
@@ -448,7 +447,7 @@ async function agentCommandInternal(
           }),
         { config: cfg },
       );
-      sessionEntry = embeddedSessionState.sessionEntry;
+      ({ sessionEntry, opts } = embeddedSessionState);
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
       const modelSelection = await measureAgentStartup(

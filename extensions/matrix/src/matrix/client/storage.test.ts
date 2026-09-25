@@ -468,16 +468,11 @@ describe("matrix client storage paths", () => {
   });
 
   it("migrates the previous account-scoped sync cache into sqlite before startup", async () => {
-    const stateDir = setupStateDir();
+    setupStateDir();
     const storagePaths = await resolveDefaultStoragePaths();
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, legacySyncCacheBody("account-token"));
-    const env = createMigrationEnv(stateDir);
-
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env,
-    });
+    await maybeMigrateLegacyStorage({ storagePaths });
 
     expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
     expect(fs.existsSync(`${storagePaths.storagePath}.migrated`)).toBe(true);
@@ -487,16 +482,11 @@ describe("matrix client storage paths", () => {
   });
 
   it("ignores unrecognized account-scoped sync cache files without a migration snapshot", async () => {
-    const stateDir = setupStateDir();
+    setupStateDir();
     const storagePaths = await resolveDefaultStoragePaths();
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, '{"new":true}');
-    const env = createMigrationEnv(stateDir);
-
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env,
-    });
+    await maybeMigrateLegacyStorage({ storagePaths });
 
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
   });
@@ -507,7 +497,7 @@ describe("matrix client storage paths", () => {
   ])(
     "preserves completed imports and retries a later archive failure $name",
     async ({ withSentinel }) => {
-      const stateDir = setupStateDir();
+      setupStateDir();
       const storagePaths = await resolveDefaultStoragePaths();
       fs.mkdirSync(storagePaths.rootDir, { recursive: true });
       fs.writeFileSync(storagePaths.storagePath, legacySyncCacheBody("retry-token"));
@@ -541,9 +531,7 @@ describe("matrix client storage paths", () => {
         }
         renameSync(source, destination);
       });
-      const env = createMigrationEnv(stateDir);
-
-      await expect(maybeMigrateLegacyStorage({ storagePaths, env })).rejects.toThrow(
+      await expect(maybeMigrateLegacyStorage({ storagePaths })).rejects.toThrow(
         "synthetic migration archive denied",
       );
       rename.mockRestore();
@@ -589,7 +577,7 @@ describe("matrix client storage paths", () => {
       ).resolves.toBe("retry-token");
 
       resetPluginStateStoreForTests();
-      await maybeMigrateLegacyStorage({ storagePaths, env });
+      await maybeMigrateLegacyStorage({ storagePaths });
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
 

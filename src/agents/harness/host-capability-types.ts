@@ -16,6 +16,10 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localProcessEnv?: Readonly<Record<string, string>>;
   /** Runtime must be a locally spawned owned child, never a socket/node/sandbox peer. */
   ownedLocalProcessRequired?: true;
+  /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
+  localToolEnv?: Readonly<Record<string, string>>;
+  /** Prefix intent for runtimes with an explicitly authored native shell PATH. */
+  localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
 }>;

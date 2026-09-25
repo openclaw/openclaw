@@ -95,6 +95,8 @@ When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
 with the same identity and byte checks as indexed transcripts. Files created after
 capture and changed originals are verified separately before settlement.
+File-era session path repair preserves those originals until their verified import
+receipts finish archival, even after the pending plugin migration records clear.
 Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
@@ -372,6 +374,20 @@ are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
 copies created by older writers. Distinct nonempty indexes, distinct transcript
 archives, invalid archives, and archives missing without a recorded prior
 restore fail closed so restore cannot silently replace or hide recoverable data.
+
+Reimporting an unchanged, manifest-recorded restored index preserves current SQLite
+session metadata while reconciling its transcript history. It does not reset newer
+labels, activity timestamps, or the current session pointer to the restored values.
+A changed restore receipt refuses import without replacing that state. Unreadable
+recovery history permits an import only when the destination has no session rows;
+Doctor verifies that condition and imports the target in one transaction. This can
+use a larger transaction than normal batched imports. A newly created index with a
+different file identity remains an ordinary import when recovery history is readable.
+Keep recovery manifests with their original files so Doctor can distinguish the two.
+Shared indexes retain a receipt for each agent's SQLite target; another owner's
+receipt alone does not establish restored provenance for the selected target. Explicit custom
+stores keep their existing restore/import admission outside the state directory;
+that does not make their files eligible for automatic recovery cleanup.
 
 After verifying the migration and current history, use
 `openclaw update cleanup --dry-run` to inspect retained recovery data without

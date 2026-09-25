@@ -13,7 +13,7 @@ export function describeBrowserTool(opts: {
     ...(actions.has("profiles")
       ? [
           "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
-          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name. Use only when the task requires an existing session and the user has authorized it.",
+          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name.",
         ]
       : []),
     ...(actions.has("importprofile")

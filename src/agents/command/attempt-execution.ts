@@ -90,19 +90,14 @@ import {
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
-import { resolveAgentRunContext } from "./run-context.js";
 import {
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
 } from "./session-store.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
-  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
-}
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -231,7 +226,7 @@ export function runAgentAttempt(params: {
   runId: string;
   lifecycleGeneration: string;
   opts: AgentCommandOpts;
-  runContext: ReturnType<typeof resolveAgentRunContext>;
+  runContext: AgentRunContext;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: SkillSnapshot | undefined;
@@ -691,7 +686,7 @@ export function runAgentAttempt(params: {
                 assertCommitAllowed: assertSettlementCurrent,
               }
             : undefined;
-        const resolveReusableCliSessionBinding = async () => {
+        const prepareCliSessionBinding = async () => {
           const hasManagedClaudeLiveSession = Boolean(
             isClaudeCliProvider(cliExecutionProvider) &&
             cliSessionBinding?.sessionId &&
@@ -713,7 +708,7 @@ export function runAgentAttempt(params: {
               workspaceDir: cliProcessCwd,
             }))
           ) {
-            return cliSessionBinding;
+            return;
           }
 
           log.warn(
@@ -727,20 +722,14 @@ export function runAgentAttempt(params: {
                 ...mutableCliSessionStore,
               })) ?? params.sessionEntry;
           }
-
-          // The store is already cleared above, so no stale --resume can leak to a
-          // later turn. Still return the bound id as the reuse candidate: prepare
-          // re-detects the missing transcript, keeps useResume=false, and arms
-          // raw-transcript reseed from prior OpenClaw history. Returning undefined
-          // strips the candidate and starves reseed, losing warm-stdin continuity.
-          return cliSessionBinding;
         };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
-        const runCliWithSession = async (
-          nextCliSessionId: string | undefined,
-          activeCliSessionBinding = cliSessionBinding,
-        ) => {
-          const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+        await prepareCliSessionBinding();
+        // Retain the cleared binding as the preparation candidate so missing-transcript
+        // recovery can reseed history without resuming the stale CLI session.
+        let result: EmbeddedAgentRunResult;
+        try {
+          const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
           const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
             agentId: params.sessionAgentId,
           });
@@ -749,10 +738,10 @@ export function runAgentAttempt(params: {
             throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
           }
           const forkStoreParams =
-            supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
+            supportsCliSessionFork && cliSessionBinding?.sessionId && mutableCliSessionStore
               ? {
                   provider: cliExecutionProvider,
-                  expectedCliSessionId: nextCliSessionId,
+                  expectedCliSessionId: cliSessionBinding.sessionId,
                   ...mutableCliSessionStore,
                   assertCommitAllowed: () => {
                     assertSettlementCurrent();
@@ -760,7 +749,7 @@ export function runAgentAttempt(params: {
                   },
                 }
               : undefined;
-          return await runCliAgent({
+          result = await runCliAgent({
             ...buildCommonRunParams(),
             diagnosticOwner,
             sessionEntry: params.sessionEntry,
@@ -778,11 +767,8 @@ export function runAgentAttempt(params: {
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
-            cliSessionId: nextCliSessionId,
-            cliSessionBinding:
-              nextCliSessionId === activeCliSessionBinding?.sessionId
-                ? activeCliSessionBinding
-                : undefined,
+            cliSessionId: cliSessionBinding?.sessionId,
+            cliSessionBinding,
             forkCliSessionOnResume,
             ...(forkStoreParams
               ? {
@@ -855,7 +841,7 @@ export function runAgentAttempt(params: {
                         params.sessionKey,
                         mediaTaskIdsBefore,
                       ) ||
-                      retry.sessionId !== activeCliSessionBinding?.sessionId
+                      retry.sessionId !== cliSessionBinding?.sessionId
                     ) {
                       return false;
                     }
@@ -911,14 +897,6 @@ export function runAgentAttempt(params: {
                 }
               : {}),
           });
-        };
-        const activeCliSessionBinding = await resolveReusableCliSessionBinding();
-        let result: EmbeddedAgentRunResult;
-        try {
-          result = await runCliWithSession(
-            activeCliSessionBinding?.sessionId,
-            activeCliSessionBinding,
-          );
         } catch (err) {
           const failedCliSessionBinding = getCliSessionBinding(
             params.sessionEntry,
@@ -930,7 +908,7 @@ export function runAgentAttempt(params: {
             shouldClearFailedCliSessionBinding({
               error: err,
               binding: failedCliSessionBinding,
-              bindingReplacedDuringRun: failedCliSessionId !== activeCliSessionBinding?.sessionId,
+              bindingReplacedDuringRun: failedCliSessionId !== cliSessionBinding?.sessionId,
               hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                 params.sessionKey,
                 mediaTaskIdsBefore,
@@ -1018,7 +996,8 @@ export function runAgentAttempt(params: {
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
-    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+    suppressLiveStreamOutput:
+      params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
     abortSignal: params.opts.abortSignal,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,

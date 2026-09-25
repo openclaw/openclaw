@@ -64,18 +64,20 @@ import type {
   KnownChild,
   MonitorOptions,
   NativeModelToolInputRequest,
-  NativeModelMapping,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
   NativeTurnObservation,
   ParentOwner,
+  ParentRegistrationHandle,
   ParentState,
   TaskRecoveryCandidate,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
 import {
+  NATIVE_SUBAGENT_NOTIFICATION_METHODS,
+  RECOVERY_REVISION_NOTIFICATION_METHODS,
   codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
 } from "./native-subagent-notification.js";
@@ -102,27 +104,6 @@ import {
 import { CodexNativeSubagentTurnObservation } from "./native-subagent-turn-observation.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
-
-const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
-  "thread/started",
-  "thread/closed",
-  "thread/status/changed",
-  "turn/started",
-  "turn/completed",
-  "item/agentMessage/delta",
-  "item/reasoning/summaryTextDelta",
-  "item/started",
-  "item/completed",
-  // App-server exposes no typed terminal subagent result. Keep this one raw
-  // boundary until its protocol provides the child's terminal status and text.
-  "rawResponseItem/completed",
-]);
-const RECOVERY_REVISION_NOTIFICATION_METHODS = new Set([
-  "thread/started",
-  "thread/status/changed",
-  "turn/started",
-  "turn/completed",
-]);
 
 class Monitor {
   private readonly submissions: CodexNativeSubagentSubmissionOwner;
@@ -383,10 +364,7 @@ class Monitor {
     this.childThreadIdsByAgentPath.clear();
   }
 
-  registerParent(params: NativeParentRegistration): {
-    bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-    unregister: () => Promise<void>;
-  } {
+  registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle> {
     return registerNativeSubagentParent(params, {
       states: this.parentStates,
       children: this.childStates,
@@ -799,6 +777,9 @@ class Monitor {
       const childThreadId = thread ? readString(thread, "id")?.trim() : undefined;
       const agentPath = readString(readThreadSpawnSource(thread), "agent_path")?.trim();
       const state = parentThreadId ? this.resolveNativeParentState(parentThreadId) : undefined;
+      if (state?.preparing) {
+        return undefined;
+      }
       if (state && childThreadId && parentThreadId) {
         return this.registerChildThread(state, childThreadId, {
           ...(agentPath === undefined ? {} : { agentPath }),
@@ -827,6 +808,9 @@ class Monitor {
         ? (readString(item, "senderThreadId") ?? readString(params, "threadId"))?.trim()
         : undefined;
       const state = parentThreadId ? this.resolveNativeParentState(parentThreadId) : undefined;
+      if (state?.preparing) {
+        return undefined;
+      }
       if (state && parentThreadId) {
         const turnId = readString(params, "turnId");
         const owner = this.resolveParentOwner(state, turnId, parentThreadId);
@@ -1315,7 +1299,7 @@ class Monitor {
     const preparedAssignment = typeof childInput === "string" ? undefined : childInput;
     const childThreadId =
       typeof childInput === "string" ? childInput.trim() : childInput.childThreadId;
-    if (!parentThreadId || !childThreadId || this.disposed) {
+    if (!parentThreadId || !childThreadId || this.disposed || state.preparing) {
       return undefined;
     }
     const claimDirectChild = options.directOwner?.claimDirectChild;
@@ -1998,7 +1982,10 @@ class Monitor {
   }
 
   private pruneParentIfUnused(state: ParentState): void {
-    if (state.modelSourceReferences) {
+    if (
+      state.modelSourceReferences ||
+      (state.pendingRegistrations && !this.disposed && !this.retiredParentStates.has(state))
+    ) {
       return;
     }
     if (this.submissions.hasCustody(state)) {

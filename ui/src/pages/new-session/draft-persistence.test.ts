@@ -108,6 +108,52 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
+    const flow = createFlow();
+    const hydrationEntered = Promise.withResolvers<void>();
+    const hydration = Promise.withResolvers<[]>();
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => undefined,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    store.readDurableComposerDraft.mockResolvedValueOnce({
+      status: "found",
+      draft: {
+        revision: 7,
+        text: "@Alex stored draft",
+        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
+        modelSelection: { agentId: "main", model: "openai/stored", thinkingLevel: "low" },
+        attachments: [],
+        writeId: "stored",
+      },
+    });
+    store.hydrateDurableComposerAttachments.mockImplementationOnce(() => {
+      hydrationEntered.resolve();
+      return hydration.promise;
+    });
+    try {
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await hydrationEntered.promise;
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      flow.setMessage("@Alex newer edit", mentions);
+      hydration.resolve([]);
+      // The restore registered its continuation before this await.
+      await hydration.promise;
+      expect(flow.message).toBe("@Alex newer edit");
+      expect(flow.mentions).toEqual(mentions);
+      expect(restoreSelection).not.toHaveBeenCalled();
+    } finally {
+      hydration.resolve([]);
+      await hydration.promise;
+      const submitted = flow.draftPersistence.captureSubmission();
+      flow.disconnect();
+      await Promise.all(submitted.mutation.writes);
+    }
+  });
+
   it.each(["read", "attachments"] as const)(
     "never flushes model-only edits after failed %s restoration",
     async (failure) => {

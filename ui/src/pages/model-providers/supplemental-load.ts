@@ -1,19 +1,13 @@
 import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, loadModelProviderUsage, type ModelProvidersData } from "./load.ts";
 
-type SupplementalGateway = {
-  connected: boolean;
-  client: GatewayBrowserClient | null;
-  epoch: number;
-  isCurrent: (params: { client: GatewayBrowserClient; epoch: number }) => boolean;
-};
-
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
-  getGateway: () => SupplementalGateway;
+  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
   setData: (data: ModelProvidersData) => void;

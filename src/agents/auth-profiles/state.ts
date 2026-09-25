@@ -89,12 +89,6 @@ export function mergeAuthProfileState(
     if (!left && !right) {
       return undefined;
     }
-    if (!left) {
-      return { ...right };
-    }
-    if (!right) {
-      return { ...left };
-    }
     return { ...left, ...right };
   };
 

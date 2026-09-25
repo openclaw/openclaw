@@ -956,7 +956,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"] != nil,
             "Run through scripts/test-ios-chat-attachments.sh with the owned loopback fixture")
         let fixtureURL = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"])
-        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let fixtureBaseURL = try XCTUnwrap(URL(string: fixtureURL))
+        let app = try await self.launchPairedLiveGatewayApp(
+            initialTab: "chat",
+            initialDestination: "chat",
+            readinessURL: fixtureBaseURL.appendingPathComponent("attachment-ready"))
         // A fixture/history failure must never produce the expected baseline regression marker.
         guard app.staticTexts["Your report is ready."].waitForExistence(timeout: 15) else {
             XCTFail("Managed document fixture history did not load")
@@ -974,7 +978,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(saveToFiles.waitForExistence(timeout: 10), "Downloaded file must reach the system exporter")
         self.attachScreenshot(named: "document-system-share")
 
-        let statusURL = try XCTUnwrap(URL(string: fixtureURL))
+        let statusURL = fixtureBaseURL
         let (statusData, _) = try await URLSession.shared.data(from: statusURL)
         let status = try XCTUnwrap(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
         XCTAssertEqual(status["documentDownloads"] as? Int, 1)
@@ -1766,6 +1770,37 @@ extension OpenClawSnapshotUITests {
         initialTab: String,
         initialDestination: String) throws -> XCUIApplication
     {
+        let app = try self.startPairedLiveGatewayApp(
+            initialTab: initialTab,
+            initialDestination: initialDestination)
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
+        app.buttons["Go to Chat"].tap()
+        return app
+    }
+
+    private func launchPairedLiveGatewayApp(
+        initialTab: String,
+        initialDestination: String,
+        readinessURL: URL) async throws -> XCUIApplication
+    {
+        let app = try self.startPairedLiveGatewayApp(
+            initialTab: initialTab,
+            initialDestination: initialDestination)
+        var request = URLRequest(url: readinessURL)
+        request.timeoutInterval = 45
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let readiness = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(readiness["ready"] as? Bool, true)
+        XCTAssertTrue(app.staticTexts["You're connected"].exists)
+        app.buttons["Go to Chat"].tap()
+        return app
+    }
+
+    private func startPairedLiveGatewayApp(
+        initialTab: String,
+        initialDestination: String) throws -> XCUIApplication
+    {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
             "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and provide a fresh setup code")
@@ -1803,9 +1838,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 3))
         app.menuItems["Paste"].tap()
         app.buttons["Apply"].tap()
-
-        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
-        app.buttons["Go to Chat"].tap()
         return app
     }
 

@@ -50,7 +50,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     sessionKey: parent,
     defaultSessionId: "resume-parent-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: previousRunId,
     childSessionKey,
     requesterSessionKey: parent,

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
   getInstallationTarget,
-  installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
 import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
@@ -16,7 +16,6 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
@@ -36,7 +35,6 @@ import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
-import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -58,6 +56,7 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -90,11 +89,8 @@ function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefi
   if (Buffer.byteLength(normalized, "utf8") > MAX_NATIVE_OPERATION_CWD_BYTES) {
     throw new Error(`native operation cwd must not exceed ${MAX_NATIVE_OPERATION_CWD_BYTES} bytes`);
   }
-  for (let index = 0; index < normalized.length; index += 1) {
-    const code = normalized.charCodeAt(index);
-    if (code < 32 || code === 127) {
-      throw new Error("native operation cwd must not contain control characters");
-    }
+  if (containsAsciiControlCharacter(normalized)) {
+    throw new Error("native operation cwd must not contain control characters");
   }
   return path.resolve(attemptCwd ?? process.cwd(), normalized);
 }
@@ -193,7 +189,6 @@ export function createAgentHarnessHostCapabilities(params: {
   const workSignal = getAsyncWorkSignal();
   const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
-  const localProcessEnv = installationTargetEnv(installationTarget);
   const ownedLocalProcessRequired = requiresOwnedRuntimeProcess();
   const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
@@ -327,10 +322,12 @@ export function createAgentHarnessHostCapabilities(params: {
         })
       : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
-  const preparedRunEnvironment = prepareGitHubToolEnvironment({
-    config: config ?? {},
-    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-    agentId: attempt.agentId ?? "main",
+  const preparedRunEnvironment = prepareAgentHarnessEnvironment({
+    config,
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    sandboxAgentId: attempt.sandboxAgentId,
+    installationTarget,
   });
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
@@ -507,13 +504,9 @@ export function createAgentHarnessHostCapabilities(params: {
       : {}),
     preparedEnvironment: () => {
       assertActive();
-      return Object.freeze({
-        credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
-        localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
-        managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
-        ...(localProcessEnv ? { localProcessEnv } : {}),
-        ...(ownedLocalProcessRequired ? { ownedLocalProcessRequired: true as const } : {}),
-      });
+      return ownedLocalProcessRequired
+        ? Object.freeze({ ...preparedRunEnvironment, ownedLocalProcessRequired: true as const })
+        : preparedRunEnvironment;
     },
     activeComputerContext: () => {
       assertActive();

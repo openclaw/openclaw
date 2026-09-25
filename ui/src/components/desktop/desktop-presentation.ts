@@ -6,7 +6,10 @@ import { renderDesktopDocumentView } from "./desktop-document-view.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
+import { renderDesktopPanelRecovery, type DesktopPanelState } from "./desktop-panel-state.ts";
 import {
+  renderDesktopCredentials,
+  renderDesktopPicker,
   renderDesktopNotice,
   renderDesktopPanelView,
   type DesktopSizingOptions,
@@ -17,7 +20,16 @@ type DesktopPresentation = {
   documentMode: boolean;
   embedded: boolean;
   workspaceControls: boolean;
-  content: Parameters<typeof renderDesktopPanelView>[0]["content"];
+  content: {
+    state: DesktopPanelState;
+    loading: boolean;
+    automaticSource: boolean;
+    hasTarget: boolean;
+    notice: Parameters<typeof renderDesktopPanelView>[0]["content"]["notice"];
+    picker: Omit<Parameters<typeof renderDesktopPicker>[0], "loading">;
+    credentials: Parameters<typeof renderDesktopCredentials>[0];
+    recovery: Omit<Parameters<typeof renderDesktopPanelRecovery>[0], "inventoryError">;
+  };
   controlling: boolean;
   desktopApps: WorkerDesktopAppId[];
   launchingApp: WorkerDesktopAppId | null;
@@ -25,6 +37,7 @@ type DesktopPresentation = {
   sizing: DesktopSizingOptions;
   mobileKeyboard: DesktopMobileKeyboard;
   pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   dockLayout: DockLayoutController<"bottom" | "right">;
   fullscreenMode: DesktopPanelFullscreenController;
   onControlToggle: () => void;
@@ -43,12 +56,25 @@ type DesktopPresentation = {
 
 /** Compose the existing document and dock views without owning connection state. */
 export function renderDesktopPresentation(view: DesktopPresentation) {
-  const content = view.startup
-    ? {
-        ...view.content,
-        notice: html`${view.content.notice}${renderDesktopNotice(null, t(view.startup.worker?.state === "bootstrapping" ? "desktop.preparing" : "desktop.starting"))}`,
-      }
-    : view.content;
+  const content: Parameters<typeof renderDesktopPanelView>[0]["content"] = {
+    // Source lookup and RFB authentication share the same loading stage.
+    state:
+      view.content.state === "picker" &&
+      view.content.loading &&
+      view.content.automaticSource &&
+      view.content.hasTarget
+        ? "connecting"
+        : view.content.state,
+    notice: view.startup
+      ? html`${view.content.notice}${renderDesktopNotice(null, t(view.startup.worker?.state === "bootstrapping" ? "desktop.preparing" : "desktop.starting"))}`
+      : view.content.notice,
+    picker: renderDesktopPicker({ ...view.content.picker, loading: view.content.loading }),
+    credentials: renderDesktopCredentials(view.content.credentials),
+    recovery: renderDesktopPanelRecovery({
+      ...view.content.recovery,
+      inventoryError: view.content.state === "inventory-error",
+    }),
+  };
   const focus = view.focusTarget();
   if (view.documentMode) {
     return renderDesktopDocumentView({
@@ -95,6 +121,7 @@ export function renderDesktopPresentation(view: DesktopPresentation) {
         desktopSourceForEnvironment({ id: focus.source }).kind === "environment",
       sizing: view.sizing,
       pictureInPictureControl: view.pictureInPictureControl,
+      audioControl: view.audioControl,
       onLaunch: view.onLaunch,
       onTakeControl: view.onTakeControl,
       onControlToggle: view.onControlToggle,

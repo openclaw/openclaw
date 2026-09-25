@@ -55,22 +55,26 @@ function getCompletionOwner(
 }
 
 /** Capture during admission; assignment/recovery owners retain their own holds before yielding. */
-export function captureAgentHarnessCompletionCustodyOwner(
+export async function captureAgentHarnessCompletionCustodyOwner(
   scopeInput: AgentHarnessTaskRuntimeScope,
   assertRequesterCurrent: () => void,
-): AgentHarnessCompletionCustody | undefined {
+): Promise<AgentHarnessCompletionCustody | undefined> {
   const scope = assertAgentHarnessTaskRuntimeScope(scopeInput);
   const resolver = getGatewayContextResolver(scope);
-  const captured = resolver
+  const preparation = resolver
     ? withPluginRuntimeGatewayContextResolver(
         resolver,
         captureOperatorToolGatewayContinuationContext,
       )
     : captureOperatorToolGatewayContinuationContext();
-  if (!captured) {
+  if (!preparation) {
     return undefined;
   }
   const root = retainGatewayRootWorkAdmissionContinuationScope();
+  const captured = await preparation.catch((error: unknown) => {
+    root?.release();
+    throw error;
+  });
   const releaseRoot = () => root?.release();
   captured.signal.addEventListener("abort", releaseRoot, { once: true });
   let references = 0;
@@ -135,6 +139,8 @@ export function captureAgentHarnessCompletionCustodyOwner(
     return custody;
   };
   try {
+    captured.assertCurrent();
+    assertRequesterCurrent();
     return retain();
   } catch (error) {
     root?.release();
