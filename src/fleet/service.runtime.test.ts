@@ -54,6 +54,19 @@ describe("fleet service", () => {
     await tempRoot.cleanup();
   });
 
+  it("refuses an incompatible image before creating state or a container", async () => {
+    const containers = createContainerMock();
+    containers.prepareGatewayImage.mockRejectedValueOnce(new Error("missing --published-port"));
+    const service = createFleetService({ env, containers: containers.runtime });
+    await expect(service.create({ tenant: "acme" })).rejects.toThrow("missing --published-port");
+    expect(containers.createNetwork).not.toHaveBeenCalled();
+    expect(containers.run).not.toHaveBeenCalled();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+    await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("creates a bootable token-only cell config and returns the secret-bearing result", async () => {
     const containers = createContainerMock();
     const service = createFleetService({
@@ -360,7 +373,7 @@ describe("fleet service", () => {
       state: "running",
       running: true,
       managed: true,
-      imageId: "sha256:old-image-id",
+      imageId: `sha256:${"a".repeat(64)}`,
     });
     expect(status.health).toEqual({
       status: "ok",

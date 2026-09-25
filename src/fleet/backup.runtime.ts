@@ -20,13 +20,9 @@ import {
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import {
-  cellAuthSecretDir,
-  cellNetworkName,
-  FLEET_ATTEMPT_LABEL,
-  validateCellContainerProfile,
-  type CellContainerProfile,
-} from "./cell-profile.js";
+import { cellAuthSecretDir, cellNetworkName, FLEET_ATTEMPT_LABEL } from "./cell-profile.js";
+import type { CellContainerProfile } from "./cell-profile.js";
+import { prepareFleetLaunchProfile } from "./container-launch.runtime.js";
 import type { FleetContainerRuntime } from "./containers.runtime.js";
 import type { FleetCellRecord } from "./registry.js";
 import {
@@ -627,7 +623,7 @@ export async function restoreFleetCell(params: {
     const token = params.generateToken();
     const attemptId = params.generateAttemptId();
     replacementAttemptId = attemptId;
-    const profile: CellContainerProfile = {
+    const profile = await prepareFleetLaunchProfile(params.containers, {
       ...buildProfileBaseFromInspection({
         record: params.record,
         stateDir: params.stateDir,
@@ -639,8 +635,8 @@ export async function restoreFleetCell(params: {
       }),
       image: inspection.imageId,
       attemptId,
-    };
-    validateCellContainerProfile(profile);
+    });
+    await params.checkpoint();
     const authSecretDir = cellAuthSecretDir(params.stateDir, params.record.tenantId);
     const dataTarget = await resolvePurgeTarget(
       path.join(params.stateDir, "fleet", "cells"),

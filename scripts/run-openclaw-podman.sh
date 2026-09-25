@@ -21,6 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/host-timeout.sh
 source "$SCRIPT_DIR/lib/host-timeout.sh"
+source "$SCRIPT_DIR/lib/container-gateway-capability.sh"
 # shellcheck source=scripts/podman/common.sh
 source "$SCRIPT_DIR/podman/common.sh"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
@@ -152,6 +153,10 @@ if [[ "${1:-}" == "setup" || "${1:-}" == "onboard" ]]; then
   shift
 fi
 
+if [[ "$RUN_SETUP" == false ]]; then
+  GATEWAY_IMAGE_ID="$(openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL")"
+fi
+
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
 mkdir -p "$CONFIG_DIR/canvas" "$CONFIG_DIR/cron"
 chmod 700 "$CONFIG_DIR" "$WORKSPACE_DIR"
@@ -266,7 +271,7 @@ if [[ "$RUN_SETUP" == true ]]; then
 fi
 
 TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
-run_podman_detached --pull="$PODMAN_PULL" -d --replace \
+run_podman_detached --pull=never -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
   ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
@@ -278,7 +283,7 @@ run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw${SELINUX_MOUNT_OPTS}" \
   -p "${PUBLISH_HOST}:${HOST_GATEWAY_PORT}:18789" \
   -p "${PUBLISH_HOST}:${HOST_BRIDGE_PORT}:18790" \
-  "$OPENCLAW_IMAGE" \
+  "$GATEWAY_IMAGE_ID" \
   node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789 --published-port "$HOST_GATEWAY_PORT" >/dev/null
 
 echo "Container $CONTAINER_NAME started: http://127.0.0.1:${HOST_GATEWAY_PORT}/"

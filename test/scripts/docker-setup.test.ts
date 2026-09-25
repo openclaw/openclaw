@@ -168,6 +168,37 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
+  it("rejects an older image before config writes or Gateway replacement", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const envPath = join(activeSandbox.rootDir, ".env");
+    const savedEnv = "OPENCLAW_IMAGE=old:selected\n";
+    await writeFile(envPath, savedEnv);
+    const result = runDockerSetup(activeSandbox, { DOCKER_STUB_OLD_GATEWAY: "1" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Select a compatible image or build this checkout");
+    expect(await readFile(envPath, "utf8")).toBe(savedEnv);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).not.toContain("config set");
+    expect(log).not.toContain("up -d");
+    expect(log).toContain("rm -f");
+    await expect(stat(`${activeSandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("launches the verified image identity while preserving the saved image selection", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, { OPENCLAW_IMAGE: "fixture:selected" });
+    expect(result.status, result.stderr).toBe(0);
+    await expect(stat(`${activeSandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readDockerLog(activeSandbox)).toContain(
+      "compose-image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    expect(await readFile(join(activeSandbox.rootDir, ".env"), "utf8")).toContain(
+      "OPENCLAW_IMAGE=fixture:selected",
+    );
+  });
+
   it.each([
     { allowedOrigins: undefined },
     { allowedOrigins: [] },
@@ -976,11 +1007,49 @@ describe("scripts/docker/setup.sh", () => {
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
   });
 
-  it("keeps docker-compose gateway command in sync", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    expect(compose).not.toContain("gateway-daemon");
-    expect(compose).toContain('"gateway"');
-  });
+  it.each([false, true])(
+    "guards direct Compose launches against an unsupported image (supported=%s)",
+    async (supported) => {
+      const activeSandbox = requireSandbox(sandbox);
+      const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+        services: { "openclaw-gateway": { command: string[] } };
+      };
+      const commandRoot = join(activeSandbox.rootDir, `compose-command-${supported}`);
+      await mkdir(join(commandRoot, "dist"), { recursive: true });
+      await writeFile(
+        join(commandRoot, "dist", "index.js"),
+        `
+      if (process.argv.includes("--help")) console.log(${JSON.stringify(supported ? "--published-port <port>" : "--port <port>")});
+      else console.log(JSON.stringify(process.argv.slice(2)));
+    `,
+      );
+      const [command, ...args] = parsed.services["openclaw-gateway"].command.map((value) =>
+        value
+          .replaceAll("$$", "$")
+          .replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")
+          .replace("${OPENCLAW_GATEWAY_PORT:-18789}", "19123"),
+      );
+      if (!command) {
+        throw new Error("Compose Gateway command must not be empty.");
+      }
+      const result = spawnSync(command, args, { cwd: commandRoot, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(supported ? 0 : 1);
+      if (supported) {
+        expect(JSON.parse(result.stdout)).toEqual([
+          "gateway",
+          "--bind",
+          "lan",
+          "--port",
+          "18789",
+          "--published-port",
+          "19123",
+        ]);
+      } else {
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("Select a compatible OPENCLAW_IMAGE");
+      }
+    },
+  );
 
   it("keeps docker-compose gateway Bonjour advertising in auto mode by default", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
@@ -1033,12 +1102,9 @@ describe("scripts/docker/setup.sh", () => {
       >;
     };
     const gateway = services["openclaw-gateway"];
-    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
-    expect(listenerPort).toBe("18789");
+    const listenerPort = "18789";
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
-    expect(gateway.command[gateway.command.indexOf("--published-port") + 1]).toBe(
-      "${OPENCLAW_GATEWAY_PORT:-18789}",
-    );
+    expect(gateway.command.at(-1)).toBe("${OPENCLAW_GATEWAY_PORT:-18789}");
     expect(services["openclaw-cli"].command).toBeUndefined();
     for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
       expect(services[name].environment, name).toMatchObject({

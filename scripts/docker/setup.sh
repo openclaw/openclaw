@@ -9,6 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/host-timeout.sh"
+source "$ROOT_DIR/scripts/lib/container-gateway-capability.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -701,6 +702,40 @@ upsert_env() {
   mv "$tmp" "$file"
 }
 
+if [[ -n "$OFFLINE_MODE" ]]; then
+  require_local_docker_image "$IMAGE_NAME"
+  echo "==> Using preloaded Docker image: $IMAGE_NAME"
+elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+  echo "==> Building Docker image: $IMAGE_NAME"
+  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+  fi
+  run_docker_build \
+    "${PROVENANCE_BUILD_ARGS[@]}" \
+    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
+    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_SKIP_DTS=${OPENCLAW_DOCKER_BUILD_SKIP_DTS}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
+    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
+    -t "$IMAGE_NAME" \
+    -f "$ROOT_DIR/Dockerfile" \
+    "$ROOT_DIR"
+else
+  echo "==> Pulling Docker image: $IMAGE_NAME"
+  if ! run_docker_pull "$IMAGE_NAME"; then
+    echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
+    exit 1
+  fi
+fi
+
+GATEWAY_IMAGE_ID="$(openclaw_prepare_gateway_image docker "$IMAGE_NAME" never)"
+
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
@@ -739,37 +774,8 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_OTEL_PRELOADED \
   OPENCLAW_SKIP_ONBOARDING
 
-if [[ -n "$OFFLINE_MODE" ]]; then
-  require_local_docker_image "$IMAGE_NAME"
-  echo "==> Using preloaded Docker image: $IMAGE_NAME"
-elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
-  echo "==> Building Docker image: $IMAGE_NAME"
-  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
-  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
-  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
-  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
-  fi
-  run_docker_build \
-    "${PROVENANCE_BUILD_ARGS[@]}" \
-    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
-    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
-    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_SKIP_DTS=${OPENCLAW_DOCKER_BUILD_SKIP_DTS}" \
-    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
-    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
-    -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
-else
-  echo "==> Pulling Docker image: $IMAGE_NAME"
-  if ! run_docker_pull "$IMAGE_NAME"; then
-    echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
-    exit 1
-  fi
-fi
+# Keep the saved image selection, but deploy exactly the image checked above.
+export OPENCLAW_IMAGE="$GATEWAY_IMAGE_ID"
 
 if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
   fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."

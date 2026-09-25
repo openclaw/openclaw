@@ -1,6 +1,6 @@
 // Exercise deployment-owned launch arguments without starting a container.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -19,13 +19,22 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       mkdirSync(config, { mode: 0o700 });
       const log = join(home, "podman-args");
       for (const [name, body] of Object.entries({
-        podman: 'printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"',
+        podman: `
+case "$1" in
+  create) touch "$PODMAN_STUB_ARGS-volume"; printf '%s' "\${@:$#}" > "$PODMAN_STUB_ARGS-probe.cjs"; printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';;
+  inspect) printf '%s\\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';;
+  start) (cd "$HOME" && node "$PODMAN_STUB_ARGS-probe.cjs");;
+  rm) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"; if [[ " $* " == *" -v "* ]]; then rm -f "$PODMAN_STUB_ARGS-volume"; fi;;
+  *) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS";;
+esac`,
         openclaw: 'printf "lan\\n"',
         systemctl: "exit 0",
         uname: 'printf "Linux\\n"',
       })) {
-        writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
       }
+      mkdirSync(join(home, "dist"));
+      writeFileSync(join(home, "dist", "index.js"), 'console.log("--published-port <port>");');
       const file = join(config, "openclaw.json");
       writeFileSync(
         file,
@@ -37,7 +46,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       writeFileSync(join(config, ".env"), "OPENCLAW_GATEWAY_TOKEN=fixture-token\n", {
         mode: 0o600,
       });
-      function run(script: string, args: string[], port = "19123") {
+      function run(script: string, args: string[], port = "19123", expectedStatus = 0) {
         const result = spawnSync("/bin/bash", [join(repoRoot, script), ...args], {
           cwd: repoRoot,
           encoding: "utf8",
@@ -52,7 +61,8 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
             PODMAN_STUB_ARGS: log,
           },
         });
-        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.status, result.stderr || result.stdout).toBe(expectedStatus);
+        return result;
       }
       return { home, file, log, run };
     }
@@ -66,6 +76,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       ({ allowedOrigins }) => {
         const sandbox = fixture(allowedOrigins);
         sandbox.run("scripts/podman/setup.sh", ["--container"]);
+        expect(existsSync(`${sandbox.log}-volume`)).toBe(false);
         const config = JSON.parse(readFileSync(sandbox.file, "utf8"));
         expect(config.gateway).toEqual({
           mode: "local",
@@ -89,12 +100,37 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       },
     );
 
+    it.each(["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"])(
+      "rejects an older selected image without replacing the service or saved config (%s)",
+      (script) => {
+        const sandbox = fixture();
+        writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
+        const before = readFileSync(sandbox.file, "utf8");
+        const envPath = join(sandbox.home, "config", ".env");
+        const envBefore = readFileSync(envPath, "utf8");
+        const result = sandbox.run(
+          script,
+          script.includes("setup.sh") ? ["--quadlet"] : ["launch"],
+          "19123",
+          1,
+        );
+        expect(result.stderr).toContain("Select a compatible image or build this checkout");
+        expect(existsSync(`${sandbox.log}-volume`)).toBe(false);
+        expect(readFileSync(sandbox.file, "utf8")).toBe(before);
+        expect(readFileSync(envPath, "utf8")).toBe(envBefore);
+        expect(readFileSync(sandbox.log, "utf8")).not.toContain("--replace");
+      },
+    );
+
     it("generates matching Quadlet port metadata without persisting an allowlist", () => {
       const sandbox = fixture();
       sandbox.run("scripts/podman/setup.sh", ["--quadlet"]);
       const quadlet = readFileSync(
         join(sandbox.home, ".config/containers/systemd/openclaw.container"),
         "utf8",
+      );
+      expect(quadlet).toContain(
+        "Image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       );
       expect(quadlet).toContain("PublishPort=127.0.0.1:18789:18789");
       expect(quadlet).toContain("--published-port 18789");

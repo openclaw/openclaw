@@ -72,17 +72,23 @@ services:
     init: true
     restart: unless-stopped
     command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-        "--published-port",
-        "${OPENCLAW_GATEWAY_PORT:-18789}",
-      ]
+      - sh
+      - -ec
+      - |
+        node -e '
+        const { spawnSync } = require("node:child_process");
+        const result = spawnSync(process.execPath, ["dist/index.js", "gateway", "--help"], {
+          encoding: "utf8", timeout: 30000, killSignal: "SIGKILL", maxBuffer: 1048576,
+        });
+        if (result.status !== 0 || !/(?:^|\s)--published-port(?:\s|=)/m.test(result.stdout ?? "")) {
+          console.error("Selected image does not support gateway --published-port. Select a compatible OPENCLAW_IMAGE or run docker-setup.sh with OPENCLAW_IMAGE=openclaw:local to build this checkout.");
+          process.exit(1);
+        }
+        '
+        exec node dist/index.js gateway --bind "$$1" --port 18789 --published-port "$$2"
+      - openclaw-gateway
+      - "${OPENCLAW_GATEWAY_BIND:-lan}"
+      - "${OPENCLAW_GATEWAY_PORT:-18789}"
     healthcheck:
       test:
         [

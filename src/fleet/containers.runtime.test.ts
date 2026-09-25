@@ -209,6 +209,7 @@ describe("fleet container runtime", () => {
           State: { Status: "running", Running: true },
           Config: {
             Env: ["OPENCLAW_GATEWAY_TOKEN=test-auth-token", "FEATURE=a=b"],
+            Cmd: ["node", "dist/index.js", "gateway", "--port", "18789"],
             Image: "ghcr.io/openclaw/openclaw:latest",
             Labels: { "openclaw.fleet.tenant": "acme" },
             User: "1000:1000",
@@ -235,6 +236,7 @@ describe("fleet container runtime", () => {
       labels: { "openclaw.fleet.tenant": "acme" },
       environment: { OPENCLAW_GATEWAY_TOKEN: "test-auth-token", FEATURE: "a=b" },
       imageId: "sha256:old-image-id",
+      command: ["node", "dist/index.js", "gateway", "--port", "18789"],
       memory: "2147483648",
       cpus: "2",
       pidsLimit: 512,

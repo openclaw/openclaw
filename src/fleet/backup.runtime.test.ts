@@ -33,6 +33,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
     },
     environment: { OPENCLAW_GATEWAY_TOKEN: "old-token" },
     imageId: "sha256:image",
+    command: ["node", "dist/index.js", "gateway", "--port", "18789"],
     memory: "2147483648",
     cpus: "2",
     pidsLimit: 512,
@@ -63,6 +64,7 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
     isDockerRootless: vi.fn(async () => false),
     run: vi.fn<FleetContainerRuntime["run"]>(async () => undefined),
     pull: vi.fn(async () => undefined),
+    prepareGatewayImage: vi.fn(async (_runtime: string, image: string) => image),
     createNetwork: vi.fn(async () => undefined),
     removeNetwork: vi.fn(async () => undefined),
     logs: vi.fn(async () => undefined),
@@ -475,6 +477,22 @@ describe("fleet restore runtime", () => {
     };
   }
 
+  it("refuses an incompatible image before replacing restored state", async () => {
+    const archive = await createArchive();
+    const containers = containerMock();
+    vi.mocked(containers.prepareGatewayImage).mockRejectedValueOnce(
+      new Error("missing --published-port"),
+    );
+    const original = await fs.readFile(path.join(record.dataDir, "state.txt"), "utf8");
+    await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
+      "missing --published-port",
+    );
+    expect(containers.stop).not.toHaveBeenCalled();
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.run).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(record.dataDir, "state.txt"), "utf8")).toBe(original);
+  });
+
   it("rejects tenant mismatch and running cells before mutation", async () => {
     const mismatch = await createArchive({ tenant: "other" });
     const stopped = containerMock();
@@ -688,7 +706,7 @@ describe("fleet restore runtime", () => {
         labels: { ...inspection(true).labels, "openclaw.fleet.attempt": NEXT_ATTEMPT },
       };
       containers.inspect.mockImplementationOnce(async () => {
-        containers.inspect.mockImplementation(async (_runtime, reference) =>
+        containers.inspect.mockImplementation(async (_runtime: string, reference) =>
           reference === "container-id" ? running : replacement,
         );
         return running;

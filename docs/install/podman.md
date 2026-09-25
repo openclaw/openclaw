@@ -158,6 +158,13 @@ the origins you intend to allow. To use the current public origin and mapped
 localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
 field from your configuration; setting it to `[]` disables those defaults.
 
+Setup checks that the selected image supports `gateway --published-port` before
+changing saved configuration or replacing the Gateway. If the image is too old,
+select a compatible image or build this checkout from source, then retry.
+The check does not upgrade your selected image automatically. Manual launch
+uses the checked image ID for that invocation. Quadlet setup records that image
+ID in the generated service, so rerun setup to select a different image.
+
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 
 | Var                                        | Default          | Effect                                 |

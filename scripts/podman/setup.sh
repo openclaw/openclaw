@@ -23,6 +23,7 @@ set -euo pipefail
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$REPO_PATH/scripts/lib/build-metadata.sh"
 source "$REPO_PATH/scripts/lib/host-timeout.sh"
+source "$REPO_PATH/scripts/lib/container-gateway-capability.sh"
 # shellcheck source=scripts/podman/common.sh
 source "$REPO_PATH/scripts/podman/common.sh"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
@@ -168,6 +169,8 @@ else
   fi
 fi
 
+GATEWAY_IMAGE_ID="$(openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never)"
+
 ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(generate_token_hex_32)"
@@ -203,7 +206,7 @@ if [[ "$INSTALL_QUADLET" == true ]]; then
   OPENCLAW_HOME_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_HOME")"
   OPENCLAW_CONFIG_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONFIG_DIR")"
   OPENCLAW_WORKSPACE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_WORKSPACE_DIR")"
-  OPENCLAW_IMAGE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_IMAGE")"
+  OPENCLAW_IMAGE_ESCAPED="$(escape_sed_replacement_pipe_delim "$GATEWAY_IMAGE_ID")"
   OPENCLAW_CONTAINER_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONTAINER_NAME")"
   sed \
     -e "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_ESCAPED|g" \
