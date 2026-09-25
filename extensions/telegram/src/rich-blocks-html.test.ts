@@ -456,8 +456,8 @@ describe("block HTML islands", () => {
         "Gamma &lt;b&gt;   <i>30</i></pre>",
         "",
         "<hr/>",
-        '<pre><code class="language-python">print("ok")',
-        "</code></pre>",
+        '<pre>\n<code class="language-python">print("ok")',
+        "</code>\n</pre>",
       ].join("\n"),
     );
     expect(blocks).toEqual([
@@ -465,7 +465,7 @@ describe("block HTML islands", () => {
       { type: "paragraph", text: { type: "bold", text: "Summary" } },
       { type: "pre", text: "Alpha / Beta     10 / 20\nGamma <b>   <i>30</i>" },
       { type: "divider" },
-      { type: "pre", text: 'print("ok")\n', language: "python" },
+      { type: "pre", text: '\nprint("ok")\n\n', language: "python" },
     ]);
     expect(plainText).not.toContain("<pre>");
     expect(plainText).not.toContain("<code");

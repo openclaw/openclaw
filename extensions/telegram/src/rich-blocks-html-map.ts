@@ -407,25 +407,26 @@ const PRE_CHILDREN = new Set(["code"]);
 const CODE_LANGUAGE_CLASS_RE = /^language-(\S+)$/u;
 
 // Telegram's `<pre>` block, optionally wrapping one `<code class="language-x">`.
-// Tags inside stay literal text (the fragment parser does not match them).
+// Tags inside stay literal text (the fragment parser does not match them), and
+// the authored text, including whitespace around the wrapper, is kept as is.
 function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlock | undefined {
   const elements = node.children.filter(
     (child): child is Extract<HtmlNode, { kind: "element" }> => child.kind === "element",
   );
-  let body = node.children;
-  let language: string | undefined;
-  if (elements.length > 0) {
-    const [code] = elements;
-    if (elements.length > 1 || !code?.closed || hasStrayContent(node.children, PRE_CHILDREN)) {
-      return undefined;
-    }
-    body = code.children;
-    language = CODE_LANGUAGE_CLASS_RE.exec(parseHtmlAttrs(code.raw).get("class") ?? "")?.[1];
+  const [code] = elements;
+  if (
+    code &&
+    (elements.length > 1 || !code.closed || hasStrayContent(node.children, PRE_CHILDREN))
+  ) {
+    return undefined;
   }
-  const text = nodeText(body);
+  const text = nodeText(node.children);
   if (text.trim() === "") {
     return undefined;
   }
+  const language = code
+    ? CODE_LANGUAGE_CLASS_RE.exec(parseHtmlAttrs(code.raw).get("class") ?? "")?.[1]
+    : undefined;
   return language ? { type: "pre", text, language } : { type: "pre", text };
 }
 
