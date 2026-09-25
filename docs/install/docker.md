@@ -15,7 +15,12 @@ and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
 Changing the public origin updates the inherited origin without saving a copy
 in the allowlist. An explicit list, including `[]`, remains authoritative and
 is not changed by setup or launch; include any desired browser origins yourself.
-Previously saved lists also remain operator-owned.
+Previously saved lists, including entries written by older setup versions,
+remain authoritative. If browser access fails after changing the published
+port or public origin, update `gateway.controlUi.allowedOrigins` to include
+the origins you intend to allow. To use the current public origin and mapped
+localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
+field from your configuration; setting it to `[]` disables those defaults.
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 

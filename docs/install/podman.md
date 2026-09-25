@@ -151,7 +151,12 @@ and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
 Changing the public origin updates the inherited origin without saving a copy
 in the allowlist. An explicit list, including `[]`, remains authoritative and
 is not changed by setup or launch; include any desired browser origins yourself.
-Previously saved lists also remain operator-owned.
+Previously saved lists, including entries written by older setup versions,
+remain authoritative. If browser access fails after changing the published
+port or public origin, update `gateway.controlUi.allowedOrigins` to include
+the origins you intend to allow. To use the current public origin and mapped
+localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
+field from your configuration; setting it to `[]` disables those defaults.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 
