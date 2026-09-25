@@ -6,17 +6,19 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
 import { createWriteTool, type WriteOperations } from "./write.js";
 
+const WritePatchReceiptSchema = Type.Extract(
+  WriteToolOutputSchema,
+  Type.Object({ patch: Type.String() }),
+);
+
 function expectApplicablePatch(details: unknown, oldContent: string, content: string) {
-  if (
-    !Value.Check(WriteToolOutputSchema, details) ||
-    !details.changed ||
-    typeof details.patch !== "string"
-  ) {
+  if (!Value.Check(WritePatchReceiptSchema, details)) {
     throw new Error("Expected a changed-file receipt with a patch");
   }
   expect(applyPatch(oldContent, details.patch)).toBe(content);

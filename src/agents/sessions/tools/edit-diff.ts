@@ -543,7 +543,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   };
 }
 
-export function applyEditsPreservingLineEndings(
+function applyEditsPreservingLineEndings(
   originalContent: string,
   edits: Edit[],
   path: string,
