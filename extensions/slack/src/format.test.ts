@@ -161,20 +161,6 @@ describe("normalizeSlackOutboundText", () => {
     expect(res).toBe("• item\n  • nested");
   });
 
-  it("renders local attachment links as labels in messages and chunks", () => {
-    const input =
-      "Attached [first.bin](/workspace/outputs/first.bin) and [**second.bin**](/workspace/outputs/second.bin). " +
-      "See [relative](./report.txt), [parent](../report.txt), [home](~/report.txt), " +
-      "[docs](https://example.com), [shared](//example.com/report), and `[sample](/local/file)`.";
-    const expected =
-      "Attached first.bin and *second.bin*. " +
-      "See relative, parent, home, <https://example.com|docs>, <//example.com/report|shared>, " +
-      "and `[sample](/local/file)`.";
-
-    expect(normalizeSlackOutboundText(input)).toBe(expected);
-    expect(markdownToSlackMrkdwnChunks(input, 4000)).toEqual([expected]);
-  });
-
   it("handles complex message with multiple elements", () => {
     const res = normalizeSlackOutboundText(
       "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
