@@ -16,6 +16,7 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";

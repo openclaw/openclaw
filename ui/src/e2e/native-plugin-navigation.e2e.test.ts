@@ -15,6 +15,8 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
         async ({ page }) => {
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
           const gateway = await installMockGateway(page, {
             operatorScopes: admin ? ["operator.admin"] : ["operator.read"],
             featureMethods: [
@@ -25,6 +27,8 @@ suite.define(() => {
             ],
             methodResponses: {
               "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: admin },
+              "plugins.catalog.browse": { items: [] },
+              "plugins.catalog.categories": { categories: [] },
               "plugins.controlUi.list": catalog("one"),
               "plugins.controlUi.report": { ok: true },
               "plugins.controlUi.reload": catalog("two"),
@@ -79,6 +83,8 @@ suite.define(() => {
           ).toBe(0);
           await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
+          await gateway.waitForRequest("plugins.controlUi.report");
+          expect(pageErrors).toEqual([]);
           if (!admin) {
             expect(
               await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
@@ -90,8 +96,10 @@ suite.define(() => {
           await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
           await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
           await gateway.waitForRequest("plugins.controlUi.reload");
+          await page.getByRole("button", { name: "Back to app", exact: true }).click();
           await page.getByRole("link", { name: "UI fixture", exact: true }).click();
           await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
+          expect(pageErrors).toEqual([]);
         },
       );
     },
