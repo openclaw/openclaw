@@ -52,8 +52,8 @@ const EXECUTABLE_ENTRYPOINTS = [
     status: 1,
   },
   {
-    args: ["2026.4.25"],
-    output: "1",
+    args: ["2026.7.33"],
+    output: "0",
     script: "scripts/e2e/lib/package-compat.mjs",
     status: 0,
   },

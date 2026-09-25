@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
@@ -11,7 +12,7 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { captureEnv } from "./env.js";
+import { captureEnv, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -354,10 +355,12 @@ export async function createOpenClawTestState(
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
           createExternalAuthRuntime(() => []),
         );
-        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
-        });
+        withEnv(env, () =>
+          saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          }),
+        );
         return resolveAuthProfileDatabasePath(targetAgentDir);
       },
       applyEnv: () => {
@@ -442,13 +445,27 @@ export async function withOpenClawTestState<T>(
   return await withStateDatabaseCoordinatorRuntimeDirectory(
     { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
     async () => {
-      const work = new AsyncWorkScope();
-      try {
-        return await work.track(() => fn(state));
-      } finally {
-        await work.drain();
-        await state.cleanup();
+      const failures = new Set<unknown>();
+      const work = new AsyncWorkScope(failures);
+      const [outcome] = await Promise.allSettled([work.track(() => fn(state))]);
+      await work.drain();
+      if ([...failures].some(hasUnjoinedWork)) {
+        // Promise settlement does not prove that an external child released its inputs.
+        try {
+          await state.restoreEnv();
+        } catch (error) {
+          failures.add(error);
+        }
+        const retained = [...failures];
+        throw retained.length === 1
+          ? retained[0]
+          : new AggregateError(retained, `Fixture cleanup unverified; retained ${state.root}`);
       }
+      await state.cleanup();
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+      return outcome.value;
     },
   );
 }

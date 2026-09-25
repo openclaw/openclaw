@@ -1,6 +1,6 @@
 // Covers prompt-facing sandbox metadata and full-access availability rules.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as execApprovals from "../infra/exec-approvals.js";
+import * as execApprovals from "../infra/exec-approvals-store.js";
 import {
   buildEmbeddedSandboxInfo,
   resolveEmbeddedFullAccessState,
@@ -50,7 +50,7 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
 describe("buildEmbeddedSandboxInfo", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
       version: 1,
       agents: {},
     });
@@ -170,19 +170,22 @@ describe("buildEmbeddedSandboxInfo", () => {
     });
   });
 
-  it("uses config exec mode when building prompt full-access state", () => {
+  it("uses config exec mode when building prompt full-access state", async () => {
     const sandbox = createSandboxContext();
-    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-      config: {
-        tools: {
-          exec: {
-            mode: "auto",
+    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
+      {
+        config: {
+          tools: {
+            exec: {
+              mode: "auto",
+            },
           },
         },
+        agentId: "main",
+        sandboxAvailable: true,
       },
-      agentId: "main",
-      sandboxAvailable: true,
-    });
+      {},
+    );
 
     expect(
       buildEmbeddedSandboxInfo(
@@ -202,19 +205,22 @@ describe("buildEmbeddedSandboxInfo", () => {
     });
   });
 
-  it("uses elevated host policy when sandbox is active and exec policy is unset", () => {
+  it("uses elevated host policy when sandbox is active and exec policy is unset", async () => {
     const sandbox = createSandboxContext();
-    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-      config: {
-        tools: {
-          exec: {
-            host: "auto",
+    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
+      {
+        config: {
+          tools: {
+            exec: {
+              host: "auto",
+            },
           },
         },
+        agentId: "main",
+        sandboxAvailable: true,
       },
-      agentId: "main",
-      sandboxAvailable: true,
-    });
+      {},
+    );
 
     expect(
       buildEmbeddedSandboxInfo(

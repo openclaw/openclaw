@@ -174,6 +174,12 @@ function closeForIntegrityAdmission(f: Fixture) {
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
 
+async function closeWorkerForIntegrityAdmission(f: Fixture) {
+  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
+
 function observeAdmission(databasePath: string, hold = false) {
   let parentChecks = 0;
   let admissions = 0;
@@ -367,7 +373,11 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        closeForIntegrityAdmission(f);
+        if (owner === "replacement") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
@@ -414,7 +424,7 @@ it.each(cases)(
               ],
             }),
     );
-    expect(callbacks).toBe(mode === "cold-preparation" ? 0 : 1);
+    expect(callbacks).toBe(owner === "replacement" || mode === "cold-preparation" ? 0 : 1);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -437,7 +447,7 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(mode === "warm" ? 0 : 1);
+    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
   },
 );
 
@@ -447,17 +457,17 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
     let callbacks = 0;
-    const close = () => {
+    const close = async () => {
       callbacks += 1;
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
     };
     const operation =
       mode === "persist-false" || mode === "unchanged"
         ? applySessionStoreProjection({
             storePath: f.databasePath,
             skipMaintenance: true,
-            update: (store) => {
-              close();
+            update: async (store) => {
+              await close();
               if (mode === "persist-false") {
                 delete store[f.input.sessionKey];
               }
@@ -470,8 +480,8 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
               mode === "missing-replacement" ? "agent:main:missing" : f.input.sessionKey,
             ],
             skipMaintenance: true,
-            update: () => {
-              close();
+            update: async () => {
+              await close();
               return {
                 result: "no-op",
                 ...(mode === "missing-replacement"
@@ -496,7 +506,7 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
 );
 
 it.each(["selection", "stale", "denied"] as const)(
-  "preserves replacement $0 error ordering across a cold commit",
+  "refuses replacement $0 before an unauthorized worker commit",
   async (mode) => {
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
@@ -505,7 +515,9 @@ it.each(["selection", "stale", "denied"] as const)(
       throw denied;
     });
     const update = vi.fn(
-      (entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0]) => {
+      async (
+        entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
+      ) => {
         if (mode === "stale") {
           replaceSessionEntrySync(f.input, {
             sessionId: "original",
@@ -513,7 +525,7 @@ it.each(["selection", "stale", "denied"] as const)(
             updatedAt: Date.now(),
           });
         }
-        closeForIntegrityAdmission(f);
+        await closeWorkerForIntegrityAdmission(f);
         return {
           result: undefined,
           replacements: entries.map(({ entry, sessionKey }) => ({
@@ -532,16 +544,14 @@ it.each(["selection", "stale", "denied"] as const)(
         update,
       }),
     );
-    if (mode === "denied") {
-      await expect(work).rejects.toBe(denied);
+    if (mode === "selection") {
+      await expect(work).rejects.toThrow("outside the selected key set");
     } else {
-      await expect(work).rejects.toThrow(
-        mode === "selection" ? "outside the selected key set" : "changed before replacement",
-      );
+      await expect(work).rejects.toBe(denied);
     }
     expect(update).toHaveBeenCalledOnce();
-    expect(guard).toHaveBeenCalledTimes(mode === "denied" ? 1 : 0);
-    probe.expectHealthy(mode === "selection" ? 0 : 1);
+    expect(guard).toHaveBeenCalledTimes(mode === "selection" ? 0 : 1);
+    probe.expectHealthy(0);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(mode === "stale" ? "newer" : undefined);
   },
 );
@@ -813,7 +823,11 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        closeForIntegrityAdmission(f);
+        if (owner === "replacement") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(

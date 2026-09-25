@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { hasFlag } from "../argv.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
@@ -54,11 +55,17 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
     return;
   }
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+  const helpArgv = [...argv];
+  const invocation = resolveCliArgvInvocation(helpArgv);
+  const parentHelp =
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "nodes" &&
+    (hasFlag(helpArgv, "--help") || hasFlag(helpArgv, "-h"));
   await withConsoleLogsRoutedToStderrForJson(
     argv,
     async () =>
       await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-        mode: "lazy",
+        mode: parentHelp ? "metadata" : "lazy",
         primary: "nodes",
       }),
   );

@@ -3,10 +3,15 @@ import { EventEmitter } from "node:events";
 import { createServer, IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { connect, Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTelegramMiniApp } from "../../miniapp-api.js";
 import {
   createTelegramMiniAppLaunchTickets,
   type TelegramMiniAppLaunchTickets,
@@ -210,19 +215,77 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('const accountId = "ops";');
-    expect(res.body).toContain("new URL(payload.controlUiUrl)");
     expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
   });
 
-  it("mints a control-ui bootstrap token for a valid owner request", async () => {
-    const route = createRoute(config());
+  it("authenticates the registered owner DM launch ticket and rejects group launches", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: BOT_TOKEN,
+          allowFrom: ["999999"],
+          accounts: { ops: { allowFrom: ["123456"] } },
+        },
+      },
+      gateway: { tailscale: { mode: "funnel" } },
+    };
+    const commands: OpenClawPluginCommandDefinition[] = [];
+    const routes: OpenClawPluginHttpRouteParams[] = [];
+    registerTelegramMiniApp(
+      createTestPluginApi({
+        config: cfg,
+        registerCommand: (command) => commands.push(command),
+        registerHttpRoute: (route) => routes.push(route),
+      }),
+    );
+    const command = commands.find((entry) => entry.name === "dashboard");
+    const route = routes.find((entry) => entry.path === "/__openclaw_tg_miniapp/");
+    if (!command || !route) {
+      throw new Error("expected registered Mini App command and route");
+    }
+    const context: PluginCommandContext = {
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/dashboard",
+      config: cfg,
+      accountId: "ops",
+      from: "telegram:123456",
+      sessionKey: "telegram:direct:123456",
+      requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    };
+
+    const groupReply = await command.handler({
+      ...context,
+      from: "telegram:group:-100",
+      sessionKey: "telegram:group:-100",
+      senderIsOwner: true,
+    });
+    expect(groupReply.text).toContain("DM");
+    expect(groupReply.presentation).toBeUndefined();
+    expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+
+    const reply = await command.handler(context);
+    const buttons = reply.presentation?.blocks.find((block) => block.type === "buttons");
+    const webAppUrl = buttons?.buttons[0]?.webApp?.url;
+    if (!webAppUrl) {
+      throw new Error("expected an owner DM Web App launch URL");
+    }
+    const launchUrl = new URL(webAppUrl);
+    const launchTicket = new URLSearchParams(launchUrl.hash.slice(1)).get("launchTicket");
     const res = await callRoute({
       route,
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json; charset=utf-8",
-      body: authBody({ nonce: "success" }),
+      body: JSON.stringify({
+        initData: signedInitData("123456", "registered-command"),
+        accountId: launchUrl.searchParams.get("accountId"),
+        launchTicket,
+      }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -231,6 +294,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       controlUiUrl: "https://host.tailnet.ts.net/openclaw",
       gatewayUrl: "wss://host.tailnet.ts.net",
     });
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],

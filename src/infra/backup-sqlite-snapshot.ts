@@ -2,6 +2,7 @@
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   sealBackupResourceInventory,
   type BackupCoreDatabase,
@@ -14,11 +15,11 @@ import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-c
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
 } from "../state/openclaw-state-db.paths.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,
@@ -33,7 +34,6 @@ import {
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   isAppleDoubleMetadataFile,
   resolveSqliteDatabaseFilePaths,
@@ -149,11 +149,6 @@ async function discoverBackupSqliteSources(params: {
         ) {
           await visit(entryPath);
         }
-        continue;
-      }
-      // Exclusions win before symlink/stat handling; protected declarations
-      // are already resolved by the inventory's include-over-exclude policy.
-      if (!params.inventory.isIncluded(entryPath)) {
         continue;
       }
       if (

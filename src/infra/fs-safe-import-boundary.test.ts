@@ -2,15 +2,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SCAN_ROOTS = ["src", "packages", "extensions"] as const;
 
-const ALLOWED_PREFIXES = ["src/infra/", "src/plugin-sdk/", "packages/memory-host-sdk/"] as const;
+const ALLOWED_PREFIXES = ["src/", "packages/memory-host-sdk/"] as const;
 
 function isSourceFile(filePath: string): boolean {
   return filePath.endsWith(".ts") && !filePath.endsWith(".test.ts") && !filePath.endsWith(".d.ts");
@@ -88,6 +89,14 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
       values: ["movePathWithCopyFallback"],
       types: ["MovePathPublicationReceipt"],
     },
+    "@openclaw/fs-safe/guest": { values: ["GUEST_FILESYSTEM_PYTHON"] },
+  },
+  "extensions/matrix/src/matrix/state-layout-walk.ts": {
+    "@openclaw/fs-safe/path": { values: ["hasNodeErrorCode"] },
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
+  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": {
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
   },
   "extensions/file-transfer/src/node-host/file-write.ts": {
     "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
@@ -103,7 +112,7 @@ function sourceWithoutPluginOwnedImports(filePath: string, source: string): stri
   if (!modules) {
     return source;
   }
-  const parsed = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest);
+  const parsed = parser.parseSourceFile(filePath, source);
   let checkedSource = source;
   for (const statement of parsed.statements.toReversed()) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -125,7 +134,8 @@ function sourceWithoutPluginOwnedImports(filePath: string, source: string): stri
         const name = (element.propertyName ?? element.name).text;
         return (
           allowed.values.includes(name) ||
-          (allowed.types?.includes(name) && (clause.isTypeOnly || element.isTypeOnly))
+          (allowed.types?.includes(name) &&
+            (clause.phaseModifier === ts.SyntaxKind.TypeKeyword || element.isTypeOnly))
         );
       })
     ) {
@@ -146,6 +156,9 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
   const checked = sourceWithoutPluginOwnedImports(filePath, source);
   return checked.includes('"@openclaw/fs-safe') || checked.includes("'@openclaw/fs-safe");
 }
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 describe("fs-safe import boundary", () => {
   it("limits File Transfer's archive inventory helpers", () => {
@@ -229,7 +242,7 @@ describe("fs-safe import boundary", () => {
   it.each([
     ["extensions/openshell/src/elsewhere.ts", true],
     ["extensions/example/src/backend.ts", true],
-    ["src/infra/replace-file.ts", false],
+    ["src/agents/workspace-bootstrap-publish.ts", false],
   ] as const)("preserves the file boundary for %s", (filePath, expected) => {
     expect(
       hasDisallowedFsSafeImport(
@@ -258,7 +271,7 @@ describe("fs-safe import boundary", () => {
     });
   });
 
-  it("keeps direct fs-safe imports behind OpenClaw policy wrappers", () => {
+  it("keeps plugin filesystem imports within their reviewed dependency surface", () => {
     const violations = listSourceFiles()
       .map((filePath) => toRepoRelativePath(REPO_ROOT, filePath))
       .filter((filePath) =>

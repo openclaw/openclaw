@@ -199,7 +199,25 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     }
   };
 
+  const captureLeaseAssertion = (key: string): (() => void) => {
+    const owner = context.getStore()?.get(key);
+    const assertCurrent = () => {
+      if (!owner || owner.phase !== "held") {
+        throw options.errors.lostLease(key);
+      }
+      const lease = readRecord(key, state.lookup(key))?.lease;
+      if (!lease || lease.token !== owner.token || lease.expiresAt <= Date.now()) {
+        throw options.errors.lostLease(key);
+      }
+    };
+    // Host retirement can stop renewal before ownership expires. Cleanup must
+    // prove the retained lease itself without requiring the retired host run.
+    assertCurrent();
+    return assertCurrent;
+  };
+
   return {
+    captureLeaseAssertion,
     transact,
     withLease,
     hasLease: (key: string) => context.getStore()?.has(key) === true,

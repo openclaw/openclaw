@@ -26,6 +26,7 @@ import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { authorizeIncognitoSessionTarget } from "./session-sharing-policy.js";
@@ -98,13 +99,45 @@ function sessionResolveCandidate(
   };
 }
 
+/** Prepare durable facts, then resolve and consume against current caller state without a yield. */
+export async function withPreparedSessionResolve<T>(
+  params: Parameters<typeof resolveSessionKeyFromResolveParams>[0] & { isCurrent?: () => boolean },
+  consume: (result: SessionsResolveResult) => T,
+): Promise<T> {
+  const { projection, p } = params;
+  const key = normalizeOptionalString(p.key);
+  const assertCurrent = () => {
+    if (params.isCurrent?.() === false) {
+      throw new Error("Session projection changed while resolving the session; retry the request");
+    }
+  };
+  if (key) {
+    return withReadySessionRows(
+      projection,
+      (cfg) => {
+        const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+        return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+      },
+      () => {
+        assertCurrent();
+        return consume(resolveSessionKeyFromResolveParams(params));
+      },
+    );
+  }
+  do {
+    await projection.ensureMaterialized();
+    assertCurrent();
+  } while (projection.needsMaterialization);
+  return consume(resolveSessionKeyFromResolveParams(params));
+}
+
 export function resolveSessionKeyFromResolveParams(params: {
   client: GatewayClient | null;
   projection: SessionRowProjection;
   p: SessionsResolveParams;
 }): SessionsResolveResult {
   const { client, p, projection } = params;
-  const { cfg } = projection.state;
+  const { cfg, policyConfig } = projection.state;
   const { sharing } = prepareProjectedSessionPresentation(projection, client);
   const { entryFilter } = sharing;
   const prepare = (
@@ -272,7 +305,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       const { entry } = target;
       const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;
       if (
-        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.key, entry) === false) ||
+        (hasOperatorBoundary(client, policyConfig) && entryFilter?.(target.key, entry) === false) ||
         (spawnedBy &&
           !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
             ([candidate]) => candidate === target.key,

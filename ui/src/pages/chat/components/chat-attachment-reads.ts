@@ -1,11 +1,22 @@
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { generateAttachmentId } from "../attachment-payload-store.ts";
 
+type ChatAttachmentReadDestination = {
+  getAttachments: () => ChatAttachment[];
+  onAttachmentsChange: (attachments: ChatAttachment[]) => void;
+  onPendingReadsChange?: (delta: 1 | -1) => void;
+};
+
 export type ChatAttachmentRead = {
   attachment: ChatAttachment;
   state: "reading" | "ready" | "error";
   progress?: number;
   cancel?: () => void;
+  destination?: ChatAttachmentReadDestination;
+};
+
+export type PendingChatAttachmentRead = ChatAttachmentRead & {
+  destination: ChatAttachmentReadDestination;
 };
 
 export class ChatAttachmentReadLifecycle {
@@ -13,7 +24,16 @@ export class ChatAttachmentReadLifecycle {
   private controller = new AbortController();
   private entries: ChatAttachmentRead[] = [];
 
-  constructor(private readonly notify: () => void) {}
+  constructor(private notify: () => void) {}
+
+  retarget(destination: ChatAttachmentReadDestination, notify: () => void): void {
+    this.notify = notify;
+    for (const entry of this.entries) {
+      if (entry.destination) {
+        entry.destination = destination;
+      }
+    }
+  }
 
   get readSignal(): AbortSignal {
     return this.controller.signal;
@@ -27,9 +47,13 @@ export class ChatAttachmentReadLifecycle {
     this.notify();
   }
 
-  begin(files: readonly File[], attachments: ChatAttachment[]): ChatAttachmentRead[] {
+  begin(
+    files: readonly File[],
+    attachments: ChatAttachment[],
+    destination: ChatAttachmentReadDestination,
+  ): PendingChatAttachmentRead[] {
     this.project(attachments);
-    const entries = files.map((file): ChatAttachmentRead => ({
+    const entries = files.map((file): PendingChatAttachmentRead => ({
       attachment: {
         id: generateAttachmentId(),
         origin: "file",
@@ -38,6 +62,7 @@ export class ChatAttachmentReadLifecycle {
         sizeBytes: file.size,
       },
       state: "reading",
+      destination,
     }));
     this.entries.push(...entries);
     this.notify();

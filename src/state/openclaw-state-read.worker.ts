@@ -20,10 +20,8 @@ import {
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
-import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
-import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
-import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
@@ -45,6 +43,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
+import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -77,15 +76,19 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
+import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
@@ -180,6 +183,20 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "deliveryQueue.outbound") {
+                  // Custody reads retain queue ownership admission even on a read-only connection.
+                  assertOpenClawStateWriteAllowed({
+                    database: db,
+                    databasePath: input.databasePath,
+                    env: input.context.environment,
+                  });
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    entries: readOutboundDeliveriesInDatabase({ db }, command),
+                  };
+                }
                 if (command.type === "acpSessions.metadata") {
                   return {
                     ok: true,
@@ -277,6 +294,14 @@ serveOwnedWorkerTasks(
                     observation: observeCronRunRecoveryInDatabase(db, command),
                   };
                 }
+                if (command.type === "cron.activeReceiptOwners") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
+                  };
+                }
                 if (
                   command.type === "devicePairing.list" ||
                   command.type === "devicePairing.lookup" ||
@@ -317,6 +342,12 @@ serveOwnedWorkerTasks(
                       path: input.databasePath,
                     }),
                   };
+                }
+                if (
+                  command.type === "config.snapshot.read" ||
+                  command.type === "audit.run.inspect"
+                ) {
+                  return readStateDiagnosticCommand(db, command);
                 }
                 if (command.type === "pluginBlob.entries") {
                   return {
@@ -418,29 +449,6 @@ serveOwnedWorkerTasks(
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
-                if (command.type === "audit.run.inspect") {
-                  try {
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: {
-                        status: "inspected",
-                        inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
-                      },
-                    };
-                  } catch (error) {
-                    if (!(error instanceof ExecutionDecisionCursorError)) {
-                      throw error;
-                    }
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: { status: "invalid-cursor", message: error.message },
-                    };
-                  }
-                }
                 if (command.type === "nodeHost.config") {
                   return {
                     ok: true,
@@ -535,15 +543,11 @@ serveOwnedWorkerTasks(
                     profile,
                   };
                 }
-                if (command.type === "userProfiles.githubIdentity.cached") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    identity: runSqliteDeferredTransactionSync(db, () =>
-                      resolveCachedGitHubIdentityInDatabase(db, command),
-                    ),
-                  };
+                if (
+                  command.type === "userProfiles.githubIdentity.cached" ||
+                  command.type === "userProfiles.githubAttribution.resolve"
+                ) {
+                  return { ok: true, ...readUserProfileGitHubCommand(db, command), sourceAdmitted };
                 }
                 if (command.type === "userProfiles.channelIdentity.list") {
                   return {
@@ -589,6 +593,19 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
+                if (command.type === "sessionRepositoryWorkspaces.find") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    workspaces: runSqliteDeferredTransactionSync(db, () =>
+                      command.owners.flatMap((owner) => {
+                        const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
+                        return workspace ? [workspace] : [];
+                      }),
+                    ),
+                  };
+                }
                 if (command.type === "sandboxRegistry.list") {
                   return {
                     ok: true,
@@ -626,7 +643,7 @@ serveOwnedWorkerTasks(
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    placements: readWorkerPlacementChangeSnapshotInDatabase(db),
+                    placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
                   };
                 }
                 if (command.type === "workers.placementProjection") {
@@ -641,19 +658,7 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return command.type === "fleet.list"
-                  ? {
-                      ok: true,
-                      type: "fleet.list",
-                      sourceAdmitted,
-                      cells: listFleetCellsInDatabase(db),
-                    }
-                  : {
-                      ok: true,
-                      type: "fleet.get",
-                      sourceAdmitted,
-                      cell: getFleetCellInDatabase(db, command.tenantId),
-                    };
+                return readStateRegistryCommand(db, command);
               },
               input.databasePath,
               input.location,

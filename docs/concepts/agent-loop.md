@@ -21,7 +21,7 @@ execution, streaming, persistence.
 2. `agentCommand` runs the turn: resolves model + thinking/verbose/trace defaults, loads the skills snapshot, calls `runEmbeddedAgent`, and emits a fallback **lifecycle end/error** if the embedded loop did not already emit one.
 3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the run timeout (aborting on expiry), and returns payloads plus usage metadata. For Codex app-server turns, native Codex owns provider liveness and the exact `turn/completed` outcome; quiet periods and assistant output do not end the turn.
 4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "finishing" | "end" | "error"`).
-5. `agent.wait` (`waitForAgentRun`) waits for **lifecycle end/error** on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`.
+5. `agent.wait` waits for the terminal outcome on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`. Gateway RPC runs also wait for their terminal replay payload to be published, so a duplicate request after a terminal wait result can replay that outcome.
 
 For embedded OpenAI Responses turns, `response.completed` finishes one model
 response. If the provider sends `end_turn: false`, the loop requests another
@@ -161,9 +161,10 @@ produce chat `final`, `error`, or `aborted` messages. Definitive cancellation an
 timeout events finalize immediately, including when the runtime reports them as
 `phase: "error"`. Retryable errors keep a 15-second grace window for a fallback
 or restart of the same run. Once the outer execution owner has finished its
-attempts, it publishes `executionSettled: true`. The Gateway and `agent.wait`
-consume that fact immediately, including preparation failures that never reached
-a model or emitted a fallback step. Unmarked timeout and bare-abort observations
+attempts, it publishes `executionSettled: true`. The Gateway consumes that fact
+without retry grace, including preparation failures that never reached a model
+or emitted a fallback step. For Gateway RPC runs, `agent.wait` also joins terminal
+replay publication after required settlement. Unmarked timeout and bare-abort observations
 retain their existing wait-layer retry handling.
 
 Cron attempt completions remain `finishing` across model fallbacks and

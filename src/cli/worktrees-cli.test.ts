@@ -210,6 +210,30 @@ describe("worktrees cli", () => {
     expect(lossless).not.toHaveBeenCalled();
   });
 
+  it("requires an exact pending commit and returns recovery's actual outcome", async () => {
+    const snapshot = "a".repeat(40);
+    const recover = vi.spyOn(managedWorktrees, "recoverRemoval").mockResolvedValue({
+      removed: true,
+      snapshotRef: "refs/openclaw/snapshots/worktree-id",
+    });
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
+    registerWorktreesCli(program);
+    await expect(
+      program.parseAsync(["worktrees", "recover-removal", "worktree-id"], { from: "user" }),
+    ).rejects.toThrow(/required option/);
+    expect(recover).not.toHaveBeenCalled();
+    await program.parseAsync(
+      ["worktrees", "recover-removal", "worktree-id", "--snapshot", snapshot, "--json"],
+      { from: "user" },
+    );
+    expect(recover).toHaveBeenCalledWith({ id: "worktree-id", snapshot });
+    expect(output).toHaveBeenCalledWith({
+      removed: true,
+      snapshotRef: "refs/openclaw/snapshots/worktree-id",
+    });
+  });
+
   it("maps --force only to snapshot-loss permission", async () => {
     const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -237,6 +261,9 @@ describe("worktrees cli", () => {
       issues: [],
       issueCount: 0,
       protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
       limitsSatisfied: true,
     });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -269,6 +296,9 @@ describe("worktrees cli", () => {
       ],
       issueCount: 1,
       protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
       limitsSatisfied: false,
     };
     vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);

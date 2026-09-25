@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -34,7 +38,11 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
   readonly path: string;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   assertCurrent(): void;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -52,7 +60,10 @@ type ExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   assertCurrent(): void;
-  borrow(expectedIdentity?: AgentDatabaseExecutionFileIdentity): OpenClawAgentDatabaseExecution;
+  borrow(
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    expectedCreationIdentity?: DatabasePathIdentity,
+  ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
   close(): Promise<void>;
 };
@@ -69,7 +80,9 @@ const IDLE_EXECUTION_MS = 60_000;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 /** These native-only scopes still need their complete owning caller cutover. */
-function supportsOpenClawAgentDatabaseExecution(options: OpenClawAgentDatabaseOptions): boolean {
+export function supportsOpenClawAgentDatabaseExecution(
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
   return (
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
@@ -81,7 +94,10 @@ function supportsOpenClawAgentDatabaseExecution(options: OpenClawAgentDatabaseOp
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
 export function captureOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
-  constraints: { expectedIdentity?: AgentDatabaseExecutionFileIdentity } = {},
+  constraints: {
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+    expectedCreationIdentity?: DatabasePathIdentity;
+  } = {},
 ): OpenClawAgentDatabaseExecution {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath(options);
@@ -90,6 +106,28 @@ export function captureOpenClawAgentDatabaseExecution(
   }
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const existing = executions.get(pathname);
+  const expectedCreationIdentity = constraints.expectedCreationIdentity
+    ? Object.freeze({ ...constraints.expectedCreationIdentity })
+    : undefined;
+  if (expectedCreationIdentity) {
+    const current = readDatabasePathIdentitySync(pathname);
+    const capturesAbsence = expectedCreationIdentity.key.startsWith("path:");
+    if (
+      constraints.expectedIdentity ||
+      (capturesAbsence &&
+        (existing ||
+          agentDatabaseLifecycle.databases.has(pathname) ||
+          agentDatabaseLifecycle.pending.has(pathname))) ||
+      (!capturesAbsence &&
+        (!expectedCreationIdentity.key.startsWith("file:") ||
+          typeof expectedCreationIdentity.birthtime !== "string")) ||
+      current.key !== expectedCreationIdentity.key ||
+      current.canonicalPath !== expectedCreationIdentity.canonicalPath ||
+      current.birthtime !== expectedCreationIdentity.birthtime
+    ) {
+      throw new Error("Agent creation no longer owns its originally observed target");
+    }
+  }
   if (existing) {
     if (existing.agentId !== agentId) {
       throw new Error(
@@ -101,11 +139,12 @@ export function captureOpenClawAgentDatabaseExecution(
         "Agent database execution belongs to another shared-state database; drain its existing resources before changing the state directory.",
       );
     }
-    return existing.borrow(constraints.expectedIdentity);
+    return existing.borrow(constraints.expectedIdentity, expectedCreationIdentity);
   }
   const executionOptions = { agentId, path: pathname, env: context.environment };
   let retired = false;
   let borrowers = 0;
+  let creationReference: object | undefined;
   let generation: AgentDatabaseNativeGeneration | undefined;
   let fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   let nativeClosing: Promise<void> | undefined;
@@ -190,11 +229,16 @@ export function captureOpenClawAgentDatabaseExecution(
     assertCallerCurrent?: () => void,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     retireNativeOnFailure = false,
+    createIfMissing = false,
+    creatingTarget?: DatabasePathIdentity,
   ): Promise<T | undefined> {
     assertCurrent();
     assertCallerCurrent?.();
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
+      if (creatingTarget && !fileIdentity) {
+        throw new Error("Agent creation cannot adopt another pending opener");
+      }
       if (pending.agentId !== agentId) {
         throw new Error(`Agent database ${pathname} is opening for ${pending.agentId}`);
       }
@@ -207,8 +251,14 @@ export function captureOpenClawAgentDatabaseExecution(
       assertCurrent();
     }
     if (cleanupFailure) {
-      throw cleanupFailure.error;
+      // A transient lifecycle refusal must not poison every later borrower.
+      // Retire the original generation before admitting any replacement work.
+      await closeNative();
+      assertCurrent();
+      assertCallerCurrent?.();
+      source.assertCurrent();
     }
+    assertCallerCurrent?.();
     if (!generation) {
       for (let idle = executionState.idle; idle && idle !== owner; idle = executionState.idle) {
         await idle.closeIdle();
@@ -229,18 +279,29 @@ export function captureOpenClawAgentDatabaseExecution(
           },
           expectedIdentity ?? fileIdentity,
           (received) => {
-            if (fileIdentity && fileIdentity.physicalIdentity !== received.physicalIdentity) {
+            if (
+              fileIdentity &&
+              (fileIdentity.physicalIdentity !== received.physicalIdentity ||
+                fileIdentity.birthtime !== received.birthtime)
+            ) {
               throw new Error("Agent database execution belongs to another physical file");
+            }
+            if (
+              creatingTarget &&
+              readDatabasePathIdentitySync(pathname).canonicalPath !== creatingTarget.canonicalPath
+            ) {
+              throw new Error("Agent creation changed its originally observed target");
             }
             fileIdentity ??= Object.freeze({ ...received });
           },
+          fileIdentity ? undefined : creatingTarget,
         );
         generation = created;
       }
     }
     const current = generation;
     try {
-      return await current.runExisting(source, operation, assertCallerCurrent);
+      return await current.run(source, operation, assertCallerCurrent, createIfMissing);
     } catch (error) {
       const nativeFailed = current.failed();
       if (generation === current && (nativeFailed || retireNativeOnFailure)) {
@@ -269,9 +330,27 @@ export function captureOpenClawAgentDatabaseExecution(
       return context.admission.identity.key;
     },
     assertCurrent,
-    borrow(expected) {
+    borrow(expected, creating) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
+      const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
+      const assertObservedFileCurrent = () => {
+        if (!creatingTarget?.key.startsWith("file:")) {
+          return;
+        }
+        const current = readDatabasePathIdentitySync(pathname);
+        if (
+          current.key !== creatingTarget.key ||
+          current.canonicalPath !== creatingTarget.canonicalPath ||
+          current.birthtime !== creatingTarget.birthtime
+        ) {
+          throw new Error("Agent creating borrower lost its originally observed physical file");
+        }
+      };
       assertCurrent();
+      assertObservedFileCurrent();
+      if (creatingTarget && !fileIdentity && generation) {
+        throw new Error("Agent creation cannot capture another pending native opener");
+      }
       if (expectedIdentity) {
         if (fileIdentity && fileIdentity.physicalIdentity !== expectedIdentity.physicalIdentity) {
           throw new Error("Agent database borrower belongs to another physical file");
@@ -284,16 +363,45 @@ export function captureOpenClawAgentDatabaseExecution(
       if (executionState.idle === owner && !nativeClosing && !cleanupFailure) {
         executionState.idle = undefined;
       }
+      const reference = {};
+      if (creatingTarget && !fileIdentity) {
+        creationReference ??= reference;
+      }
+      const assertCreationReference = (create: boolean) => {
+        if (creatingTarget && !fileIdentity && !create) {
+          throw new Error("Originally observed agent target requires creating admission first");
+        }
+        if (creationReference && !fileIdentity && (!create || creationReference !== reference)) {
+          throw new Error(
+            "Originally observed agent target requires its captured creating reference",
+          );
+        }
+      };
       let released = false;
       let release: Promise<void> | undefined;
       const pending = new Set<Promise<unknown>>();
       const assertReferenceCurrent = () => {
         assertCurrent();
+        assertObservedFileCurrent();
         if (expectedIdentity) {
-          if (fileIdentity && fileIdentity.physicalIdentity !== expectedIdentity.physicalIdentity) {
-            throw new Error("Agent database borrower belongs to another physical file");
+          assertExistingDatabaseIdentity(
+            pathname,
+            `file:${expectedIdentity.physicalIdentity}`,
+            expectedIdentity.birthtime,
+          );
+        }
+        if (fileIdentity) {
+          assertExistingDatabaseIdentity(
+            pathname,
+            `file:${fileIdentity.physicalIdentity}`,
+            fileIdentity.birthtime,
+          );
+          if (
+            creatingTarget &&
+            readDatabasePathIdentitySync(pathname).canonicalPath !== creatingTarget.canonicalPath
+          ) {
+            throw new Error("Agent creation changed its originally observed target");
           }
-          assertExistingDatabaseIdentity(pathname, `file:${expectedIdentity.physicalIdentity}`);
         }
       };
       const assertBorrowed = () => {
@@ -305,13 +413,40 @@ export function captureOpenClawAgentDatabaseExecution(
       return {
         agentId,
         path: pathname,
+        get fileIdentity() {
+          assertBorrowed();
+          return fileIdentity;
+        },
         assertCurrent: assertBorrowed,
+        async prepare(source) {
+          assertBorrowed();
+          assertCreationReference(true);
+          const result = run(
+            source,
+            async () => undefined,
+            () => {
+              assertReferenceCurrent();
+              assertCreationReference(true);
+            },
+            expectedIdentity,
+            false,
+            true,
+            creatingTarget,
+          );
+          pending.add(result);
+          void result.finally(() => pending.delete(result)).catch(() => undefined);
+          await result;
+        },
         async runExisting(source, operation, runOptions) {
           assertBorrowed();
+          assertCreationReference(false);
           const result = run(
             source,
             operation,
-            assertReferenceCurrent,
+            () => {
+              assertReferenceCurrent();
+              assertCreationReference(false);
+            },
             expectedIdentity,
             runOptions?.retireNativeOnFailure,
           );
@@ -323,6 +458,24 @@ export function captureOpenClawAgentDatabaseExecution(
           released = true;
           release ??= (async () => {
             await Promise.allSettled(pending);
+            if (
+              creationReference === reference &&
+              !fileIdentity &&
+              !nativeClosing &&
+              !cleanupFailure
+            ) {
+              if (generation) {
+                // Source refusal can leave an unaccepted generation allocated before native open.
+                try {
+                  await closeNative(generation);
+                } catch (error) {
+                  reportCleanupFailure(error);
+                }
+              }
+              if (!generation && !nativeClosing && !cleanupFailure) {
+                creationReference = undefined;
+              }
+            }
             borrowers -= 1;
             if (borrowers !== 0 || retired || cleanupFailure) {
               return;
@@ -353,9 +506,6 @@ export function captureOpenClawAgentDatabaseExecution(
       };
     },
     async closeIdle() {
-      if (cleanupFailure) {
-        throw cleanupFailure.error;
-      }
       await closeNative();
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {
@@ -397,7 +547,7 @@ export function captureOpenClawAgentDatabaseExecution(
   }
   executions.set(pathname, owner);
   try {
-    return owner.borrow(constraints.expectedIdentity);
+    return owner.borrow(constraints.expectedIdentity, expectedCreationIdentity);
   } catch (error) {
     executions.delete(pathname);
     unregisterAgent();

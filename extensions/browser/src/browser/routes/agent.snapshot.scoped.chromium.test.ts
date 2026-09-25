@@ -1,13 +1,13 @@
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { BrowserContext, Frame, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
-import { toErrorObject } from "../../infra/errors.js";
 import { resolveBrowserConfig } from "../config.js";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
 import { getPwAiModule } from "../pw-ai-module.js";

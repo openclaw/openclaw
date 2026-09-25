@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import {
@@ -71,8 +72,8 @@ export function isExcludedExportCollisionSource(filePath: string) {
   );
 }
 
-function hasModifier(node: ts.Node, kind: ts.SyntaxKind) {
-  return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((item) => item.kind === kind);
+function hasModifier(node: ts.ModifiersBase, kind: ts.SyntaxKind) {
+  return node.modifiers?.some((item) => item.kind === kind);
 }
 
 function collectBindingNames(name: ts.BindingName, names: Set<string>) {
@@ -81,7 +82,7 @@ function collectBindingNames(name: ts.BindingName, names: Set<string>) {
     return;
   }
   for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
+    if (ts.isBindingElement(element) && element.name) {
       collectBindingNames(element.name, names);
     }
   }
@@ -143,7 +144,7 @@ function collectImportedReferences(
         ),
       );
     }
-    ts.forEachChild(current, visit);
+    current.forEachChild(visit);
   };
   visit(node);
   return [...references.values()].toSorted((left, right) =>
@@ -320,8 +321,11 @@ function isForwardingOnlyConst(
 }
 
 /** Collects value exports and locally defined exported functions/consts from one module. */
-export function collectModuleExportNames(content: string, fileName = "source.ts"): ModuleExports {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function collectModuleExportNames(
+  _content: string,
+  fileName: string,
+  sourceFile: ts.SourceFile,
+): ModuleExports {
   const importedNamesByLocalName = new Map<string, string>();
   const importedSymbolsByLocalName = new Map<string, ImportedSymbolReference>();
   const namespaceImportsByLocalName = new Map<string, string>();
@@ -340,7 +344,10 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       const bindings = statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
-          if (!statement.importClause?.isTypeOnly && !specifier.isTypeOnly) {
+          if (
+            statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+            !specifier.isTypeOnly
+          ) {
             const importedName = specifier.propertyName?.text ?? specifier.name.text;
             const moduleSpecifier = ts.isStringLiteral(statement.moduleSpecifier)
               ? statement.moduleSpecifier.text
@@ -356,7 +363,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       } else if (
         bindings &&
         ts.isNamespaceImport(bindings) &&
-        !statement.importClause?.isTypeOnly &&
+        statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
         ts.isStringLiteral(statement.moduleSpecifier)
       ) {
         namespaceImportsByLocalName.set(bindings.name.text, statement.moduleSpecifier.text);
@@ -540,6 +547,16 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
             namespaceImportsByLocalName,
           );
           if (aliasSource) {
+            if (ts.isIdentifier(constDeclaration.name) && aliasSource.importedName === name) {
+              // Const aliases keep runtime identity even when their declared type narrows.
+              // Retain the edge so real wrappers still resolve through this facade.
+              namedReExports.push({
+                exportedName: name,
+                importedName: aliasSource.importedName,
+                moduleSpecifier: aliasSource.moduleSpecifier,
+              });
+              continue;
+            }
             importedReferences.push(aliasSource);
           }
         }
@@ -665,6 +682,10 @@ const managedHandoffNativeLoaderModules = [
 // Other modules remain collisions, including while these consumers land separately.
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
+    "createSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
     "openExistingSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
@@ -674,6 +695,7 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/auth-profiles/inline-usage.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
     ]),
@@ -681,6 +703,7 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
 ]);
 
 function analyzeExportNames(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
   const modulesByPath = new Map<string, ModuleExports>();
@@ -688,7 +711,11 @@ function analyzeExportNames(modules: SourceModule[]) {
     left.path.localeCompare(right.path),
   )) {
     const relativePath = normalizeRelativePath(sourceModule.path);
-    const moduleExports = collectModuleExportNames(sourceModule.content, relativePath);
+    const moduleExports = collectModuleExportNames(
+      sourceModule.content,
+      relativePath,
+      parser.parseSourceFile(relativePath, sourceModule.content),
+    );
     modulesByPath.set(relativePath, moduleExports);
     if (sourceModule.includeDefinitions !== false && !relativePath.startsWith("src/plugin-sdk/")) {
       aliasingReExports.push(

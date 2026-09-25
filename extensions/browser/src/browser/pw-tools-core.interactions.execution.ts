@@ -1,5 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -69,7 +69,10 @@ async function executeSingleAction(
     assertCurrent,
   };
   if (assertCurrent) {
-    await assertInteractionCurrent(interaction);
+    const assertion = assertInteractionCurrent(interaction);
+    if (assertion) {
+      await assertion;
+    }
   }
   switch (action.kind) {
     case "click":

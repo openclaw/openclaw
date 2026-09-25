@@ -81,7 +81,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/control-plane/manager.failover.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
-  "src/acp/control-plane/manager.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -142,7 +141,6 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
-  "src/trajectory/runtime.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
   "src/tts/status-config.test.ts",
@@ -172,6 +170,9 @@ const ownerRoutedUnitTestPatterns = [
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
   "test/scripts/plugin-release-git-lifecycle.test.ts",
   "test/scripts/release-workflow-git-lifecycle.test.ts",
+  // Release orchestration executes real CLI subprocesses through shared fixtures.
+  "test/scripts/release-stable.test.ts",
+  "test/scripts/release-stable-post.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   // Detached handoff and service-manager fixtures retain their infra owner when shared.

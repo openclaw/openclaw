@@ -22,6 +22,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { renderModelAccountsSection } from "./model-accounts-section.ts";
 
@@ -66,6 +67,7 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   private generation = 0;
   private inventoryRequest = 0;
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeEvents: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback() {
@@ -75,12 +77,19 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
       // Endpoint and person context stay visible even without an authorized account target.
       this.requestUpdate();
     });
+    this.unsubscribeEvents = this.context.gateway.subscribeEvents((event) => {
+      if (modelAuthEventInvalidates(event)) {
+        void this.loadAccounts();
+      }
+    });
     this.applySnapshot(this.context.gateway.snapshot);
   }
 
   override disconnectedCallback() {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.unsubscribeEvents?.();
+    this.unsubscribeEvents = null;
     this.generation += 1;
     this.target = null;
     this.stopPoll();

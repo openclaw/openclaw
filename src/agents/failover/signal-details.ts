@@ -1,23 +1,14 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MAX_FAILOVER_DETAIL_CANDIDATES = 12;
 const MAX_FAILOVER_DETAIL_CHARS = 1_000;
 
-function normalizeFailoverDetailString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
-    ? truncateUtf16Safe(trimmed, MAX_FAILOVER_DETAIL_CHARS)
-    : trimmed;
-}
-
-function appendFailoverDetailCandidate(candidates: string[], value: unknown): void {
-  const normalized =
-    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-      ? normalizeFailoverDetailString(String(value))
-      : undefined;
+function appendFailoverDetailCandidate(
+  candidates: string[],
+  value: string | number | boolean,
+): void {
+  const normalized = truncateUtf16Safe(String(value).trim(), MAX_FAILOVER_DETAIL_CHARS);
   if (!normalized || candidates.includes(normalized)) {
     return;
   }
@@ -29,11 +20,7 @@ function collectFailoverDetailCandidates(
   candidates: string[],
   seen: Set<object>,
 ): void {
-  if (
-    candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES ||
-    value === undefined ||
-    value === null
-  ) {
+  if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
     return;
   }
   if (typeof value === "string") {
@@ -53,14 +40,11 @@ function collectFailoverDetailCandidates(
     appendFailoverDetailCandidate(candidates, value);
     return;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(value);
+  if (!record || seen.has(record)) {
     return;
   }
-  if (seen.has(value)) {
-    return;
-  }
-  seen.add(value);
-  const record = value as Record<string, unknown>;
+  seen.add(record);
   for (const key of ["message", "param", "code", "type", "error", "detail", "body"]) {
     collectFailoverDetailCandidates(record[key], candidates, seen);
     if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {

@@ -20,6 +20,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { reportLimitViolations, type LimitViolation } from "../lib/check-limits.mts";
 import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import { readGatewayResources } from "../lib/gateway-bench-profile.ts";
 import {
@@ -2645,11 +2646,23 @@ function assertProcessResourceCeiling(
   if (!Number.isFinite(aggregateRssMiB) || aggregateRssMiB <= 0) {
     throw new Error(`${label} aggregate RSS sample was invalid: ${String(aggregateRssMiB)} MiB`);
   }
+  const violations: LimitViolation[] = [];
   if (sample.rssMiB > maxRssMiB) {
-    throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
+    violations.push({
+      file: "scripts/e2e/kitchen-sink-rpc-walk.mts",
+      title: "Kitchen sink process RSS budget",
+      message: `${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`,
+    });
   }
   if (aggregateRssMiB > maxRssMiB) {
-    throw new Error(`${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`);
+    violations.push({
+      file: "scripts/e2e/kitchen-sink-rpc-walk.mts",
+      title: "Kitchen sink aggregate RSS budget",
+      message: `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`,
+    });
+  }
+  if (reportLimitViolations(violations)) {
+    throw new Error(violations.map(({ message }) => message).join("\n"));
   }
 }
 
@@ -2865,8 +2878,40 @@ type ResourceGatewayWorkload = ResourceGatewayPreparation & {
     name: string,
     count: number,
     run: (index: number) => Promise<void>,
+    options?: { splitFirst?: boolean },
   ) => Promise<KitchenSinkResourcePhase>;
 };
+
+export async function runKitchenSinkResourceToolWorkload(
+  { rpc, measure }: Pick<ResourceGatewayWorkload, "rpc" | "measure">,
+  count: number,
+) {
+  await measure("session-create", 1, async () => {
+    assertCreatedKitchenSinkSession(
+      await rpc("sessions.create", {
+        key: SESSION_KEY,
+        agentId: "main",
+        label: "kitchen-sink-resources",
+      }),
+    );
+  });
+  await measure(
+    "plugin-tool",
+    count,
+    async (index) => {
+      assertKitchenSinkTextInvokeResult(
+        await rpc("tools.invoke", {
+          name: "kitchen_sink_text",
+          args: { prompt: "explain kitchen sink resource profiling" },
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          idempotencyKey: `kitchen-sink-resources-${index}`,
+        }),
+      );
+    },
+    { splitFirst: true },
+  );
+}
 
 /** One frozen host package root as cwd per process; callers own outer deadlines and mock cleanup. */
 export async function runResourceGatewayCase(options: {
@@ -2963,8 +3008,14 @@ export async function runResourceGatewayCase(options: {
       ...context,
       rpc: (method, params) => rpcCall(method, params, { runner, env, port }),
       sample,
-      measure: async (name, count, run) => {
-        const measured = await measureResourceOperations({ name, count, sample, run });
+      measure: async (name, count, run, measurement) => {
+        const measured = await measureResourceOperations({
+          name,
+          count,
+          sample,
+          run,
+          ...measurement,
+        });
         result.phases.push(measured);
         if (measured.status !== "exercised") {
           throw new Error(`${name}: ${measured.error}`);
@@ -3137,24 +3188,10 @@ async function profileKitchenSinkResources(reportPath: string) {
           });
           await idle("post-neutral");
           if (enabled) {
-            const session = assertCreatedKitchenSinkSession(
-              await rpc("sessions.create", {
-                key: SESSION_KEY,
-                agentId: "main",
-                label: "kitchen-sink-resources",
-              }),
+            await runKitchenSinkResourceToolWorkload(
+              { rpc, measure },
+              report.measurement.pluginToolOperations,
             );
-            await measure("plugin-tool", report.measurement.pluginToolOperations, async (index) => {
-              assertKitchenSinkTextInvokeResult(
-                await rpc("tools.invoke", {
-                  name: "kitchen_sink_text",
-                  args: { prompt: "explain kitchen sink resource profiling" },
-                  sessionKey: String(session.key),
-                  agentId: "main",
-                  idempotencyKey: `kitchen-sink-resources-${index}`,
-                }),
-              );
-            });
             await idle("post-tool");
             result.calibration = await calibrateKitchenSinkResources({
               pluginId: PLUGIN_ID,

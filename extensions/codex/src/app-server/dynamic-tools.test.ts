@@ -820,6 +820,25 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
+  it("registers subscription-sharing tools as direct functions, including model-only tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "computer", catalogMode: "direct-only" }),
+        createTool({ name: "message" }),
+      ],
+      signal: new AbortController().signal,
+      loading: "direct",
+      functionToolsOnly: true,
+    });
+    for (const specs of [bridge.specs, bridge.availableSpecs]) {
+      expect(specs.map((spec) => [spec.type, spec.name])).toEqual([
+        ["function", "computer"],
+        ["function", "message"],
+      ]);
+      expect(specs.every((spec) => !("deferLoading" in spec) || !spec.deferLoading)).toBe(true);
+    }
+  });
+
   it("keeps model-visible tools stable when plugin discovery order changes", () => {
     const tools = [
       createTool({ name: "web_search" }),
@@ -988,113 +1007,6 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result.success).toBe(false);
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([]);
-  });
-
-  it("treats accepted goal tool statuses (created / updated) as successful dynamic tool calls", async () => {
-    // Same runtime-parity class as the accepted spawn fix: create_goal /
-    // update_goal return details.status "created" / "updated", reach Codex agents
-    // through the dynamic-tool bridge, and must not be classified as errors (#96833).
-    const createdBridge = createBridgeWithToolResult(
-      "create_goal",
-      textToolResult("Goal created.", { status: "created" }),
-    );
-    const createdResult = await createdBridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-created",
-      namespace: null,
-      tool: "create_goal",
-      arguments: { text: "ship the fix" },
-    });
-    expect(createdResult.success).toBe(true);
-
-    const updatedBridge = createBridgeWithToolResult(
-      "update_goal",
-      textToolResult("Goal updated.", { status: "updated" }),
-    );
-    const updatedResult = await updatedBridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-updated",
-      namespace: null,
-      tool: "update_goal",
-      arguments: { status: "completed" },
-    });
-    expect(updatedResult.success).toBe(true);
-  });
-
-  it("treats get_goal read statuses (found / missing) as successful dynamic tool calls", async () => {
-    const onFoundResult = vi.fn();
-    const foundBridge = createBridgeWithToolResult(
-      "get_goal",
-      textToolResult('{\n  "status": "found"\n}', {
-        status: "found",
-        goal: { objective: "ship the fix", status: "active" },
-      }),
-    );
-    const foundResult = await foundBridge.handleToolCall(
-      createDynamicToolCall("get_goal", {}, "call-found"),
-      { onAgentToolResult: onFoundResult },
-    );
-    expect(foundResult.success).toBe(true);
-    expect(onFoundResult).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "get_goal", isError: false }),
-    );
-
-    const onMissingResult = vi.fn();
-    const missingBridge = createBridgeWithToolResult(
-      "get_goal",
-      textToolResult('{\n  "status": "missing"\n}', { status: "missing" }),
-    );
-    const missingResult = await missingBridge.handleToolCall(
-      createDynamicToolCall("get_goal", {}, "call-missing"),
-      { onAgentToolResult: onMissingResult },
-    );
-    expect(missingResult.success).toBe(true);
-    expect(onMissingResult).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "get_goal", isError: false }),
-    );
-  });
-
-  it.each(["pending", "applied", "rejected", "quarantined", "stale"] as const)(
-    "treats Skill Workshop lifecycle status %s as a successful dynamic tool call",
-    async (status) => {
-      const onAgentToolResult = vi.fn();
-      const bridge = createBridgeWithToolResult(
-        "skill_workshop",
-        textToolResult(`Proposal is ${status}.`, { status }),
-      );
-
-      const result = await bridge.handleToolCall(
-        {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: `call-${status}`,
-          namespace: null,
-          tool: "skill_workshop",
-          arguments: { action: "inspect" },
-        },
-        { onAgentToolResult },
-      );
-
-      expect(result.success).toBe(true);
-      expect(onAgentToolResult).toHaveBeenCalledWith(
-        expect.objectContaining({ toolName: "skill_workshop", isError: false }),
-      );
-    },
-  );
-
-  it("treats arbitrary plugin-owned status metadata as successful by default", async () => {
-    const bridge = createBridgeWithToolResult(
-      "plugin_tool",
-      textToolResult("Plugin action completed.", { status: "plugin-defined-outcome" }),
-    );
-
-    const result = await bridge.handleToolCall(
-      createDynamicToolCall("plugin_tool", {}, "call-plugin-defined-outcome"),
-    );
-
-    expect(result.success).toBe(true);
   });
 
   it("keeps available and registered schemas paired with their tools", () => {

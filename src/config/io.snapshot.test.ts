@@ -176,7 +176,7 @@ describe("config snapshot plugin metadata", () => {
         JSON.stringify({
           nodeHost: { browserProxy: { enabled: "invalid" } },
           channels: { discord: {} },
-          routing: { allowFrom: ["fixture"] },
+          session: { typingMode: "thinking" },
         }),
       );
       const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
@@ -188,7 +188,7 @@ describe("config snapshot plugin metadata", () => {
         ]),
       );
       expect(snapshot.legacyIssues).toEqual(
-        expect.arrayContaining([expect.objectContaining({ path: "routing.allowFrom" })]),
+        expect.arrayContaining([expect.objectContaining({ path: "session.typingMode" })]),
       );
       expect(doctor.mock.calls.length > 0).toBe(pluginValidation === "full");
     },

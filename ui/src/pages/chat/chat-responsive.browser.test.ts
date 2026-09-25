@@ -741,23 +741,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
                             </svg>
                           </summary>
-                          <section class="context-usage__popover">
-                            <div class="context-usage__section-label context-usage__plan-header">
-                              <span>Plan usage</span>
-                              <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
-                                <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
-                              </a>
-                            </div>
-                            <div class="context-usage__limits">
-                              <div class="context-usage__limit">
-                                <div class="context-usage__limit-head">
-                                  <span class="context-usage__limit-label">Weekly</span>
-                                  <span class="context-usage__limit-meta"><strong>72%</strong></span>
-                                </div>
-                                <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
-                              </div>
-                            </div>
-                          </section>
                         </details>
                       </div>
                     </div>
@@ -783,12 +766,7 @@ async function syncFixtureComposerPopoverAnchor(page: Page) {
   await page.locator(".agent-chat__composer-shell > .agent-chat__input").evaluate((node) => {
     const viewport = window.visualViewport;
     const viewportTop = viewport?.offsetTop ?? 0;
-    const layoutViewportHeight = document.documentElement.clientHeight || window.innerHeight;
     const composerTop = node.getBoundingClientRect().top;
-    node.style.setProperty(
-      "--chat-composer-popover-bottom",
-      `${layoutViewportHeight - composerTop + 6}px`,
-    );
     node.style.setProperty(
       "--chat-composer-popover-max-height",
       `${Math.max(0, composerTop - viewportTop - 28)}px`,
@@ -1787,8 +1765,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const bubbleRect = bubble.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         return {
-          avatarBottom: avatarRect.bottom,
-          bubbleBottom: bubbleRect.bottom,
+          avatarTop: avatarRect.top,
+          bubbleTop: bubbleRect.top,
           firstBottom: firstRect.bottom,
           footerBottom: footerRect.bottom,
           footerHeight: footerRect.height,
@@ -1797,7 +1775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.footerHeight).toBeGreaterThan(24);
-      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
+      expect(layout.avatarTop - layout.bubbleTop).toBeCloseTo(0, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
       expect(Math.abs(layout.secondTop - layout.firstBottom)).toBeLessThanOrEqual(1);
     });
@@ -3100,84 +3078,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it.each([
-    [320, 568, false],
-    [375, 812, false],
-    [667, 375, false],
-    [768, 500, false],
-    [320, 568, true],
-    [667, 375, true],
-  ] as const)(
-    "keeps the context usage popover inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
-    async (width, height, composerAttachment) => {
-      await withBrowserPage(openFixture(width, height, { composerAttachment }), async (page) => {
-        const composer = await getBoundingBox(
-          page,
-          ".agent-chat__composer-shell > .agent-chat__input",
-        );
-        const menuSelector = ".context-usage__popover";
-        const triggerSelector = ".context-ring";
-        await page.locator(triggerSelector).evaluate((node) => {
-          node.parentElement?.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
-        await syncFixtureComposerPopoverAnchor(page);
-        await waitForLayoutSettled(page, `${menuSelector}, .agent-chat__input`);
-        const menu = await getBoundingBox(page, menuSelector);
-        const trigger = await getBoundingBox(page, triggerSelector);
-        const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
-        const menuPosition = await page.locator(menuSelector).evaluate((node) => ({
-          bottom: getComputedStyle(node).bottom,
-          boxSizing: getComputedStyle(node).boxSizing,
-          maxHeight: getComputedStyle(node).maxHeight,
-        }));
-        expect(menu.x).toBeGreaterThanOrEqual(0);
-        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
-        expect(menu.y, JSON.stringify(menuPosition)).toBeGreaterThanOrEqual(0);
-        expect(menu.y + menu.height).toBeLessThanOrEqual(composer.y + 1);
-        expect(trigger.y + trigger.height).toBeLessThanOrEqual(height + 1);
-        expect(footer.y + footer.height).toBeLessThanOrEqual(height + 1);
-      });
-    },
-  );
-
-  it("anchors mobile context usage when the iPhone visual viewport is panned", async () => {
-    await withBrowserPage(openFixture(375, 812), async (page) => {
-      await page.evaluate(() => {
-        Object.defineProperty(window, "visualViewport", {
-          configurable: true,
-          value: { height: 400, offsetTop: 300 },
-        });
-      });
-      await syncFixtureComposerPopoverAnchor(page);
-      await page.locator(".context-ring").evaluate((node) => {
-        node.parentElement?.setAttribute("open", "");
-      });
-      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
-      await syncFixtureComposerPopoverAnchor(page);
-      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
-      await syncFixtureComposerPopoverAnchor(page);
-      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
-      const composer = await getBoundingBox(
-        page,
-        ".agent-chat__composer-shell > .agent-chat__input",
-      );
-      const menu = await getBoundingBox(page, ".context-usage__popover");
-      const anchorEvidence = await page
-        .locator(".agent-chat__composer-shell > .agent-chat__input")
-        .evaluate((node) => ({
-          anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
-          layoutHeight: document.documentElement.clientHeight,
-        }));
-
-      expect(menu.y).toBeGreaterThanOrEqual(300);
-      expect(
-        Math.abs(menu.y + menu.height - (composer.y - 6)),
-        JSON.stringify({ anchorEvidence, composer, menu }),
-      ).toBeLessThanOrEqual(1);
-    });
-  });
-
   it("keeps transient footer controls from crushing mobile model settings", async () => {
     await withBrowserPage(openFixture(320, 568, { crowdedComposerFooter: true }), async (page) => {
       await expectNoHorizontalOverflow(page);
@@ -3753,36 +3653,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         );
       },
     );
-  });
-
-  it("keeps the desktop context popover visible with Goal mode active", async () => {
-    await withBrowserPage(openFixture(1366, 900, { goalMode: true }), async (page) => {
-      const composer = await getBoundingBox(
-        page,
-        ".agent-chat__composer-shell > .agent-chat__input",
-      );
-      await page.locator(".context-ring").evaluate((node) => {
-        node.parentElement?.setAttribute("open", "");
-      });
-      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
-      const popover = await getBoundingBox(page, ".context-usage__popover");
-      expect(popover.y).toBeGreaterThanOrEqual(0);
-      expect(popover.y).toBeLessThan(composer.y);
-      const visibleAboveComposer = await page.evaluate(
-        ({ composerTop, popoverCenterX, popoverTop }) =>
-          Boolean(
-            document
-              .elementFromPoint(popoverCenterX, Math.max(popoverTop + 1, composerTop - 1))
-              ?.closest(".context-usage__popover"),
-          ),
-        {
-          composerTop: composer.y,
-          popoverCenterX: popover.x + popover.width / 2,
-          popoverTop: popover.y,
-        },
-      );
-      expect(visibleAboveComposer).toBe(true);
-    });
   });
 
   it("keeps short-landscape slash menu visible inside the bounded composer", async () => {

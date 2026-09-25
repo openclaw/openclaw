@@ -510,30 +510,12 @@ export function createDiscordMessagingActionContext(params: {
       const targetChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(channelId);
       const target = await resolveReadTargetContext(targetChannelId);
       const currentConversation = isCurrentReadTarget(targetChannelId);
-      if (guildId) {
-        if (target.metadataKnown && target.guildId !== guildId) {
-          throw new Error("Discord read target channel is not allowed.");
-        }
-        const guildInfo = await resolveReadGuildEntry(guildId);
-        if (
-          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
-          (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))
-        ) {
-          return;
-        }
-        if (
-          !isDiscordReadTargetAllowedInGuild({
-            groupPolicy,
-            guildInfo,
-            target,
-          })
-        ) {
-          throw new Error("Discord read target channel is not allowed.");
-        }
-        return;
+      if (guildId && target.metadataKnown && target.guildId !== guildId) {
+        throw new Error("Discord read target channel is not allowed.");
       }
-      if (target.guildId) {
-        const guildInfo = await resolveReadGuildEntry(target.guildId);
+      const targetGuildId = guildId || target.guildId;
+      if (targetGuildId) {
+        const guildInfo = await resolveReadGuildEntry(targetGuildId);
         if (
           (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
           (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))

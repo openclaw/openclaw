@@ -42,6 +42,7 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
+import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
@@ -55,6 +56,7 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewaySourcePreviewConfig
+import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
@@ -116,6 +118,7 @@ import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
 import ai.openclaw.app.voice.SystemSpeechSpeaker
 import ai.openclaw.app.voice.TalkAudioPlayer
+import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
@@ -1211,6 +1214,8 @@ class NodeRuntime private constructor(
     var operatorConnectAdmitted: Boolean = false,
   ) {
     val bootstrapHandoff = initialAuth.bootstrapHandoff
+
+    @Volatile var refreshAfterBootstrap = false
     val auth: GatewayConnectAuth
       get() = if (bootstrapHandoff?.completed == true) initialAuth.copy(bootstrapToken = null) else initialAuth
   }
@@ -1360,7 +1365,7 @@ class NodeRuntime private constructor(
           ?.tls ?: manualTls.value
       },
     )
-  private var lastNodePermissions = connectionManager.buildPermissions()
+  private var lastNodeConnectOptions: GatewayConnectOptions? = null
   private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   /**
@@ -1397,6 +1402,8 @@ class NodeRuntime private constructor(
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> = _nodeCapabilityApproval.asStateFlow()
+  private val nodeApproval = GatewayNodeApproval()
+  val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> = nodeApproval.state
 
   private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
@@ -2131,7 +2138,10 @@ class NodeRuntime private constructor(
         startNodeHostStatsReporting()
         refreshNodesDevices()
         val endpoint = connectedEndpoint
-        if (!operatorConnected && endpoint != null && connection != null) {
+        if (connection?.refreshAfterBootstrap == true) {
+          // Leave this session's callback lock before replacing both role sockets.
+          scope.launch { refreshAcceptedGatewayConnection(connection) }
+        } else if (!operatorConnected && endpoint != null && connection != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, connection)
         }
       },
@@ -2487,8 +2497,8 @@ class NodeRuntime private constructor(
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
 
-  val talkFailureText: StateFlow<String?>
-    get() = talkMode.failureText
+  internal val talkFailureNotice: StateFlow<TalkFailureNotice?>
+    get() = talkMode.failureNotice
 
   private val wearRealtimeLifecycleMutex = Mutex()
 
@@ -3068,6 +3078,14 @@ class NodeRuntime private constructor(
   }
 
   fun refreshNodesDevices() = launchGatewayRefresh { refreshNodesDevicesFromGateway() }
+
+  fun approveNodeCapabilities(expectedRequestId: String) {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    scope.launch {
+      nodeApproval.approve(expectedRequestId)
+      refreshNodesDevicesFromGateway()
+    }
+  }
 
   fun approveDevicePairing(
     requestId: String,
@@ -3886,20 +3904,20 @@ class NodeRuntime private constructor(
    */
   fun refreshNodePermissionSurface() {
     val permissions = connectionManager.buildPermissions()
-    if (permissions == lastNodePermissions) return
-    refreshAcceptedGatewayConnection()
+    if (permissions == lastNodeConnectOptions?.permissions) return
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setCameraEnabled(value: Boolean) {
     if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setLocationMode(mode: LocationMode) {
     if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setManualEnabled(value: Boolean) {
@@ -3921,13 +3939,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -4058,6 +4076,10 @@ class NodeRuntime private constructor(
     micCapture.cancelMicCapture()
     setVoiceCaptureMode(VoiceCaptureMode.Off, persistManualMic = false)
     prefs.setVoiceMicEnabled(false)
+  }
+
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
+    talkMode.acknowledgeFailure(notice)
   }
 
   fun setTalkModeEnabled(value: Boolean) {
@@ -4446,7 +4468,7 @@ class NodeRuntime private constructor(
     val enabled = isVoiceWakeCapabilityEnabled()
     if (enabled == lastVoiceWakeCapabilityEnabled) return
     lastVoiceWakeCapabilityEnabled = enabled
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   suspend fun runVoiceE2e(
@@ -4823,8 +4845,12 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshAcceptedGatewayConnection() {
-    val connection = activeGatewayConnection ?: return
+  private fun refreshAcceptedGatewayConnection(
+    connection: GatewayConnectionContext? = activeGatewayConnection,
+    refreshOperator: Boolean = true,
+  ) {
+    nodeApproval.invalidate()
+    if (connection == null) return
     val endpoint = connectedEndpoint ?: return
     launchGatewayLifecycle({
       val accepted = acceptedConnectAttempt.value
@@ -4834,7 +4860,29 @@ class NodeRuntime private constructor(
         connectedEndpoint?.stableId == endpoint.stableId
     }) {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
+      if (connection.bootstrapHandoff?.completed == false) {
+        // Onboarding permissions may change after the Gateway consumes its setup token but
+        // before hello delivers durable role grants. Keep that handoff alive; reconnect with
+        // the latest capability surface as soon as its node hello has been accepted.
+        connection.refreshAfterBootstrap = true
+        // Publish before checking readiness so a concurrent hello either observes the request
+        // in onConnected or leaves this caller responsible for refreshing the ready session.
+        if (!nodeSession.isReady()) return@launchGatewayLifecycle
+      }
+      val auth = resolveGatewayConnectAuth(endpoint)
+      if (refreshOperator || connection.refreshAfterBootstrap) {
+        connectWithAuth(endpoint = endpoint, auth = auth)
+      } else {
+        // Phone authority is declared only by the node. Keep the operator transport and
+        // its in-flight Chat/Talk requests alive while publishing the new node surface.
+        val options = connectionManager.buildNodeConnectOptions()
+        // Permission callbacks may queue behind the same lifecycle operation. Compare at
+        // admission so a duplicate cannot retire the node handshake we just started.
+        if (options == lastNodeConnectOptions) return@launchGatewayLifecycle
+        runGatewayConnectOperation {
+          connectNodeSession(endpoint, auth, connectionManager.resolveTlsParams(endpoint), options)
+        }
+      }
     }
   }
 
@@ -5031,18 +5079,26 @@ class NodeRuntime private constructor(
           onReady = { publishOperatorReadiness(connection) },
         )
       }
-      val nodeConnectOptions = connectionManager.buildNodeConnectOptions()
-      lastNodePermissions = nodeConnectOptions.permissions
-      nodeSession.connect(
-        endpoint,
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        nodeConnectOptions,
-        tls,
-        bootstrapHandoff = connection.bootstrapHandoff,
-      )
+      connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
     }
+
+  private fun connectNodeSession(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    tls: GatewayTlsParams?,
+    options: GatewayConnectOptions,
+  ) {
+    lastNodeConnectOptions = options
+    nodeSession.connect(
+      endpoint,
+      auth.token,
+      auth.bootstrapToken,
+      auth.password,
+      options,
+      tls,
+      bootstrapHandoff = auth.bootstrapHandoff,
+    )
+  }
 
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside
   // this monitor because GatewaySession invokes callbacks while holding its own lifecycle monitor.
@@ -8405,6 +8461,7 @@ class NodeRuntime private constructor(
 
   private suspend fun refreshNodesDevicesFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
+    val approvalContext = captureNodeApprovalContext(gatewayScope)
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     var refreshStarted = false
     val currentScope =
@@ -8464,6 +8521,7 @@ class NodeRuntime private constructor(
       if (!scopePublished || !approvalPublished) {
         return
       }
+      if (approvalContext != null && nodesRoot != null) nodeApproval.refresh(approvalContext, nodesRoot)
       publishGatewayData(gatewayScope) {
         if (selfNodeConnected && !_nodeConnected.value) {
           updateStatus {
@@ -9241,12 +9299,42 @@ class NodeRuntime private constructor(
   ): List<GatewayExecApprovalSummary> = filterNot { it.isExpiredExecApproval(nowMs) }
 
   private fun invalidateNodeCapabilityApprovalState() {
+    nodeApproval.invalidate()
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
       _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
       _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
       _nodesDevicesRefreshing.value = false
     }
+  }
+
+  private fun currentNodeApprovalSurface(): GatewayNodeApprovalSurface =
+    GatewayNodeApprovalSurface(
+      capabilities = invokeDispatcher.buildCapabilities().toSet(),
+      commands = invokeDispatcher.buildInvokeCommands().toSet(),
+      permissions = connectionManager.buildPermissions(),
+    )
+
+  private fun captureNodeApprovalContext(gatewayScope: GatewayDataScope): GatewayNodeApprovalContext? {
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return null
+    val desired = currentNodeApprovalSurface()
+    val grantedScopes = _operatorScopes.value
+    return GatewayNodeApprovalContext(
+      lease = lease,
+      selfNodeId = identityStore.loadOrCreate().deviceId,
+      scopes = grantedScopes,
+      desired = desired,
+      commitIfCurrent = { block ->
+        var current = false
+        publishGatewayData(gatewayScope) {
+          if (_operatorScopes.value == grantedScopes && currentNodeApprovalSurface() == desired) {
+            current = true
+            block()
+          }
+        }
+        current
+      },
+    )
   }
 
   private suspend fun refreshChannelsFromGateway() =

@@ -1,13 +1,3 @@
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
 function base64ToBytes(value: string): Uint8Array {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -220,8 +210,8 @@ export function estimateBase64DecodedByteLength(value: string): number {
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
 
-const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
-const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
+const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 60;
+const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 4_096;
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 

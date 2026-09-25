@@ -4,18 +4,18 @@ import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
   type ActiveSessionSqliteMigrationRun,
   canonicalMigrationFilePath,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
   readOnlySqliteDbStats,
   resolveTargetSqlitePath,
   scanReadOnlySqliteActiveTranscriptFiles,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
   createDoctorSessionSqliteTotals,
   sumDoctorSessionSqliteTargets,

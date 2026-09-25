@@ -743,22 +743,6 @@ img.chat-avatar {
   color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
 }
 
-.chat-reply-attribution {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: var(--space-1);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-reply-attribution__icon,
-.chat-reply-attribution__icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1006,6 +990,11 @@ img.chat-avatar {
   background: currentColor;
   vertical-align: -0.12em;
   animation: chat-typing-pulse 1s step-end infinite;
+}
+
+.agent-chat__typing-preview-text[data-paused]::after {
+  animation: none;
+  opacity: 0;
 }
 
 .agent-chat__typing-bubble {

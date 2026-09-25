@@ -1,6 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   appendSessionTranscriptReport,
@@ -23,6 +25,16 @@ import { createSessionHistorySubagentProjection } from "../session-history-subag
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
+
+function expectHistoryThreadSql(queries: string[]) {
+  // Pending-input reconciliation is still local; schema admission needs one freshness probe.
+  expect(
+    queries.filter(
+      (sql) => sql !== "PRAGMA data_version" && !sql.includes('"session_pending_inputs"'),
+    ),
+  ).toEqual([]);
+  expect(queries.filter((sql) => sql === "PRAGMA data_version").length).toBeLessThanOrEqual(1);
+}
 
 it.each(["native", "acp"])(
   "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",
@@ -94,6 +106,17 @@ it.each(["native", "acp"])(
         return expectDefined(asOptionalRecord(response[1]), "history payload");
       };
       const initial = await call();
+      const initialCounter = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        const repeated = await call();
+        expectHistoryThreadSql(initialCounter.queries);
+        expect(repeated).toEqual({
+          ...initial,
+          sessionInfo: { ...asOptionalRecord(initial.sessionInfo), snapshotAt: expect.any(Number) },
+        });
+      } finally {
+        initialCounter.restore();
+      }
       if (typeof initial.deltaCursor !== "string") {
         throw new Error("Expected initial delta cursor");
       }
@@ -182,11 +205,14 @@ it.each(["native", "acp"])(
           throw new Error("Transcript SQLite read ran on the request thread");
         });
         const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
+        const counter = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(JSON.stringify(await call(initial.deltaCursor))).toBe(goldenJson);
+          expectHistoryThreadSql(counter.queries);
           expect(read).not.toHaveBeenCalled();
           expect(projectionRead).not.toHaveBeenCalled();
         } finally {
+          counter.restore();
           projectionRead.mockRestore();
           read.mockRestore();
         }
