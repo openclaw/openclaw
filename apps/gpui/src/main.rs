@@ -1,3 +1,4 @@
+mod assets;
 mod gateway;
 mod gateway_windows;
 mod model;
@@ -137,7 +138,7 @@ fn main() {
     };
     let initial = initial_gateway(&args, &store);
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             ui::init_session_menu_shortcuts(cx);
