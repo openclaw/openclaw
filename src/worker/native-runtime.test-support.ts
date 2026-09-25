@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createLlmRuntime } from "@openclaw/ai";
-import { createNativeRuntime, NativeRuntimeConfigSchema } from "./native-runtime.js";
+import { NativeRuntimeConfigSchema } from "./native-runtime-config.js";
+import { createNativeRuntime } from "./native-runtime.js";
 const config = NativeRuntimeConfigSchema.parse(
   JSON.parse(await readFile(process.argv[2]!, "utf8")),
 );

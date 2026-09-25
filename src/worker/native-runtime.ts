@@ -19,9 +19,7 @@ import {
 } from "./native-runtime-config.js";
 const BindingSchema = z.object({ workspaceId: id, workspacePath: z.string().optional() });
 
-export { NativeRuntimeConfigSchema, type NativeRuntimeConfig } from "./native-runtime-config.js";
-
-export type NativeRuntimeTurn = {
+type NativeRuntimeTurn = {
   binding: { workspaceId: string; workspacePath?: string };
   selection: { provider: string; modelId: string };
 };

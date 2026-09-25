@@ -8,11 +8,10 @@ import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { build } from "esbuild";
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NativeRuntimeConfigSchema, type NativeRuntimeConfig } from "./native-runtime-config.js";
 import {
   createNativeRuntime,
-  NativeRuntimeConfigSchema,
   type NativeRuntime,
-  type NativeRuntimeConfig,
   type NativeRuntimeResolved,
 } from "./native-runtime.js";
 

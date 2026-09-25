@@ -9,7 +9,7 @@ import { NativeRuntimeConfigSchema } from "./native-runtime-config.js";
 export const WORKER_NATIVE_INFERENCE_STARTUP_ENV = "OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP";
 export const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
 export const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
-export const NativeInferenceStartupSchema = z.strictObject({
+const NativeInferenceStartupSchema = z.strictObject({
   config: NativeRuntimeConfigSchema,
   credentials: z.record(z.string(), z.string()),
 });
