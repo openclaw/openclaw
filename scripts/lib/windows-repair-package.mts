@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { list as listTar } from "tar";
 import { hashFile } from "./gateway-bench-installed-package.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
+import { isRecord } from "./record-shared.mjs";
 
 export type PackagedOwnerEvidence = {
   file: string;
@@ -34,7 +37,12 @@ export async function verifyPackageMember(packageRoot: string, tarball: string, 
 
 // Authenticate the installed package once, before any owner can import computed
 // or transitive local modules. External npm dependencies are installed separately.
-export async function createPackagedOwnerLoader(packageRoot: string, tarball: string) {
+export async function createPackagedOwnerLoader(installedRoot: string, tarball: string) {
+  assert.ok(
+    (await fs.lstat(installedRoot)).isDirectory(),
+    "Installed package root must be a directory",
+  );
+  const packageRoot = await fs.realpath(installedRoot);
   const bindings = new Map<string, PackagedOwnerEvidence>();
   const errors: string[] = [];
   await listTar({
@@ -83,22 +91,22 @@ export async function createPackagedOwnerLoader(packageRoot: string, tarball: st
       directories.add(parent);
     }
   }
+  function isExternalDependency(relative: string) {
+    const segments = relative.split("/");
+    if (segments[0] !== "node_modules") {
+      return false;
+    }
+    const root = segments.slice(0, segments[1]?.startsWith("@") ? 3 : 2).join("/");
+    return !bindings.has(root) && !directories.has(root);
+  }
   const missing = new Set(bindings.keys());
-  assert.ok(
-    (await fs.lstat(packageRoot)).isDirectory(),
-    "Installed package root must be a directory",
-  );
   async function verifyDirectory(directory: string) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       const relative = path.relative(packageRoot, file).replaceAll(path.sep, "/");
       // Only top-level dependency roots may belong to npm instead of the archive.
       // Once inside a bundled package, nested dependencies must remain bound too.
-      const segments = relative.split("/");
-      const dependencyEntry =
-        segments[0] === "node_modules" &&
-        (segments.length <= 2 || (segments.length === 3 && segments[1]?.startsWith("@") === true));
-      if (dependencyEntry && !bindings.has(relative) && !directories.has(relative)) {
+      if (isExternalDependency(relative)) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -117,8 +125,110 @@ export async function createPackagedOwnerLoader(packageRoot: string, tarball: st
   }
   await verifyDirectory(packageRoot);
   assert.equal(missing.size, 0, `Missing installed package members: ${[...missing].join(", ")}`);
-  return (stem: string, names: readonly string[], evidence: PackagedOwnerEvidence[]) =>
-    loadPackagedOwner(packageRoot, bindings, stem, names, evidence);
+  function localMember(url: string) {
+    if (!url.startsWith("file:")) {
+      return undefined;
+    }
+    const relative = path.relative(packageRoot, fileURLToPath(url)).replaceAll(path.sep, "/");
+    if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+      return undefined;
+    }
+    return isExternalDependency(relative) ? undefined : relative;
+  }
+  function boundMember(url: string, required = false) {
+    const relative = localMember(url);
+    if (relative === undefined && !required) {
+      return undefined;
+    }
+    const binding = relative === undefined ? undefined : bindings.get(relative);
+    assert.ok(binding, `Unbound installed package member: ${relative ?? url}`);
+    return binding;
+  }
+  const manifestBinding = bindings.get("package.json");
+  assert.ok(manifestBinding, "Package tarball has no package.json");
+  const manifestSha256 = manifestBinding.sha256;
+  function readBoundManifest() {
+    const bytes = readFileSync(path.join(packageRoot, "package.json"));
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      manifestSha256,
+      "Installed module differs from the bound package: package.json",
+    );
+    return bytes;
+  }
+  const manifest: unknown = JSON.parse(readBoundManifest().toString("utf8"));
+  assert.ok(isRecord(manifest) && typeof manifest.name === "string", "Missing package name");
+  const packageName = manifest.name;
+  // Keep the import's actual source bound through lazy imports and require(), not
+  // just the initial scan. The observer owns this hook until its process finishes.
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      let required = false;
+      const parent = context.parentURL ? localMember(context.parentURL) : undefined;
+      if (parent !== undefined) {
+        readBoundManifest();
+      }
+      if (path.isAbsolute(specifier)) {
+        required = localMember(pathToFileURL(specifier).href) !== undefined;
+      } else if (specifier.startsWith("file:") || specifier.startsWith(".")) {
+        required = localMember(new URL(specifier, context.parentURL).href) !== undefined;
+      } else if (parent !== undefined && !isBuiltin(specifier) && !specifier.includes(":")) {
+        // OpenClaw artifacts have no external # aliases. Internal aliases and
+        // self-references must remain archive-bound; bare npm dependencies may not.
+        required =
+          specifier.startsWith("#") ||
+          specifier === packageName ||
+          specifier.startsWith(`${packageName}/`);
+        const dependency = specifier
+          .split("/")
+          .slice(0, specifier.startsWith("@") ? 2 : 1)
+          .join("/");
+        // Preserve Node's extension and package resolution, including bundled CJS.
+        // An archive-owned dependency cannot escape via a replacement symlink.
+        for (
+          let directory: string | undefined = path.posix.dirname(parent);
+          directory;
+          directory = directory === "." ? undefined : path.posix.dirname(directory)
+        ) {
+          if (directories.has(path.posix.join(directory, "node_modules", dependency))) {
+            required = true;
+            break;
+          }
+        }
+      }
+      const resolved = nextResolve(specifier, context);
+      boundMember(resolved.url, required);
+      return resolved;
+    },
+    load(url, context, nextLoad) {
+      const binding = boundMember(url);
+      const loaded = nextLoad(url, context);
+      if (binding) {
+        assert.ok(loaded.source != null, `Missing module source: ${binding.file}`);
+        const source =
+          loaded.source instanceof ArrayBuffer ? new Uint8Array(loaded.source) : loaded.source;
+        assert.equal(
+          createHash("sha256").update(source).digest("hex"),
+          binding.sha256,
+          `Installed module differs from the bound package: ${binding.file}`,
+        );
+      }
+      return loaded;
+    },
+  });
+  let disposed = false;
+  return Object.assign(
+    (stem: string, names: readonly string[], evidence: PackagedOwnerEvidence[]) => {
+      assert.ok(!disposed, "Packaged owner loader is disposed");
+      return loadPackagedOwner(packageRoot, bindings, stem, names, evidence);
+    },
+    {
+      [Symbol.dispose]: () => {
+        disposed = true;
+        hooks.deregister();
+      },
+    },
+  );
 }
 
 type Callable = (...args: unknown[]) => unknown;

@@ -525,6 +525,7 @@ async function observer(spec) {
     await acknowledged;
     await fs.rm(workspace, { recursive: true });
   } finally {
+    loadPackagedOwner[Symbol.dispose]();
     server.closeAllConnections();
     await new Promise((resolve) => {
       server.close(resolve);

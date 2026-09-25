@@ -6,20 +6,44 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import {
-  createPackagedOwnerLoader,
+  createPackagedOwnerLoader as createLoader,
   type PackagedOwnerEvidence,
 } from "../../scripts/lib/windows-repair-package.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const loaders = new Set<Awaited<ReturnType<typeof createLoader>>>();
+afterEach(() => {
+  for (const loader of loaders) {
+    loader[Symbol.dispose]();
+  }
+  loaders.clear();
+});
+async function createPackagedOwnerLoader(packageRoot: string, tarball: string) {
+  const loader = await createLoader(packageRoot, tarball);
+  loaders.add(loader);
+  return loader;
+}
 
-async function fixture(files: Record<string, string>, bundled: Record<string, string> = {}) {
+async function fixture(
+  files: Record<string, string>,
+  bundled: Record<string, string> = {},
+  manifest: {
+    name: string;
+    version: string;
+    imports?: Record<string, string>;
+    exports?: Record<string, string>;
+  } = { name: "openclaw", version: "0.0.0" },
+) {
   const root = directories.make("windows-repair-package-owner-");
   const packageRoot = path.join(root, "package");
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify(manifest));
   for (const [name, contents] of Object.entries(files)) {
-    await fs.writeFile(path.join(packageRoot, "dist", name), contents);
+    const file = path.join(packageRoot, "dist", name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
   }
   for (const [name, contents] of Object.entries(bundled)) {
     const file = path.join(packageRoot, "node_modules", name);
@@ -112,36 +136,174 @@ it("authenticates every selected chunk before importing any owner", async () => 
   ).rejects.toThrow("Installed module differs from the bound package");
 });
 
-it.each(["static", "computed"])(
-  "authenticates %s transitive imports before owner execution",
+it.each([
+  { kind: "static", afterAdmission: false },
+  { kind: "computed", afterAdmission: false },
+  { kind: "owner", afterAdmission: true },
+  { kind: "static", afterAdmission: true },
+  { kind: "computed", afterAdmission: true },
+  { kind: "lazy", afterAdmission: true },
+  { kind: "bundled", afterAdmission: true },
+])(
+  "rejects $kind replacement with afterAdmission=$afterAdmission before evaluation",
+  async ({ kind, afterAdmission }) => {
+    const sources: Record<string, string> = {
+      owner: 'function admit() { return "original"; } export { admit };',
+      static:
+        'import { value } from "./implementation.mjs"; function admit() { return value; } export { admit };',
+      computed:
+        'const module = "./implementation.mjs"; const { value } = await import(module); function admit() { return value; } export { admit };',
+      lazy: 'async function admit() { return (await import("./implementation.mjs")).value; } export { admit };',
+      bundled: 'import value from "bundled"; function admit() { return value; } export { admit };',
+    };
+    const { packageRoot, tarball } = await fixture(
+      {
+        "executor-fixture.mjs": sources[kind]!,
+        "implementation.mjs": 'export const value = "original";',
+      },
+      kind === "bundled"
+        ? {
+            "bundled/package.json": '{"name":"bundled","version":"1.0.0","main":"index.cjs"}',
+            "bundled/index.cjs": 'module.exports = "original";',
+          }
+        : {},
+    );
+    const target = path.join(
+      packageRoot,
+      kind === "bundled"
+        ? "node_modules/bundled/index.cjs"
+        : `dist/${kind === "owner" ? "executor-fixture" : "implementation"}.mjs`,
+    );
+    const changed =
+      'console.log("UNVERIFIED_MODULE_EVALUATED"); ' +
+      (kind === "owner"
+        ? 'function admit() { return "changed"; } export { admit };'
+        : kind === "bundled"
+          ? 'module.exports = "changed";'
+          : 'export const value = "changed";');
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { writeFile } from "node:fs/promises";
+         const { createPackagedOwnerLoader } = await import(process.argv[1]);
+         const replace = () => writeFile(process.argv[4], process.argv[5]);
+         if (!${afterAdmission}) await replace();
+         const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
+         try {
+           if (${afterAdmission} && ${JSON.stringify(kind)} !== "lazy") await replace();
+           const owner = await loadOwner("executor", ["admit"], []);
+           if (${JSON.stringify(kind)} === "lazy") await replace();
+           await owner.admit();
+         } finally { loadOwner[Symbol.dispose]?.(); }`,
+        pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
+        packageRoot,
+        tarball,
+        target,
+        changed,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Installed module differs from the bound package");
+    expect(result.stdout).not.toContain("UNVERIFIED_MODULE_EVALUATED");
+  },
+);
+
+it.each(["alias", "self", "absolute"])(
+  "rejects a post-admission %s escape into a separate npm dependency",
   async (kind) => {
-    const { packageRoot, tarball } = await fixture({
-      "executor-fixture.mjs":
-        kind === "static"
-          ? 'import { value } from "./implementation.mjs"; function admit() { return value; } export { admit };'
-          : 'const module = "./implementation.mjs"; const { value } = await import(module); function admit() { return value; } export { admit };',
-      "implementation.mjs": 'export const value = "original";',
-    });
+    const specifier =
+      kind === "alias"
+        ? '"#dep"'
+        : kind === "self"
+          ? '"openclaw/dep"'
+          : 'fileURLToPath(new URL("./target/index.cjs", import.meta.url))';
+    const { packageRoot, tarball } = await fixture(
+      {
+        "executor-fixture.mjs": `import { createRequire } from "node:module"; import { fileURLToPath } from "node:url"; const value = createRequire(import.meta.url)(${specifier}); function admit() { return value; } export { admit };`,
+        "target/index.cjs": 'module.exports = "original";',
+      },
+      {},
+      {
+        name: "openclaw",
+        version: "0.0.0",
+        imports: { "#dep": "./dist/target/index.cjs" },
+        exports: { "./dep": "./dist/target/index.cjs" },
+      },
+    );
+    const external = path.join(packageRoot, "node_modules", "external");
+    await fs.mkdir(external, { recursive: true });
     await fs.writeFile(
-      path.join(packageRoot, "dist", "implementation.mjs"),
-      'throw new Error("unverified transitive code executed"); export const value = "changed";',
+      path.join(external, "index.cjs"),
+      'console.log("UNVERIFIED_MODULE_EVALUATED"); module.exports = "changed";',
     );
     const result = spawnSync(
       process.execPath,
       [
         "--input-type=module",
         "-e",
-        'const { createPackagedOwnerLoader } = await import(process.argv[1]); const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]); await loadOwner("executor", ["admit"], []);',
+        `import { rm, symlink } from "node:fs/promises";
+       const { createPackagedOwnerLoader } = await import(process.argv[1]);
+       const load = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
+       try {
+         await rm(process.argv[4], { recursive: true });
+         await symlink(process.argv[5], process.argv[4], "junction");
+         await load("executor", ["admit"], []);
+       } finally { load[Symbol.dispose]?.(); }`,
         pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
         packageRoot,
         tarball,
+        path.join(packageRoot, "dist", "target"),
+        external,
       ],
       { encoding: "utf8" },
     );
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Installed module differs from the bound package");
+    expect(result.stderr).toContain("Unbound installed package member");
+    expect(result.stdout).not.toContain("UNVERIFIED_MODULE_EVALUATED");
   },
 );
+
+it("scopes import hooks to their loader lifetime while preserving external dependencies", async () => {
+  const { packageRoot, tarball } = await fixture({
+    "executor-fixture.mjs":
+      'import { basename } from "node:path"; import external from "external"; async function admit() { return basename((await import("./implementation.mjs")).value) + external; } export { admit };',
+    "implementation.mjs": 'import value from "./cjs.cjs"; export { value };',
+    "cjs.cjs":
+      'module.exports = require("./value") + require("./directory") + require("./data.json").suffix;',
+    "value.js": 'module.exports = "path/";',
+    "data.json": '{"suffix":"original"}',
+    "directory/index.js": 'module.exports = "";',
+  });
+  const external = path.join(packageRoot, "node_modules", "external");
+  await fs.mkdir(external, { recursive: true });
+  await fs.writeFile(path.join(external, "package.json"), '{"name":"external","main":"index.cjs"}');
+  await fs.writeFile(path.join(external, "index.cjs"), 'module.exports = "-external";');
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import assert from "node:assert/strict";
+     const { createPackagedOwnerLoader } = await import(process.argv[1]);
+     const first = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
+     const second = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
+     try {
+       first[Symbol.dispose]();
+       assert.throws(() => first("executor", ["admit"], []), /loader is disposed/);
+       const owner = await second("executor", ["admit"], []);
+       assert.equal(await owner.admit(), "original-external");
+     } finally { first[Symbol.dispose](); second[Symbol.dispose](); }`,
+      pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
+      packageRoot,
+      tarball,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stderr || result.stdout).toBe(0);
+});
 
 it.each(["added", "missing", "pending lifecycle", "nested dependency"])(
   "refuses %s installed files before loading an owner",
