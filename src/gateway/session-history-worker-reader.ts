@@ -8,10 +8,10 @@ import { createReadonlySessionHistoryReader } from "./session-history-readonly-r
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
   request: SessionHistoryWorkerRequest,
-  target: PreparedSessionHistoryReadTarget,
+  readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
   const options = {
-    readers: createReadonlySessionHistoryReader(target),
+    readers: createReadonlySessionHistoryReader(readTarget),
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,

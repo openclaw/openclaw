@@ -72,10 +72,10 @@ export async function readSessionMessagesAsync(
 
 export async function readSessionMessagesWithSourceAsync(
   scope: SessionTranscriptReadScope,
-  options: Parameters<typeof sessionTranscriptReader.readSessionMessagesWithSourceAsync>[1],
+  inputOptions: Parameters<typeof sessionTranscriptReader.readSessionMessagesWithSourceAsync>[1],
 ) {
   const target = captureHistoryReadScope(scope);
-  options = structuredClone(options);
+  const options = structuredClone(inputOptions);
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessagesWithSourceAsync(target, options);
   }
@@ -86,10 +86,12 @@ export async function readSessionMessagesWithSourceAsync(
 
 export async function readRecentSessionMessagesWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  options: Parameters<typeof sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync>[1],
+  inputOptions: Parameters<
+    typeof sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync
+  >[1],
 ) {
   const target = captureHistoryReadScope(scope);
-  options = structuredClone(options);
+  const options = structuredClone(inputOptions);
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync(target, options);
   }
@@ -100,10 +102,10 @@ export async function readRecentSessionMessagesWithStatsAsync(
 
 export async function readSessionMessagesPageWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  options: Parameters<typeof sessionTranscriptReader.readSessionMessagesPageWithStatsAsync>[1],
+  inputOptions: Parameters<typeof sessionTranscriptReader.readSessionMessagesPageWithStatsAsync>[1],
 ) {
   const target = captureHistoryReadScope(scope);
-  options = structuredClone(options);
+  const options = structuredClone(inputOptions);
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessagesPageWithStatsAsync(target, options);
   }
@@ -114,10 +116,12 @@ export async function readSessionMessagesPageWithStatsAsync(
 
 export async function readSessionMessagesAroundIdWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  options: Parameters<typeof sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync>[1],
+  inputOptions: Parameters<
+    typeof sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync
+  >[1],
 ) {
   const target = captureHistoryReadScope(scope);
-  options = structuredClone(options);
+  const options = structuredClone(inputOptions);
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync(target, options);
   }
@@ -140,10 +144,10 @@ export function readSessionArtifacts(
 ): Promise<Extract<SessionArtifactReadResult, { kind: "image" }>>;
 export async function readSessionArtifacts(
   scope: SessionTranscriptReadScope,
-  query: SessionArtifactReadQuery,
+  inputQuery: SessionArtifactReadQuery,
 ): Promise<SessionArtifactReadResult> {
   const target = captureHistoryReadScope(scope);
-  query = structuredClone(query);
+  const query = structuredClone(inputQuery);
   if (usesProcessHeldTranscript(target)) {
     const { readSessionArtifacts: readLocal } = await import("./session-artifact-read.js");
     return readLocal(target, query, sessionTranscriptReader);

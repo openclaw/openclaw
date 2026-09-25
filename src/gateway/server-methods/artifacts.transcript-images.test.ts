@@ -282,8 +282,8 @@ describe("persisted chat image artifact recovery", () => {
         phase === "read"
           ? vi
               .spyOn(transcriptReaders, "readSessionArtifacts")
-              .mockImplementationOnce(async (scope, query) => {
-                const result = await read(scope, query);
+              .mockImplementationOnce(async (readScope, query) => {
+                const result = await read(readScope, query);
                 await revoke();
                 return result;
               })
