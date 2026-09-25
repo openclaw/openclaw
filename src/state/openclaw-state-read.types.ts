@@ -17,6 +17,7 @@ import type {
 } from "../audit/execution-identity-inspection.types.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronRunReceiptOwnerObservation } from "../cron/store/run-receipt.types.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -128,6 +129,7 @@ export type OpenClawStateReadCommand =
       scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
     }
   | CronRunRecoveryReadCommand
+  | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
@@ -307,6 +309,12 @@ export type OpenClawStateReadReply = (
       type: "cron.observeRunRecovery";
       sourceAdmitted: true;
       observation: CronRunRecoveryObservation;
+    }
+  | {
+      ok: true;
+      type: "cron.activeReceiptOwners";
+      sourceAdmitted: true;
+      owners: CronRunReceiptOwnerObservation[];
     }
   | {
       ok: true;
