@@ -801,6 +801,15 @@ the plugin does not grant additional authority to an existing job.
   </Card>
 </CardGroup>
 
+### QR login preflight
+
+The optional `ChannelPlugin.gateway.loginWithQrStartPreflight` callback can
+short-circuit `web.login.start` with a non-QR result. The Gateway calls it
+before checking or stopping the channel. Do not start login or include a
+`qrDataUrl` field in its result; the Gateway rejects a QR-bearing result.
+Return `null` to continue to `gateway.loginWithQrStart`. Any non-null result is
+returned directly, without the Gateway's channel stop/start handling.
+
 <Note>
 Some bundled helper seams still exist for bundled-plugin maintenance and
 compatibility. They are not the recommended pattern for new channel plugins;
