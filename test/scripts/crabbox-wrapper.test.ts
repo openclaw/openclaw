@@ -4614,7 +4614,9 @@ process.on("exit", () => {
           ? readlinkSync(path.join(producer, sourcePath), { encoding: "buffer" })
           : readFileSync(path.join(producer, sourcePath)),
       ).toEqual(sourceBytes);
-      if (fault === "short writes") return;
+      if (fault === "short writes") {
+        return;
+      }
       const diagnostic = observed.diagnostic;
       expect(diagnostic).toBeDefined();
       expect(diagnostic.code).toBe(code);
@@ -4648,7 +4650,9 @@ process.on("exit", () => {
         expect(diagnostic.message).toContain(`code=${JSON.stringify(code)}, errno=${errno}`);
         expect(diagnostic.causeIsOriginal).toBe(true);
       }
-      if (fault === "directory open") expect(diagnostic.syscall).toBe("open");
+      if (fault === "directory open") {
+        expect(diagnostic.syscall).toBe("open");
+      }
       if (fault === "readonly write" || fault === "tagged write") {
         expect(diagnostic.syscall).toBe("write");
       }
