@@ -4,10 +4,11 @@ import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../infra/file-lock.js";
 import { readJsonFile } from "../infra/json-files.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 import { canonicalizeSetupMigrationValue } from "./setup.migration-canonical.js";
@@ -45,15 +46,6 @@ export class SetupTargetLockedError extends Error {
       { cause },
     );
     this.name = "SetupTargetLockedError";
-  }
-}
-
-async function exists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -116,7 +108,7 @@ export async function inspectSetupMigrationFreshness(params: {
     reasons.push("existing config values are loaded");
   }
   for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
-    if (await exists(path.join(params.workspaceDir, entry))) {
+    if (await pathExists(path.join(params.workspaceDir, entry))) {
       reasons.push(`workspace ${entry} exists`);
     }
   }
@@ -152,47 +144,11 @@ export function preserveSetupMigrationOnboardingConsents(
   };
 }
 
-async function hashTargetPath(
+async function hashSnapshotPath(
   hash: crypto.Hash,
   candidate: string,
   snapshotPath: string,
-): Promise<void> {
-  let stat: import("node:fs").Stats;
-  try {
-    stat = await fs.lstat(candidate);
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      hash.update(`missing:${snapshotPath}\0`);
-      return;
-    }
-    throw error;
-  }
-  if (stat.isSymbolicLink()) {
-    hash.update(`symlink:${snapshotPath}\0${await fs.readlink(candidate)}\0`);
-    return;
-  }
-  if (stat.isDirectory()) {
-    hash.update(`directory:${snapshotPath}\0`);
-    for (const entry of (await fs.readdir(candidate)).toSorted()) {
-      await hashTargetPath(hash, path.join(candidate, entry), `${snapshotPath}/${entry}`);
-    }
-    return;
-  }
-  if (stat.isFile()) {
-    hash.update(`file:${snapshotPath}\0${stat.size}\0`);
-    for await (const chunk of createReadStream(candidate)) {
-      hash.update(chunk);
-    }
-    hash.update("\0");
-    return;
-  }
-  hash.update(`other:${snapshotPath}\0`);
-}
-
-async function hashSourcePath(
-  hash: crypto.Hash,
-  candidate: string,
-  snapshotPath: string,
+  symlinks: "record" | "follow",
   followedRealPaths = new Set<string>(),
 ): Promise<void> {
   let stat: import("node:fs").Stats;
@@ -207,6 +163,9 @@ async function hashSourcePath(
   }
   if (stat.isSymbolicLink()) {
     hash.update(`symlink:${snapshotPath}\0${await fs.readlink(candidate)}\0`);
+    if (symlinks === "record") {
+      return;
+    }
     let realPath: string;
     try {
       realPath = await fs.realpath(candidate);
@@ -219,17 +178,18 @@ async function hashSourcePath(
       return;
     }
     followedRealPaths.add(realPath);
-    await hashSourcePath(hash, realPath, `${snapshotPath}/referent`, followedRealPaths);
+    await hashSnapshotPath(hash, realPath, `${snapshotPath}/referent`, symlinks, followedRealPaths);
     followedRealPaths.delete(realPath);
     return;
   }
   if (stat.isDirectory()) {
     hash.update(`directory:${snapshotPath}\0`);
     for (const entry of (await fs.readdir(candidate)).toSorted()) {
-      await hashSourcePath(
+      await hashSnapshotPath(
         hash,
         path.join(candidate, entry),
         `${snapshotPath}/${entry}`,
+        symlinks,
         followedRealPaths,
       );
     }
@@ -255,9 +215,9 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   const hash = crypto.createHash("sha256");
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeSetupMigrationValue(targetConfig))}\0`);
-  await hashTargetPath(hash, params.workspaceDir, "workspace");
+  await hashSnapshotPath(hash, params.workspaceDir, "workspace", "record");
   for (const entry of IMPORT_BLOCKING_STATE_ENTRIES) {
-    await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
+    await hashSnapshotPath(hash, path.join(params.stateDir, entry), `state/${entry}`, "record");
   }
   return hash.digest("hex");
 }
@@ -283,7 +243,7 @@ export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan)
     ),
   ].toSorted();
   for (const [index, source] of sources.entries()) {
-    await hashSourcePath(hash, source, `source/${index}`);
+    await hashSnapshotPath(hash, source, `source/${index}`, "follow");
   }
   return hash.digest("hex");
 }

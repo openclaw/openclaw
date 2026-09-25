@@ -12,7 +12,7 @@ import {
 import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types.js";
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import {
@@ -24,7 +24,7 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generati
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-export class PluginAdmittedWorkTimeoutError extends Error {
+class PluginAdmittedWorkTimeoutError extends Error {
   constructor(pluginIds: ReadonlySet<string>, cause: PluginHostCleanupTimeoutError) {
     const ids = [...pluginIds].join(", ");
     super(
@@ -44,6 +44,7 @@ export function createPluginReloadCleanup({
   abortSignal,
   log,
   recordCleanup,
+  recordWarning,
   retainRetirement,
 }: {
   previousRegistry: PluginRegistry;
@@ -54,9 +55,12 @@ export function createPluginReloadCleanup({
   abortSignal: AbortSignal;
   log: ReturnType<typeof createSubsystemLogger>;
   recordCleanup: (result: PluginHostCleanupResult) => void;
+  recordWarning: (warning: string) => void;
   retainRetirement: (retire: () => Promise<PluginHostCleanupResult>) => void;
 }) {
   let pendingServiceCleanup: ReturnType<typeof getPluginServiceCleanupSettlement>;
+  let admittedWorkDeadlineAtMs: number | undefined;
+  const quiescedInstances: PluginInstanceHandle[] = [];
   const attempt = async (errors: unknown[], run: () => void | Promise<void>) => {
     try {
       await run();
@@ -91,7 +95,10 @@ export function createPluginReloadCleanup({
     reportStatus: (status: GatewayPluginReloadStatus) => void,
     phase: "reloading" | "recovering",
   ) => {
-    const deadlineAtMs = Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+    const deadlineAtMs =
+      phase === "reloading"
+        ? (admittedWorkDeadlineAtMs ??= Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS)
+        : Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
     reportStatus({
       phase,
       pluginIds: [...changedPluginIds],
@@ -269,8 +276,53 @@ export function createPluginReloadCleanup({
       throw new AggregateError(errors, "Unpublished plugin resource cleanup failed");
     }
   };
+  const drainRetainedWork = async (
+    pluginIds: ReadonlySet<string>,
+    signal: AbortSignal,
+    reportStatus: (status: GatewayPluginReloadStatus) => void,
+    includeConsumers = false,
+  ) => {
+    const instances = previousRegistry.plugins.flatMap((record) => {
+      const instance = pluginIds.has(record.id) && getPluginInstance(record);
+      return instance ? [instance] : [];
+    });
+    const count = instances.reduce((total, instance) => total + instance.retainedWorkCount, 0);
+    if (!count) {
+      return;
+    }
+    const deadlineAtMs = (admittedWorkDeadlineAtMs ??=
+      Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS);
+    const reason = `Plugin replacement queued behind ${count} retained work item(s); applies when they finish within the 60s drain budget.`;
+    reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
+    log.info(reason);
+    const observation = new AbortController();
+    try {
+      await withPluginHostCleanupTimeout(
+        "retained plugin work",
+        () =>
+          Promise.all(
+            instances.map((instance) =>
+              instance.waitForRetainedWork(
+                AbortSignal.any([signal, observation.signal]),
+                includeConsumers,
+              ),
+            ),
+          ),
+        Math.max(0, deadlineAtMs - Date.now()),
+      );
+      recordWarning(`Plugin replacement waited for ${count} retained work item(s) to finish.`);
+    } catch (error) {
+      if (error instanceof PluginHostCleanupTimeoutError) {
+        throw new PluginAdmittedWorkTimeoutError(pluginIds, error);
+      }
+      throw error;
+    } finally {
+      observation.abort();
+    }
+  };
   return {
     attempt,
+    drainRetainedWork,
     stopPreviousServices: async (services: PluginServicesHandle | null, strict: boolean) => {
       try {
         await services?.stop({
@@ -346,11 +398,29 @@ export function createPluginReloadCleanup({
       pluginIds: ReadonlySet<string>,
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,
+      assertCurrent: () => void,
     ) => {
-      if (pluginIds.size) {
-        await drainWithDeadline(pluginIds, signal, reportStatus, "reloading");
+      // Sidecars release their capability consumers before finite work and callbacks drain.
+      await drainRetainedWork(pluginIds, signal, reportStatus, true);
+      assertCurrent();
+      for (const record of previousRegistry.plugins) {
+        const instance = changedPluginIds.has(record.id) && getPluginInstance(record);
+        if (instance && instance.quiesce()) {
+          quiescedInstances.push(instance);
+        }
+      }
+      try {
+        if (pluginIds.size) {
+          await drainWithDeadline(pluginIds, signal, reportStatus, "reloading");
+        }
+      } catch (error) {
+        if (error instanceof PluginHostCleanupTimeoutError) {
+          throw new PluginAdmittedWorkTimeoutError(pluginIds, error);
+        }
+        throw error;
       }
     },
+    resumeInstances: () => quiescedInstances.forEach((instance) => instance.resume()),
     drainForRecovery: async (
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,

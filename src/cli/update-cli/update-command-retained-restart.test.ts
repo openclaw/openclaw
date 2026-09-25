@@ -114,66 +114,104 @@ function owned(
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it("restarts retained A with a real child and keeps both owners until native drain", async () => {
-    const effect = path.join(a, "effect");
-    const proceed = path.join(a, "proceed");
-    const started = createDeferred();
-    const definition = path.join(a, "unit");
-    fs.writeFileSync(definition, "original Node A and service definition");
-    let pid = 0;
-    const native = vi
-      .spyOn(systemdExec, "execSystemctlUser")
-      .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-        assertCurrent?.();
-        assertGatewayServiceUpdateCurrent();
-        if (args[0] === "reset-failed") {
-          return success;
+  it.each(["native drain", "readiness failure"] as const)(
+    "restarts retained A with a real child and keeps both owners until %s",
+    async (outcome) => {
+      const effect = path.join(a, "effect");
+      const proceed = path.join(a, "proceed");
+      const started = createDeferred();
+      const definition = path.join(a, "unit");
+      fs.writeFileSync(definition, "original Node A and service definition");
+      let pid = 0;
+      const readinessError = new Error("fixture readiness observer failed");
+      // Observe outside native custody so a readiness failure can release the child
+      // before the authority owner joins its still-pending command.
+      const observer = fs.watch(a, () => {
+        try {
+          if (!fs.existsSync(effect)) {
+            return;
+          }
+          pid = Number(fs.readFileSync(effect, "utf8"));
+          observer.close();
+          if (outcome === "readiness failure") {
+            started.reject(readinessError);
+          } else {
+            started.resolve();
+          }
+        } catch (error) {
+          started.reject(error);
         }
-        expect(args).toEqual(["restart", "fixture-A.service"]);
-        const running = execFileUtf8(process.execPath, [
-          "-e",
-          `
-      const fs=require("node:fs");
-      fs.writeFileSync(${JSON.stringify(effect + ".tmp")},String(process.pid));
-      fs.renameSync(${JSON.stringify(effect + ".tmp")},${JSON.stringify(effect)});
-      const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.stdout.write("drained");}},10);
+      });
+      observer.on("error", started.reject);
+      const native = vi
+        .spyOn(systemdExec, "execSystemctlUser")
+        .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+          assertCurrent?.();
+          assertGatewayServiceUpdateCurrent();
+          if (args[0] === "reset-failed") {
+            return success;
+          }
+          expect(args).toEqual(["restart", "fixture-A.service"]);
+          return await execFileUtf8(process.execPath, [
+            "-e",
+            `
+      const fs = require("node:fs");
+      let drained = false;
+      const finish = () => {
+        if (drained || !fs.existsSync(${JSON.stringify(proceed)})) return;
+        drained = true;
+        watcher.close();
+        process.stdout.write("drained");
+      };
+      const watcher = fs.watch(${JSON.stringify(a)}, finish);
+      fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
+      fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
+      finish();
     `,
-        ]);
-        await vi.waitFor(() => expect(fs.existsSync(effect)).toBe(true));
-        pid = Number(fs.readFileSync(effect, "utf8"));
-        started.resolve();
-        return await running;
+          ]);
+        });
+      let complete = false;
+      const work = owned(async (run) => {
+        await expect(commands.restartRetainedUpdateGatewayService(request(run))).resolves.toEqual({
+          outcome: "completed",
+        });
+      }).then(() => {
+        complete = true;
       });
-    let complete = false;
-    const work = owned(async (run) => {
-      await expect(commands.restartRetainedUpdateGatewayService(request(run))).resolves.toEqual({
-        outcome: "completed",
-      });
-    }).then(() => {
-      complete = true;
-    });
-    try {
-      await Promise.race([started.promise, work]);
-      expect(pid).toBeGreaterThan(0);
-      expect(pid).not.toBe(process.pid);
-      expect(complete).toBe(false);
-      const store = createManagedHandoffLeaseStore();
-      for (const root of [a, b]) {
-        expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+      const exercise = async () => {
+        try {
+          await Promise.race([started.promise, work]);
+          expect(pid).toBeGreaterThan(0);
+          expect(pid).not.toBe(process.pid);
+          expect(complete).toBe(false);
+          const store = createManagedHandoffLeaseStore();
+          for (const root of [a, b]) {
+            expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+          }
+          expect(store.read(c)).toEqual({ kind: "absent" });
+          fs.writeFileSync(proceed, "");
+          await work;
+        } finally {
+          observer.close();
+          fs.writeFileSync(proceed, "");
+          await work.catch(() => undefined);
+        }
+      };
+      if (outcome === "readiness failure") {
+        await expect(exercise()).rejects.toBe(readinessError);
+      } else {
+        await exercise();
       }
-      expect(store.read(c)).toEqual({ kind: "absent" });
-      fs.writeFileSync(proceed, "");
-      await work;
+      expect(pid).toBeGreaterThan(0);
+      expect(complete).toBe(true);
       expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
       expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
+      const store = createManagedHandoffLeaseStore();
       for (const root of [a, b]) {
         expect(store.read(root)).toEqual({ kind: "absent" });
       }
-    } finally {
-      fs.writeFileSync(proceed, "");
-      await work.catch(() => undefined);
-    }
-  });
+    },
+  );
 
   it.each(["A", "B", "caller", "executor", "abort"] as const)(
     "refuses after the native lock/config await changes %s",

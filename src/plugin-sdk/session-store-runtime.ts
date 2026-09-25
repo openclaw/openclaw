@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -41,7 +42,6 @@ import type {
   InternalSessionEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,

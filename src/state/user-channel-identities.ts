@@ -36,6 +36,9 @@ import {
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
 import type {
+  UserChannelAuthorization,
+  UserChannelAuthorizationPolicy,
+  UserChannelAuthorizationReference,
   UserChannelIdentity,
   UserChannelIdentityLink,
   UserChannelIdentityAuthorityFacts,
@@ -49,26 +52,15 @@ const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
-export type UserChannelAuthorizationReference = Readonly<z.infer<typeof referenceSchema>>;
-export type UserChannelAuthorization = {
-  reference: UserChannelAuthorizationReference;
-  subject: string;
-  grant: GatewayAccessGrantRef | null;
-};
-
 export function parseUserChannelAuthorizationReference(value: unknown) {
   return referenceSchema.safeParse(value).data;
 }
 
 export function resolveUserChannelAuthorizationPolicy(
   gateway: Pick<GatewayConfig, "roles" | "auth"> | undefined,
-) {
+): UserChannelAuthorizationPolicy {
   return { roles: gateway?.roles ?? null, identityScopes: gateway?.auth?.identityScopes ?? null };
 }
-export type UserChannelAuthorizationPolicy = ReturnType<
-  typeof resolveUserChannelAuthorizationPolicy
->;
-
 function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
   return row !== undefined && isDeepStrictEqual(JSON.parse(row.value_json), policy);

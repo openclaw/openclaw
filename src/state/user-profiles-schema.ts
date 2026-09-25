@@ -104,11 +104,12 @@ export function ensureUserProfilesSchema(
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
+      // sqlite-allow-raw -- Canonical first-use channel-link indexes after additive columns.
       db.exec(
         extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities", {
           endMarker: "ON user_profile_identities(authorization_id);",
         }),
-      ); // sqlite-allow-raw -- Canonical first-use channel-link indexes after additive columns.
+      );
       ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
       ensureColumn(db, "user_profile_emails", "binding_id TEXT");
       const kysely = getNodeSqliteKysely<UserProfilesDatabase>(db);

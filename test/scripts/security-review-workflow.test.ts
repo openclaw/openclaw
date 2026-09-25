@@ -201,7 +201,7 @@ describe("security review workflow trust boundaries", () => {
                 name: "Setup supported Node runtime",
                 "timeout-minutes": 3,
                 uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                with: { "node-version": "24.19.0", "package-manager-cache": false },
+                with: { "node-version": "24.21.0", "package-manager-cache": false },
               },
             ]
           : [],

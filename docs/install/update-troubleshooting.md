@@ -117,6 +117,15 @@ authorizes concurrent repair or discards recovery backups. Active migration
 writes, unreadable state, incomplete migrations, and unconfirmed subprocess
 cleanup retain their failure and recovery guidance.
 
+On Windows, `windows-task-inspection-failed` means OpenClaw could not query
+Task Scheduler to verify service absence. Check Task Scheduler availability and
+the service account's query permissions, then run `openclaw gateway status --deep`
+before retrying. Install failures and update reports include the safe failure
+category and, when available, a numeric errno, hexadecimal HRESULT, exit code, or timeout
+budget. These facts appear before the recovery guidance so bounded reports retain
+them. Preserve those facts when reporting the problem; task definitions and raw
+native output are excluded.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
