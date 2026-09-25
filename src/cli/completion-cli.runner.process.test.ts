@@ -41,6 +41,15 @@ it.skipIf(process.platform === "win32").each([
     message: "Unexpected PowerShell completion stdout: completion primary failure",
   },
   {
+    label: "never emits READY after partial stdout",
+    script: `#!${process.execPath}
+process.stdin.resume();
+process.stdout.write("x".repeat(5000) + "partial READY");
+`,
+    outcome: { code: null, signal: "SIGTERM" },
+    message: "PowerShell completion runner did not become ready",
+  },
+  {
     label: "ignores termination after its first failure",
     script: `#!${process.execPath}
 process.on("SIGTERM", () => process.stdout.write("completion fixture received SIGTERM\\n"));
@@ -59,12 +68,17 @@ process.stdout.write("completion primary failure\\n");
     const liveChildren: childProcess.ChildProcess[] = [];
     let sentTermination = false;
     let childStdout = "";
+    const readinessTimeout = message === "PowerShell completion runner did not become ready";
     try {
       const executable = path.join(tempDirs.make("openclaw-completion-exit-"), "pwsh");
       writeFileSync(executable, script, { mode: 0o700 });
       const closed = createDeferred<ChildExit>();
       vi.resetModules();
       vi.stubEnv("OPENCLAW_TEST_PWSH", executable);
+      if (readinessTimeout) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      }
+      const partialStdout = createDeferred();
       vi.doMock("node:child_process", () => ({
         ...childProcess,
         spawn(...args: Parameters<typeof childProcess.spawn>) {
@@ -84,6 +98,9 @@ process.stdout.write("completion primary failure\\n");
             }
             child.stdout.on("data", (chunk: string | Buffer) => {
               childStdout += chunk.toString();
+              if (childStdout.endsWith("partial READY")) {
+                partialStdout.resolve();
+              }
             });
             const exit = createDeferred<ChildExit>();
             child.once("close", (code, signal) => exit.resolve({ code, signal }));
@@ -114,6 +131,13 @@ process.stdout.write("completion primary failure\\n");
         })(),
       );
 
+      if (readinessTimeout) {
+        await partialStdout.promise;
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(first.value).toEqual({ state: "pending" });
+        expect(sentTermination).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      }
       expect(await closed.promise).toEqual(outcome);
       // The real child is closed; only promise continuations remain.
       // Node drains those before setImmediate's check phase, regardless of chain depth.
@@ -134,6 +158,24 @@ process.stdout.write("completion primary failure\\n");
       }
       expect(second.value.error).toBe(first.value.error);
       expect(caller.value.error).toBe(first.value.error);
+      if (readinessTimeout) {
+        expect(first.value.error).toBeInstanceOf(Error);
+        if (!(first.value.error instanceof Error)) {
+          throw new Error("Readiness timeout must reject with an Error");
+        }
+        const diagnostic = JSON.parse(first.value.error.message.split("\nStartup: ")[1] ?? "null");
+        expect(diagnostic).toMatchObject({
+          executable,
+          elapsedMs: 15_000,
+          spawnElapsedMs: 0,
+          pid: liveChildren[0]?.pid,
+          exitCode: null,
+          signalCode: null,
+          killed: false,
+          stdoutTail: "x".repeat(4096 - "partial READY".length) + "partial READY",
+        });
+        expect(first.value.error.message.length).toBeLessThan(6_000);
+      }
       if (outcome.signal) {
         expect(sentTermination).toBe(true);
       }
@@ -148,6 +190,7 @@ process.stdout.write("completion primary failure\\n");
       }
       // Real close and EOF, rather than the runner's exit latch, prove fixture completion.
       await Promise.all(children);
+      vi.useRealTimers();
       vi.restoreAllMocks();
       vi.doUnmock("node:child_process");
       vi.unstubAllEnvs();

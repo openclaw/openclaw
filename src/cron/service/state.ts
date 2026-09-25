@@ -14,8 +14,8 @@ import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import type { QuarantinedCronConfigJob } from "../store/types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -40,6 +40,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 import type {
   CronNotificationIntent,
   CronNotificationJob,
@@ -139,7 +140,7 @@ export type CronServiceDeps = {
   legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
-  /** Revalidate ownership through the supplied transaction when a receipt holds it. */
+  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
@@ -305,6 +306,15 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** One prepared list, invalidated by committed revisions and service mutations. */
+  listPageSnapshot?: {
+    storeRevision: number;
+    filteredJobs: CronJob[];
+    sortBy: CronJobsSortBy;
+    sortDir: CronSortDir;
+    jobs: CronJob[];
+    snapshotRevision: string;
+  };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;

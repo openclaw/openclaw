@@ -504,23 +504,6 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
   addTimestampToSummary(summary, entry);
 }
 
-function findRoleTextCandidate(
-  index: RoleTextIndex,
-  entry: ComparableHistoryMessage,
-  consumed: Set<ComparableHistoryMessage>,
-  minimumOrder: number,
-): ComparableHistoryMessage | undefined {
-  if (!entry.role || !entry.text) {
-    return undefined;
-  }
-  return findTimestampMatch(
-    index.get(entry.role)?.get(entry.text),
-    entry.timestamp,
-    consumed,
-    minimumOrder,
-  );
-}
-
 function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
   if (entry.role !== "user") {
     return false;
@@ -644,35 +627,18 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
     const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
-    let imageDuplicate: ComparableHistoryMessage | undefined;
-    if (imageCandidates) {
-      imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
-        imageCandidates.cursor += 1;
-        imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      }
-      if (imageDuplicate) {
-        imageCandidates.cursor += 1;
-      }
-    }
-    if (imageDuplicate) {
-      // Each local image turn suppresses one import while retaining the native
-      // identity on the media-bearing row that remains visible.
-      const projected = projectImportedIdentity(imageDuplicate.message, imported.message);
-      if (projected !== imageDuplicate.message) {
-        imageDuplicate.message = projected;
-        imageDuplicate.externalIdentityKey = resolveImportedExternalIdentityKey(projected);
-        if (imageDuplicate.externalIdentityKey) {
-          exactExternalIdentityIndex.set(imageDuplicate.externalIdentityKey, imageDuplicate);
-        }
-        changed = true;
-      }
-      consumedLocalCandidates.add(imageDuplicate);
-      advanceRoleTextMinimumOrder(imported, imageDuplicate);
-      continue;
-    }
     let duplicate: ComparableHistoryMessage | undefined;
-    if (!imported.hasCliImageMentions) {
+    if (imageCandidates) {
+      duplicate = imageCandidates.entries[imageCandidates.cursor];
+      while (duplicate && consumedLocalCandidates.has(duplicate)) {
+        imageCandidates.cursor += 1;
+        duplicate = imageCandidates.entries[imageCandidates.cursor];
+      }
+      if (duplicate) {
+        imageCandidates.cursor += 1;
+      }
+    }
+    if (!duplicate && !imported.hasCliImageMentions) {
       const index = imported.externalIdentityKey
         ? identitylessRoleTextIndex
         : allMessageRoleTextIndex;
@@ -685,9 +651,9 @@ export function mergeImportedChatHistoryMessages(params: {
           continue;
         }
         const minimumOrder = Math.max(importedMinimumOrder, byText?.get(text) ?? 0);
-        duplicate = findRoleTextCandidate(
-          index,
-          { ...imported, text },
+        duplicate = findTimestampMatch(
+          index.get(imported.role)?.get(text),
+          imported.timestamp,
           consumedLocalCandidates,
           minimumOrder,
         );

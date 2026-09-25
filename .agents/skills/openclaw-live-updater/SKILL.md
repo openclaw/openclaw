@@ -57,7 +57,7 @@ If no update, build repair, pending Mac retry, or exact-head failure exists, rep
 
 Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, never release preparation or publication.
 
-1. Treat 12 hours as wall-clock cadence, not per-SHA cadence. Inspect Full Release Validation runs from the last 12 hours and verify effective `release_profile=full`, `rerun_group=all`, and expected child-job shape. Any valid active or successful full/all umbrella in that window satisfies the cadence even if `main` advanced afterward. Never duplicate an active full/all run.
+1. Treat 12 hours as wall-clock cadence, not per-SHA cadence. Inspect Full Release Validation runs from the last 12 hours and verify effective `release_profile=full`, `rerun_group=all`, and expected child-job shape. Any valid active or successful full/all umbrella in that window satisfies the cadence even if `main` advanced afterward. Never duplicate an active full/all run. The scheduled `Full Release Validation Nightly` (04:00 UTC, `stable` profile, `main-qualification`) is additional stable-profile evidence and never satisfies this full/all cadence; when both target the same SHA, the full sweep still runs and may adopt the nightly's per-child receipts.
 2. Only when the cadence is due, confirm no full/all run is active, then snapshot exact current `origin/main` after checking mirror invariants. Run the provider-secret preflight without printing secrets and dispatch the trusted workflow once:
 
    ```bash

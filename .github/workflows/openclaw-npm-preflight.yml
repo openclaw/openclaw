@@ -54,7 +54,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
 jobs:
@@ -288,6 +288,18 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           build-all-cache-scope: full
+
+      - name: Materialize trusted package preparation runtime
+        run: |
+          git -C .release-harness sparse-checkout add \
+            .github/actions/setup-release-harness \
+            .github/actions/setup-pnpm-store-cache \
+            packages patches
+
+      - name: Provision trusted package preparation runtime
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Validate npm release request
         env:

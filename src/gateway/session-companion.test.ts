@@ -408,11 +408,13 @@ describe("session companion asks", () => {
       const harness = createHarness();
       const selected = { agentId: "work", sessionKey };
       const other = { agentId: "main", sessionKey: "global" };
+      const databaseIdentity = Symbol("session-companion-database");
       await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
       await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
 
       emitSessionIdentityMutation({
         agentId: sessionKey === "global" ? "work" : "main",
+        databaseIdentity,
         kind: "delete",
         previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
       });

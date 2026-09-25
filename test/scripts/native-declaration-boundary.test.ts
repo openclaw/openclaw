@@ -7,6 +7,7 @@ import { portableRelativePath } from "../../scripts/lib/build-artifact-cache.mts
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
+import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -16,6 +17,55 @@ import {
 } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+
+it("keeps test-only ambient augmentation out of declaration roots but in test graphs", () => {
+  const root = fs.realpathSync.native(roots.make("native-declaration-production-roots-"));
+  // Use the actual production/test selection rules with a tiny semantic-free fixture.
+  const testConfigs = [
+    "test/tsconfig/tsconfig.test.json",
+    "src/tsconfig.json",
+    "ui/tsconfig.json",
+    "extensions/tsconfig.json",
+  ];
+  // Actual emit owners: tsgo:prod UI/plugin configs are noEmit typecheck graphs.
+  const productionConfigs = [
+    "tsconfig.json",
+    "packages/plugin-sdk/tsconfig.json",
+    "extensions/browser/tsconfig.json",
+  ];
+  for (const config of [
+    ...productionConfigs,
+    ...testConfigs,
+    "extensions/tsconfig.package-boundary.paths.json",
+    "extensions/tsconfig.package-boundary.base.json",
+  ]) {
+    writeNativeFixtureFile(root, config, fs.readFileSync(config, "utf8"));
+  }
+  const productionAmbient = "src/types/production.d.ts";
+  const testAmbient = "src/config/sessions/session-entry.test-compat.d.ts";
+  writeNativeFixtureFile(root, productionAmbient, "declare const productionOrigin: string;");
+  writeNativeFixtureFile(root, testAmbient, 'import "./runtime.js";');
+  writeNativeFixtureFile(root, "src/config/sessions/runtime.ts", "export const value = 1;");
+  for (const file of [
+    "packages/example/src/index.ts",
+    "src/plugin-sdk/index.ts",
+    "extensions/browser/src/index.ts",
+  ]) {
+    writeNativeFixtureFile(root, file, "export const value = 1;");
+  }
+  const configuredRoots = (configFileName: string) =>
+    readNativeTypeScriptConfig({ cwd: root, configFileName }).fileNames.map((file) =>
+      path.relative(root, file).replaceAll(path.sep, "/"),
+    );
+  const production = configuredRoots("tsconfig.json");
+  expect(production).toContain(productionAmbient);
+  for (const config of productionConfigs) {
+    expect(configuredRoots(config), config).not.toContain(testAmbient);
+  }
+  for (const config of testConfigs) {
+    expect(configuredRoots(config), config).toContain(testAmbient);
+  }
+});
 
 it.each([true, false])(
   "diagnoses declaration escapes with an ancestor install=%s",

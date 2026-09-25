@@ -188,14 +188,14 @@ export function registerSharedClientLifetimeTests(
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
       client,
       {
-        captureAgentHarnessCompletionCustody: () => undefined,
+        captureAgentHarnessCompletionCustody: async () => undefined,
         createAgentHarnessTaskEventSink: () => () => {},
         createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
         deliverAgentHarnessTaskCompletion: deliverCompletion,
       },
       { retainClient },
     );
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       taskRuntimeScope: { requesterSessionKey: "agent:main:main" },

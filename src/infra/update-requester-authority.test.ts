@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   linkUserChannelIdentity,
@@ -20,9 +21,15 @@ import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
+  prepareManagedUpdateRequesterIdentity,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "./update-run-ledger.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -204,6 +211,65 @@ describe("managed update requester authority", () => {
       await clearActivePluginRegistry(builder.registry);
     }
   });
+
+  it.each([
+    { source: "configured-owner", retainedRuns: 2 },
+    { source: "profile", retainedRuns: 2 },
+    { source: "configured-owner", retainedRuns: 500 },
+  ])(
+    "reads $retainedRuns retained runs under $source Doctor authority and rejects revocation",
+    async ({ source, retainedRuns }) => {
+      const fixture = await linkedAdmins();
+      if (source === "configured-owner") {
+        await fs.writeFile(configPath, allowed);
+      }
+      const identity = await prepareManagedUpdateRequesterIdentity(
+        source === "profile" ? fixture.requester : requester,
+        env,
+      );
+      for (let index = 2; index < retainedRuns; index++) {
+        const historical = createUpdateRun({ trigger: "chat" }, { env });
+        finishUpdateRun(historical.runId, { status: "failed", reason: "doctor-failed" }, { env });
+      }
+      const previous = createUpdateRun({ trigger: "chat" }, { env });
+      finishUpdateRun(previous.runId, { status: "failed", reason: "doctor-failed" }, { env });
+      const current = createUpdateRun(
+        { trigger: "chat", origin: { requester: fixture.requester } },
+        { env },
+      );
+      recordUpdateRunStep(
+        current.runId,
+        {
+          step: "warning:openclaw doctor",
+          status: "completed",
+          detail: `Previous update ${previous.runId} rolled back; migrationWarnings: /Users/migrated/.openclaw/agents/main/sessions/sessions.json: entry_invalid, transcript_missing`,
+        },
+        { env },
+      );
+      const maintenance = createOpenClawDatabaseMaintenanceScope(undefined, () => {
+        if (!identity.isCurrentIdentity()) {
+          throw new UpdateRequesterRevokedError();
+        }
+      });
+      try {
+        expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({
+          runId: current.runId,
+          status: "running",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ detail: expect.stringContaining(previous.runId) }),
+          ]),
+        });
+        expect(getUpdateRun(previous.runId, { env })?.status).toBe("failed");
+        unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
+        await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
+        expect(() => maintenance.run(() => getUpdateRun(current.runId, { env }))).toThrow(
+          UpdateRequesterRevokedError,
+        );
+      } finally {
+        await maintenance.close();
+      }
+    },
+  );
 
   it("does not infer linked-profile authority for a source-less released driver", async () => {
     const fixture = await linkedAdmins();

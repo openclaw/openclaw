@@ -1,100 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import {
+  createGatewayHarness,
+  createHello,
+  flushSync,
+} from "./session-pull-requests.test-support.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionGitHubRepository,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
-
-function createHello(): GatewayHelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: [] },
-    features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
-  };
-}
-
-function createGatewayHarness() {
-  const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
-  const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: createHello(),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<GatewayEventListener>();
-  const unsubscribeSnapshots = vi.fn();
-  const unsubscribeEvents = vi.fn();
-  const subscribeSnapshots = vi.fn((listener: (value: ApplicationGatewaySnapshot) => void) => {
-    snapshotListeners.add(listener);
-    return () => {
-      unsubscribeSnapshots();
-      snapshotListeners.delete(listener);
-    };
-  });
-  const subscribeEvents = vi.fn((listener: GatewayEventListener) => {
-    eventListeners.add(listener);
-    return () => {
-      unsubscribeEvents();
-      eventListeners.delete(listener);
-    };
-  });
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
-    connectionRevision: 0,
-    eventLog: [],
-    eventLogRevision: 0,
-    subscribe: subscribeSnapshots,
-    subscribeEvents,
-    subscribeEventLog: () => () => {},
-    connect: vi.fn(),
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-  } as ApplicationGateway;
-  return {
-    gateway,
-    request,
-    subscribeSnapshots,
-    subscribeEvents,
-    unsubscribeSnapshots,
-    unsubscribeEvents,
-    emit(payload: unknown, event = "controlUi.sessionPullRequests.changed") {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event,
-          payload,
-          seq: 1,
-        });
-      }
-    },
-    setSnapshot(next: ApplicationGatewaySnapshot) {
-      snapshot = next;
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
-
-async function flushSync() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -203,10 +118,14 @@ describe("session pull request snapshot store", () => {
       }
       harness.setSnapshot({ ...connected, hello: createHello() });
       await flushSync();
-      expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-        sessionKeys: [key],
-        refreshSessionKeys: [key],
-      });
+      expect(harness.request).toHaveBeenLastCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        {
+          sessionKeys: [key],
+          refreshSessionKeys: [key],
+        },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+      );
       const calls = harness.request.mock.calls.length;
       if (outcome === "resolve") {
         resolve({ subscribed: true });
@@ -358,16 +277,24 @@ describe("session pull request snapshot store", () => {
     const owner = {};
     store.watch(owner, ["agent:main:demo"]);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: ["agent:main:demo"],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -400,9 +327,13 @@ describe("session pull request snapshot store", () => {
     });
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [key],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -459,10 +390,14 @@ describe("session pull request snapshot store", () => {
       await flushSync();
       expect(harness.request).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-        sessionKeys: [key, otherKey].toSorted(),
-        refreshSessionKeys: [key],
-      });
+      expect(harness.request).toHaveBeenCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        {
+          sessionKeys: [key, otherKey].toSorted(),
+          refreshSessionKeys: [key],
+        },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+      );
       unsubscribe();
       store.unwatch(owner);
       await flushSync();
@@ -514,9 +449,13 @@ describe("session pull request snapshot store", () => {
 
     store.unwatch(owner);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     expect(harness.unsubscribeSnapshots).not.toHaveBeenCalled();
     expect(harness.unsubscribeEvents).not.toHaveBeenCalled();
 
@@ -585,9 +524,13 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.subscribeSnapshots).toHaveBeenCalledTimes(2);
     expect(harness.subscribeEvents).toHaveBeenCalledTimes(2);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [key],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     harness.emit({
       sessions: {
         [key]: {
@@ -616,9 +559,13 @@ describe("session pull request snapshot store", () => {
 
     const loaded = store.load({}, key);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
+    expect(harness.request).toHaveBeenCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [key],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     harness.emit({
       sessions: {
         [key]: { pullRequests: [], rateLimited: false, status: "ready" },
@@ -661,10 +608,14 @@ describe("session pull request snapshot store", () => {
     await flushSync();
 
     expect(harness.request).toHaveBeenCalledOnce();
-    expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo", "agent:main:other"],
-      refreshSessionKeys: ["agent:main:demo"],
-    });
+    expect(harness.request).toHaveBeenCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: ["agent:main:demo", "agent:main:other"],
+        refreshSessionKeys: ["agent:main:demo"],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -687,18 +638,26 @@ describe("session pull request snapshot store", () => {
     await vi.advanceTimersByTimeAsync(2_999);
     expect(harness.request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [first, second],
-      refreshSessionKeys: [second],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [first, second],
+        refreshSessionKeys: [second],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     store.refresh(first);
     await flushSync();
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [first, second],
-      refreshSessionKeys: [first],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [first, second],
+        refreshSessionKeys: [first],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     await vi.advanceTimersByTimeAsync(5_000);
     expect(harness.request).toHaveBeenCalledTimes(2);
     store.unwatch(owner);
@@ -963,9 +922,13 @@ describe("session pull request snapshot store", () => {
     await loaded;
     await flushSync();
 
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
   });
 
   it("settles a pending one-shot load when the gateway disconnects", async () => {

@@ -3,6 +3,7 @@ import type { DmPolicy } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelDmAllowFrom, resolveChannelDmPolicy } from "./dm-access.js";
 import {
   addWildcardAllowFrom,
@@ -39,20 +40,14 @@ function patchLegacyChannelConfig(params: {
 }): OpenClawConfig {
   const channelConfig = resolveLegacyChannelConfig(params.cfg, params.channel);
   const dmConfig = asObjectRecord(channelConfig.dm) ?? {};
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channel]: {
-        ...channelConfig,
-        ...params.patch,
-        dm: {
-          ...dmConfig,
-          enabled: typeof dmConfig.enabled === "boolean" ? dmConfig.enabled : true,
-        },
-      },
+  return writeChannelSection(params.cfg, params.channel, {
+    ...channelConfig,
+    ...params.patch,
+    dm: {
+      ...dmConfig,
+      enabled: typeof dmConfig.enabled === "boolean" ? dmConfig.enabled : true,
     },
-  };
+  });
 }
 function setLegacyChannelDmPolicy(params: {
   cfg: OpenClawConfig;

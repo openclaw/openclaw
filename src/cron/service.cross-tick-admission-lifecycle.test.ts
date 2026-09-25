@@ -12,6 +12,7 @@ import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -183,7 +184,10 @@ describe("cron service cross-tick admission lifecycle", () => {
       await deliveries.settle();
 
       expect(state.runAdmission.capacityListener).toBeTypeOf("function");
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(
+        getActiveGatewayRootWorkCount(),
+        `Active Gateway roots: ${JSON.stringify(getActiveGatewayRootWorkHolders())}`,
+      ).toBe(2);
 
       releaseDirectA.resolve({ status: "ok", summary: "direct a" });
       // The capacity wake still observes active receipts before admitting pending work.

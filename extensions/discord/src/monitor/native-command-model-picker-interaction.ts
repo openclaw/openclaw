@@ -51,7 +51,7 @@ import {
   splitDiscordModelRef,
 } from "./native-command-model-picker-ui.js";
 import type {
-  DiscordModelPickerContext,
+  DiscordCommandArgContext,
   SafeDiscordInteractionCall,
 } from "./native-command-ui.types.js";
 
@@ -206,14 +206,8 @@ function resolveDiscordModelPickerModelIndex(params: {
   model: string;
 }): number | null {
   const models = listDiscordModelPickerProviderModels(params.data, params.provider);
-  if (!models.length) {
-    return null;
-  }
   const index = models.indexOf(params.model);
-  if (index < 0) {
-    return null;
-  }
-  return index + 1;
+  return index < 0 ? null : index + 1;
 }
 
 function resolveDiscordModelPickerModelSelection(params: {
@@ -224,9 +218,6 @@ function resolveDiscordModelPickerModelSelection(params: {
   requireModelToken?: boolean;
 }): string | null {
   const models = listDiscordModelPickerProviderModels(params.data, params.provider);
-  if (!models.length) {
-    return null;
-  }
   if (params.modelToken) {
     const matchingModels = models.filter(
       (model) => createDiscordModelPickerModelToken(params.provider, model) === params.modelToken,
@@ -242,7 +233,7 @@ function resolveDiscordModelPickerModelSelection(params: {
 async function handleDiscordModelPickerInteraction(params: {
   interaction: ButtonInteraction | StringSelectMenuInteraction;
   data: ComponentData;
-  ctx: DiscordModelPickerContext;
+  ctx: DiscordCommandArgContext;
   safeInteractionCall: SafeDiscordInteractionCall;
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 }) {
@@ -670,7 +661,7 @@ async function handleDiscordModelPickerInteraction(params: {
 }
 
 type DiscordModelPickerFallbackParams = {
-  ctx: DiscordModelPickerContext;
+  ctx: DiscordCommandArgContext;
   safeInteractionCall: SafeDiscordInteractionCall;
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };

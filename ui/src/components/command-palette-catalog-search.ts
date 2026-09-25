@@ -44,6 +44,9 @@ type CommandPaletteCatalogItem = {
   search?: string;
   hash?: string;
   agentId?: string;
+  pluginId?: string;
+  catalogId?: string;
+  hasPluginIcon?: boolean;
   description?: string;
   searchText?: string;
   /** Searchable only while the current model catalog permits unrestricted selection. */
@@ -209,6 +212,9 @@ export function toCommandPaletteItems(
     search: item.search,
     hash: item.hash,
     agentId: item.agentId,
+    pluginId: item.pluginId,
+    catalogId: item.catalogId,
+    hasPluginIcon: item.hasPluginIcon,
     description: item.description,
     searchText: item.searchText,
     primaryModel: item.primaryModel,
@@ -327,7 +333,10 @@ export async function loadCommandPaletteCatalogItems(params: {
       label: plugin.name,
       icon: "plug" as const,
       category: "plugins" as const,
-      routeId: "plugins" as const,
+      routeId: plugin.installed ? ("plugin-settings" as const) : ("plugins" as const),
+      pluginId: plugin.id,
+      catalogId: plugin.installed ? undefined : plugin.catalogId,
+      hasPluginIcon: plugin.hasIcon,
       description: plugin.description,
       searchText: [plugin.id, plugin.packageName, plugin.category, plugin.kind?.join(" ")]
         .filter(Boolean)

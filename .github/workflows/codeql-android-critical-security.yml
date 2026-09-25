@@ -20,8 +20,7 @@ permissions:
 jobs:
   android:
     name: Critical Security (android)
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
-    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45
     steps:

@@ -11,6 +11,7 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { WorkerEnvironmentPreparation } from "./environment-record.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -57,11 +58,14 @@ export type WorkerEnvironmentServiceRecord = {
   ownerEpoch: number;
   createdAtMs: number;
   idleSinceAtMs: number | null;
+  destroyRequestedAtMs: number | null;
   attachedSessionIds: readonly string[];
   desktopAvailable: boolean;
   desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
-  preparation?: { purpose: "reserve" | "build"; key: string } | null;
+  preparation?:
+    | (WorkerEnvironmentPreparation & { project?: { label?: string; baseCommit: string } })
+    | null;
   error?: string;
 };
 
@@ -134,6 +138,8 @@ export type WorkerEnvironmentServiceContract = {
     close: () => Promise<void>;
   }>;
   list(): WorkerEnvironmentServiceRecord[];
+  readPreparedPoolSummary(): { maxTotal: number; reservedEnvironmentIds: string[] };
+  readReadyWorkerTarget(profileId: string): number;
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
   readMachineShape(

@@ -3,26 +3,26 @@ import {
   type MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  listAgentIds,
-  resolveConfiguredAgentId,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   defaultRuntime,
   formatCliJsonFailure,
   formatErrorMessage,
   getMemoryEmbeddingCommandSecretTargetIds,
-  getMemorySearchManager,
-  getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
-  resolveDefaultAgentId,
   shortenHomePath,
   theme,
-  type OpenClawConfig,
   withManager,
-} from "./cli.host.runtime.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  listAgentIds,
+  resolveConfiguredAgentId,
+  getRuntimeConfig,
+  resolveDefaultAgentId,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import { getMemorySearchManager } from "./memory/index.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
 export type MemoryManager = NonNullable<

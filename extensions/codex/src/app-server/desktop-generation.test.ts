@@ -111,42 +111,45 @@ describe("Codex desktop generation owner", () => {
     });
   });
 
-  it("settles same-version Computer Use plugin content changes as a new generation", async () => {
-    await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
-      const chatGpt = candidate(root, "ChatGPT.app");
-      const pluginRoot = path.join(chatGpt.bundledMarketplacePath, "plugins", "computer-use");
-      await Promise.all([
-        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
-        fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
-      ]);
-      await fs.writeFile(
-        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: "computer-use", version: "1.0.0" }),
-      );
-      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
-      const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
+  it.each(["computer-use", "unified-computer-use"])(
+    "settles same-version %s plugin content changes as a new generation",
+    async (pluginName) => {
+      await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
+        const chatGpt = candidate(root, "ChatGPT.app");
+        const pluginRoot = path.join(chatGpt.bundledMarketplacePath, "plugins", pluginName);
+        await Promise.all([
+          writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
+          fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
+        ]);
+        await fs.writeFile(
+          path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+          JSON.stringify({ name: pluginName, version: "1.0.0" }),
+        );
+        await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
+        const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
 
-      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-y");
-      const updatedFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
-      expect(updatedFingerprint).not.toBe(initialFingerprint);
+        await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-y");
+        const updatedFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
+        expect(updatedFingerprint).not.toBe(initialFingerprint);
 
-      vi.useFakeTimers();
-      let fingerprint = initialFingerprint;
-      const owner = createCodexDesktopGenerationOwner({
-        readFingerprint: async () => fingerprint,
+        vi.useFakeTimers();
+        let fingerprint = initialFingerprint;
+        const owner = createCodexDesktopGenerationOwner({
+          readFingerprint: async () => fingerprint,
+        });
+        const initial = owner.refresh();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(initial).resolves.toMatchObject({ epoch: 1 });
+
+        fingerprint = updatedFingerprint;
+        owner.markDirty();
+        const updated = owner.wait();
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await expect(updated).resolves.toMatchObject({ epoch: 2 });
       });
-      const initial = owner.refresh();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(initial).resolves.toMatchObject({ epoch: 1 });
-
-      fingerprint = updatedFingerprint;
-      owner.markDirty();
-      const updated = owner.wait();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      await expect(updated).resolves.toMatchObject({ epoch: 2 });
-    });
-  });
+    },
+  );
 
   it("watches stable application roots for recursive artifact updates", () => {
     const fixture = candidate("/Applications", "ChatGPT.app");

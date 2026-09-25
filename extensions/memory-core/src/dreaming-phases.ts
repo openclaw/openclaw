@@ -19,11 +19,15 @@ import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+  type SessionIngestionState,
+  readDailyIngestionState,
+  writeDailyIngestionState,
   DAILY_MEMORY_FILENAME_RE,
   compareDailyMemoryFilesByNewestDay,
   parseDailyMemoryFileName,
   type DailyMemoryFile,
-  normalizeDailyIngestionState,
   normalizeMemoryDay,
   type DailyIngestionFileState,
   type DailyIngestionState,
@@ -36,12 +40,7 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import {
-  DREAMING_DAILY_INGESTION_NAMESPACE,
-  normalizeMemoryCoreWorkspaceKey,
-  readMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
+import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
@@ -53,7 +52,6 @@ import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
-  readSessionIngestionState,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
   sessionExclusionReason,
@@ -63,12 +61,10 @@ import {
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
   SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   trimTrackedSessionScopes,
-  writeSessionIngestionState,
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
   type SessionIngestionMessage,
   type SessionIngestionSource,
-  type SessionIngestionState,
 } from "./session-ingestion.js";
 import { compareStoreTimestampDesc, isGenericDailyHeading } from "./short-term-promotion-utils.js";
 import {
@@ -373,10 +369,12 @@ function findManagedDailyDreamingHeadingIndex(
 
 function isManagedDailyDreamingBoundary(
   line: string,
+  headingLevel: number,
   blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
 ): boolean {
   const trimmed = line.trim();
-  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+  const heading = /^#{1,6}(?=\s)/.exec(trimmed);
+  return (heading !== null && heading[0].length <= headingLevel) || blockByStartMarker.has(trimmed);
 }
 
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
@@ -397,7 +395,10 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
         stripUntilIndex = cursor;
         break;
       }
-      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+      if (
+        line &&
+        isManagedDailyDreamingBoundary(line, block.heading.indexOf(" "), blockByStartMarker)
+      ) {
         stripUntilIndex = cursor - 1;
         break;
       }
@@ -493,28 +494,6 @@ function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: stri
     return relativePath;
   }
   return `memory/${path.basename(filePath)}`;
-}
-
-async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  const entries = await readMemoryCoreWorkspaceEntries<DailyIngestionFileState>({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir,
-  });
-  return normalizeDailyIngestionState({
-    version: 1,
-    files: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
-  });
-}
-
-async function writeDailyIngestionState(
-  workspaceDir: string,
-  state: DailyIngestionState,
-): Promise<void> {
-  await writeMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir,
-    entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-  });
 }
 
 function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {

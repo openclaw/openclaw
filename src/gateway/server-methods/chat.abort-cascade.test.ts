@@ -53,7 +53,7 @@ describe("descendant cascade ownership", () => {
   it("does not stop descendants after the original caller is revoked during parent cancellation", async () => {
     const sessionKey = "agent:main:main";
     const childKey = "agent:main:subagent:retained-stop";
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "retained-stop-child",
       childSessionKey: childKey,
       requesterSessionKey: sessionKey,
@@ -244,7 +244,7 @@ describe("descendant cascade ownership", () => {
         startedAt: 2,
       });
     } else {
-      registerChild();
+      await registerChild();
     }
     const start = vi.fn(async () => {});
     enqueueSwarmRun({
@@ -308,7 +308,7 @@ describe("descendant cascade ownership", () => {
           expect(
             getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator")?.execution.endedAt,
           ).toBeUndefined();
-          registerChild();
+          await registerChild();
         }
         if (canCascade) {
           expect(

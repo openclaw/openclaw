@@ -77,52 +77,55 @@ describe("Codex accepted child receipts", () => {
     },
   );
 
-  it("preserves an accepted sessions_spawn after result middleware strips its details", async () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
-      result: {
-        ...event.result,
-        content: [{ type: "text" as const, text: "Child launch recorded." }],
-        details: {},
-      },
-    }));
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "result-compactor",
-      pluginName: "Result Compactor",
-      rawHandler: handler,
-      handler,
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createSpawnBridge(
-      textToolResult("Accepted: launching child session.", {
-        status: "accepted",
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-        expectsCompletionMessage: true,
-      }),
-    );
+  it.each([true, undefined])(
+    "preserves an accepted sessions_spawn after result middleware strips its details (%s)",
+    async (expectsCompletionMessage) => {
+      const registry = createEmptyPluginRegistry();
+      const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: "Child launch recorded." }],
+          details: {},
+        },
+      }));
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "result-compactor",
+        pluginName: "Result Compactor",
+        rawHandler: handler,
+        handler,
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const bridge = createSpawnBridge(
+        textToolResult("Accepted: launching child session.", {
+          status: "accepted",
+          runId: "run_compacted",
+          childSessionKey: "child-compacted",
+          ...(expectsCompletionMessage !== undefined ? { expectsCompletionMessage } : {}),
+        }),
+      );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-compacted",
-      namespace: null,
-      tool: "sessions_spawn",
-      arguments: { task: "scan logs" },
-    });
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-compacted",
+        namespace: null,
+        tool: "sessions_spawn",
+        arguments: { task: "scan logs" },
+      });
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Child launch recorded." }],
-    });
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      {
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-        expectsCompletionMessage: true,
-      },
-    ]);
-  });
+      expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
+        success: true,
+        contentItems: [{ type: "inputText", text: "Child launch recorded." }],
+      });
+      expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
+        {
+          runId: "run_compacted",
+          childSessionKey: "child-compacted",
+          expectsCompletionMessage: expectsCompletionMessage === true,
+        },
+      ]);
+    },
+  );
 });

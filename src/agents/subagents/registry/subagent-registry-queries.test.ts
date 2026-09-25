@@ -1,6 +1,6 @@
 // Subagent registry query tests cover liveness, descendant counting, requester
 // lookup, and stale-row handling for in-memory run snapshots.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   createSubagentRunRecord,
@@ -484,6 +484,27 @@ describe("subagent registry query regressions", () => {
     );
 
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+  });
+
+  it("uses the admission snapshot time for descendants at the stale boundary", () => {
+    const capturedAt = Date.now();
+    const parent = makeRun({ runId: "ended-parent", endedAt: capturedAt - 1 });
+    const child = makeRun({
+      runId: "boundary-child",
+      requesterSessionKey: parent.childSessionKey,
+      createdAt: capturedAt - STALE_UNENDED_SUBAGENT_RUN_MS,
+      startedAt: capturedAt - STALE_UNENDED_SUBAGENT_RUN_MS,
+    });
+    const runs = toRunMap([parent, child]);
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(capturedAt)
+      .mockReturnValue(capturedAt + 1);
+    try {
+      expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("dedupes stale and current rows for the same child session when counting active runs", () => {

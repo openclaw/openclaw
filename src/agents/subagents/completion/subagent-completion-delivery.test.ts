@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
+import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -11,6 +11,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -191,26 +192,94 @@ describe("subagent completion recovery identity", () => {
     },
   );
 
+  it.each(["dismiss", "retry", "retry and suspend"] as const)(
+    "keeps the competing %s result while retry authority prepares",
+    async (competing) => {
+      const pair = persistCompletion("current");
+      const context = createContext();
+      const client = createOperatorClient({
+        profileName: "held-retry",
+        scopes: ["operator.write"],
+      });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      let captured: Awaited<ReturnType<typeof capture>>;
+      const held = vi
+        .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+        .mockImplementationOnce(async (...args) => {
+          captured = await capture(...args);
+          entered.resolve();
+          await resume.promise;
+          return captured;
+        });
+      const pending = withPluginRuntimeGatewayRequestScope(
+        { client, context, isWebchatConnect: () => false },
+        () => retrySubagentCompletionDelivery(pair.task.taskId, { database }),
+      );
+      const settled = Promise.allSettled([pending]);
+      try {
+        await entered.promise;
+        if (competing === "dismiss") {
+          await dismiss(pair.task.taskId);
+        } else {
+          await retrySubagentCompletionDelivery(pair.task.taskId, { database });
+          if (competing === "retry and suspend") {
+            expect(
+              admission.blockSubagentCompletionDelivery({
+                subagent: pair.subagent,
+                taskId: pair.task.taskId,
+                reason: "retry blocked again",
+                suspendedReason: "permanent_failure",
+                databaseOptions: { database },
+              }),
+            ).toBe(true);
+          }
+        }
+        const committed = storedPair(pair);
+        const resumptions = resumeSubagentRun.mock.calls.length;
+        resume.resolve();
+        await expect(pending).resolves.toMatchObject({
+          ok: false,
+          reason: "completion delivery changed during preparation",
+        });
+        expect(storedPair(pair)).toEqual(committed);
+        expect(resumeSubagentRun).toHaveBeenCalledTimes(resumptions);
+        expect(captured?.authority.assertCurrent).toThrow();
+      } finally {
+        resume.resolve();
+        await settled;
+        held.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     "retries under a fresh operator without reviving retired custody (write fails: %s)",
     async (fails) => {
       const { subagent, task } = persistCompletion("current");
       const context = createContext();
       const originalClient = createOperatorClient({
-        profileId: "original",
+        profileName: "original",
         scopes: ["operator.write"],
       });
-      const original = withPluginRuntimeGatewayRequestScope(
+      const original = (await withPluginRuntimeGatewayRequestScope(
         { client: originalClient, context, isWebchatConnect: () => false },
         captureOperatorToolGatewayContinuationContext,
-      )!;
+      ))!;
       subagentRuns.bindCompletionAuthority(subagent, original);
       subagentRuns.releaseCompletionAuthority(subagent);
       expect(() => subagentRuns.runWithCompletionAuthority(subagent, () => "retired")).toThrow(
         /authority/,
       );
-      const client = createOperatorClient({ profileId: "retry-owner", scopes: ["operator.write"] });
-      const fresh = captureGatewayOperatorRunAuthority({ client, context })!;
+      const client = createOperatorClient({
+        profileName: "retry-owner",
+        scopes: ["operator.write"],
+      });
+      const fresh = (await operatorCapture.captureGatewayOperatorRunAuthority({
+        client,
+        context,
+      }))!;
       client.internal = { operatorRunAuthority: fresh.authority };
       if (fails) {
         vi.spyOn(admission, "settleSubagentCompletionDelivery").mockImplementationOnce(() => {

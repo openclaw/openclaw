@@ -11,61 +11,66 @@ export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefine
   );
 }
 
-export function enqueueMemoryTargetedSessionSync(
-  state: {
-    isClosed: () => boolean;
-    getSyncing: () => Promise<void> | null;
-    getQueuedArchiveFiles: () => Set<string>;
-    getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
-    getQueuedForce: () => boolean;
-    setQueuedForce: (value: boolean) => void;
-    getQueuedProgressCallbacks: () => Set<NonNullable<MemorySyncParams["progress"]>>;
-    getQueuedSessionSync: () => Promise<void> | null;
-    setQueuedSessionSync: (value: Promise<void> | null) => void;
-    sync: (params?: MemorySyncParams) => Promise<void>;
-  },
-  targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
-): Promise<void> {
-  const queuedArchiveFiles = state.getQueuedArchiveFiles();
-  for (const sessionFile of targets?.archiveFiles ?? []) {
-    const trimmed = sessionFile.trim();
-    if (trimmed) {
-      queuedArchiveFiles.add(trimmed);
+export class MemoryTargetedSessionSyncQueue {
+  readonly archiveFiles = new Set<string>();
+  readonly sessions = new Map<string, MemorySessionSyncTarget>();
+  readonly progressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
+  force = false;
+  pending: Promise<void> | null = null;
+
+  constructor(
+    private readonly owner: {
+      isClosed: () => boolean;
+      getSyncing: () => Promise<void> | null;
+      sync: (params?: MemorySyncParams) => Promise<void>;
+    },
+  ) {}
+
+  get hasPending(): boolean {
+    return this.pending !== null || this.archiveFiles.size > 0 || this.sessions.size > 0;
+  }
+
+  clear(): void {
+    this.archiveFiles.clear();
+    this.sessions.clear();
+    this.force = false;
+    this.progressCallbacks.clear();
+  }
+
+  enqueue(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
+  ): Promise<void> {
+    for (const sessionFile of targets?.archiveFiles ?? []) {
+      const trimmed = sessionFile.trim();
+      if (trimmed) {
+        this.archiveFiles.add(trimmed);
+      }
     }
-  }
-  const queuedSessions = state.getQueuedSessions();
-  for (const session of targets?.sessions ?? []) {
-    const normalized = normalizeQueuedMemorySessionSyncTarget(session);
-    if (normalized) {
-      queuedSessions.set(memorySessionSyncTargetKey(normalized), normalized);
+    for (const session of targets?.sessions ?? []) {
+      const normalized = normalizeQueuedMemorySessionSyncTarget(session);
+      if (normalized) {
+        this.sessions.set(memorySessionSyncTargetKey(normalized), normalized);
+      }
     }
-  }
-  if (queuedArchiveFiles.size === 0 && queuedSessions.size === 0) {
-    return state.getSyncing() ?? Promise.resolve();
-  }
-  if (targets?.force) {
-    state.setQueuedForce(true);
-  }
-  if (targets?.progress) {
-    state.getQueuedProgressCallbacks().add(targets.progress);
-  }
-  if (!state.getQueuedSessionSync()) {
-    state.setQueuedSessionSync(
-      (async () => {
+    if (this.archiveFiles.size === 0 && this.sessions.size === 0) {
+      return this.owner.getSyncing() ?? Promise.resolve();
+    }
+    if (targets?.force) {
+      this.force = true;
+    }
+    if (targets?.progress) {
+      this.progressCallbacks.add(targets.progress);
+    }
+    if (!this.pending) {
+      this.pending = (async () => {
         try {
-          await state.getSyncing()?.catch(() => undefined);
-          while (
-            !state.isClosed() &&
-            (state.getQueuedArchiveFiles().size > 0 || state.getQueuedSessions().size > 0)
-          ) {
-            const pendingArchiveFiles = Array.from(state.getQueuedArchiveFiles());
-            const pendingSessions = Array.from(state.getQueuedSessions().values());
-            const pendingForce = state.getQueuedForce();
-            const pendingProgressCallbacks = Array.from(state.getQueuedProgressCallbacks());
-            state.getQueuedArchiveFiles().clear();
-            state.getQueuedSessions().clear();
-            state.setQueuedForce(false);
-            state.getQueuedProgressCallbacks().clear();
+          await this.owner.getSyncing()?.catch(() => undefined);
+          while (!this.owner.isClosed() && (this.archiveFiles.size > 0 || this.sessions.size > 0)) {
+            const pendingArchiveFiles = Array.from(this.archiveFiles);
+            const pendingSessions = Array.from(this.sessions.values());
+            const pendingForce = this.force;
+            const pendingProgressCallbacks = Array.from(this.progressCallbacks);
+            this.clear();
             const progress =
               pendingProgressCallbacks.length > 0
                 ? (update: MemorySyncProgressUpdate) => {
@@ -75,7 +80,7 @@ export function enqueueMemoryTargetedSessionSync(
                   }
                 : undefined;
             try {
-              await state.sync({
+              await this.owner.sync({
                 reason: "queued-sessions",
                 ...(pendingForce ? { force: true } : {}),
                 sessions: pendingSessions,
@@ -86,36 +91,33 @@ export function enqueueMemoryTargetedSessionSync(
               // Merge the failed batch with arrivals queued during sync so the
               // next trigger can retry every target instead of dropping work.
               for (const archiveFile of pendingArchiveFiles) {
-                state.getQueuedArchiveFiles().add(archiveFile);
+                this.archiveFiles.add(archiveFile);
               }
               for (const session of pendingSessions) {
-                state.getQueuedSessions().set(memorySessionSyncTargetKey(session), session);
+                this.sessions.set(memorySessionSyncTargetKey(session), session);
               }
               if (pendingForce) {
-                state.setQueuedForce(true);
+                this.force = true;
               }
               // Every caller awaiting this queue owner receives the rejection.
               // Do not retain callbacks that could otherwise fire after their
               // originating promise has already failed.
-              state.getQueuedProgressCallbacks().clear();
+              this.progressCallbacks.clear();
               throw err;
             }
           }
         } finally {
-          if (state.isClosed()) {
+          if (this.owner.isClosed()) {
             // A closed manager cannot drain retained work. Release every
             // manager-owned target and caller closure with the queue owner.
-            state.getQueuedArchiveFiles().clear();
-            state.getQueuedSessions().clear();
-            state.setQueuedForce(false);
-            state.getQueuedProgressCallbacks().clear();
+            this.clear();
           }
-          state.setQueuedSessionSync(null);
+          this.pending = null;
         }
-      })(),
-    );
+      })();
+    }
+    return this.pending ?? Promise.resolve();
   }
-  return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
 function normalizeQueuedMemorySessionSyncTarget(

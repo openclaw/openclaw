@@ -1,6 +1,8 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   isIncognitoSessionKey,
   LEGACY_IMPLICIT_AGENT_ID,
@@ -16,11 +18,18 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
-import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
-import { resolveSqliteAgentId } from "./session-accessor.sqlite-scope.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnlyResultInScope,
+} from "./session-accessor.sqlite-entry.js";
+import { resolveSqliteAgentId, resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
+  SessionAccessScope,
   SessionEntryReadScope,
   SessionEntryReadOnlyWorkerScope,
 } from "./session-accessor.types.js";
@@ -232,6 +241,103 @@ async function withSessionEntryReadOnlyWorkerSource<T>(
   }
 }
 
+/** Preserve logical lookup and writable open semantics on the canonical file-backed actor. */
+export async function readSessionEntryInWorker(
+  input: SessionAccessScope,
+  assertCallerCurrent: () => void,
+) {
+  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const scope = { ...input, env };
+  assertCallerCurrent();
+  const agentId = scope.agentId
+    ? normalizeAgentId(scope.agentId)
+    : parseAgentSessionKey(scope.sessionKey)?.agentId;
+  let storePath = scope.storePath ? path.resolve(scope.storePath) : undefined;
+  // Incognito still belongs to its process-held native owner until that owner's complete cutover.
+  if (isNativeSessionEntryRead(scope, agentId)) {
+    return loadSessionEntry(scope);
+  }
+  if (!storePath) {
+    if (!agentId) {
+      throw new Error("Cannot resolve SQLite session scope without an agent id");
+    }
+    storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+  }
+  const candidates = captureSessionStoreReadCandidates(storePath);
+  const loadedRead = await withSessionStoreTarget(
+    { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
+    async (target, owner) => {
+      const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
+      const options = { ...target.database, env };
+      const targetIdentity = readDatabasePathIdentitySync(options.path);
+      const execution = captureOpenClawAgentDatabaseExecution(
+        options,
+        targetIdentity.key.startsWith("file:")
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: targetIdentity.key.slice("file:".length),
+                nativeLocation: targetIdentity.canonicalPath,
+                birthtime: targetIdentity.birthtime,
+              },
+            }
+          : { expectedCreationIdentity: targetIdentity },
+      );
+      const assertRetainedTarget = () => {
+        execution.assertCurrent();
+        const currentIdentity = readDatabasePathIdentitySync(options.path);
+        if (
+          currentIdentity.key !== targetIdentity.key ||
+          currentIdentity.canonicalPath !== targetIdentity.canonicalPath
+        ) {
+          throw new Error("Session database identity changed while awaiting admission");
+        }
+      };
+      const assertCurrent = () => {
+        execution.assertCurrent();
+        owner.assertCurrent();
+      };
+      const source = {
+        assertCurrent,
+        onRegistryChange: owner.onRegistryChange,
+        createAdmission(binding) {
+          return () => ({
+            nativeLocations: binding.nativeLocations,
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              binding.authorize(request);
+              assertCurrent();
+              if (!grant()) {
+                throw new Error("Session read authority expired");
+              }
+            }, binding.attachment),
+          });
+        },
+      } satisfies AgentDatabaseRequestExecutionSource;
+      let entry: SessionEntry | undefined;
+      try {
+        entry = await runOpenClawAgentWorkerWrite(options, async () => {
+          await owner.refreshBeforeDispatch(assertRetainedTarget);
+          assertRetainedTarget();
+          await execution.prepare(source);
+          return execution.runExisting(source, (worker) =>
+            worker.execute({ type: "session.entry.read", input: { sessionKey } }),
+          );
+        });
+        await owner.revalidateTarget();
+        assertCurrent();
+      } finally {
+        await execution.release();
+      }
+      owner.assertCurrent();
+      return { entry, assertCurrent: owner.assertCurrent };
+    },
+    assertCallerCurrent,
+  );
+  loadedRead.assertCurrent();
+  return loadedRead.entry;
+}
+
 type SessionStoreWorkerReadScope = {
   agentId: string;
   storePath: string;
@@ -243,6 +349,7 @@ type SessionEntryWorkerRead = SessionStoreWorkerReadScope & {
   lifecycleSessionKey?: string;
   projection?: "full" | "backing" | "sharing";
   includeMembers?: boolean;
+  includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
 };
 
@@ -314,6 +421,7 @@ async function withSessionEntriesFromStoreInWorker<T>(
     lifecycleSessionKey: input.lifecycleSessionKey,
     projection: input.projection,
     includeMembers: input.includeMembers,
+    includeParticipantRecords: input.includeParticipantRecords,
     includeAuthorization: input.includeAuthorization,
   };
   return withSessionStoreReaderInWorker(
