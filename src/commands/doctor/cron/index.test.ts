@@ -19,6 +19,7 @@ import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
+import { createCurrentCronJob, createLegacyCronJob } from "./cron-job.test-fixtures.js";
 import {
   collectLegacyCronStoreHealthFindings,
   collectLegacyWhatsAppCrontabHealthWarning,
@@ -71,42 +72,6 @@ function createCronConfig(
       webhook,
     },
   } as unknown as OpenClawConfig;
-}
-
-function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
-  return {
-    jobId: "legacy-job",
-    name: "Legacy job",
-    notify: true,
-    createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-    schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
-    payload: {
-      kind: "systemEvent",
-      text: "Morning brief",
-    },
-    state: {},
-    ...overrides,
-  };
-}
-
-function createCurrentCronJob(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "sqlite-job",
-    name: "SQLite job",
-    enabled: true,
-    createdAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
-    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: {
-      kind: "systemEvent",
-      text: "SQLite brief",
-    },
-    state: {},
-    ...overrides,
-  };
 }
 
 async function writeCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
@@ -1942,27 +1907,43 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoNoteContaining("Cron run logs migrated", "Doctor changes");
   });
 
-  it("does not claim legacy store detected when only non-legacy issues exist (#92683)", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCurrentCronStore(storePath, [
-      createCurrentCronJob({
-        id: "notify-job",
-        name: "Notify job",
-        notify: true,
-      }),
-    ]);
+  it.each([
+    {
+      label: "notify",
+      overrides: { id: "notify-job", name: "Notify job", notify: true },
+      preview: "1 job still uses legacy",
+    },
+    {
+      label: "owner account",
+      overrides: {
+        schedule: { kind: "every", everyMs: 60_000 },
+        owner: { agentId: "main", sessionKey: "agent:main:discord:work:direct:user-1" },
+        payload: { kind: "agentTurn", message: "Check status" },
+      },
+      preview:
+        "1 job can reconcile its owner account from persisted creator identity without changing tool permissions",
+    },
+  ])(
+    "previews and confirms SQLite-only $label repair without claiming a legacy store (#92683)",
+    async ({ overrides, preview }) => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [createCurrentCronJob(overrides)]);
+      expect(fsSync.existsSync(storePath)).toBe(false);
+      const prompter = makePrompter(true);
 
-    await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
-      options: {},
-      prompter: makePrompter(true),
-    });
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
 
-    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
-    expectNoteContaining("Cron store issues detected", "Cron");
-    expectNoteContaining("1 job still uses legacy", "Cron");
-    expectNoNoteContaining("jobs.json", "Cron");
-  });
+      expect(prompter.confirm).toHaveBeenCalledTimes(1);
+      expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+      expectNoteContaining("Cron store issues detected", "Cron");
+      expectNoteContaining(preview, "Cron");
+      expectNoNoteContaining("jobs.json", "Cron");
+    },
+  );
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
     const storePath = await makeTempStorePath();
