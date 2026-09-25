@@ -62,13 +62,17 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.google.mlkit.common.sdkinternal.MlKitContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -224,28 +228,63 @@ class InitialOnboardingLayoutTest {
   }
 
   @Test
-  fun dismissedNodeApprovalDialogStaysClosedAcrossBackgroundRefreshes() {
-    val app = ApplicationProvider.getApplicationContext<NodeApp>()
-    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-approval-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    prefs.setOnboardingCompleted(false)
-    prefs.setManualTls(false)
-    val previousRuntime = app.peekRuntime()
-    val gateway = OnboardingApprovalGateway(DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId)
-    var ownedRuntime: NodeRuntime? = null
-    val models = ViewModelStore()
-    val mounted = mutableStateOf(true)
-    var viewModelJob: Job? = null
-    val previousAutoAdvance = composeRule.mainClock.autoAdvance
-    try {
-      val runtime = NodeRuntime(app, prefs).also { ownedRuntime = it }
-      bindNodeRuntimeTestFixture(app, runtime)
-      val viewModel = MainViewModel(app, prefs, SavedStateHandle())
-      models.put("onboarding", viewModel)
-      viewModelJob = viewModel.viewModelScope.coroutineContext.job
-      setContent(fontScale = 1f, viewportHeight = 720.dp) {
-        if (mounted.value) OnboardingFlow(viewModel)
+  fun nativeNodeApprovalWaitsForEffectiveCameraBeforeAdvancing() =
+    withApprovalGateway(nativeApproval = true) { runtime, viewModel, gateway ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
+      composeRule.onNodeWithText("Test connection").performClick()
+      drainWithMainLooper { withTimeout(10_000) { gateway.nodeConnectReceived.await() } }
+      runtime.refreshNodesDevices()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          viewModel.nodeApprovalAction.first { it.pending != null }
+          viewModel.nodesDevicesRefreshing.first { !it }
+        }
       }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
+      composeRule.mainClock.autoAdvance = false
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("Camera", substring = true).assertIsDisplayed()
 
+      gateway.holdNodeLists()
+      composeRule.onNodeWithText("Approve access and continue").assertIsEnabled().performClick()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          assertEquals("self-request", gateway.approvedRequest.await())
+          gateway.heldNodeListReceived.await()
+          viewModel.nodeApprovalAction.first { it.approving }
+        }
+      }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("Approving access…").assertIsDisplayed().assertIsNotEnabled()
+
+      // An accepted write and an approved/connected node still lack the requested Camera surface.
+      gateway.releaseNodeLists()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          viewModel.nodeApprovalAction.first { !it.approving && it.errorText != null }
+          viewModel.nodeCapabilityApproval.first { it == GatewayNodeCapabilityApproval.Approved }
+          viewModel.isNodeConnected.first { it }
+          viewModel.nodesDevicesRefreshing.first { !it }
+        }
+      }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("I have approved").assertIsDisplayed()
+
+      gateway.cameraEffective = true
+      runtime.refreshNodesDevices()
+      drainWithMainLooper { withTimeout(10_000) { viewModel.nodeApprovalAction.first { it.verified } } }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("Capture photos and clips from this phone").assertIsDisplayed()
+    }
+
+  @Test
+  fun dismissedNodeApprovalDialogStaysClosedAcrossBackgroundRefreshes() =
+    withApprovalGateway { runtime, viewModel, gateway ->
       fun awaitUnapprovedRefreshCompletion() {
         composeRule.waitUntil(timeoutMillis = 10_000) {
           composeRule.runOnIdle {
@@ -316,6 +355,35 @@ class InitialOnboardingLayoutTest {
       composeRule.onNodeWithText("OK").performClick()
       composeRule.mainClock.advanceTimeByFrame()
       composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+    }
+
+  private fun withApprovalGateway(
+    nativeApproval: Boolean = false,
+    verify: (NodeRuntime, MainViewModel, OnboardingApprovalGateway) -> Unit,
+  ) {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-approval-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    prefs.setOnboardingCompleted(false)
+    prefs.setManualTls(false)
+    if (nativeApproval) prefs.setCameraEnabled(true)
+    val previousRuntime = app.peekRuntime()
+    val gateway = OnboardingApprovalGateway(DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId, nativeApproval)
+    var ownedRuntime: NodeRuntime? = null
+    val models = ViewModelStore()
+    val mounted = mutableStateOf(true)
+    var viewModelJob: Job? = null
+    val previousAutoAdvance = composeRule.mainClock.autoAdvance
+    try {
+      val runtime = NodeRuntime(app, prefs).also { ownedRuntime = it }
+      bindNodeRuntimeTestFixture(app, runtime)
+      val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+      models.put("onboarding", viewModel)
+      viewModelJob = viewModel.viewModelScope.coroutineContext.job
+      setContent(fontScale = 1f, viewportHeight = 720.dp) {
+        if (mounted.value) OnboardingFlow(viewModel)
+      }
+
+      verify(runtime, viewModel, gateway)
     } finally {
       composeRule.mainClock.autoAdvance = previousAutoAdvance
       gateway.releaseNodeLists()
@@ -589,8 +657,16 @@ class InitialOnboardingLayoutTest {
 
 private class OnboardingApprovalGateway(
   private val selfNodeId: String,
+  private val nativeApproval: Boolean = false,
 ) : AutoCloseable {
   private val server = MockWebServer()
+  val nodeConnectReceived = CompletableDeferred<Unit>()
+  val approvedRequest = CompletableDeferred<String>()
+  val heldNodeListReceived = CompletableDeferred<Unit>()
+
+  @Volatile private var nodeSurface: JsonObject = buildJsonObject {}
+
+  @Volatile var cameraEffective = false
   private val nodeListLock = Any()
   private var holdNodeListResponses = false
   private val heldNodeLists = mutableListOf<Pair<WebSocket, JsonElement>>()
@@ -634,9 +710,14 @@ private class OnboardingApprovalGateway(
           add(
             buildJsonObject {
               put("nodeId", selfNodeId)
-              put("paired", false)
-              put("connected", false)
-              put("approvalState", "unapproved")
+              put("paired", approvedRequest.isCompleted)
+              put("connected", approvedRequest.isCompleted)
+              put("approvalState", if (approvedRequest.isCompleted) "approved" else "unapproved")
+              if (nativeApproval) {
+                nodeSurface.forEach { (key, value) ->
+                  put(key, if (!cameraEffective && value is JsonArray) JsonArray(value.filterNot { it.jsonPrimitive.content.substringBefore('.') == "camera" }) else value)
+                }
+              }
             },
           )
         },
@@ -666,6 +747,7 @@ private class OnboardingApprovalGateway(
             synchronized(nodeListLock) {
               if (holdNodeListResponses) {
                 heldNodeLists.add(webSocket to id)
+                heldNodeListReceived.complete(Unit)
                 true
               } else {
                 false
@@ -684,6 +766,12 @@ private class OnboardingApprovalGateway(
                   .getValue("role")
                   .jsonPrimitive.content
               if (role == "node") {
+                val params = frame.getValue("params").jsonObject
+                nodeSurface =
+                  buildJsonObject {
+                    for (key in listOf("caps", "commands", "permissions")) params[key]?.let { put(key, it) }
+                  }
+                nodeConnectReceived.complete(Unit)
                 reply(
                   webSocket,
                   id,
@@ -693,7 +781,41 @@ private class OnboardingApprovalGateway(
                 return
               }
               check(role == "operator")
-              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"]},"auth":{"role":"operator","scopes":["operator.read","operator.write"]},"snapshot":{}}""")
+              val approvalMethods = if (nativeApproval) ",\"node.pair.list\",\"node.pair.approve\"" else ""
+              val approvalScope = if (nativeApproval) ",\"operator.admin\"" else ""
+              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"$approvalMethods]},"auth":{"role":"operator","scopes":["operator.read","operator.write"$approvalScope]},"snapshot":{}}""")
+            }
+
+            "node.pair.list" -> {
+              buildJsonObject {
+                put(
+                  "pending",
+                  buildJsonArray {
+                    if (!approvedRequest.isCompleted) {
+                      for ((nodeId, requestId) in listOf("other-phone" to "other-request", selfNodeId to "self-request")) {
+                        add(
+                          buildJsonObject {
+                            put("nodeId", nodeId)
+                            put("requestId", requestId)
+                            nodeSurface.forEach { (key, value) -> put(key, value) }
+                          },
+                        )
+                      }
+                    }
+                  },
+                )
+              }
+            }
+
+            "node.pair.approve" -> {
+              val requestId =
+                frame
+                  .getValue("params")
+                  .jsonObject
+                  .getValue("requestId")
+                  .jsonPrimitive.content
+              approvedRequest.complete(requestId)
+              buildJsonObject { put("requestId", requestId) }
             }
 
             "health" -> {
