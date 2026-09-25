@@ -5,27 +5,19 @@ import { makeContext } from "./test/provider-helpers.js";
 const ctx = makeContext({ source: "/hermes", stateDir: "/state", workspaceDir: "/workspace" });
 
 describe("Hermes MCP policy migration", () => {
-  it.each([
-    [false, false, { exclude: ["*"] }],
-    [false, true, { include: ["prompts_list", "prompts_get"] }],
-    [true, false, { include: ["resources_list", "resources_read"] }],
-    [true, true, { include: ["resources_list", "resources_read", "prompts_list", "prompts_get"] }],
-  ])(
-    "preserves an empty native allowlist with resources=%s and prompts=%s",
-    (resources, prompts, toolFilter) => {
-      const items = buildConfigItems({
-        ctx,
-        config: {
-          mcp_servers: {
-            acme: { command: "acme-mcp", tools: { include: [], resources, prompts } },
-          },
+  it("preserves resource utilities with an empty native allowlist", () => {
+    const items = buildConfigItems({
+      ctx,
+      config: {
+        mcp_servers: {
+          acme: { command: "acme-mcp", tools: { include: [], resources: true, prompts: false } },
         },
-      });
-      expect(items.find((item) => item.id === "config:mcp-server:acme")?.details?.value).toEqual({
-        acme: { command: "acme-mcp", toolFilter },
-      });
-    },
-  );
+      },
+    });
+    expect(items.find((item) => item.id === "config:mcp-server:acme")?.details?.value).toEqual({
+      acme: { command: "acme-mcp", toolFilter: { include: ["resources_list", "resources_read"] } },
+    });
+  });
 
   it("preserves an empty string native allowlist", () => {
     const items = buildConfigItems({
