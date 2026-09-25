@@ -43,63 +43,6 @@ function normalizeHostPath(value: string): string {
 }
 
 describe("local media roots", () => {
-  function withStateDir<T>(stateDir: string, run: () => T): T {
-    return withEnv({ OPENCLAW_STATE_DIR: stateDir }, run);
-  }
-
-  function expectNormalizedRootsContain(
-    roots: readonly string[],
-    expectedRoots: readonly string[],
-  ) {
-    const normalizedRoots = roots.map(normalizeHostPath);
-    expectedRoots.forEach((expectedRoot) => {
-      expect(normalizedRoots).toContain(normalizeHostPath(expectedRoot));
-    });
-  }
-
-  function expectNormalizedRootsExclude(
-    roots: readonly string[],
-    excludedRoots: readonly string[],
-  ) {
-    const normalizedRoots = roots.map(normalizeHostPath);
-    excludedRoots.forEach((excludedRoot) => {
-      expect(normalizedRoots).not.toContain(normalizeHostPath(excludedRoot));
-    });
-  }
-
-  function expectPicturesRootPresence(params: {
-    roots: readonly string[];
-    shouldContainPictures: boolean;
-    picturesRoot?: string;
-  }) {
-    const normalizedRoots = params.roots.map(normalizeHostPath);
-    const picturesRoot = normalizeHostPath(params.picturesRoot ?? "/Users/peter/Pictures");
-    if (params.shouldContainPictures) {
-      expect(normalizedRoots).toContain(picturesRoot);
-      return;
-    }
-    expect(normalizedRoots).not.toContain(picturesRoot);
-  }
-
-  function expectAgentMediaRootsCase(params: {
-    stateDir: string;
-    getRoots: () => readonly string[];
-    expectedContained?: readonly string[];
-    expectedExcluded?: readonly string[];
-    minLength?: number;
-  }) {
-    const roots = withStateDir(params.stateDir, params.getRoots);
-    if (params.expectedContained) {
-      expectNormalizedRootsContain(roots, params.expectedContained);
-    }
-    if (params.expectedExcluded) {
-      expectNormalizedRootsExclude(roots, params.expectedExcluded);
-    }
-    if (params.minLength !== undefined) {
-      expect(roots.length).toBeGreaterThanOrEqual(params.minLength);
-    }
-  }
-
   it.each([
     {
       name: "keeps temp, media cache, canvas, and workspace roots by default",
@@ -141,13 +84,16 @@ describe("local media roots", () => {
       expectedExcluded: ["agents", "workspace", "sandboxes"],
     },
   ] as const)("$name", ({ stateDir, getRoots, expectedContained, expectedExcluded, minLength }) => {
-    expectAgentMediaRootsCase({
-      stateDir,
-      getRoots,
-      expectedContained: expectedContained.map((suffix) => path.join(stateDir, suffix)),
-      expectedExcluded: expectedExcluded.map((suffix) => path.join(stateDir, suffix)),
-      minLength,
-    });
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, getRoots).map(normalizeHostPath);
+    for (const suffix of expectedContained) {
+      expect(roots).toContain(normalizeHostPath(path.join(stateDir, suffix)));
+    }
+    for (const suffix of expectedExcluded) {
+      expect(roots).not.toContain(normalizeHostPath(path.join(stateDir, suffix)));
+    }
+    if (minLength !== undefined) {
+      expect(roots.length).toBeGreaterThanOrEqual(minLength);
+    }
   });
 
   it("does not promote sibling sandbox directories via source-parent expansion", () => {
@@ -338,13 +284,15 @@ describe("local media roots", () => {
       shouldContainPictures: true,
     },
   ] as const)("$name", ({ stateDir, cfg, shouldContainPictures }) => {
-    const roots = withStateDir(stateDir, () =>
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
       getAgentScopedMediaLocalRootsForSources({
         cfg,
         agentId: "ops",
         mediaSources: ["/Users/peter/Pictures/photo.png"],
       }),
     );
-    expectPicturesRootPresence({ roots, shouldContainPictures });
+    expect(roots.map(normalizeHostPath).includes(normalizeHostPath("/Users/peter/Pictures"))).toBe(
+      shouldContainPictures,
+    );
   });
 });
