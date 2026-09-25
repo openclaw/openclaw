@@ -1860,14 +1860,10 @@ extension OpenClawSnapshotUITests {
     }
 
     private func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
-        // Keyboard predictions expose another scroll view below the composer.
-        let composerTop = self.chatMessageInput(in: app).frame.minY
-        let candidates = app.scrollViews.allElementsBoundByIndex.filter {
-            $0.isHittable && $0.frame.maxY <= composerTop
-        }
+        let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
         return try XCTUnwrap(
             candidates.count == 1 ? candidates.first : nil,
-            "Expected one hittable chat transcript above the composer")
+            "Expected one chat transcript")
     }
 
     private func sendLiveGatewayMessage(

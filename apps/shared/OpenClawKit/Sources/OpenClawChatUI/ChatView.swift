@@ -430,6 +430,7 @@ public struct OpenClawChatView: View {
                         (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
                 .frame(maxWidth: .infinity)
             }
+            .accessibilityIdentifier("chat-transcript")
             #if !os(macOS)
             .scrollDismissesKeyboard(.interactively)
             #endif
@@ -1200,9 +1201,7 @@ extension OpenClawChatView {
             for: nil)
         #endif
     }
-}
 
-extension OpenClawChatView {
     private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var result: [OpenClawChatMessage] = []
         result.reserveCapacity(messages.count)
