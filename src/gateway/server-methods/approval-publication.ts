@@ -165,6 +165,7 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "system-agent",
       effect: "forwarder",
       run: () =>
+        // SAFETY: a system-agent record's live request is a system-agent payload.
         params.forwarder!.handleSystemAgentApprovalResolved!(event as SystemAgentApprovalResolved),
     });
   }

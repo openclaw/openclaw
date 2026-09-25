@@ -192,13 +192,18 @@ export async function handleApproveCommandFromContext(
 
   const resolvedBy = buildResolvedByLabel(params);
   const callApprovalMethod = async (approvalKind: ChannelApprovalKind): Promise<void> => {
-    const reviewer = approvalCapability?.authorizeActorAction
-      ? {
-          channel: params.command.channel,
-          accountId: effectiveAccountId,
-          senderId: params.command.senderId,
-        }
-      : {};
+    // Channel senders deciding an OpenClaw change carry their identity so the
+    // Gateway's final decision guard rechecks live custody (channel approvers,
+    // or else configured owner). Gateway clients are authorized by their scopes.
+    const reviewer =
+      approvalCapability?.authorizeActorAction ||
+      (approvalKind === "system-agent" && !Array.isArray(params.ctx.GatewayClientScopes))
+        ? {
+            channel: params.command.channel,
+            accountId: effectiveAccountId,
+            senderId: params.command.senderId,
+          }
+        : {};
     const clientDisplayName = `Chat approval (${resolvedBy})`;
     if (approvalKind !== "system-agent") {
       await resolveApprovalOverGateway({
