@@ -165,7 +165,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "renders user capabilities alongside tools without redundant provider or channel lists (mixed=%s)",
+  "renders user capabilities before tools without redundant provider or channel lists (mixed=%s)",
   (mixed) => {
     const result = createDiscoveryDetail();
     result.detail.contracts = {
@@ -197,18 +197,18 @@ it.each([false, true])(
     const sections = [...container.querySelectorAll(".plugin-capabilities")];
     expect(container.querySelector(".plugin-capabilities button")).toBeNull();
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
-      ...(mixed ? ["Skills1", "Tools1", "MCP servers1"] : []),
       "Capabilities3",
+      ...(mixed ? ["Skills1", "Tools1", "MCP servers1"] : []),
     ]);
     expect(
       sections.flatMap((section) =>
         [...section.querySelectorAll("strong")].map((item) => item.textContent),
       ),
     ).toEqual([
-      ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
       "Video generation",
       "Dashboard widgets",
       "Link previews",
+      ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
     ]);
     expect(container.textContent).not.toContain("internal-dispatch");
     expect(container.textContent).not.toContain("heygen-alias");

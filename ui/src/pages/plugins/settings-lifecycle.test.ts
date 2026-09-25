@@ -195,6 +195,7 @@ it.each([false, true])(
     const inspection = createInspectResult();
     inspection.declared = {
       ...inspection.declared,
+      tools: ["speech_status"],
       providers: ["local-model", "sibling-model"],
       channels: ["local-channel", "sibling-channel"],
       contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
@@ -211,7 +212,7 @@ it.each([false, true])(
     const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
       (heading) => heading.textContent,
     );
-    expect(titles).toEqual(expect.arrayContaining(["Capabilities2"]));
+    expect(titles).toEqual(["Capabilities2", "Tools1"]);
     expect(container.textContent).toContain("Text to speech");
     expect(container.textContent).toContain("Pages");
     expect(container.textContent).not.toContain("speechProviders:");

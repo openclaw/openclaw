@@ -52,7 +52,7 @@ suite.define(() => {
             })
             .toBeLessThan(0.5);
           expect(
-            await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
+            await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
           ).toBe(0);
           await page.getByRole("link", { name: "Plugins", exact: true }).click();
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
@@ -75,21 +75,21 @@ suite.define(() => {
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
           expect(
-            await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
+            await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
           ).toBe(0);
           await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           if (!admin) {
             expect(
-              await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
+              await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
             ).toBe(0);
             return;
           }
-          await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+          await page.locator("openclaw-plugin-manager .settings-group").waitFor();
+          expect(await page.getByRole("dialog").count()).toBe(0);
           await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
           await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
           await gateway.waitForRequest("plugins.controlUi.reload");
-          await page.getByRole("button", { name: "Close", exact: true }).last().click();
           await page.getByRole("link", { name: "UI fixture", exact: true }).click();
           await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
         },

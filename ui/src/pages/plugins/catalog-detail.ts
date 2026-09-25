@@ -98,6 +98,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     identity: renderPluginPublisher(result),
     sidebar: renderPluginMetadata(result),
     panel: html`${renderPluginRowMessage(props.message, { busy: props.busy, onContinue: props.canInstall ? props.onContinueInstall : undefined })}
+    ${renderPluginDeclaredCapabilities(detail.contracts, detail.uiCapabilities)}
     ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.bookOpenText)}
     ${renderPluginCapabilitySection(
       t("pluginsPage.detailTools"),
@@ -108,8 +109,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
       t("pluginsPage.detailMcpServers"),
       detail.mcpServers.map((name) => ({ name })),
       icons.plug,
-    )}
-    ${renderPluginDeclaredCapabilities(detail.contracts, detail.uiCapabilities)}`,
+    )}`,
     readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }
