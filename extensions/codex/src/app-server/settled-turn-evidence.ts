@@ -56,8 +56,7 @@ export function projectVerifiedSettledCodexMessages(
 
 function projectToolFailureEvidence(messages: readonly AgentMessage[]): JsonValue[] {
   const failedIndex = messages.findLastIndex(
-    (message) =>
-      message.role === "toolResult" && message.isError === true && !isMissingToolResult(message),
+    (message) => message.role === "toolResult" && message.isError && !isMissingToolResult(message),
   );
   const failed = messages[failedIndex];
   const request = messages.find((message) => message.role === "user");
@@ -70,7 +69,7 @@ function projectToolFailureEvidence(messages: readonly AgentMessage[]): JsonValu
       (message) =>
         message.role === "toolResult" &&
         message.toolName === failed.toolName &&
-        message.isError !== true &&
+        !message.isError &&
         !isMissingToolResult(message),
     );
   const selectedResults = laterResult ? [failed, laterResult] : [failed];

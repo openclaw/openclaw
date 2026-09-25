@@ -90,7 +90,7 @@ describe("bounded tool failure evidence", () => {
     const messages = oversizedTurn();
     const history = structuredClone(messages);
     const altered = history[350];
-    if (altered.role !== "toolResult") {
+    if (altered?.role !== "toolResult") {
       throw new Error("Expected a tool result fixture");
     }
     altered.content = [{ type: "text", text: "changed persisted output" }];
