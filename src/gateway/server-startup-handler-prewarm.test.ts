@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -72,6 +73,10 @@ vi.mock("../agents/context.js", () => ({
 }));
 
 const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
+const workspaces = {
+  main: path.resolve("prewarm-main"),
+  research: path.resolve("prewarm-research"),
+};
 
 beforeEach(() => {
   mocks.events.length = 0;
@@ -94,8 +99,8 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     const cfg: OpenClawConfig = {
       agents: {
         entries: {
-          main: { workspace: "/workspaces/main" },
-          research: { workspace: "/workspaces/research" },
+          main: { workspace: workspaces.main },
+          research: { workspace: workspaces.research },
         },
       },
     };
@@ -118,12 +123,12 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       expect(mocks.events.filter((event) => event === "handlers")).toHaveLength(3);
       expect(mocks.executeRequest).not.toHaveBeenCalled();
       expect(mocks.prepareWorkspaceSkillEntries.mock.calls).toEqual([
-        ["/workspaces/main", { config: cfg, agentId: "main" }],
-        ["/workspaces/research", { config: cfg, agentId: "research" }],
+        [workspaces.main, { config: cfg, agentId: "main" }],
+        [workspaces.research, { config: cfg, agentId: "research" }],
       ]);
       expect(mocks.ensureSkillsWatcher.mock.calls).toEqual([
-        [{ workspaceDir: "/workspaces/main", config: cfg, agentId: "main" }],
-        [{ workspaceDir: "/workspaces/research", config: cfg, agentId: "research" }],
+        [{ workspaceDir: workspaces.main, config: cfg, agentId: "main" }],
+        [{ workspaceDir: workspaces.research, config: cfg, agentId: "research" }],
       ]);
       expect(mocks.ensureSkillsWatcher.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.prepareWorkspaceSkillEntries.mock.invocationCallOrder[0],
@@ -295,7 +300,7 @@ it("keeps the context cache delayed and uses current config after foreground wor
 it("skips optional discovery when foreground work arrives after idle admission", async () => {
   vi.useFakeTimers();
   const handle = scheduleGatewayHandlerPrewarm({
-    getConfig: () => ({ agents: { entries: { main: { workspace: "/workspaces/main" } } } }),
+    getConfig: () => ({ agents: { entries: { main: { workspace: workspaces.main } } } }),
     log: { warn: vi.fn() },
     startupTrace: {
       measure: async (_name, load) => {
