@@ -92,9 +92,8 @@ describe("Agents API agent workspace instructions", () => {
     expect(firstInstructions).not.toContain("Persona fixture");
 
     await fs.writeFile(instructionsPath, "Follow the updated Gateway fixture rules.\n");
-    // A restored binding is sufficient after process restart; there is no local
-    // instruction cache that the next attempt must reconstruct.
-    const resumedBinding: AgentsApiBinding = JSON.parse(JSON.stringify(binding));
+    // A resumed attempt needs only its binding, with no local instruction cache.
+    const resumedBinding = structuredClone(binding);
     await fixture.run(resumedBinding);
     expect(fixture.requests).toHaveLength(2);
     expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
@@ -240,7 +239,7 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
       version: 1,
       assertActive: () => {},
       bindToolSurface: (tools) => tools,
-      runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
+      runBeforeToolCall: async ({ params: toolParams }) => ({ blocked: false, params: toolParams }),
       requestApproval: async () => undefined,
       waitForApproval: async () => undefined,
     },
