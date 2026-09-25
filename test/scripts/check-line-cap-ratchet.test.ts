@@ -260,4 +260,31 @@ describe("line-cap growth ratchet", () => {
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
+  it("uses the reachable parent when an explicit base has no merge base", () => {
+    const root = fixture(3);
+    const target = path.join(root, "src/file.ts");
+
+    fs.writeFileSync(target, source(4));
+    git(root, "add", ".");
+    git(root, "commit", "-m", "local parent");
+
+    git(root, "checkout", "--orphan", "unrelated");
+    fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
+    fs.rmSync(path.join(root, ".oxlintrc.json"), { force: true });
+    fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "disconnected base");
+    const disconnectedBase = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-");
+
+    fs.writeFileSync(target, source(5));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    expect(main(root, ["--base", disconnectedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("src/file.ts: 4 -> 5 counted lines (cap 3)"),
+    );
+  });
+
 });
