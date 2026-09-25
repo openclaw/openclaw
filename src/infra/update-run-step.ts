@@ -3,6 +3,7 @@ import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
@@ -48,14 +49,17 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   const snapshotCapacity = capacity
     ? {
         ...capacity,
-        candidates: capacity.candidates.slice(0, 3).map((candidate) => ({
-          kind: candidate.kind,
-          availableBytes: candidate.availableBytes,
-          directory: text(candidate.directory),
-          ...(candidate.allocationError
-            ? { allocationError: text(candidate.allocationError) }
-            : {}),
-        })),
+        candidates: capacity.candidates.slice(0, 3).map((candidate) => {
+          const copied: UpdateSnapshotCapacity["candidates"][number] = {
+            kind: candidate.kind,
+            availableBytes: candidate.availableBytes,
+            directory: text(candidate.directory),
+          };
+          if (candidate.allocationError) {
+            copied.allocationError = text(candidate.allocationError);
+          }
+          return copied;
+        }),
         selection: capacity.selection
           ? { ...capacity.selection, directory: text(capacity.selection.directory) }
           : null,

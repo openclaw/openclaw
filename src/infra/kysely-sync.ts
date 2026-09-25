@@ -75,6 +75,10 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
   }
 }
 
+function throwSqliteIteratorCleanupError(error: unknown): never {
+  throw toErrorObject(error, "SQLite iterator cleanup failed");
+}
+
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
 function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
@@ -263,7 +267,7 @@ export function iterateSqliteQuerySync<Row>(
         }
         reader.release();
         if (!failed && cleanupError !== undefined) {
-          throw toErrorObject(cleanupError, "SQLite iterator cleanup failed");
+          throwSqliteIteratorCleanupError(cleanupError);
         }
       }
     } catch (error) {
