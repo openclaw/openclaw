@@ -8,7 +8,6 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
-import { buildDeliveryMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -513,22 +512,17 @@ export async function prepareCronRunContext(params: {
       agentRuntime: effectiveAgentRuntime,
       toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
-    const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
-      await resolveCronDeliveryContext({
-        cfg: cfgWithAgentDefaults,
-        job: input.job,
-        agentId,
-      });
-
-    // Announce runs have no inbound message, so the delivery target supplies channel formatting.
-    const deliverySystemPrompt =
-      deliveryRequested && resolvedDelivery.ok
-        ? buildDeliveryMetaSystemPrompt({
-            cfg: cfgWithAgentDefaults,
-            channel: resolvedDelivery.channel,
-            accountId: resolvedDelivery.accountId,
-          })
-        : undefined;
+    const {
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+      sourceDelivery,
+      deliverySystemPrompt,
+    } = await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.

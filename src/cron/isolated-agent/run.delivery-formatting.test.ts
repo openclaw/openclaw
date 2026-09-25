@@ -1,7 +1,7 @@
 // Cron announce runs receive the delivery channel's formatting hints as trusted system metadata.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -31,15 +31,25 @@ const cfg = {
   },
 } as OpenClawConfig;
 
-function registerTelegramFormattingHints() {
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(
+// The Telegram plugin is not active: the first announcement after startup bootstraps it
+// into a caller-owned registry, like a cold Gateway.
+const { bootstrapOutboundChannelPluginMock } = vi.hoisted(() => ({
+  bootstrapOutboundChannelPluginMock: vi.fn(),
+}));
+vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", () => ({
+  bootstrapOutboundChannelPlugin: bootstrapOutboundChannelPluginMock,
+  bootstrapOutboundChannelPluginAsync: bootstrapOutboundChannelPluginMock,
+}));
+
+function bootstrapTelegramWithFormattingHints() {
+  bootstrapOutboundChannelPluginMock.mockReturnValue(
     createTestRegistry([
       {
         pluginId: "telegram",
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          outbound: { deliveryMode: "direct", sendText: async () => ({ messageId: "1" }) },
           agentPrompt: {
             inboundFormattingHints: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
               params.cfg.channels?.telegram?.accounts?.[params.accountId ?? ""]?.richMessages
@@ -89,7 +99,8 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
-    registerTelegramFormattingHints();
+    resetPluginRuntimeStateForTest();
+    bootstrapTelegramWithFormattingHints();
   });
 
   afterEach(() => {
