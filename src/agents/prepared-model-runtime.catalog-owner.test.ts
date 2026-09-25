@@ -12,7 +12,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as agentDatabase from "../state/openclaw-agent-db-readonly.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import { modelCatalogRouteVariantKey } from "./model-catalog-entry.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
@@ -586,6 +588,16 @@ describe("legacy provider catalog retention", () => {
           : {}),
     };
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
+    mocks.catalogHookRows = new Map([
+      [
+        "custom",
+        new Set(
+          previous.entries.map((entry) =>
+            modelCatalogRouteVariantKey(entry, resolveModelCatalogIdentityKey(entry)),
+          ),
+        ),
+      ],
+    ]);
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
     const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
       catalogMode: "static",
@@ -617,6 +629,7 @@ describe("legacy provider catalog retention", () => {
       });
     }
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(failed);
+    mocks.catalogHookRows = new Map();
     const result = await owner.loadFullModelCatalog!({ refresh: true });
     expect(result.entries.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
       scenario.expected,
