@@ -11,6 +11,7 @@ import {
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
+import { readSupervisedSourceHandoff } from "../../tasks/supervised-task.source.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
@@ -267,7 +268,13 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   entry: SessionEntry;
   messages: readonly unknown[];
   pendingFinalDeliveryIntentId?: string;
-  reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
+  reason:
+    | "delivered-terminal"
+    | "delivered-terminal-receipt"
+    | "handled-silent"
+    | "supervised-handoff";
+  canonicalSessionKey?: string;
+  stateDir?: string;
   storePath: string;
   sessionKey: string;
   sourceTurnId?: string;
@@ -300,7 +307,10 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     updatedAt: endedAt,
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
-  if (params.reason === "handled-silent" && !sourceTurnId) {
+  if (
+    (params.reason === "handled-silent" || params.reason === "supervised-handoff") &&
+    !sourceTurnId
+  ) {
     return {
       outcome: "unsafe-transcript",
       reason: "handled silent checkpoint lacks its durable source turn",
@@ -325,6 +335,29 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       outcome: "unsafe-transcript",
       reason: "recovery checkpoint belongs to an earlier transcript turn",
     };
+  }
+  const hasSupervisedHandoff = () =>
+    Boolean(
+      sourceTurnId &&
+      sourceTurnId === expectedRecoverySourceRunId &&
+      readSupervisedSourceHandoff(
+        {
+          agentId: params.agentId,
+          sessionKey: params.canonicalSessionKey ?? params.sessionKey,
+          sessionId: params.entry.sessionId,
+          namespace:
+            params.entry.restartRecoverySourceIngress === "channel"
+              ? "channel"
+              : params.entry.restartRecoverySourceIngress === "local-cli"
+                ? "local"
+                : "gateway",
+          inputId: sourceTurnId,
+        },
+        params.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } } : {},
+      ),
+    );
+  if (params.reason === "supervised-handoff" && !hasSupervisedHandoff()) {
+    return { outcome: "unsafe-transcript", reason: "No exact committed supervised source handoff" };
   }
   if (toolCallId && !sourceTurnId) {
     return {
@@ -451,7 +484,10 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
-          expectedRecoverySourceRunId
+          expectedRecoverySourceRunId ||
+        (params.reason === "supervised-handoff" &&
+          (entry.restartRecoverySourceIngress !== params.entry.restartRecoverySourceIngress ||
+            !hasSupervisedHandoff()))
       ) {
         return { result: false };
       }
@@ -466,7 +502,9 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     mainSessionRecoveryLog.info(
       params.reason === "delivered-terminal" || params.reason === "delivered-terminal-receipt"
         ? `reconciled delivered terminal reply after restart: ${params.sessionKey}`
-        : `reconciled handled silent reply after restart: ${params.sessionKey}`,
+        : params.reason === "supervised-handoff"
+          ? `reconciled supervised input handoff after restart: ${params.sessionKey}`
+          : `reconciled handled silent reply after restart: ${params.sessionKey}`,
     );
   }
   return { outcome: marked ? "completed" : "changed" };

@@ -26,6 +26,7 @@ import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { startGatewayTaskSupervision } from "../tasks/supervised-task.gateway.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
 import {
   createScheduledGatewayRunner,
@@ -435,6 +436,7 @@ export function activateGatewayScheduledServices(params: {
     params.resolveGatewayContext,
   );
   const runScheduledHeartbeat = createScheduledGatewayRunner(heartbeatGatewayContextResolver);
+  const runScheduledTaskSupervision = createScheduledGatewayRunner(heartbeatGatewayContextResolver);
   let heartbeatStopped = false;
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
@@ -467,8 +469,16 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  const taskSupervision = startGatewayTaskSupervision({
+    onError: () =>
+      params.log
+        .child("taskflow")
+        .warn("Supervised TaskFlow owner unavailable; inspect task supervision status"),
+    runWithContext: (run) => runScheduledTaskSupervision(run),
+  });
   let deliveryRecoveryStopPromise: Promise<void> | undefined;
   const stopDeliveryRecovery = () => {
+    taskSupervision.stop();
     // Both owners fence synchronously before the close prelude awaits either.
     deliveryRecoveryStopPromise ??= Promise.all([
       stopOutboundDeliveryRecovery(),

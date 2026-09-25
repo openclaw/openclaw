@@ -21,6 +21,8 @@ export type DispatchFromConfigResult = {
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
   deferredToActiveRun?: "steer" | "followup";
+  /** Durable task custody, distinct from a live backend injection. */
+  supervisedInputHandled?: true;
   noVisibleReplyFallbackEligible?: boolean;
   noVisibleReplyFallbackDelivered?: boolean;
   deliberateSilentTerminalReply?: true;

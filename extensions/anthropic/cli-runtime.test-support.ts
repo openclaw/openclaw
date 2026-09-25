@@ -61,6 +61,20 @@ for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     initialize = message.request;
+    if (scenario === "initialize-exit") {
+      process.stderr.write("SYNTHETIC_PRIVATE_STDERR\n", () => process.exit(23));
+      continue;
+    }
+    if (scenario === "initialize-rejected") {
+      send({ type: "control_response", response: {
+        subtype: "error", request_id: message.request_id, error: "SYNTHETIC_PRIVATE_PROTOCOL",
+      } });
+      continue;
+    }
+    if (scenario === "malformed-control") {
+      send({ type: "control_request", request_id: 123, request: "SYNTHETIC_PRIVATE_PROTOCOL" });
+      continue;
+    }
     hooks = initialize.hooks;
     if (scenario === "revoked-initialize") {
       writeFileSync("initialize.ready", "ready");
@@ -124,8 +138,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       }
       continue;
     }
-    if (scenario === "missing-result") {
-      process.stderr.write("PermissionError: fixture cannot read its input\n", () => process.exit(1));
+    if (scenario === "missing-result" || scenario === "zero-exit" || scenario === "signal-exit") {
+      process.stderr.write("PermissionError: fixture cannot read its input\nSYNTHETIC_PRIVATE_STDERR\n", () => {
+        if (scenario === "signal-exit") process.kill(process.pid, "SIGTERM");
+        else process.exit(scenario === "zero-exit" ? 0 : 1);
+      });
       continue;
     }
     if (scenario === "ordinary-error") {

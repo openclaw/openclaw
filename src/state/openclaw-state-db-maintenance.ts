@@ -26,6 +26,7 @@ import {
 } from "./openclaw-state-db-doctor-schema.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { migrateSupervisedAttemptAllocationsV19 } from "./openclaw-state-db-schema-v19-attempts.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -562,6 +563,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateGitHubPublicationRequesterAuthority,
     applied: "Added original requester authority to GitHub publication receipts (v18)",
+  },
+  {
+    migrate: migrateSupervisedAttemptAllocationsV19,
+    applied: "Preserved workspace allocations under episode-owned attempt custody (v19)",
   },
 ];
 

@@ -35,6 +35,7 @@ async function createOwner(
     deferExit?: boolean;
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
+    outputJsonSchema?: Record<string, unknown>;
     skillsSnapshot?: SkillSnapshot;
     argv0?: string;
     capture?: { token: string; key: string };
@@ -52,6 +53,7 @@ async function createOwner(
     sessionKey,
     ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
   });
+  context.params.outputJsonSchema = options.outputJsonSchema;
   const admission = prepareSystemAgentRunAdmission(
     {},
     context.params.runId,
@@ -413,6 +415,11 @@ describe("generic plugin-owned live session registry", () => {
       change: "system prompt",
       originalOptions: { systemPrompt: "Original system policy." },
       changedOptions: { systemPrompt: "Changed system policy." },
+    },
+    {
+      change: "output schema",
+      originalOptions: { outputJsonSchema: { type: "object", required: ["a"] } },
+      changedOptions: { outputJsonSchema: { type: "object", required: ["b"] } },
     },
     {
       change: "invocation name",

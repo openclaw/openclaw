@@ -13,6 +13,7 @@ import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type * as SupervisionSchema from "./schema/tasks-supervision.js";
 import type {
   ThemesListParams,
   ThemesGetParams,
@@ -25,6 +26,10 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "tasks.supervision.list": SupervisionSchema.SupervisionListParams;
+  "tasks.supervision.artifact": SupervisionSchema.SupervisionArtifactParams;
+  "tasks.supervision.get": SupervisionSchema.SupervisionGetParams;
+  "tasks.supervision.control": SupervisionSchema.SupervisionControlParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
   "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;
   "canvas.document.preview": CanvasDocumentPreviewParams;

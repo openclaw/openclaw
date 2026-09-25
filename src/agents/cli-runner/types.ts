@@ -180,6 +180,8 @@ export type RunCliAgentParams = {
    * handles alive after returning.
    */
   cleanupCliLiveSessionOnRunEnd?: boolean;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
 } & AgentRunClientContext &
   AgentRunMessageContext &
   AgentRunChannelContext &

@@ -47,6 +47,8 @@ export type CliOutput = {
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
   rawText?: string;
+  /** Exact successful CLI result envelope when display text also retains earlier messages. */
+  terminalResultText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
@@ -123,6 +125,8 @@ export type CliToolResultDelta = {
 };
 
 export type CliJsonlStreamingParserOptions = {
+  /** Structured consumers need the terminal field even when it matches display text. */
+  captureTerminalResultText?: boolean;
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;

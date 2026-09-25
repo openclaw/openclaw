@@ -302,6 +302,20 @@ The host rejects restart when the caller is revoked or an exact live generation
 must be preserved. `register()` remains a synchronous admission check and refuses
 replacement while cleanup is unresolved.
 
+Internal callers can supply `outputJsonSchema` for schema-constrained terminal
+output. The bundled Claude transport sends the draft-7 schema through native
+initialization and validates the returned `structured_output` object before
+projecting it as terminal result text (at most 64 KiB). It never extracts JSON
+from conversational text. The exact native `StructuredOutput` submission is
+permitted only for a current schema-requesting turn with valid input; it grants
+no action tools. Requested schema changes invalidate warm-process reuse. Host
+schema requests override configured `--json-schema` arguments for that run;
+runs without a host schema retain their ordinary argument and output behavior.
+The provider requires an object root without top-level union keywords. Supervised
+decisions keep their full union under a strict `decision` property; the task owner
+validates and unwraps that envelope. The collector retains explicitly requested
+terminal text even when it matches conversational display text.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
@@ -472,6 +486,37 @@ the bounded raw process output and must require a backend-owned positive
 acknowledgement; a zero exit alone is not proof of compaction. Do not declare
 this capability for a command that creates a separate session or requires an
 ordinary model turn.
+
+## Transport failure diagnostics
+
+Custom executors can throw `CliBackendTransportError` from
+`openclaw/plugin-sdk/cli-backend` to preserve native transport facts. Pass the
+existing error message and one diagnostic object:
+
+- `{ kind: "exit", exitCode, signal }`: values from the native child-process
+  exit event; status or signal may be `null`.
+- `{ kind: "initialize" }`: the native initialization response rejected startup.
+- `{ kind: "protocol" }`: the executor rejected a malformed control record or
+  a record exceeding its framing limit.
+
+The error carries a fixed own-data version marker so source and separately built
+SDK copies can recognize the same bounded diagnostic contract.
+
+This metadata does not select retries, alter timeouts, or quarantine auth
+profiles. Preserve the original error when rethrowing, or retain it as `cause`.
+Do not derive exit status or signal from stdout, stderr, provider messages, or
+credentials. Executors may separately call `error.withProcessStderr()` with four
+boolean observations: `received`, `complete`, `crashBanner`, and
+`outOfMemoryBanner`. `complete` means the stderr stream reached EOF, not merely
+that the process exited or a drain timeout elapsed. Banner flags report only
+recognized fixed markers and must not carry diagnostic text.
+
+These observations belong to the process, which may have served earlier turns;
+they do not establish the current turn's failure cause. Missing metadata means
+unobserved, and an incomplete stream cannot establish that a banner was absent.
+Supervised tasks expose bounded exit statuses, allowed signal names, fixed
+initialization/protocol categories, and closed stderr-observation categories for
+`SIGABRT`. Native diagnostic text stays outside their control records.
 
 ## MCP tool bridge
 

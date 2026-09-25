@@ -17,7 +17,11 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
-import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
+import {
+  isCodexAppServerProxyLaunch,
+  readCodexAppServerConfigOptions,
+  resolveCodexPrivateLauncher,
+} from "./launch-args.js";
 import { readModelListResult, type CodexAppServerModel } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
@@ -112,6 +116,7 @@ type CodexBoundedTurnParams = {
   input: CodexUserInput[];
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
+  ownedLocalProcessRequired?: true;
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
@@ -127,6 +132,17 @@ export async function runBoundedCodexAppServerTurn(
     pluginConfig: params.options.pluginConfig,
     managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
   });
+  if (
+    params.ownedLocalProcessRequired &&
+    (appServer.start.transport !== "stdio" ||
+      isCodexAppServerProxyLaunch(appServer.start.args) ||
+      // A remote workspace root places execution off this host, so a local stdio
+      // launcher still forwards the turn. prepareCodexAttemptConnection rejects the
+      // same placement; keep both owned-local fences on identical predicates.
+      Boolean(appServer.remoteWorkspaceRoot))
+  ) {
+    throw new Error("Supervised isolated completion requires an owned local Codex stdio process");
+  }
   if (params.isolation === "configured-transport") {
     return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
       cwd: params.agentDir?.trim() || process.cwd(),

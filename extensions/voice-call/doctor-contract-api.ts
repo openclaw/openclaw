@@ -147,6 +147,10 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "Skill Workshop proposals -> per-agent Workshop directory ownership";
     case "prepared-worker-ownership-v17":
       return "prepared workers -> one-use capacity and fixed workspace ownership";
+    case "supervised-workflow-custody-v18":
+      return "supervised workflows -> durable resource custody";
+    case "supervised-attempt-custody-v19":
+      return "supervised attempts -> episode-owned workspace custody";
     case "github-publication-requester-authority-v18":
       return "GitHub publication receipts -> original requesting authority";
     case "worker-placement-execution-mode-v8":

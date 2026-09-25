@@ -672,4 +672,15 @@ export {
   SessionsActivitySummaryEnsureResultSchema,
 } from "./schema/sessions-activity-summary.js";
 
+export {
+  SupervisionControlParamsSchema,
+  SupervisionGetParamsSchema,
+  SupervisionListParamsSchema,
+  SupervisionSummarySchema,
+  SupervisionGetResultSchema,
+  SupervisionListResultSchema,
+  SupervisionControlResultSchema,
+  SupervisionArtifactParamsSchema,
+  SupervisionArtifactResultSchema,
+} from "./schema/tasks-supervision.js";
 export * from "./schema/sessions-involvement.js";

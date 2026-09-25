@@ -73,6 +73,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Trusted per-run credential binding; never accepted from public ingress. */
+  authProfileId?: string;
   /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
   modelFallbacksOverride?: string[];
   to?: string;
@@ -116,6 +118,10 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Narrow host-owned file tools to this run's workspace without changing global config. */
+  toolWorkspaceOnly?: true;
+  /** Host-owned task snapshot already prepared; do not seed agent-home files or git. */
+  workspacePrepared?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
@@ -193,6 +199,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
   /** Opaque foreground fence transferred by Gateway after atomic session admission. */
@@ -259,7 +267,7 @@ type AgentCommandGatewayOnlyKey =
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
+  AgentCommandGatewayOnlyKey | "authProfileId" | "outputJsonSchema" | "senderIsOwner" | "allowModelOverride"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;

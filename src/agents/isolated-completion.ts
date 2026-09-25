@@ -10,6 +10,7 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requiresOwnedRuntimeProcess } from "../infra/owned-runtime-process-context.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -74,6 +75,8 @@ type RunIsolatedCompletionParams = {
   /** Concrete owner already resolved by the caller, when available. */
   agentHarnessRuntimeOverride?: string;
   systemPrompt: string;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
@@ -160,6 +163,7 @@ async function runCliIsolatedCompletion(params: {
           config,
           prompt: params.request.prompt,
           extraSystemPrompt: params.request.systemPrompt,
+          outputJsonSchema: params.request.outputJsonSchema,
           timeoutMs: params.request.timeoutMs,
           runId: sessionId,
           provider: params.provider,
@@ -184,7 +188,16 @@ async function runCliIsolatedCompletion(params: {
           isolatedCompletion: true,
           outputTextPolicy: params.request.outputTextPolicy,
         });
-        if (hasCliSideEffectEvidence(result)) {
+        if (
+          result.didSendViaMessagingTool ||
+          result.didDeliverSourceReplyViaMessageTool ||
+          result.messagingToolSentTexts?.length ||
+          result.messagingToolSentMediaUrls?.length ||
+          result.messagingToolSentTargets?.length ||
+          result.messagingToolSourceReplyPayloads?.length ||
+          result.acceptedSessionSpawns?.length ||
+          result.successfulCronAdds
+        ) {
           throw new IsolatedCompletionError(
             "output-rejected",
             "Isolated CLI completion returned side-effect evidence; result rejected.",
@@ -206,11 +219,19 @@ async function runCliIsolatedCompletion(params: {
             "Isolated CLI completion returned non-text output; result rejected.",
           );
         }
-        const text = payloads
-          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
-          .map((payload) => payload.text ?? "")
-          .join("\n")
-          .trim();
+        if (params.request.outputJsonSchema && !result.meta?.cliTerminalResultText) {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated CLI completion returned no structured terminal output.",
+          );
+        }
+        const text = params.request.outputJsonSchema
+          ? (result.meta?.cliTerminalResultText ?? "")
+          : payloads
+              .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+              .map((payload) => payload.text ?? "")
+              .join("\n")
+              .trim();
         const backend = resolveCliBackendConfig(params.provider, params.request.config, {
           agentId: params.agentId,
         });
@@ -445,6 +466,7 @@ async function runIsolatedCompletionOwned(
         );
       }
       const commonParams = {
+        ...(requiresOwnedRuntimeProcess() ? { ownedLocalProcessRequired: true as const } : {}),
         provider,
         modelId: request.model,
         ...context,

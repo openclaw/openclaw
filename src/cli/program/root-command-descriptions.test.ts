@@ -100,6 +100,7 @@ const JSON_NOT_APPLICABLE = {
       "models auth",
       "models auth order",
       "skills workshop",
+      "tasks supervise",
     ],
   },
   interactive: {
@@ -142,6 +143,7 @@ const JSON_NOT_APPLICABLE = {
       "webhooks gmail run",
       "hooks relay",
       "sessions tail",
+      "tasks supervise work",
     ],
   },
   mutations: {

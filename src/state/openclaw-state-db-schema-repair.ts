@@ -359,6 +359,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
   const userVersion = readStateSchemaMigrationVersion(db);
+  if (userVersion < 19 && tableExists(db, "task_flow_episodes")) {
+    migrations.push({ kind: "supervised-attempt-custody-v19", path: pathname });
+  }
+  if (userVersion < 18 && tableExists(db, "task_flow_episodes")) {
+    migrations.push({ kind: "supervised-workflow-custody-v18", path: pathname });
+  }
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&

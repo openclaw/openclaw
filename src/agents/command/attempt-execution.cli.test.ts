@@ -2264,6 +2264,52 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
   });
 
+  it("forwards a trusted profile into a fresh Claude CLI attempt", async () => {
+    const sessionKey = "agent:main:taskflow:credential-test";
+    const sessionEntry = makeSessionEntry("taskflow-credential-test");
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:work": { type: "token", provider: "anthropic", token: "fixture-token" },
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("accepted"));
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      authProfileProvider: "anthropic",
+      sessionEntry,
+      sessionKey,
+      sessionStore,
+      opts: { authProfileId: "anthropic:work", sessionEffects: "internal" },
+    });
+    expect(firstRunCliAgentArg().authProfileId).toBe("anthropic:work");
+  });
+
+  it("does not forward a trusted profile to a different fallback provider", async () => {
+    const sessionKey = "agent:main:taskflow:credential-fallback";
+    const sessionEntry = makeSessionEntry("taskflow-credential-fallback");
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("fallback"));
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "openai",
+      authProfileProvider: "anthropic",
+      isFallbackRetry: true,
+      sessionEntry,
+      sessionKey,
+      sessionStore,
+      opts: { authProfileId: "openai:work", sessionEffects: "internal" },
+    });
+    expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
+  });
+
   it("passes session-bound OpenAI Codex auth profile to codex-cli aliases", async () => {
     const sessionKey = "agent:main:direct:codex-cli-auth-alias";
     const sessionEntry = makeSessionEntry("openclaw-session-codex", {

@@ -44,6 +44,7 @@ import {
 } from "../chat/components/chat-task-detail-state.ts";
 import { renderTaskTranscript } from "../chat/components/chat-task-detail.ts";
 import "../../styles/chat/sidebar.css";
+import { SupervisionPanelController } from "./supervision-panel.ts";
 import { renderTasks } from "./view.ts";
 
 function taskMatchesAgentScope(task: TaskSummary, agentId: string | null): boolean {
@@ -195,6 +196,11 @@ class TasksPage extends OpenClawLightDomElement {
     },
     ensureInitialData: () => void this.refreshTasks(),
   });
+  private readonly supervision = new SupervisionPanelController(
+    this,
+    () => this.context,
+    this.gateway,
+  );
   private readonly observeAgentScope = watchAgentScope(() => {
     this.gateway.invalidate();
     this.cancelGatewayWork();
@@ -516,6 +522,7 @@ class TasksPage extends OpenClawLightDomElement {
           </button>
         `,
       })}
+      ${this.supervision.render(hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null))}
       ${renderSettingsWorkspace(
         html`${this.renderTranscript()}${renderTasks({
           basePath: this.context.basePath,

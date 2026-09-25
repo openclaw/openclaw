@@ -122,6 +122,34 @@ export function setGatewayDedupeEntries(params: {
   }
 }
 
+/** Records an accepted run under every dedupe key so a replayed request returns that acceptance. */
+export function setAcceptedAgentDedupeEntries(
+  params: {
+    context: { dedupe: GatewayRequestContext["dedupe"] };
+    agentDedupeKeys: readonly string[];
+    suppressVisibleSessionEffects: boolean;
+    ownerConnId?: string;
+    ownerDeviceId?: string;
+  },
+  accepted: { runId: string; status: "accepted" },
+): void {
+  setGatewayDedupeEntries({
+    dedupe: params.context.dedupe,
+    keys: params.agentDedupeKeys,
+    entry: {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        ...accepted,
+        controlUiVisible: !params.suppressVisibleSessionEffects,
+        dedupeKeys: params.agentDedupeKeys,
+        ownerConnId: params.ownerConnId,
+        ownerDeviceId: params.ownerDeviceId,
+      },
+    },
+  });
+}
+
 export function buildAbortedAgentPayload(
   runId: string,
   stopReason: string,

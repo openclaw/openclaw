@@ -34,9 +34,10 @@ export function prepareCommandSessionRecoveryEntry(
     deliveryContext?: DeliveryContext;
     now: number;
     isSessionRollover: boolean;
+    supervisedLocalRoot?: boolean;
   },
 ) {
-  const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
+  const { entry, sessionId, runId, opts, now, isSessionRollover, supervisedLocalRoot } = params;
   const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
     prepareCommandHarnessCompletionRecovery({
       ...params,
@@ -60,6 +61,12 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        // sourceOptions already claims "internal" for a generated-media or
+        // harness-completion source; a supervised local CLI root is only the
+        // fallback source when neither of those already owns this run.
+        ...(supervisedLocalRoot && sourceOptions.sourceIngress === undefined
+          ? { sourceIngress: "local-cli" as const, sourceRunId: runId }
+          : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
       }),
     },

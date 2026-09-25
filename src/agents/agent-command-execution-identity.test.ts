@@ -41,6 +41,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
     };
     const opts = {
       prompt: "create an automation",
+      authProfileId: "anthropic:other-owner",
       cronCreatorAuthorityCapability: forgedCapability,
       pinnedWidgetAuthoring: true,
       assertSourceCurrent: () => {},
@@ -54,6 +55,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
 
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
       prompt: "create an automation",
+      authProfileId: undefined,
       cronCreatorAuthorityCapability: undefined,
       pinnedWidgetAuthoring: undefined,
       assertSourceCurrent: undefined,

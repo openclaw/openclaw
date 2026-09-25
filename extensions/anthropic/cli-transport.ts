@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import {
+  CliBackendTransportError,
+  type CliBackendExecuteContext,
+} from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -121,11 +124,14 @@ export function createClaudeCliTransport(params: {
     void fail(error);
   });
   child.once("exit", (code, signal) => {
-    if (code !== 0) {
-      exitError = new Error(
-        signal
-          ? `Claude Code process exited with signal ${signal}`
-          : `Claude Code process exited with code ${code}`,
+    if (code !== 0 || !exitError) {
+      exitError = new CliBackendTransportError(
+        code === 0
+          ? "Claude CLI live session exited unexpectedly without a terminal result."
+          : signal
+            ? `Claude Code process exited with signal ${signal}`
+            : `Claude Code process exited with code ${code}`,
+        { kind: "exit", exitCode: code, signal },
       );
     }
     didExit();
@@ -200,12 +206,16 @@ export function createClaudeCliTransport(params: {
         if (response.subtype === "success") {
           resolveReady();
         } else {
-          throw new Error("Claude CLI initialization failed.");
+          throw new CliBackendTransportError("Claude CLI initialization failed.", {
+            kind: "initialize",
+          });
         }
       }
     } else if (message.type === "control_request") {
       if (typeof message.request_id !== "string" || !isRecord(message.request)) {
-        throw new Error("Claude CLI sent a malformed control request.");
+        throw new CliBackendTransportError("Claude CLI sent a malformed control request.", {
+          kind: "protocol",
+        });
       }
       // Permission callbacks can await the operator; keep reading cancellation and output.
       void dispatch(message.request_id, message.request).catch(fail);
@@ -226,7 +236,10 @@ export function createClaudeCliTransport(params: {
         const newline = text.indexOf("\n", offset);
         const end = newline < 0 ? text.length : newline;
         if (pending.length + end - offset > MAX_LINE_CHARS) {
-          throw new Error(`Claude CLI JSONL line exceeded ${MAX_LINE_CHARS} characters.`);
+          throw new CliBackendTransportError(
+            `Claude CLI JSONL line exceeded ${MAX_LINE_CHARS} characters.`,
+            { kind: "protocol" },
+          );
         }
         pending += text.slice(offset, end);
         offset = end + 1;

@@ -14,6 +14,8 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localIdentityEnv: Readonly<Record<string, string>>;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
+  /** Runtime must be a locally spawned owned child, never a socket/node/sandbox peer. */
+  ownedLocalProcessRequired?: true;
   /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
   localToolEnv?: Readonly<Record<string, string>>;
   /** Prefix intent for runtimes with an explicitly authored native shell PATH. */

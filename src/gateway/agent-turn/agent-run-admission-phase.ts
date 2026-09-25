@@ -52,6 +52,7 @@ import type {
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
+import { maybeAdmitSupervisedGatewayRoot } from "./agent-run-supervised-root.js";
 import {
   prepareAgentRunTaskTracking,
   registerSessionFollowupTask,
@@ -522,6 +523,20 @@ export async function prepareAgentRunDispatch(
     } finally {
       releasePreparedAgentRunUserTurn(userTurn, parentResume ? "cancelled" : "interrupted");
     }
+  }
+  const supervisedRoot = maybeAdmitSupervisedGatewayRoot({
+    admission: params,
+    userTurn,
+    activeModel,
+    activeRunAbort,
+    onInputAccepted: () => {
+      assertInputAdmissionCurrent = undefined;
+    },
+    onAccepted: cleanupPreaccept,
+    onRejected: (error) => rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, error)),
+  });
+  if (supervisedRoot && (await supervisedRoot)) {
+    return undefined;
   }
   const accepted = {
     runId: params.runId,

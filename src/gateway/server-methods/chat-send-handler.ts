@@ -52,6 +52,7 @@ import {
 } from "./chat-send-message-injection.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import { handoffSupervisedChatRoot, isSupervisedChatRoot } from "./chat-send-supervision.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
@@ -302,6 +303,14 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    const supervisionScope = {
+      directExternal: externalAuthorityAdmission !== undefined,
+      internalOptions: options !== undefined,
+      isInternalCommand: isInternalTextSlashCommandTurn,
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      client,
+    };
     admitted.value.setPendingInputCleanup(() => {
       try {
         userTurnRecorder.finishPendingInput?.(
@@ -356,7 +365,7 @@ async function handleChatSendWithOptions(
                 return true;
               }),
       });
-      if (userTurnRecorder.isPendingInputConsumed?.()) {
+      if (userTurnRecorder.isPendingInputConsumed?.() && !isSupervisedChatRoot(supervisionScope)) {
         admitted.value.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         respond(true, { runId: clientRunId, status: "ok" }, undefined, {
@@ -365,7 +374,7 @@ async function handleChatSendWithOptions(
         });
         return;
       }
-      if (!staged) {
+      if (!staged && !userTurnRecorder.isPendingInputConsumed?.()) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
       const approved = userTurnRecorder.getPendingInputMessage?.();
@@ -380,6 +389,32 @@ async function handleChatSendWithOptions(
         { sessionKey, agentId: selectedAgent.agentId, reason: "send" },
         { accessChanged: false },
       );
+    }
+    const consumedBeforeSupervision = Boolean(userTurnRecorder.isPendingInputConsumed?.());
+    if (
+      await handoffSupervisedChatRoot({
+        ...supervisionScope,
+        ctx,
+        admission: admitted.value,
+        context,
+        respond,
+        recorder: userTurnRecorder,
+        persistUserTurn: persistGatewayUserTurnTranscript,
+        terminalizeRestartSafeAdmission,
+      })
+    ) {
+      return;
+    }
+    // An ordinary input that was already consumed is still a replay, not a
+    // new backend dispatch merely because supervision was enabled meanwhile.
+    if (consumedBeforeSupervision) {
+      admitted.value.cleanupAdmittedRun();
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respond(true, { runId: clientRunId, status: "ok" }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {

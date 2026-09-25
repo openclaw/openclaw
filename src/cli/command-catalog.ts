@@ -1,6 +1,7 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
+import { supervisedTaskCommandEntries } from "./command-catalog-supervision.js";
 import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
 import { updateCommandCatalog } from "./command-catalog-update.js";
 
@@ -322,6 +323,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: PASSIVE_STARTUP_POLICY,
     route: { id: "tasks-list" },
   },
+  ...supervisedTaskCommandEntries,
   {
     // This unregistered root is reserved so plugin registration cannot claim it;
     // the catalog entry preserves its startup policy.

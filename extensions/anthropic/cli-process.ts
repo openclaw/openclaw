@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import {
+  CliBackendTransportError,
+  type CliBackendExecuteContext,
+} from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -21,6 +24,9 @@ export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
 const STDERR_CAPTURE_CHARS = 8_192;
 const STDERR_PREVIEW_CHARS = 2_000;
 const STDERR_DRAIN_GRACE_MS = 200;
+const CRASH_BANNER = "Bun has crashed.";
+const OUT_OF_MEMORY_BANNER = "Bun has run out of memory.";
+const BANNER_CARRY_CHARS = Math.max(CRASH_BANNER.length, OUT_OF_MEMORY_BANNER.length) - 1;
 
 function spawnClaudeCliProcess(
   options: ClaudeCliSpawnOptions,
@@ -78,10 +84,20 @@ export function createClaudeCliProcessOwner(
   let disposed = false;
   let tail = "";
   let dropPartialLine = false;
+  let received = false;
+  let complete = false;
+  let crashBanner = false;
+  let outOfMemoryBanner = false;
+  let bannerCarry = "";
   const observeStderr = (process: ChildProcessWithoutNullStreams) => {
     child = process;
     drained = new Promise<void>((resolve) => {
       process.stderr.once("close", resolve);
+    });
+    process.stderr.once("end", () => {
+      if (!disposed) {
+        complete = true;
+      }
     });
     process.stderr.setEncoding("utf8");
     process.stderr.on("error", () => {}); // A failed diagnostic pipe must not crash the Gateway.
@@ -89,6 +105,15 @@ export function createClaudeCliProcessOwner(
       let text = chunk;
       if (disposed) {
         return;
+      }
+      // Keep only fixed observations across warm turns, independently of the clipped
+      // display tail. A banner is process-wide evidence, not a turn's failure cause.
+      if (chunk.length > 0) {
+        received = true;
+        const observed = bannerCarry + chunk;
+        crashBanner ||= observed.includes(CRASH_BANNER);
+        outOfMemoryBanner ||= observed.includes(OUT_OF_MEMORY_BANNER);
+        bannerCarry = observed.slice(-BANNER_CARRY_CHARS);
       }
       if (dropPartialLine) {
         const newline = text.indexOf("\n");
@@ -114,6 +139,8 @@ export function createClaudeCliProcessOwner(
       credential?.fill(0);
       environment = {};
       tail = "";
+      bannerCarry = "";
+      received = complete = crashBanner = outOfMemoryBanner = false;
     },
     spawn: (options: ClaudeCliSpawnOptions) => {
       assertCurrent();
@@ -142,6 +169,10 @@ export function createClaudeCliProcessOwner(
       if (disposed || currentContext() !== context || context.abortSignal?.aborted) {
         return error;
       }
+      const failure =
+        error instanceof CliBackendTransportError
+          ? error.withProcessStderr({ received, complete, crashBanner, outOfMemoryBanner })
+          : error;
       let diagnostic = tail;
       // Known opaque credentials need exact-value masking as well as pattern redaction.
       // Warm turns can mint new grants while the child retains its original environment.
@@ -168,14 +199,14 @@ export function createClaudeCliProcessOwner(
         redactSensitiveText(diagnostic, { mode: "tools" }),
         -STDERR_PREVIEW_CHARS,
       ).trim();
-      if (diagnostic && error instanceof Error) {
+      if (diagnostic && failure instanceof Error) {
         // Independent pipes cannot attribute warm stderr to a turn or classify its failure.
         attachErrorDiagnostic(
-          error,
+          failure,
           `stderr (process-wide; may include earlier turns): ${diagnostic}`,
         );
       }
-      return error;
+      return failure;
     },
   };
 }

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withOwnedRuntimeProcess } from "../../infra/owned-runtime-process-context.js";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -451,3 +452,23 @@ describe("runIsolatedCompletion native authorization", () => {
     );
   });
 });
+
+it.each([false, true])(
+  "carries only the current owner's local-process constraint (%s)",
+  async (owned) => {
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "bounded result" }]),
+    }));
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
+    const invoke = () => runIsolatedCompletion(isolatedRequest());
+    await (owned ? withOwnedRuntimeProcess(invoke) : invoke());
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining(owned ? { ownedLocalProcessRequired: true } : {}),
+    );
+    if (!owned) {
+      expect(runIsolatedCompletionV2).not.toHaveBeenCalledWith(
+        expect.objectContaining({ ownedLocalProcessRequired: true }),
+      );
+    }
+  },
+);
