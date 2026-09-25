@@ -833,7 +833,9 @@ describe("GatewayProtocolClient requests", () => {
       throw new Error("expected initial request connection");
     }
     const retired = client.request("retired", {}, { timeoutMs: null });
+    const alsoRetired = client.request("also-retired", {}, { timeoutMs: null });
     void retired.catch(() => undefined);
+    void alsoRetired.catch(() => undefined);
 
     firstConnection.close(1012, "service restart");
 
@@ -850,6 +852,7 @@ describe("GatewayProtocolClient requests", () => {
     respond(replacementConnection, "1:same-id", { healthy: true });
 
     await expect(retired).rejects.toThrow("gateway closed (1012): service restart");
+    await expect(alsoRetired).rejects.toThrow("gateway closed (1012): service restart");
     await expect(recoveredRequest).resolves.toEqual({ healthy: true });
     expect(client.hasPendingRequests).toBe(false);
     client.stop();

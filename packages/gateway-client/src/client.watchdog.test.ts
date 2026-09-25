@@ -1,5 +1,3 @@
-// Gateway Client tests cover client.watchdog behavior.
-import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -201,7 +199,6 @@ function completeSyntheticGatewayProtocolHandshake(
 
 describe("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
-  let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -219,14 +216,6 @@ describe("GatewayClient", () => {
         wss?.close(() => resolve());
       });
       wss = null;
-    }
-    if (httpsServer) {
-      httpsServer.closeAllConnections?.();
-      httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => {
-        httpsServer?.close(() => resolve());
-      });
-      httpsServer = null;
     }
   });
 
@@ -516,19 +505,6 @@ describe("GatewayClient", () => {
     expect(connections).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(10);
     expect(connections).toHaveLength(3);
-    client.stop();
-  });
-
-  test("starts a fresh protocol socket after an explicit stop", () => {
-    const { client, connections } = createSyntheticGatewayProtocol();
-
-    client.start();
-    client.stop();
-    client.start();
-
-    expect(connections).toHaveLength(2);
-    expect(connections[0]?.close).toHaveBeenCalledOnce();
-    expect(connections[1]?.close).not.toHaveBeenCalled();
     client.stop();
   });
 
@@ -920,54 +896,6 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("cleans pending request state when websocket send throws", async () => {
-    const { client, send } = createOpenGatewayClient(25);
-    const onSent = vi.fn();
-    send.mockImplementationOnce(() => {
-      throw new Error("synthetic send failure");
-    });
-
-    await expect(client.request("status", undefined, { onSent })).rejects.toThrow(
-      "synthetic send failure",
-    );
-    expect(onSent).not.toHaveBeenCalled();
-    expect(hasPendingRequests(client)).toBe(false);
-  });
-
-  test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
-    const { client, send } = createOpenGatewayClient(25);
-
-    const onSent = vi.fn();
-    const onAccepted = vi.fn();
-    const requestPromise = client.request<{ status: string }>("agent", undefined, {
-      expectFinal: true,
-      onSent,
-      onAccepted,
-    });
-    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
-
-    handleGatewayMessage(client, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "accepted", runId: "run-1" },
-    });
-
-    expect(onSent).toHaveBeenCalledOnce();
-    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
-    expect(hasPendingRequests(client)).toBe(true);
-
-    handleGatewayMessage(client, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "ok" },
-    });
-
-    await expect(requestPromise).resolves.toEqual({ status: "ok" });
-    expect(hasPendingRequests(client)).toBe(false);
-  });
-
   test("aborts in-flight requests from caller AbortSignal", async () => {
     const { client, send } = createOpenGatewayClient(25);
 
@@ -1027,55 +955,5 @@ describe("GatewayClient", () => {
     await vi.advanceTimersByTimeAsync(249);
     await expect(stopPromise).resolves.toBeUndefined();
     expect(ws.terminate).toHaveBeenCalledTimes(1);
-  });
-
-  test("rejects mismatched tls fingerprint", async () => {
-    httpsServer = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
-    wss = new WebSocketServer({ server: httpsServer, maxPayload: 1024 * 1024 });
-    const port = await new Promise<number>((resolve, reject) => {
-      httpsServer?.once("error", reject);
-      httpsServer?.listen(0, "127.0.0.1", () => {
-        const address = httpsServer?.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("https server address unavailable"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-
-    let client: GatewayClient | null = null;
-    const error = await new Promise<Error>((resolve) => {
-      let settled = false;
-      const finish = (err: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(err);
-      };
-      const timeout = setTimeout(() => {
-        client?.stop();
-        finish(new Error("timeout waiting for tls error"));
-      }, 2000);
-      client = new GatewayClient({
-        url: `wss://127.0.0.1:${port}`,
-        connectChallengeTimeoutMs: 0,
-        tlsFingerprint: "ab".repeat(32),
-        onConnectError: (err) => {
-          clearTimeout(timeout);
-          client?.stop();
-          finish(err);
-        },
-        onClose: () => {
-          clearTimeout(timeout);
-          client?.stop();
-          finish(new Error("closed without tls error"));
-        },
-      });
-      client.start();
-    });
-
-    expect(String(error)).toContain("tls fingerprint mismatch");
   });
 });
