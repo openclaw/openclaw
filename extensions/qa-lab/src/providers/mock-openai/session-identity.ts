@@ -34,7 +34,23 @@ export function createQaSessionIdentityResolver() {
     }
     const affinity = request.headers?.session_id;
     if (typeof affinity !== "string" || !affinity.trim()) {
-      if (sessionScoped) {
+      // Host-prepared utility completions have no conversation identity or tools.
+      // Recognize only their system contracts, never quoted user/history text.
+      const input: ResponsesInputItem[] = Array.isArray(request.body.input)
+        ? request.body.input
+        : [];
+      const instructions = extractAllRequestTexts(
+        input.filter((item) => item.role === "developer" || item.role === "system"),
+        request.body,
+      );
+      const standalone =
+        (!Array.isArray(request.body.tools) || request.body.tools.length === 0) &&
+        [
+          "You are a JSON-only function.",
+          "You are keeping a dream diary.",
+          "Choose how to incorporate each supplied candidate into MEMORY.md.",
+        ].some((prefix) => instructions.startsWith(prefix));
+      if (sessionScoped && !standalone) {
         throw new Error(
           "Missing QA session identity: session-scoped mock runs require transport affinity; cacheRetention: none suppresses it",
         );
