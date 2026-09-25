@@ -56,7 +56,7 @@ describe("Agents API completed reply settlement", () => {
 
     const result = await fixture.run();
 
-    expect(result.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
+    expect(result).toHaveProperty("terminal", { kind: "failed", source: "prompt", error: failure });
     expect(result.assistantTexts).toEqual(["The completed answer."]);
     expect(result.assistantTranscriptOwned).toBe(true);
     expect(result.assistantTranscriptIdempotencyKey).toBe("agentsapi:session-fixture:turn-fixture");
@@ -93,7 +93,8 @@ describe("Agents API completed reply settlement", () => {
 
       const result = await fixture.run();
 
-      expect(result.terminal).toEqual(
+      expect(result).toHaveProperty(
+        "terminal",
         interruption === "cancelled"
           ? { kind: "aborted", source: "external" }
           : { kind: "failed", source: "prompt", error: failure },
