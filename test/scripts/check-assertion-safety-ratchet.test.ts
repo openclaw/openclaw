@@ -195,32 +195,45 @@ describe("check-assertion-safety-ratchet", () => {
     ).toEqual(new Map([["src/example.ts", 2]]));
   });
 
-  it("rejects assertion baseline growth when no merge base is available", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-disconnected-",);
+  it("preserves assertion baseline growth rejection across earlier branch commits", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-disconnected-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = value as string;\n");
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "release base"]]) {
+    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = 1;\n");
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "upstream base"]]) {
       git(root, args);
     }
+    git(root, ["branch", "upstream"]);
     git(root, ["branch", "-m", "release"]);
 
     fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "src/example.ts\t1\n");
+    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = value as string;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "grow release baseline"]);
-
-    git(root, ["checkout", "--orphan", "main"]);
-    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "");
-    fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = 1;\n");
+    fs.writeFileSync(path.join(root, "src/branch-change.ts"), "export const branchChange = true;\n");
     git(root, ["add", "."]);
-    git(root, ["commit", "-m", "disconnected main"]);
-    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["commit", "-m", "later release commit"]);
+
+    git(root, ["checkout", "upstream"]);
+    fs.writeFileSync(path.join(root, "src/upstream-change.ts"), "export const upstreamChange = true;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "upstream update"]);
+
+    git(root, ["checkout", "release"]);
+    git(root, ["merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main"]);
+    git(root, ["checkout", "--orphan", "unrelated"]);
+    fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
+    fs.rmSync(path.join(root, "config"), { recursive: true, force: true });
+    fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "disconnected base"]);
+    const disconnectedBase = git(root, "rev-parse", "HEAD");
     git(root, ["checkout", "release"]);
 
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(main(root)).toBe(1);
+    expect(main(root, ["--base", disconnectedBase])).toBe(1);
   });
 
   it("compares an explicit moving base at the branch fork", () => {
