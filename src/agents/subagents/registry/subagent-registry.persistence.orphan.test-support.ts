@@ -118,7 +118,7 @@ export function registerSubagentOrphanTaskCases({
         }
       } finally {
         childResult.resolve({ status: "ok", startedAt: now - 10_000, endedAt: now });
-        await settleSubagentRegistryPersistenceWork();
+        await settle();
       }
     },
   );
