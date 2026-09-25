@@ -190,6 +190,73 @@ describe("channel DM access request views", () => {
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
   });
 
+  it.each([
+    {
+      kind: "dismiss" as const,
+      pending: "Dismissing…",
+      pendingAria: "Dismissing +15551234567 for WhatsApp, account Personal",
+      idle: "Approve",
+      idleAria: "Approve +15551234567 for WhatsApp, account Personal",
+      pendingIndex: 1,
+      idleIndex: 0,
+    },
+    {
+      kind: "approve" as const,
+      pending: "Approving…",
+      pendingAria: "Approving +15551234567 for WhatsApp, account Personal",
+      idle: "Dismiss",
+      idleAria: "Dismiss +15551234567 for WhatsApp, account Personal",
+      pendingIndex: 0,
+      idleIndex: 1,
+    },
+  ])(
+    "shows $kind pending copy on the request row and confirmation",
+    ({ kind, pending, pendingAria, idle, idleAria, pendingIndex, idleIndex }) => {
+      const queue = renderInto(
+        renderChannelPairingQueue(
+          createProps({
+            channels: {
+              pairingBusyRequestId: request.requestId,
+              pairingBusyKind: kind,
+            },
+          }),
+        ),
+      );
+      const actions = Array.from(
+        queue.querySelectorAll<HTMLButtonElement>(".channels-pairing-request__actions button"),
+      );
+
+      expect(actions[pendingIndex]?.textContent?.trim()).toBe(pending);
+      expect(actions[pendingIndex]?.getAttribute("aria-label")).toBe(pendingAria);
+      expect(actions[idleIndex]?.textContent?.trim()).toBe(idle);
+      expect(actions[idleIndex]?.getAttribute("aria-label")).toBe(idleAria);
+      expect(actions.every((button) => button.disabled)).toBe(true);
+
+      const dialog = renderInto(
+        renderChannelPairingPrompt(
+          createProps({
+            channels: {
+              pairingBusyRequestId: request.requestId,
+              pairingBusyKind: kind,
+            },
+            pairingPrompt: {
+              kind,
+              request,
+              notify: false,
+              bootstrapCommandOwner: false,
+            },
+          }),
+        ),
+      );
+      const confirm = dialog.querySelector<HTMLButtonElement>(
+        ".channels-pairing-dialog__actions button",
+      );
+
+      expect(confirm?.textContent?.trim()).toBe(pending);
+      expect(confirm?.disabled).toBe(true);
+    },
+  );
+
   it("shows explicit notification and first-owner choices for an admin", () => {
     const container = renderInto(
       renderChannelPairingPrompt(
