@@ -582,6 +582,12 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {
     this.composerPersistence.restore(options);
+    // Storage holds reload-safe aliases (sending -> waiting-reconnect); a live
+    // page presents the outbox owner's projection, including in-flight sends.
+    const state = this.stateValue;
+    if (state) {
+      chatOutboxOwner(state).syncHost(state);
+    }
   }
 
   startComposerPersistence() {
