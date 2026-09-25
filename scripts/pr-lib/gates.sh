@@ -165,10 +165,14 @@ prepare_local_gate_workspace() {
   bootstrap_deps_if_needed
 }
 
-run_remote_testbox_full_test_gate() {
+run_remote_testbox_gates() {
   local label="$1"
   local log_file="$2"
   local lease_label="$3"
+  local gate_command="corepack pnpm build && corepack pnpm check"
+  if [ "${4:-false}" != "true" ]; then
+    gate_command="$gate_command && corepack pnpm test"
+  fi
   local remote_env=(CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false)
   local name value
   # Delegated Testbox commands do not inherit the caller's scheduling controls.
@@ -199,7 +203,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env "${remote_env[@]}" corepack pnpm test
+    -- env "${remote_env[@]}" /bin/bash -c "$gate_command"
 }
 
 read_remote_testbox_gate_stamp() {
@@ -574,9 +578,26 @@ prepare_gates() {
     remote_gates_run_url=""
     echo "Crabbox AWS proof is deferred until prepare-push verifies the exact remote head."
   else
-    prepare_local_gate_workspace
-    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    if [ "$gates_remote_mode" = "testbox" ]; then
+      # The capsule owns the complete install/build/check/test boundary. Running
+      # any package phase here can resolve an ancestor checkout's dependencies.
+      echo "Running prepare gates on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
+      run_remote_testbox_gates \
+        "prepare gates (blacksmith-testbox)" \
+        ".local/gates-test.log" \
+        "pr-$pr-gates" "$docs_only" || return $?
+      local remote_stamp
+      remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log") || return $?
+      remote_gates_provider="blacksmith-testbox"
+      remote_gates_run_id=""
+      remote_gates_lease_id=$(printf '%s\n' "$remote_stamp" | jq -r '.leaseId')
+      remote_gates_run_url=$(printf '%s\n' "$remote_stamp" | jq -r '.actionsRunUrl // ""')
+      echo "Remote testbox gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
+    else
+      prepare_local_gate_workspace
+      run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
+      run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    fi
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
@@ -588,18 +609,6 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     elif [ "$gates_remote_mode" = "testbox" ]; then
       gates_mode="remote_testbox"
-      echo "Running pnpm test on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
-      run_remote_testbox_full_test_gate \
-        "pnpm test (blacksmith-testbox)" \
-        ".local/gates-test.log" \
-        "pr-$pr-gates"
-      local remote_stamp
-      remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log")
-      remote_gates_provider="blacksmith-testbox"
-      remote_gates_run_id=""
-      remote_gates_lease_id=$(printf '%s\n' "$remote_stamp" | jq -r '.leaseId')
-      remote_gates_run_url=$(printf '%s\n' "$remote_stamp" | jq -r '.actionsRunUrl // ""')
-      echo "Remote testbox gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
       previous_full_gates_head="$current_head"
     else
       gates_mode="full"
