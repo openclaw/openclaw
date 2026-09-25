@@ -10,10 +10,6 @@ const sandboxRegistryModuleLoader = createLazyImportLoader(
   () => import("../agents/sandbox/registry.js"),
 );
 
-function loadPluginRegistryModule() {
-  return pluginRegistryModuleLoader.load();
-}
-
 async function readPersistedSandboxBackendIds(): Promise<string[]> {
   // Management must activate each recorded owner before lifecycle code can
   // inspect or remove its runtime. Configured-only activation strands old rows.
@@ -35,7 +31,7 @@ export async function ensureCliPluginRegistryLoaded(params: {
       : undefined;
   const { ensurePluginRegistryLoaded } = await measureCliCommandStartup(
     "plugin-registry-module-import",
-    loadPluginRegistryModule,
+    pluginRegistryModuleLoader.load,
   );
   await measureCliCommandStartup("plugin-registry-runtime-load", () => {
     const previousForceStderr = loggingState.forceConsoleToStderr;

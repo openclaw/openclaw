@@ -2079,7 +2079,6 @@ src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
-src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	5
@@ -2093,7 +2092,7 @@ src/cli/command-format.ts	1
 src/cli/command-options.ts	1
 src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	2
-src/cli/config-cli-input.ts	2
+src/cli/config-cli-input.ts	1
 src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
@@ -2106,9 +2105,6 @@ src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	8
-src/cli/daemon-cli/launchd-recovery.ts	1
-src/cli/daemon-cli/start-repair.ts	1
-src/cli/deps.ts	2
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	7
 src/cli/dns-cli.ts	3
@@ -2117,7 +2113,7 @@ src/cli/exec-policy-cli.ts	3
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
-src/cli/gateway-cli/run.ts	12
+src/cli/gateway-cli/run.ts	11
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
@@ -2139,9 +2135,8 @@ src/cli/parse-duration.ts	2
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-update-command.ts	5
-src/cli/ports.ts	9
+src/cli/ports.ts	8
 src/cli/precomputed-help.ts	1
-src/cli/profile.ts	4
 src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
@@ -2149,9 +2144,7 @@ src/cli/program/message/helpers.ts	1
 src/cli/program/message/register.emoji-sticker.ts	1
 src/cli/program/message/register.permissions-search.ts	2
 src/cli/program/message/register.poll.ts	1
-src/cli/program/message/register.thread.ts	1
 src/cli/program/preaction.ts	1
-src/cli/program/private-qa-cli.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register-lazy-command.ts	1
 src/cli/program/register.agent-turn.ts	1
