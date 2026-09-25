@@ -34,7 +34,6 @@ describe("qwen provider catalog", () => {
     expect(provider.baseUrl).toBe(QWEN_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     const modelIds = getQwenModelIds(provider);
-    expect(modelIds.length).toBeGreaterThan(0);
     expect(modelIds).toContain(QWEN_DEFAULT_MODEL_ID);
     expect(modelIds).not.toContain(QWEN_36_FLASH_MODEL_ID);
     expect(modelIds).toContain("qwen3.6-plus");

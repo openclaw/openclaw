@@ -50,19 +50,9 @@ describe("normalizeElevenLabsBaseUrl", () => {
     }
     // A malformed value that embeds a token must not be echoed either.
     const malformed = "http://:not a url token=abcd1234secret";
-    try {
-      normalizeElevenLabsBaseUrl(malformed);
-    } catch (error) {
-      expect((error as Error).message).not.toContain("abcd1234secret");
-    }
-  });
-
-  it("keeps every accepted result parseable as an http(s) URL", () => {
-    for (const input of ["https://ok.example.com/", "http://a.b:9000"]) {
-      const normalized = normalizeElevenLabsBaseUrl(input);
-      const url = new URL(normalized);
-      expect(["http:", "https:"]).toContain(url.protocol);
-    }
+    expect(() => normalizeElevenLabsBaseUrl(malformed)).toThrow(
+      new Error("Invalid ElevenLabs baseUrl: value is not a valid URL"),
+    );
   });
 
   it("maps HTTP endpoints and preserves explicit WebSocket endpoints for realtime", () => {

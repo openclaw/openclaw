@@ -420,9 +420,6 @@ describe("buildXiaomiSpeechProvider", () => {
           }),
         ).rejects.toThrow("Xiaomi API key missing");
         expect(mockFetch).not.toHaveBeenCalled();
-        expect(
-          mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("api-key")),
-        ).toEqual([]);
       } finally {
         if (savedKey === undefined) {
           delete process.env.XIAOMI_API_KEY;

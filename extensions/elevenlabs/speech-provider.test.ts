@@ -435,18 +435,22 @@ describe("elevenlabs speech provider", () => {
       throw new Error("streamSynthesize is unavailable");
     }
 
-    expect(result).toMatchObject({
-      outputFormat: "pcm_44100",
-      fileExtension: ".pcm",
-      voiceCompatible: false,
-    });
-    if (!result.release) {
-      throw new Error("stream release is unavailable");
+    try {
+      expect(result).toMatchObject({
+        outputFormat: "pcm_44100",
+        fileExtension: ".pcm",
+        voiceCompatible: false,
+      });
+      if (!result.release) {
+        throw new Error("stream release is unavailable");
+      }
+      expect(cancel).not.toHaveBeenCalled();
+      await result.release();
+      await result.release();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await result.release?.();
     }
-    expect(cancel).not.toHaveBeenCalled();
-    await result.release();
-    await result.release();
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

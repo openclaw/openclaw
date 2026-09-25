@@ -91,10 +91,10 @@ describe("qwen provider plugin", () => {
     });
     const retiredProviderIds = ["qwen-oauth", "qwen-portal", "qwen-cli"];
 
-    expect(providers.map((provider) => provider.id)).not.toEqual(
-      expect.arrayContaining(retiredProviderIds),
-    );
-    expect(manifest.providers).not.toEqual(expect.arrayContaining(retiredProviderIds));
+    for (const retiredProviderId of retiredProviderIds) {
+      expect(providers.map((provider) => provider.id)).not.toContain(retiredProviderId);
+      expect(manifest.providers).not.toContain(retiredProviderId);
+    }
     expect(manifest.modelCatalog.providers).not.toHaveProperty("qwen-oauth");
   });
 

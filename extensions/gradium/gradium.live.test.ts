@@ -1,7 +1,4 @@
 // Gradium tests cover gradium plugin behavior.
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -35,9 +32,5 @@ describe.skipIf(!LIVE || !GRADIUM_API_KEY)("gradium live", () => {
 
     expect(result.outputFormat).toBe("wav");
     expect(result.audioBuffer.byteLength).toBeGreaterThan(512);
-
-    const outPath = join(tmpdir(), "gradium-live-test.wav");
-    writeFileSync(outPath, result.audioBuffer);
-    console.log(`Audio written to ${outPath}`);
   }, 60_000);
 });

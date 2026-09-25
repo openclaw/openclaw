@@ -37,7 +37,7 @@ describe("Fish Audio speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("exposes S2.1 free as the default without requiring a voice id", () => {
+  it("exposes S2.1 Pro as the default without requiring a voice id", () => {
     vi.stubEnv("FISH_API_KEY", "fish-test");
     const provider = buildFishAudioSpeechProvider();
     expect(provider.defaultModel).toBe("s2.1-pro");
@@ -108,14 +108,17 @@ describe("Fish Audio speech provider", () => {
       target: "voice-note",
       timeoutMs: 1_000,
     });
-    expect(result).toMatchObject({
-      outputFormat: "opus",
-      fileExtension: ".opus",
-      voiceCompatible: true,
-    });
-    const bytes = new Uint8Array(await new Response(result?.audioStream).arrayBuffer());
-    expect([...bytes]).toEqual([4, 5, 6]);
-    await result?.release?.();
+    try {
+      expect(result).toMatchObject({
+        outputFormat: "opus",
+        fileExtension: ".opus",
+        voiceCompatible: true,
+      });
+      const bytes = new Uint8Array(await new Response(result?.audioStream).arrayBuffer());
+      expect([...bytes]).toEqual([4, 5, 6]);
+    } finally {
+      await result?.release?.();
+    }
   });
 
   it("requests raw 8 kHz PCM for telephony", async () => {

@@ -630,7 +630,7 @@ mkdirSync(process.argv[outIndex + 1]);
       await expect(run).rejects.toThrow();
 
       const preview = String(debugLogMock.mock.calls[0]?.[0]);
-      expect(Buffer.from(preview).toString()).toBe(preview);
+      expect(preview).toBe(`${method}: text=${"a".repeat(49)}...`);
     },
   );
 });
