@@ -12,6 +12,7 @@ import type {
 } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT } from "../plugin-sdk/approval-terminal.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -30,6 +31,8 @@ import {
   buildForwardedExecResolvedPayload,
   buildForwardedPluginPendingPayload,
   buildForwardedPluginResolvedPayload,
+  buildForwardedSystemAgentPendingPayload,
+  buildForwardedSystemAgentResolvedPayload,
 } from "./exec-approval-forwarder.messages.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import {
@@ -37,9 +40,13 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
-// Approval forwarding mirrors foreground exec/plugin approvals into configured
-// chat targets, then sends resolution/expiry notices to the same targets.
+// Approval forwarding mirrors foreground approvals into chat targets, then sends
+// resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
   typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
@@ -85,6 +92,8 @@ export type ExecApprovalForwarder = {
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
   handlePluginApprovalRequested?: (request: PluginApprovalRequest) => Promise<boolean>;
   handlePluginApprovalResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+  handleSystemAgentApprovalRequested?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  handleSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -528,6 +537,19 @@ const pluginApprovalStrategy = {
   buildResolvedPayload: buildForwardedPluginResolvedPayload,
 } satisfies ApprovalStrategy<PluginApprovalRequest, PluginApprovalResolved>;
 
+// A delegated OpenClaw change blocks the requesting tool until someone decides,
+// so the requesting chat always gets a reply path. A native card for the same
+// target suppresses this text through the shared fallback check.
+const SYSTEM_AGENT_FORWARDING: ExecApprovalForwardingConfig = { enabled: true, mode: "session" };
+
+const systemAgentApprovalStrategy = {
+  kind: "system-agent",
+  config: () => SYSTEM_AGENT_FORWARDING,
+  buildExpiredText: () => SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+  buildPendingPayload: buildForwardedSystemAgentPendingPayload,
+  buildResolvedPayload: buildForwardedSystemAgentResolvedPayload,
+} satisfies ApprovalStrategy<SystemAgentApprovalRequest, SystemAgentApprovalResolved>;
+
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
@@ -559,14 +581,24 @@ export function createExecApprovalForwarder(
     resolveSessionTarget,
     getNativeApprovalRouteCoordinator,
   });
+  const systemAgentHandlers = createApprovalHandlers({
+    strategy: systemAgentApprovalStrategy,
+    getConfig,
+    deliver,
+    nowMs,
+    resolveSessionTarget,
+    getNativeApprovalRouteCoordinator,
+  });
 
   return {
     handleRequested: execHandlers.handleRequested,
     handleResolved: execHandlers.handleResolved,
     handlePluginApprovalRequested: pluginHandlers.handleRequested,
     handlePluginApprovalResolved: pluginHandlers.handleResolved,
+    handleSystemAgentApprovalRequested: systemAgentHandlers.handleRequested,
+    handleSystemAgentApprovalResolved: systemAgentHandlers.handleResolved,
     stop: async () => {
-      await Promise.all([execHandlers.stop(), pluginHandlers.stop()]);
+      await Promise.all([execHandlers.stop(), pluginHandlers.stop(), systemAgentHandlers.stop()]);
     },
   };
 }

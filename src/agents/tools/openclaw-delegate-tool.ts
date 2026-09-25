@@ -87,7 +87,7 @@ export function createOpenClawDelegateToolsForRun(
       "Setup flows collect credentials with masked entry; never request them in chat. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
-        : "Changes wait for human approval and return the final outcome."),
+        : "Changes wait for the user to approve in this chat (approval buttons or `/approve`) and return the final outcome."),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {

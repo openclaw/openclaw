@@ -9,7 +9,10 @@ import type {
   PluginApprovalRequestPayload,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type {
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.js";
 import { broadcastApprovalResolvedEvent } from "./approval-shared.js";
@@ -149,6 +152,20 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "plugin",
       effect: "ios-push",
       run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
+    });
+  }
+  // An allowed change reports its applied outcome from the system-agent owner.
+  if (
+    params.record.kind === "system-agent" &&
+    params.record.status !== "allowed" &&
+    params.forwarder?.handleSystemAgentApprovalResolved
+  ) {
+    await runSideEffect({
+      context: params.context,
+      approvalKind: "system-agent",
+      effect: "forwarder",
+      run: () =>
+        params.forwarder!.handleSystemAgentApprovalResolved!(event as SystemAgentApprovalResolved),
     });
   }
 }

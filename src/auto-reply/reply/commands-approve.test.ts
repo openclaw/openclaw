@@ -17,8 +17,10 @@ import { handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
+const isPendingSystemAgentApprovalMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/approval-gateway-resolver.js", () => ({
+  isPendingSystemAgentApprovalOverGateway: isPendingSystemAgentApprovalMock,
   resolveApprovalOverGateway: resolveApprovalOverGatewayMock,
 }));
 
@@ -155,6 +157,7 @@ function buildApproveParams(
 describe("handleApproveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isPendingSystemAgentApprovalMock.mockResolvedValue(false);
     setApprovePluginRegistry();
   });
 
@@ -183,6 +186,7 @@ describe("handleApproveCommand", () => {
             : { reply: "❌ Telegram exec approvals are not enabled for this bot account." }),
         },
         plugin: { authorizedSenders: execApprovals?.approvers ?? [] },
+        "system-agent": { authorizedSenders: execApprovals?.approvers ?? [] },
       },
     );
   }
@@ -207,6 +211,7 @@ describe("handleApproveCommand", () => {
       {
         exec: { authorizedSenders: execApprovals?.approvers ?? [] },
         plugin: { authorizedSenders: execApprovals?.approvers ?? [] },
+        "system-agent": { authorizedSenders: execApprovals?.approvers ?? [] },
       },
     );
   }
@@ -567,6 +572,51 @@ describe("handleApproveCommand", () => {
       method: "plugin.approval.resolve",
       id: "legacy-plugin-123",
     });
+  });
+
+  it("resolves an OpenClaw change approval with its canonical owner", async () => {
+    const notFound = () => new Error("unknown or expired approval id");
+    resolveApprovalOverGatewayMock
+      .mockRejectedValueOnce(notFound())
+      .mockRejectedValueOnce(notFound())
+      .mockResolvedValueOnce({ applied: true });
+    isPendingSystemAgentApprovalMock.mockResolvedValueOnce(true);
+
+    const result = await handleApproveCommand(
+      buildApproveParams("/approve system-agent:abc allow-once", createTelegramApproveCfg(), {
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "123",
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Approval allow-once submitted for system-agent:abc");
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(3);
+    const canonical = approvalResolverRequest(2);
+    expect(canonical.approvalKind).toBe("system-agent");
+    expect(canonical.resolveMethod).toBeUndefined();
+    expect(canonical.decision).toBe("allow-once");
+  });
+
+  it("never submits a canonical decision for an approval owned by another kind", async () => {
+    // A canonical resolve with the wrong owner is recorded as a deny.
+    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+    isPendingSystemAgentApprovalMock.mockResolvedValueOnce(false);
+
+    const result = await handleApproveCommand(
+      buildApproveParams("/approve mystery-id allow-once", createTelegramApproveCfg(), {
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "123",
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(2);
+    expect(approvalResolverRequest(0).approvalKind).toBeUndefined();
+    expect(approvalResolverRequest(1).approvalKind).toBeUndefined();
   });
 
   it("returns the underlying not-found error for plugin-only approval routing", async () => {

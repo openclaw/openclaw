@@ -36,7 +36,6 @@ describe("openclaw delegation tool", () => {
       throw new Error("expected OpenClaw delegation tool");
     }
     expect(tool.description).toContain("Gateway restart");
-    expect(tool.description).toContain("human approval");
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
@@ -120,7 +119,9 @@ describe("openclaw delegation tool", () => {
         ),
     );
 
-    expect(tool.description).toContain(full ? "without asking for approval" : "human approval");
+    expect(tool.description).toContain(
+      full ? "without asking for approval" : "approve in this chat",
+    );
     expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("fullPermission");
     expect(callGateway.mock.calls[0]?.[1].delegation).not.toHaveProperty("fullPermission");
     expect(getGatewayToolCallerIdentity()).toBeUndefined();

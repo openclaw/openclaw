@@ -778,6 +778,78 @@ describe("exec approval forwarder", () => {
         expect(deliver).toHaveBeenCalledTimes(forwarded ? 1 : 0);
       },
     );
+
+    describe("OpenClaw change approvals", () => {
+      // No approvals.* forwarding config: the requesting chat is the reply path.
+      const unconfigured = {
+        channels: {
+          telegram: { execApprovals: { enabled: true, approvers: ["123"], target: "channel" } },
+        },
+      } as OpenClawConfig;
+      const systemAgentRequest = {
+        id: "system-agent:req-1",
+        request: {
+          title: "OpenClaw change",
+          description: "set agents.defaults.memorySearch.provider to openai",
+          command: "set agents.defaults.memorySearch.provider to openai",
+          proposalHash: "hash-1",
+          allowedDecisions: ["allow-once", "deny"] as const,
+          sessionId: "delegated-1",
+          agentId: "main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "-100999",
+          turnSourceAccountId: "default",
+        },
+        createdAtMs: 1000,
+        expiresAtMs: 601_000,
+      };
+
+      it("asks the requesting chat with an /approve reply when no native card owns it", async () => {
+        vi.useFakeTimers();
+        const { deliver, forwarder } = createForwarder({
+          cfg: unconfigured,
+          resolveSessionTarget,
+        });
+
+        await expect(
+          forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
+        ).resolves.toBe(true);
+        expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({ to: "-100999" });
+        const text = getFirstDeliveryText(deliver);
+        expect(text).toContain("set agents.defaults.memorySearch.provider to openai");
+        expect(text).toContain("/approve system-agent:req-1 allow-once|deny");
+
+        await forwarder.handleSystemAgentApprovalResolved?.({
+          id: systemAgentRequest.id,
+          decision: "allow-once",
+          ts: 2000,
+          request: systemAgentRequest.request,
+          applicationStatus: "applied",
+        });
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(deliver).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            payloads: [
+              expect.objectContaining({ text: expect.stringContaining("approved and applied") }),
+            ],
+          }),
+        );
+      });
+
+      it("leaves the chat to a running native approval card", async () => {
+        vi.useFakeTimers();
+        const { deliver, forwarder } = createForwarder({
+          cfg: unconfigured,
+          resolveSessionTarget,
+          nativeRoutes: [{ channel: "telegram", accountId: "default" }],
+        });
+
+        await expect(
+          forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
+        ).resolves.toBe(false);
+        expect(deliver).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it.each(["webchat", "tui"])(

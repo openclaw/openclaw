@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Implements approval commands for pending tool and execution requests.
+// Implements approval commands for pending exec, plugin, and OpenClaw change requests.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,
@@ -7,9 +7,15 @@ import {
 } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
-import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
+import {
+  isPendingSystemAgentApprovalOverGateway,
+  resolveApprovalOverGateway,
+} from "../../infra/approval-gateway-resolver.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
-import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
+import {
+  resolveApprovalCommandAuthorization,
+  type ApprovalCommandAuthorization,
+} from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScope } from "./command-gates.js";
@@ -97,27 +103,6 @@ type ApproveCommandBehavior =
   | { kind: "ignore" }
   | { kind: "reply"; text: string };
 
-function resolveAuthorizedApprovalKinds(params: {
-  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-}): ChannelApprovalKind[] {
-  return [
-    ...(params.execAuthorization.authorized ? (["exec"] as const) : []),
-    ...(params.pluginAuthorization.authorized ? (["plugin"] as const) : []),
-  ];
-}
-
-function resolveApprovalAuthorizationError(params: {
-  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-}): string {
-  return (
-    params.execAuthorization.reason ??
-    params.pluginAuthorization.reason ??
-    "❌ You are not authorized to approve this request."
-  );
-}
-
 export async function handleApproveCommandFromContext(
   params: ApproveCommandParams,
   allowTextCommands: boolean,
@@ -139,23 +124,25 @@ export async function handleApproveCommandFromContext(
     ctx: params.ctx,
     command: params.command,
   });
-  const execApprovalAuthorization = resolveApprovalCommandAuthorization({
-    cfg: params.cfg,
-    channel: params.command.channel,
-    accountId: effectiveAccountId,
-    senderId: params.command.senderId,
-    kind: "exec",
-  });
-  const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
-    cfg: params.cfg,
-    channel: params.command.channel,
-    accountId: effectiveAccountId,
-    senderId: params.command.senderId,
-    kind: "plugin",
-  });
-  const hasExplicitApprovalAuthorization =
-    (execApprovalAuthorization.explicit && execApprovalAuthorization.authorized) ||
-    (pluginApprovalAuthorization.explicit && pluginApprovalAuthorization.authorized);
+  // Probe order: legacy exec/plugin resolution reports not-found for other
+  // owners; system-agent resolution reads the owner first (see below).
+  const approvalKinds = ["exec", "plugin", "system-agent"] as const;
+  const authorize = (kind: ChannelApprovalKind) =>
+    resolveApprovalCommandAuthorization({
+      cfg: params.cfg,
+      channel: params.command.channel,
+      accountId: effectiveAccountId,
+      senderId: params.command.senderId,
+      kind,
+    });
+  const authorizations: Record<(typeof approvalKinds)[number], ApprovalCommandAuthorization> = {
+    exec: authorize("exec"),
+    plugin: authorize("plugin"),
+    "system-agent": authorize("system-agent"),
+  };
+  const hasExplicitApprovalAuthorization = Object.values(authorizations).some(
+    (authorization) => authorization.explicit && authorization.authorized,
+  );
   if (!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -176,7 +163,7 @@ export async function handleApproveCommandFromContext(
     getChannelPlugin(params.command.channel),
   );
   const commandBehaviors = new Map<ChannelApprovalKind, ApproveCommandBehavior | undefined>();
-  for (const approvalKind of ["exec", "plugin"] as const) {
+  for (const approvalKind of approvalKinds) {
     commandBehaviors.set(
       approvalKind,
       approvalCapability?.resolveApproveCommandBehavior?.({
@@ -201,29 +188,49 @@ export async function handleApproveCommandFromContext(
   };
 
   const resolvedBy = buildResolvedByLabel(params);
-  const callApprovalMethod = async (resolveMethod: ChannelApprovalKind): Promise<void> => {
+  const callApprovalMethod = async (approvalKind: ChannelApprovalKind): Promise<void> => {
+    const reviewer = approvalCapability?.authorizeActorAction
+      ? {
+          channel: params.command.channel,
+          accountId: effectiveAccountId,
+          senderId: params.command.senderId,
+        }
+      : {};
+    const clientDisplayName = `Chat approval (${resolvedBy})`;
+    if (approvalKind !== "system-agent") {
+      await resolveApprovalOverGateway({
+        cfg: params.cfg,
+        approvalId: parsed.id,
+        decision: parsed.decision,
+        ...reviewer,
+        resolveMethod: approvalKind,
+        clientDisplayName,
+      });
+      return;
+    }
+    // Canonical resolution denies an approval addressed with the wrong owner,
+    // so confirm the owner before submitting the decision.
+    const isSystemAgentApproval = await isPendingSystemAgentApprovalOverGateway({
+      cfg: params.cfg,
+      approvalId: parsed.id,
+      clientDisplayName,
+    });
+    if (!isSystemAgentApproval) {
+      throw new Error("unknown or expired approval id");
+    }
     await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
-      ...(approvalCapability?.authorizeActorAction
-        ? {
-            channel: params.command.channel,
-            accountId: effectiveAccountId,
-            senderId: params.command.senderId,
-          }
-        : {}),
-      resolveMethod,
-      clientDisplayName: `Chat approval (${resolvedBy})`,
+      ...reviewer,
+      approvalKind,
+      clientDisplayName,
     });
   };
 
-  const methods = resolveAuthorizedApprovalKinds({
-    execAuthorization: execApprovalAuthorization,
-    pluginAuthorization: pluginApprovalAuthorization,
-  }).filter((approvalKind) => {
+  const methods = approvalKinds.filter((approvalKind) => {
     const behavior = commandBehaviors.get(approvalKind);
-    return !behavior || behavior.kind === "allow";
+    return authorizations[approvalKind].authorized && (!behavior || behavior.kind === "allow");
   });
   if (methods.length === 0) {
     const blocked = blockedCommandResult();
@@ -233,10 +240,9 @@ export async function handleApproveCommandFromContext(
     return {
       shouldContinue: false,
       reply: {
-        text: resolveApprovalAuthorizationError({
-          execAuthorization: execApprovalAuthorization,
-          pluginAuthorization: pluginApprovalAuthorization,
-        }),
+        text:
+          Object.values(authorizations).find((authorization) => authorization.reason)?.reason ??
+          "❌ You are not authorized to approve this request.",
       },
     };
   }
