@@ -56,6 +56,10 @@ export function scanFenceSpans(
     const markerChar = marker.charAt(0);
     const markerLen = marker.length;
     if (!open) {
+      // CommonMark forbids backticks in a backtick fence's info string.
+      if (markerChar === "`" && trailing.includes("`")) {
+        continue;
+      }
       open = {
         start,
         markerChar,

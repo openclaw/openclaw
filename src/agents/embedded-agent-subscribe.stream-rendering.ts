@@ -85,7 +85,11 @@ function splitTrailingFenceFragment(
 ): { text: string; pendingFenceFragment?: string } {
   const lineStart = text.lastIndexOf("\n") + 1;
   const line = text.slice(lineStart);
-  if ((!startsAtLineStart && lineStart === 0) || !/^(?: {0,3})(?:`+|~+)$/.test(line)) {
+  const lineWithoutCr = line.endsWith("\r") ? line.slice(0, -1) : line;
+  if (
+    (!startsAtLineStart && lineStart === 0) ||
+    !/^(?: {0,3})(?:`{1,2}|`{3,}[^`]*|~+)$/.test(lineWithoutCr)
+  ) {
     return { text };
   }
   return {
