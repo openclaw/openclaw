@@ -181,7 +181,7 @@ export function recordUpdateRunDiagnostics(
   }
 }
 
-export function finishUpdateRun(
+export function finishUpdateRunLedger(
   runId: string,
   result: FinishUpdateRunResult & {
     before?: UpdateRunRecord["before"];

@@ -184,6 +184,7 @@ function retainCommandProcess(
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let groupExtinct = false;
   const nativeChild = child.nodeChildProcess;
   let observedExit = nativeChild.exitCode != null || nativeChild.signalCode != null;
   const onExit = () => {
@@ -198,6 +199,12 @@ function retainCommandProcess(
     stopped = true;
     // A live direct child holds PID custody even when its optional timestamp probe failed.
     if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+      // Descendants can exit after pipe closure retained this command. An absent
+      // group has settled even if another process now owns the retired root PID.
+      if (!isChildProcessTreeAlive({ pid })) {
+        groupExtinct = true;
+        return;
+      }
       const currentStart = getFileLockProcessStartTime(pid);
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
@@ -238,6 +245,9 @@ function retainCommandProcess(
     async settle() {
       await initialized;
       await completed;
+      if (groupExtinct) {
+        return;
+      }
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
