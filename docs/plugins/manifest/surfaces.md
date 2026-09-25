@@ -729,6 +729,22 @@ enable self-update or native service management under external supervision.
 Deployment configuration should be maintained by its supervisor so copying an
 installation does not carry stale host-specific commands to a new deployment.
 
+Existing configurations need no migration when upgrading: the selector is optional,
+and leaving it unset preserves built-in guidance. Before downgrading an installation
+that uses this feature to a version without it, remove the selector with the current
+CLI:
+
+```bash
+openclaw config unset plugins.slots.supervisorGuidance
+```
+
+For supervisor-managed or read-only configuration, remove that key from the
+supervisor’s configuration source instead. Setting the value to `"none"` is not enough
+for downgrade compatibility: older strict schemas reject the key itself. If the
+older CLI is already installed and refuses the configuration, remove the key from
+`openclaw.json` (or its managed source) before starting it again. Check the deployment
+plugin’s own version requirements before downgrading it as well.
+
 Plugin authors can import `SupervisorAction`, `SupervisorGuidanceV1`,
 `SupervisorDisplayGuidance`, `PluginManifestSupervisorGuidance`, and
 `parseSupervisorGuidance` from `openclaw/plugin-sdk/plugin-entry`. The parser
