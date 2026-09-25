@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -106,6 +107,68 @@ describe("Microsoft Foundry discovered model metadata", () => {
       },
     });
     expect(result.notes).toBeUndefined();
+  });
+
+  it("preserves saved GPT-6 reasoning overrides during selection and runtime normalization", async () => {
+    const provider = registerProvider();
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "production-astra",
+      modelNameHint: "gpt-6-astra",
+      api: "openai-responses",
+      authMethod: "api-key",
+    });
+    const providerPatch = requireFoundryProviderPatch(result);
+    const thinkingLevelMap = { off: "none", minimal: null, high: "high" };
+    const supportedReasoningEfforts = ["none", "high"];
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            ...providerPatch,
+            models: providerPatch.models.map((model) => ({
+              ...model,
+              thinkingLevelMap,
+              compat: { ...model.compat, supportedReasoningEfforts },
+            })),
+          },
+        },
+      },
+    };
+
+    await provider.onModelSelected?.({
+      config,
+      model: "microsoft-foundry/production-astra",
+      prompter: {} as never,
+      agentDir: "/tmp/test-agent",
+    });
+
+    const selected = config.models?.providers?.["microsoft-foundry"]?.models[0];
+    expect(selected?.thinkingLevelMap).toEqual(thinkingLevelMap);
+    expect(selected?.compat?.supportedReasoningEfforts).toEqual(supportedReasoningEfforts);
+    if (!selected) {
+      throw new Error("expected the selected Foundry model");
+    }
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "production-astra",
+      model: {
+        ...selected,
+        provider: "microsoft-foundry",
+        api: "openai-responses",
+        baseUrl: providerPatch.baseUrl,
+        reasoning: selected.reasoning ?? true,
+        input: ["text", "image"],
+        cost: selected.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: selected.contextWindow ?? 1_050_000,
+        maxTokens: selected.maxTokens ?? 128_000,
+      },
+    });
+    expect(normalized?.thinkingLevelMap).toEqual(thinkingLevelMap);
+    expect(normalized?.compat?.supportedReasoningEfforts).toEqual(supportedReasoningEfforts);
   });
 
   it("discovers GPT-6 deployment aliases with their Foundry limits and reasoning efforts", async () => {
