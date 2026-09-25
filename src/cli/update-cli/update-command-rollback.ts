@@ -70,6 +70,7 @@ export async function rollbackFailedUpdate(params: {
   previousVerified?: boolean;
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   allowGatewayRestart?: boolean;
+  onGatewayStartAttempted?: () => void;
   configSnapshot: ConfigFileSnapshot;
   activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;
@@ -481,6 +482,9 @@ export async function rollbackFailedUpdate(params: {
         }
       : stopped;
     failureReason = "service-revalidation-failed";
+    if (stopped.windowsTaskAutoStartRecovery) {
+      params.onGatewayStartAttempted?.();
+    }
     await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
       stopped,
       true,
@@ -533,6 +537,7 @@ export async function rollbackFailedUpdate(params: {
     let verificationFailure: string | undefined;
     let verifiedAtMs: number | undefined;
     const restartOutcome = await maybeRestartService({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
       shouldRestart: true,
       result,
       opts,

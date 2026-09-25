@@ -13,6 +13,7 @@ import {
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
@@ -384,7 +385,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
   const coreDatabases: BackupCoreDatabase[] = [
     { role: "global", sourcePath: globalPath, identity: globalIdentity },
   ];
-  for (const database of [
+  const defaultDatabases = await listDefaultAgentDatabasePaths(params.resources.stateDir);
+  const discoveredDatabasePaths: string[] = [];
+  const candidates: Array<BackupCoreDatabase & { discoveredPath?: string }> = [
     {
       role: "quarantine" as const,
       sourcePath: resolveQuarantineStorePath({
@@ -393,7 +396,21 @@ export async function createBackupSqliteSnapshotPlan(params: {
       }),
     },
     ...capturedAgents,
-  ]) {
+    ...params.resources.agentRoots.map(({ agentId, databasePath }) => ({
+      role: "agent" as const,
+      agentId,
+      sourcePath: databasePath,
+    })),
+    ...defaultDatabases
+      .toSorted((a, b) => a.path.localeCompare(b.path))
+      .map(({ agentId, path: sourcePath }) => ({
+        role: "agent" as const,
+        agentId: normalizeAgentId(agentId),
+        sourcePath,
+        discoveredPath: sourcePath,
+      })),
+  ];
+  for (const { discoveredPath, ...database } of candidates) {
     const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
         return undefined;
@@ -403,9 +420,23 @@ export async function createBackupSqliteSnapshotPlan(params: {
     if (identity && !identity.isFile()) {
       throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }
+    if (discoveredPath && !identity) {
+      continue;
+    }
+    if (discoveredPath) {
+      discoveredDatabasePaths.push(discoveredPath);
+      // Keep directory links as links; publish the database at its real archive path.
+      database.sourcePath = await fs.realpath(database.sourcePath);
+    }
     coreDatabases.push(Object.freeze({ ...database, identity }));
   }
-  const inventory = sealBackupResourceInventory(params.resources, coreDatabases);
+  const inventory = sealBackupResourceInventory(
+    {
+      ...params.resources,
+      protectedPaths: [...params.resources.protectedPaths, ...discoveredDatabasePaths],
+    },
+    coreDatabases,
+  );
   const discovery = await discoverBackupSqliteSources({ inventory });
   const { sources, groups } = await planBackupSqliteSources(inventory, discovery.snapshotPaths);
   for (const source of sources) {

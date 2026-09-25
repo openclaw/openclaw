@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -49,6 +51,7 @@ import {
   runUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
@@ -136,7 +139,7 @@ export const UpdateCandidateSnapshotInventorySchema = z.object({
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
 });
-const UpdateStateSchemaInspectionPlanSchema = z.object({
+export const UpdateStateSchemaInspectionPlanSchema = z.object({
   files: z.array(z.tuple([z.string(), StateDatabaseDiscoverySchema])),
   sharedVersion: UpdateStateSchemaVersionsSchema.element,
 });
@@ -224,15 +227,9 @@ export async function collectStateDatabasePaths(
   queue(shared);
   let directories: string[] = [];
   if (options.includeUnconfiguredAgents !== false) {
-    try {
-      directories = (await fs.readdir(path.join(input.stateDir, "agents"), { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-        .map((entry) => entry.name);
-    } catch (error) {
-      if (!hasNodeErrorCode(error, "ENOENT")) {
-        throw error;
-      }
-    }
+    directories = (await listDefaultAgentDatabasePaths(input.stateDir)).map(
+      (entry) => entry.agentId,
+    );
   }
   const configured = Object.entries(input.config.agents?.entries ?? {});
   for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
@@ -496,6 +493,71 @@ async function discoverLegacyUpdateStateSchemaInspection(
   }
   // Settle the copy worker and close the private reader before removing discovery staging.
   return finishStateInspection(stagingRoot, outcome);
+}
+
+/** Raw fingerprint reads need their own process so descriptor closes cannot release caller locks. */
+export async function readUpdateDatabaseGenerationsIsolated(
+  paths: readonly string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    root?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<UpdateDatabaseGenerations> {
+  const sourceEnv = options.env ?? process.env;
+  const controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  const stagingRoot = await createSqliteSnapshotStagingDirectory(
+    resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
+    options.root !== undefined,
+    signal,
+  );
+  const inspection = (async () => {
+    let outcome: { value: UpdateDatabaseGenerations } | { cause: unknown };
+    try {
+      const worker = {
+        nodeRunner: process.execPath,
+        sourceEnv,
+        stagingRoot,
+        timeoutMs: options.timeoutMs,
+        signal,
+      };
+      const generations = parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...worker,
+          root: options.root,
+          input: {
+            mode: "database-generations",
+            paths,
+            stateDir: resolveStateDir(sourceEnv),
+            config: {},
+          },
+          databases: await readUpdateStateDatabaseSizes(paths, worker),
+        }),
+        z.record(
+          z.string(),
+          z
+            .string()
+            .regex(/^[a-f0-9]{64}$/u)
+            .nullable(),
+        ),
+      );
+      if (
+        Object.keys(generations).length !== new Set(paths).size ||
+        paths.some((pathname) => !Object.hasOwn(generations, pathname))
+      ) {
+        throw new Error("Database generation worker did not return the supplied inventory.");
+      }
+      outcome = { value: generations };
+    } catch (cause) {
+      outcome = { cause };
+    }
+    return finishStateInspection(stagingRoot, outcome);
+  })();
+  return retainSnapshotWork(inspection, () => controller.abort());
 }
 
 /** Schema fencing reads private copies in candidate workers under size-aware deadlines. */

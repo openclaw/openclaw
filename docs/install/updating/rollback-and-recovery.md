@@ -106,10 +106,26 @@ openclaw update cleanup --dry-run
 
 ### Full-state recovery requires a backup
 
-`openclaw update` does not create or replay a full-state checkpoint. It can
-restore a retained package only under the compatibility checks below. It cannot
-reverse a database migration by replacing the package. Use a verified pre-update
-backup with its matching release when migration has made state incompatible.
+Package updates retain pre-migration SQLite snapshots alongside the package
+backup. If the Gateway was confirmed stopped during capture, a failed candidate
+that was never allowed to start can restore those databases before package
+rollback when Doctor's recorded write fingerprints still match. A change between
+capture and Doctor admission, or after Doctor finishes, preserves the current
+databases and reports `state-migrated-no-rollback` with the snapshot location and
+Doctor recovery guidance. Without Doctor write evidence, rollback requires the
+last verified database generations to remain unchanged.
+Snapshots taken while a Gateway may still be writing are retained for
+manual recovery only, even if it exits later. Migrated files are kept as
+`<database>.migrated-<runId>` for inspection, and the report names the snapshots
+and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
+for disk requirements and the lifecycle checks.
+
+This requires the repaired updater to drive the update; already-running older
+drivers cannot gain database rollback from the candidate. A candidate that
+may have served keeps the existing refusal to avoid discarding newer writes.
+Replacing its package alone cannot reverse migration. Use a verified pre-update
+backup with its matching release for an intentional downgrade. The updater
+does not create or replay a full-state checkpoint.
 
 An existing pending checkpoint-recovery record blocks further mutable updates.
 The updater reports that it is unsupported and leaves its records, backups, and
@@ -191,8 +207,8 @@ creation. Skipping or cancelling does not start diagnosis or submit a report.
 JSON, `--yes`, non-interactive, and managed-service handoff invocations do not
 show this menu after rollback.
 
-If the config file changed after the activation Doctor pass or the databases are
-not schema-neutral, rollback is refused with
+If the config file changed after the activation Doctor pass or the databases
+remain incompatible after eligible pre-start restoration, rollback is refused with
 `state-migrated-no-rollback`. For config edits, the next action names the file
 whose changes blocked restoration. The updater preserves the failed outcome and migrated state. Optional
 [post-failure triage](/install/updating#unattended-repair-on-your-own-inference)
@@ -200,7 +216,10 @@ can run after update ownership and service compensation settle, including after
 failed rollback. Use the printed diagnostics and installation-specific repair
 command before considering an older version. Triage does not rewrite that
 failed update as successful.
-Automatic rollback restores code and the captured config, not a full state snapshot.
+Automatic rollback restores code and captured config, and restores pre-migration
+database snapshots only when the Gateway was confirmed stopped during capture
+and the candidate was never allowed to start, with matching write fingerprints
+through Doctor and rollback.
 The temporary snapshots used to check migrations are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
