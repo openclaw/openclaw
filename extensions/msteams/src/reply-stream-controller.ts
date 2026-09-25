@@ -6,6 +6,7 @@ import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MarkdownTableMode, MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatMSTeamsMarkdown } from "./format.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { extractMessageId } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -46,24 +47,6 @@ type DeferredReplacementEntry =
 // utils/promises/retry.js falls back to this same name check.
 function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
-}
-
-// Teams shows informative stream updates as a one-line status next to the
-// progress bar and drops newlines, so multi-row progress drafts (label,
-// commentary, tool bullets, plan steps) would run together. Join the rows with
-// a visible separator instead, keeping the newest rows within Teams' 1000-char
-// informative limit.
-const INFORMATIVE_MAX_CHARS = 1000;
-
-export function flattenInformativeStatus(text: string): string {
-  const joined = text
-    .split("\n")
-    .map((line) => line.trim().replace(/^[•-]\s+/u, ""))
-    .filter(Boolean)
-    .join(" · ");
-  return joined.length > INFORMATIVE_MAX_CHARS
-    ? `…${joined.slice(joined.length - INFORMATIVE_MAX_CHARS + 1)}`
-    : joined;
 }
 
 /**
