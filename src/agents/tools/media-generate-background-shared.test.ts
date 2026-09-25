@@ -563,7 +563,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     }
   });
 
-  it("stops pending handoff retries at the completion deadline", async () => {
+  it("completes deferred-pending when the handoff deadline expires with a pending wake outcome", async () => {
     vi.useFakeTimers();
     try {
       const scheduled: Array<() => Promise<void>> = [];
@@ -602,13 +602,12 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
       expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
+          terminalResult: undefined,
         }),
       );
-      expect(onWakeFailure).toHaveBeenCalledWith(
-        "Image generation completion wake failed after successful generation",
-        expect.objectContaining({ taskId: "task-image-orphaned" }),
-      );
+      // The durable session-delivery queue owns a pending handoff, so the
+      // requester-busy deadline is not a delivery failure.
+      expect(onWakeFailure).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
