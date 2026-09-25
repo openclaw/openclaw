@@ -19,15 +19,24 @@ function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
   };
 }
 
+function createTerminalPane(client: GatewayBrowserClient) {
+  const { pane, state } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
+  const container = document.createElement("div");
+  const paint = (
+    row: GatewaySessionRow | undefined,
+    workspace = createSessionWorkspaceProps(state),
+    tasks = createBackgroundTasksProps(state),
+  ) =>
+    render(pane.renderPaneHeader(workspace, tasks, row, false, undefined, false, null), container);
+  return { pane, state, container, paint };
+}
+
 describe("chat pane terminal action", () => {
   it.each(["session", "owner", "target", "client", "reconnect"] as const)(
     "closes terminal continuation after a %s ownership change",
     async (change) => {
       const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({
-        client,
-        sessions: createSessionCapabilityFixture(),
-      });
+      const { pane, container, paint } = createTerminalPane(client);
       const row = {
         key: "bare-session",
         agentId: "row-agent",
@@ -35,20 +44,6 @@ describe("chat pane terminal action", () => {
         updatedAt: 0,
       } satisfies GatewaySessionRow;
       const replacementRow = { ...row, key: "other-session" };
-      const container = document.createElement("div");
-      const paint = (selected: GatewaySessionRow) =>
-        render(
-          pane.renderPaneHeader(
-            createSessionWorkspaceProps(state),
-            createBackgroundTasksProps(state),
-            selected,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-          container,
-        );
 
       await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
       paint(row);
@@ -92,30 +87,14 @@ describe("chat pane terminal action", () => {
     const client = {
       gatewayUrl: "wss://gateway.example/control?route=alpha",
     } as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { container, paint } = createTerminalPane(client);
     const row = {
       key: "main",
       agentId: "alpha",
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        row,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
+    paint(row);
 
     const menu = container.querySelector<
       HTMLElement & {
@@ -129,35 +108,20 @@ describe("chat pane terminal action", () => {
 
   it("exposes the terminal as a side-panel tab only when available", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { state, container, paint } = createTerminalPane(client);
     const session = {
       key: state.sessionKey,
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
     state.terminalAvailable = true;
-    const container = document.createElement("div");
     const renderHeader = () =>
-      render(
-        pane.renderPaneHeader(
-          {
-            ...createSessionWorkspaceProps(state),
-            onToggleTerminal: state.terminalAvailable
-              ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
-              : undefined,
-          },
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
+      paint(session, {
+        ...createSessionWorkspaceProps(state),
+        onToggleTerminal: state.terminalAvailable
+          ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
+          : undefined,
+      });
     const panelActions = () =>
       container.querySelector<
         HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }
@@ -177,30 +141,13 @@ describe("chat pane terminal action", () => {
 
   it("exposes Desktop as a side-panel action only for observable session targets", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { pane, state, container, paint } = createTerminalPane(client);
     const localSession = {
       key: state.sessionKey,
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-    const renderHeader = (session: GatewaySessionRow | undefined) => {
-      render(
-        pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    };
+    const renderHeader = paint;
     const panelActionIds = () =>
       container
         .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
@@ -214,20 +161,8 @@ describe("chat pane terminal action", () => {
 
     snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
     const onToggleDesktop = vi.fn();
-    const renderDesktopHeader = (session: GatewaySessionRow | undefined) => {
-      render(
-        pane.renderPaneHeader(
-          { ...createSessionWorkspaceProps(state), onToggleDesktop },
-          createBackgroundTasksProps(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
-    };
+    const renderDesktopHeader = (session: GatewaySessionRow | undefined) =>
+      paint(session, { ...createSessionWorkspaceProps(state), onToggleDesktop });
     {
       const targetCases: Array<{
         name: string;
@@ -287,34 +222,18 @@ describe("chat pane terminal action", () => {
 
   it("keeps Browser and Tasks reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { state, container, paint } = createTerminalPane(client);
     const session = {
       key: state.sessionKey,
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
     const onToggleTasks = vi.fn();
     const backgroundTasks = {
       ...createBackgroundTasksProps(state),
       onToggleCollapsed: onToggleTasks,
     };
-    const renderHeader = () =>
-      render(
-        pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
-          backgroundTasks,
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
-      );
+    const renderHeader = () => paint(session, undefined, backgroundTasks);
     const panelActionIds = () =>
       container
         .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
@@ -331,18 +250,7 @@ describe("chat pane terminal action", () => {
 
     state.browserPanelAvailable = true;
     const onToggleBrowser = vi.fn();
-    render(
-      pane.renderPaneHeader(
-        { ...createSessionWorkspaceProps(state), onToggleBrowser },
-        backgroundTasks,
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
+    paint(session, { ...createSessionWorkspaceProps(state), onToggleBrowser }, backgroundTasks);
     container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle")?.click();
     expect(onToggleBrowser).toHaveBeenCalledOnce();
     expect(panelActionIds()).toContain("browser");

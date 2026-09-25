@@ -7,7 +7,7 @@ describe("buildContinueInTerminalCommand", () => {
     {
       name: "preserves a qualified key and the selected Gateway base path",
       input: {
-        gatewayUrl: "wss://gateway.example/openclaw",
+        gatewayUrl: "WsS://gateway.example/openclaw",
         sessionKey: "Agent:Work:Case'Sensitive",
         rowAgentId: "ignored",
         selectedAgentId: "fallback",
@@ -45,25 +45,6 @@ describe("buildContinueInTerminalCommand", () => {
       version: 1,
       sessionKey: qualifiedKey,
       gatewayUrl: input.gatewayUrl,
-    });
-  });
-
-  it("accepts and preserves a mixed-case WebSocket scheme", () => {
-    const result = buildContinueInTerminalCommand({
-      gatewayUrl: "WsS://gateway.example/ws",
-      sessionKey: "main",
-      rowAgentId: "alpha",
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected a continuation command");
-    }
-    const encoded = result.command.slice("openclaw resume --handoff ".length);
-    expect(decodeResumeHandoff(encoded)).toEqual({
-      version: 1,
-      sessionKey: "agent:alpha:main",
-      gatewayUrl: "WsS://gateway.example/ws",
     });
   });
 
