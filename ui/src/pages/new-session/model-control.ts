@@ -267,9 +267,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       status: "loading",
     };
     const scope = this.bindMetadataSubscription(client, requestedScope);
-    return this.metadataReader.read().then(
-      (result) => Boolean(result) && this.ownsMetadata(client, scope),
-    );
+    return this.metadataReader
+      .read()
+      .then((result) => Boolean(result) && this.ownsMetadata(client, scope));
   }
 
   private clearDraftAccount() {

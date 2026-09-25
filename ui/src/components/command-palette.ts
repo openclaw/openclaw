@@ -608,10 +608,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       sessionItems: this.sessionItems,
       modelSearchError: this.modelReader.failed
         ? t("palette.modelSearchFailed")
-        : models?.hasSnapshot
+        : models.hasSnapshot
           ? modelCatalogRefreshError(models)
           : null,
-      primaryModelSearch: Boolean(models?.hasSnapshot && !models.modelSelectionPolicy?.restricted),
+      primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
         ...toCommandPaletteItems(
           getStaticCommandPaletteCatalogItems(
@@ -620,7 +620,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           ),
         ),
         ...this.catalogItems,
-        ...(models ? toCommandPaletteItems(getCommandPaletteModelItems(models)) : []),
+        ...toCommandPaletteItems(getCommandPaletteModelItems(models)),
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(
