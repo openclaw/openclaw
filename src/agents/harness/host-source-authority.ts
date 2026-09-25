@@ -3,9 +3,11 @@ import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-ev
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  assertAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
@@ -128,4 +130,44 @@ export function retainHarnessSource(
       }
     },
   });
+}
+
+/** Host-only original source; an explicit undefined operator identifies System work. */
+export type AgentHarnessCompactionSourceAuthority = Readonly<{
+  assertActive: () => void;
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+}>;
+
+export function assertCompactionSource(
+  source: AgentHarnessCompactionSourceAuthority | undefined,
+): asserts source is AgentHarnessCompactionSourceAuthority {
+  if (!source || !Object.hasOwn(source, "operatorAuthority")) {
+    throw new Error("Compaction requires its original host source authority");
+  }
+  source.assertActive();
+  if (source.operatorAuthority !== undefined) {
+    assertAdmittedRunOperatorAuthority(source.operatorAuthority);
+    source.operatorAuthority.assertCurrent();
+  }
+}
+
+/** Retains the existing issuer through queueing; the compaction work owner releases it. */
+export function retainAgentHarnessCompactionSource(
+  source: AgentHarnessCompactionSourceAuthority | undefined,
+): () => void {
+  assertCompactionSource(source);
+  const release = source.operatorAuthority?.retain?.();
+  try {
+    assertCompactionSource(source);
+  } catch (error) {
+    release?.();
+    throw error;
+  }
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      release?.();
+    }
+  };
 }

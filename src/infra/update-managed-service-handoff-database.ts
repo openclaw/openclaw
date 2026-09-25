@@ -4,6 +4,7 @@ import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
+import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
   executeSqliteQuerySync,
@@ -41,12 +42,6 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
       .addColumn("updated_at", "integer", (column) => column.notNull())
       .modifyEnd(sql`STRICT`),
   );
-}
-
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
 }
 
 export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
@@ -139,7 +134,7 @@ function createMissingDatabaseFile(
             0o600,
           );
   } catch (error) {
-    if (errorCode(error) !== "EEXIST") {
+    if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   }
@@ -236,12 +231,9 @@ export function createManagedHandoffLeaseDatabase(
         validate: (db: HandoffDatabase) => {
           let validate = validations.get(db);
           if (!validate) {
-            const query = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
+            validate = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
               leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
             );
-            validate = () => {
-              query();
-            };
             validations.set(db, validate);
           }
           validate();

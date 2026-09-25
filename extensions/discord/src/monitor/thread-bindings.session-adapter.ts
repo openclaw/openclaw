@@ -2,7 +2,6 @@ import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
-  type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -43,14 +42,6 @@ function normalizeChildBindingParentChannelId(raw?: string | null): string | und
   }
 }
 
-function toSessionBindingTargetKind(raw: string): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: ThreadBindingDefaults,
@@ -64,7 +55,7 @@ function toSessionBindingRecord(
   return {
     bindingId,
     targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
       channel: "discord",
       accountId: record.accountId,
@@ -119,24 +110,12 @@ export function createThreadBindingSessionAdapter(params: {
         asOptionalObjectRecord(
           snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
         ) ?? {};
-      const targetKind = toThreadBindingTargetKind(input.targetKind);
+      const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
       const label = normalizeOptionalString(metadata.label);
-      const threadName =
-        typeof metadata.threadName === "string"
-          ? normalizeOptionalString(metadata.threadName)
-          : undefined;
-      const introText =
-        typeof metadata.introText === "string"
-          ? normalizeOptionalString(metadata.introText)
-          : undefined;
-      const boundBy =
-        typeof metadata.boundBy === "string"
-          ? normalizeOptionalString(metadata.boundBy)
-          : undefined;
-      const agentId =
-        typeof metadata.agentId === "string"
-          ? normalizeOptionalString(metadata.agentId)
-          : undefined;
+      const threadName = normalizeOptionalString(metadata.threadName);
+      const introText = normalizeOptionalString(metadata.introText);
+      const boundBy = normalizeOptionalString(metadata.boundBy);
+      const agentId = normalizeOptionalString(metadata.agentId);
       let threadId: string | undefined;
       let channelId: string | undefined;
       let createThread = false;

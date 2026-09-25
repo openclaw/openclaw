@@ -142,6 +142,7 @@ const sessionSpawnContextSchema = z
   .object({
     requesterProfileId: normalizedRequiredStringSchema.optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
       .object({
         provider: normalizedRequiredStringSchema,
@@ -161,6 +162,9 @@ const sessionSpawnContextSchema = z
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
+    ...(context.inheritedPermissionMode
+      ? { inheritedPermissionMode: context.inheritedPermissionMode }
+      : {}),
     ...(context.resolvedModel ? { resolvedModel: context.resolvedModel } : {}),
     ...(context.spawnModelAutoSelection
       ? { spawnModelAutoSelection: context.spawnModelAutoSelection }

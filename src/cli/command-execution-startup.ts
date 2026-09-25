@@ -47,22 +47,12 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
-  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
   validateConfigOnly?: boolean;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
 }) {
-  const {
-    runtime,
-    commandPath,
-    startupPolicy,
-    allowInvalid,
-    beforeStateMigrations,
-    skipPristineCoreStateMigrations,
-    skipPristineStartupStateMigrations,
-  } = params;
+  const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
   const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
   const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
@@ -77,12 +67,8 @@ export async function ensureCliExecutionBootstrap(params: {
           measure: (stage, run) => measureCliCommandStartup(stage, run),
           ...(allowInvalid ? { allowInvalid: true } : {}),
           ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
-          ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+          ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
           ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-          ...(skipPristineStartupStateMigrations
-            ? { skipPristineStartupStateMigrations: true }
-            : {}),
-          ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
         });
       const nativeGatewayBootstrap =
         commandPath[0] === "gateway" &&

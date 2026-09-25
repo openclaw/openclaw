@@ -3,15 +3,8 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { getRuntimeConfig } from "../config/io.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
-import {
-  loadSessionEntryReadOnly,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureStateDatabaseCoordinatorRuntime,
   withStateDatabaseCoordinatorRuntimeDirectory,
@@ -20,8 +13,8 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,224 +24,29 @@ import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import {
+  branch,
+  createFixture,
+  readerChanges,
+  sessionKey,
+  snapshot,
+  type Load,
+} from "./control-ui-session-pr-access.test-support.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import { createGatewayConnectionState } from "./server-connection-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createControlUiHandlers } from "./server-methods/control-ui.js";
-import {
-  disposeSessionReadContexts,
-  initializeSessionReadContext,
-} from "./server-methods/sessions-read-cache.test-support.js";
-import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
-import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
-const METHOD = "controlUi.sessionPullRequests.subscribe";
 const EVENT = "controlUi.sessionPullRequests.changed";
-const sessionKey = "agent:main:guest-publication";
-const branch = { owner: "synthetic", repo: "publication", branch: "guest-change" };
-const snapshot: ControlUiSessionPullRequests = { pullRequests: [], branch, rateLimited: false };
-const readerChanges = [
-  "unchanged",
-  "role",
-  "connection",
-  "profile",
-  "visibility",
-  "grant",
-  "replacement grant",
-] as const;
-type Load = NonNullable<
-  Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
->;
 
-let fixtureSequence = 0;
 let sharedState: OpenClawTestState | undefined;
 afterAll(async () => {
   await sharedState?.cleanup();
 });
-
-async function createFixture(
-  scope: OperatorScope,
-  useDefaultLoader = false,
-  initialSessionPatch: Partial<SessionEntry> = {},
-) {
-  const fixtureId = ++fixtureSequence;
-  const readerEmail = `guest-publication-reader-${fixtureId}@example.test`;
-  const profile = ensureProfileForEmail(readerEmail);
-  const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
-  const seeded = new Set<string>();
-  const sessionId = `${sessionKey}-${fixtureId}`;
-  const cfg: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: {
-            agents: ["main"],
-            sessions: { others: "view" },
-            scopes: [scope],
-          },
-        },
-      },
-    },
-  };
-  setUserProfileRole(profile.id, "reader");
-  setRuntimeConfigSnapshot(cfg);
-  const seed = async (key: string, creator = profile.id, patch: Partial<SessionEntry> = {}) => {
-    if (!seeded.has(key)) {
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: key })).toBeUndefined();
-      seeded.add(key);
-    }
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: `${key}-${fixtureId}`,
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: creator },
-        spawnedCwd: "/synthetic/guest-publication",
-        ...patch,
-      },
-    );
-  };
-  await seed(sessionKey, profile.id, initialSessionPatch);
-  const connections = createGatewayConnectionState({
-    bootId: "publication-read",
-    cfg,
-    getRuntimeConfig,
-  });
-  const addReader = (connId: string) => {
-    const socket = createGatewayWsTestSocket();
-    const client = createOperatorWsClient({ connId, socket, scopes: [scope] });
-    const access = new AbortController();
-    client.internal = {
-      ...client.internal,
-      operatorAccessAuthority: {
-        signal: access.signal,
-        assertCurrent: () => access.signal.throwIfAborted(),
-      },
-    };
-    client.authenticatedUserProfile = {
-      profileId: profile.id,
-      avatarRevision: "fixture",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    connections.clients.add(client);
-    return { client, socket, access };
-  };
-  const reader = addReader("guest-publication-reader");
-  const load = vi.fn<Load>(async () => snapshot);
-  const subscriptions = createControlUiSessionPullRequestSubscriptions({
-    broadcastToConnIds: connections.broadcastToConnIds,
-    isConnectionActive: connections.isConnectionActive,
-    prepareRead: async (connId, session) => {
-      const client = connections.clients.getByConnectionId(connId);
-      return client
-        ? await prepareControlUiSessionPrRead({
-            client,
-            ...session,
-            getRuntimeConfig,
-            getSessionRowProjection: () => getSessionRowProjection(context),
-            isCurrentClient: () => connections.clients.getByConnectionId(connId) === client,
-          })
-        : undefined;
-    },
-    ...(useDefaultLoader ? {} : { load }),
-  });
-  const context = createGatewayRequestContext(makeContextParams(connections));
-  context.getRuntimeConfig = getRuntimeConfig;
-  context.controlUiSessionPullRequests = subscriptions;
-  await initializeSessionReadContext(context);
-  return {
-    ...reader,
-    addReader,
-    profile,
-    other,
-    sessionId,
-    cfg,
-    seed,
-    load,
-    subscriptions,
-    context,
-    async changeReader(change: (typeof readerChanges)[number], key = sessionKey) {
-      if (change === "role") {
-        const roles = cfg.gateway!.roles!;
-        setRuntimeConfigSnapshot({
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              ...roles,
-              definitions: {
-                ...roles.definitions,
-                reader: { ...roles.definitions.reader!, scopes: [] },
-              },
-            },
-          },
-        });
-      } else if (change === "connection") {
-        reader.client.invalidated = true;
-      } else if (change === "profile") {
-        linkEmail(readerEmail, other.id);
-      } else if (change === "visibility") {
-        await seed(key, other.id, { visibility: "draft", updatedAt: 2 });
-      } else if (change === "grant") {
-        reader.access.abort(new Error("Original access retired"));
-      } else if (change === "replacement grant") {
-        const replacement = new AbortController();
-        reader.client.internal = {
-          ...reader.client.internal,
-          operatorAccessAuthority: {
-            signal: replacement.signal,
-            assertCurrent: () => replacement.signal.throwIfAborted(),
-          },
-        };
-      }
-    },
-    async subscribe(keys = [sessionKey], client = reader.client) {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "guest-publication-watch",
-          method: METHOD,
-          params: { sessionKeys: keys },
-        },
-        client,
-        context,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(true, { subscribed: keys.length > 0 }, undefined);
-    },
-    async close() {
-      await subscriptions.stop();
-      connections.clients.clear();
-      await disposeSessionReadContexts();
-    },
-    async removeSessions() {
-      for (const key of seeded) {
-        const original = loadSessionEntryReadOnly({ agentId: "main", sessionKey: key });
-        if (original) {
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).storePath,
-            target: { canonicalKey: key, storeKeys: [key] },
-            expectedSessionId: original.sessionId,
-            archiveTranscript: false,
-          });
-        }
-      }
-    },
-  };
-}
 
 async function withFixture(
   scope: OperatorScope,
@@ -310,6 +108,216 @@ function expectedFrame(key: string, value: ControlUiSessionPullRequests = snapsh
 }
 
 describe("registered session PR subscriptions", () => {
+  it.each(["incarnation", "namespace", "repository"] as const)(
+    "retires a captured private PR read after its %s changes",
+    async (change) => {
+      await withFixture(
+        "operator.admin",
+        async (f) => {
+          const key = "agent:main:dashboard:incognito-pr-retirement";
+          const repository = getSessionRepositoryWorkspaceStore().create({
+            agentId: "main",
+            sessionKey: key,
+            url: "https://github.com/synthetic/private",
+            branch: "private-change",
+            assertCurrent: () => {},
+          });
+          const entry = { incognito: true as const, repositoryWorkspaceId: repository.workspaceId };
+          await f.seed(key, f.profile.id, entry);
+          const entered = createDeferredCore();
+          const release = createDeferredCore();
+          const exposed = vi.fn();
+          f.load.mockImplementationOnce(async (_params, _signal, read) => {
+            read.assertCurrent();
+            entered.resolve();
+            await release.promise;
+            read.assertCurrent();
+            exposed();
+            return snapshot;
+          });
+          const loading = f.subscriptions.replace(f.client.connId!, [key]);
+          try {
+            await Promise.race([
+              entered.promise,
+              loading.then(() => {
+                throw new Error("Private PR read was not admitted");
+              }),
+            ]);
+            if (change === "repository") {
+              await getSessionRepositoryWorkspaceStore().delete({
+                workspaceId: repository.workspaceId,
+                assertCurrent: () => {},
+              });
+            } else {
+              if (change === "namespace") {
+                const source = loadGatewaySessionEntryReadOnly(key, {
+                  agentId: "main",
+                }).readSource!;
+                await closeOpenClawAgentDatabaseByPathAsync(source.path);
+              }
+              await f.seed(key, f.profile.id, {
+                ...entry,
+                ...(change === "incarnation" ? { lifecycleRevision: "next" } : {}),
+              });
+            }
+            release.resolve();
+            await loading;
+            expect(exposed).not.toHaveBeenCalled();
+            expect(frames(f.socket)).not.toContainEqual(expectedFrame(key));
+          } finally {
+            release.resolve();
+            await loading;
+          }
+        },
+        true,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "delivers an authorized private session (repository=%s)",
+    async (repository) => {
+      await withFixture(
+        "operator.admin",
+        async (f) => {
+          const key = "agent:main:dashboard:incognito-pr-reader";
+          const workspace = repository
+            ? getSessionRepositoryWorkspaceStore().create({
+                agentId: "main",
+                sessionKey: key,
+                url: "https://github.com/synthetic/private",
+                branch: "private-change",
+                assertCurrent: () => {},
+              })
+            : undefined;
+          await f.seed(key, f.profile.id, {
+            incognito: true,
+            ...(workspace ? { repositoryWorkspaceId: workspace.workspaceId } : {}),
+          });
+          await f.subscribe([key]);
+          await f.subscriptions.pollNow();
+          expect(frames(f.socket)).toContainEqual(expectedFrame(key));
+          expect(
+            getSessionRowProjection(f.context)
+              ?.selectEntries()
+              .map((row) => row.key),
+          ).not.toContain(key);
+        },
+        true,
+      );
+    },
+  );
+
+  it.each(["unchanged", "revoked"] as const)(
+    "prepares pending topology while preserving %s watcher authority",
+    async (authority) => {
+      await withFixture("operator.read", async (f) => {
+        await f.subscriptions.replace(f.client.connId!, [sessionKey]);
+        f.load.mockClear();
+        f.socket.send.mockClear();
+        const refreshed = { ...snapshot, branch: { ...branch, branch: "after-topology" } };
+        f.load.mockResolvedValue(refreshed);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const createTransport = stateReadWorker.createOpenClawStateReadTransport;
+        let held = false;
+        const transport = vi
+          .spyOn(stateReadWorker, "createOpenClawStateReadTransport")
+          .mockImplementation((command) => {
+            const owned = createTransport(command);
+            if (held || command.type !== "agentDatabaseDeletion.snapshot") {
+              return owned;
+            }
+            held = true;
+            return {
+              ...owned,
+              async read(...args: Parameters<typeof owned.read>) {
+                const result = await owned.read(...args);
+                entered.resolve();
+                await release.promise;
+                return result;
+              },
+            };
+          });
+        sessionChanges.emit({ all: true, scope: "stores" });
+        const polling = f.subscriptions.pollNow();
+        try {
+          await Promise.race([
+            entered.promise,
+            polling.then(() => {
+              throw new Error("PR polling finished before its pending topology was prepared");
+            }),
+          ]);
+          expect(f.load).not.toHaveBeenCalled();
+          expect(frames(f.socket)).toEqual([]);
+          if (authority === "revoked") {
+            await f.changeReader("grant");
+          }
+          release.resolve();
+          await polling;
+          await f.subscriptions.pollNow();
+          expect(f.load).toHaveBeenCalledTimes(authority === "unchanged" ? 2 : 0);
+          expect(frames(f.socket)).toEqual(
+            authority === "unchanged" ? [expectedFrame(sessionKey, refreshed)] : [],
+          );
+        } finally {
+          release.resolve();
+          await polling;
+          transport.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["replace", "unsubscribe"] as const)(
+    "does not restore a pending watched set after a later %s",
+    async (operation) => {
+      const first = "agent:main:pending-first";
+      const second = "agent:main:current-second";
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let ready = false;
+      const load = vi.fn<Load>(async () => snapshot);
+      const broadcast = vi.fn();
+      const subscriptions = createControlUiSessionPullRequestSubscriptions({
+        broadcastToConnIds: broadcast,
+        load,
+        prepareRead: async (_connId, session) => async () => {
+          if (session.sessionKey === first && !ready) {
+            entered.resolve();
+            await release.promise;
+            ready = true;
+          }
+          return {
+            params: { sessionKey: session.sessionKey, agentId: "main" },
+            identity: session.sessionKey,
+            readSource: { agentId: "main", path: "/synthetic/unused.sqlite" },
+            source: null,
+          };
+        },
+      });
+      const pending = subscriptions.replace("reader", [first]);
+      try {
+        await entered.promise;
+        if (operation === "replace") {
+          await subscriptions.replace("reader", [second]);
+        } else {
+          subscriptions.unsubscribe("reader");
+        }
+        release.resolve();
+        await pending;
+        await subscriptions.pollNow();
+        expect(load.mock.calls.map(([params]) => params.sessionKey)).toEqual(
+          operation === "replace" ? [second, second] : [],
+        );
+        expect(broadcast).toHaveBeenCalledTimes(operation === "replace" ? 1 : 0);
+      } finally {
+        release.resolve();
+        await pending;
+        await subscriptions.stop();
+      }
+    },
+  );
   it("delivers an archived session that was cold at Gateway startup", async () => {
     await withFixture(
       "operator.read",

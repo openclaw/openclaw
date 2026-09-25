@@ -14,8 +14,8 @@ import {
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
-import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
-import { describeBrowserTool } from "./browser-tool-description.js";
+import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
+import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import { executeBrowserLifecycleAction } from "./browser-tool.lifecycle.js";
@@ -28,9 +28,6 @@ import {
 import {
   type AnyAgentTool,
   type browserAct,
-  BrowserToolOutputSchema,
-  createBrowserToolSchema,
-  resolveBrowserToolCapabilities,
   type BrowserToolCapabilities,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
@@ -198,45 +195,12 @@ export function createBrowserTool(
     toolCapabilities?: BrowserToolCapabilities;
   },
 ): AnyAgentTool {
-  const bindingResult =
-    opts?.runToolBinding === undefined
-      ? undefined
-      : parseBrowserTabToolBinding(opts.runToolBinding);
-  if (bindingResult && !bindingResult.ok) {
-    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
-  }
-  const capabilities =
-    opts?.toolCapabilities ??
-    (() => {
-      const config = getRuntimeConfig();
-      const boundProfile =
-        bindingResult?.ok && bindingResult.binding.target === "host"
-          ? resolveProfile(
-              resolveBrowserConfig(config.browser, config),
-              bindingResult.binding.profile,
-            )
-          : undefined;
-      return resolveBrowserToolCapabilities({
-        tabBound: bindingResult?.ok,
-        evaluateEnabled: config.browser?.evaluateEnabled !== false,
-        ...(boundProfile
-          ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) }
-          : {}),
-      });
-    })();
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
-  const hostHint =
-    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getRuntimeConfig);
   return {
-    label: "Browser",
-    name: "browser",
-    resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
-    parameters: createBrowserToolSchema(capabilities),
-    outputSchema: BrowserToolOutputSchema,
+    ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      let params = bindingResult?.ok
-        ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
+      let params = binding
+        ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
       if (!capabilities.actions.some((candidate) => candidate === action)) {
@@ -256,7 +220,7 @@ export function createBrowserTool(
             : ["operator.sessions.write" as const]
           : ["operator.admin" as const];
         if (
-          bindingResult ||
+          binding ||
           !opts?.agentSessionKey ||
           opts.allowHostControl === false ||
           (params.target && params.target !== "host") ||
@@ -548,8 +512,8 @@ export function createBrowserTool(
           requestedTimeoutMs,
           signal,
           opts,
-          boundTargetId: bindingResult?.ok
-            ? bindingResult.binding.targetId
+          boundTargetId: binding
+            ? binding.targetId
             : dashboardName
               ? readStringParam(params, "targetId")
               : undefined,

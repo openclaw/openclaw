@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import {
@@ -211,11 +212,15 @@ async function runDoctorHealthFlowWithResult(
       }
       const { guardUpdateDoctorSchemaUpgrade } =
         await import("../commands/doctor-update-schema-guard.js");
+      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = [];
       await guardUpdateDoctorSchemaUpgrade({
         schemas,
         runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
+        onVerifiedBackup: (snapshots) => {
+          verifiedSnapshots = snapshots;
+        },
       });
 
       if (maintenance && (options.repair === true || options.yes === true)) {
@@ -240,6 +245,16 @@ async function runDoctorHealthFlowWithResult(
         }
         if (repairedState) {
           schemas = await prepareDoctorDatabasePreflight();
+        }
+        const { backupDoctorMigrationDatabases } =
+          await import("../commands/doctor-migration-backup.js");
+        const backups = await backupDoctorMigrationDatabases({
+          env: process.env,
+          pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
+          verifiedSnapshots,
+        });
+        for (const change of backups.changes) {
+          effectiveRuntime.log(change);
         }
       }
 

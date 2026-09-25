@@ -88,7 +88,7 @@ export function encodePluginDiscoveryId(packageName: string): string {
   return encodeDiscoveryId(DISCOVERY_ID_PREFIX, normalized);
 }
 
-function encodeLocalPluginDiscoveryId(identity: string): string {
+export function encodeLocalPluginDiscoveryId(identity: string): string {
   return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
 }
 
@@ -213,6 +213,8 @@ function projectLocalDiscoveryEntry(
   const clawhubIdentity = localClawHubIdentity(plugin);
   const publishedToClawHub = clawhubIdentity ? true : publicationVerified ? false : undefined;
   const packageName = plugin.clawhubPackage ?? plugin.packageName;
+  // Distribution provenance is host-owned; an npm scope alone proves no publisher.
+  const official = plugin.origin === "bundled";
   return {
     id: clawhubIdentity
       ? encodePluginDiscoveryId(clawhubIdentity)
@@ -221,7 +223,8 @@ function projectLocalDiscoveryEntry(
       name: plugin.name,
       ...(packageName ? { packageName } : {}),
       ...(plugin.description ? { summary: plugin.description } : {}),
-      official: false,
+      official,
+      ...(official ? { author: "openclaw" } : {}),
       categories: localDiscoveryCategories(plugin),
       ...(publishedToClawHub !== undefined ? { publishedToClawHub } : {}),
       ...(plugin.version ? { latestVersion: plugin.version } : {}),
@@ -259,6 +262,11 @@ export function joinLocalPluginDetail(params: {
     plugin,
     detail: {
       origin: "local",
+      ...(plugin.catalog.official
+        ? { author: { handle: "openclaw", displayName: "OpenClaw", official: true } }
+        : inspection?.overview?.publisherName
+          ? { author: { displayName: inspection.overview.publisherName } }
+          : {}),
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
       ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
@@ -268,6 +276,13 @@ export function joinLocalPluginDetail(params: {
       ...(inspection?.overview?.documentationUrl
         ? { documentationUrl: inspection.overview.documentationUrl }
         : {}),
+      ...(inspection?.declared.tools.length
+        ? { contracts: { tools: inspection.declared.tools } }
+        : {}),
+      ...(inspection?.declared.providers.length
+        ? { providers: inspection.declared.providers }
+        : {}),
+      ...(inspection?.declared.channels.length ? { channels: inspection.declared.channels } : {}),
       configuration: [],
       mcpServers: inspection?.components.mcpServers ?? [],
       skills: (inspection?.components.skills ?? []).map((name) => ({ name })),

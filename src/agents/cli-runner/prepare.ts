@@ -50,10 +50,6 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
@@ -107,11 +103,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  remapSkillReferencePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../embedded-agent-runner/sandbox-skills.js";
+import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
@@ -125,7 +117,6 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -179,6 +170,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -254,81 +246,6 @@ function prependCliSessionDriftUserContext(
     ...context,
     text: [note, context.text].join("\n\n"),
     ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
-
-async function resolveCliSkillsPrompt(params: {
-  assertCurrent: () => void;
-  agentId: string;
-  config: RunCliAgentParams["config"];
-  sessionKey: string;
-  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
-  workspaceDir: string;
-  executionWorkspaceDir: string;
-}): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
-  params.assertCurrent();
-  const skillsSnapshot =
-    params.skillsSnapshot ??
-    (
-      await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config ?? {},
-        agentId: params.agentId,
-        watch: false,
-      })
-    ).snapshot;
-  params.assertCurrent();
-  const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-    skillsSnapshot,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  params.assertCurrent();
-  const {
-    skillsEligibility,
-    skillUsagePaths,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot: skillsSnapshotForRun,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: sandboxWorkspace ? { ...sandboxWorkspace, enabled: true } : undefined,
-    skillsAnchorWorkspace: sandboxWorkspace?.workspaceDir ?? params.workspaceDir,
-    skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-    await resolveEmbeddedRunSkillEntries({
-      assertCurrent: params.assertCurrent,
-      workspaceDir: skillsWorkspaceDir,
-      ...(sandboxWorkspace ? {} : { executionWorkspaceDir: params.executionWorkspaceDir }),
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly,
-    });
-  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  return {
-    ...(sandboxWorkspace ? { usagePaths: skillUsagePaths } : {}),
-    prompt: await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      ...(sandboxWorkspace ? {} : { loadEntries: loadSkillEntries }),
-      workspaceDir: skillsPromptWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    }),
   };
 }
 

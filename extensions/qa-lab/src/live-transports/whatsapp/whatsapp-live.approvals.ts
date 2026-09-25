@@ -6,11 +6,8 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  assertApprovalDecisionResult,
-  formatApprovalResultValue,
-  readAcceptedApprovalRequestId,
-} from "../shared/live-approval-result.js";
+import { requestLiveQaApproval } from "../shared/live-approval-request.js";
+import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import type {
   WhatsAppObservedMessage,
   WhatsAppQaApprovalDecision,
@@ -21,65 +18,6 @@ import type {
 import { formatDiagnosticId } from "./whatsapp-live.operations.js";
 
 const WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS = 60_000;
-
-async function requestWhatsAppApproval(params: {
-  approvalId: string;
-  gateway: WhatsAppQaGateway;
-  turnSourceTo: string;
-  run: WhatsAppQaApprovalScenarioRun;
-  sutAccountId: string;
-}) {
-  const commonParams = {
-    timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS,
-    turnSourceAccountId: params.sutAccountId,
-    turnSourceChannel: "whatsapp",
-    turnSourceTo: params.turnSourceTo,
-    twoPhase: true,
-  };
-  if (params.run.approvalKind === "exec") {
-    const result = await params.gateway.call(
-      "exec.approval.request",
-      {
-        ...commonParams,
-        ask: "always",
-        command: `printf '%s\\n' '${params.run.token}'`,
-        host: "gateway",
-        id: params.approvalId,
-        security: "full",
-      },
-      {
-        expectFinal: false,
-        timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-      },
-    );
-    const acceptedId = readAcceptedApprovalRequestId(result);
-    if (acceptedId !== params.approvalId) {
-      throw new Error(
-        `accepted exec approval id was ${formatApprovalResultValue(
-          acceptedId,
-        )} instead of ${params.approvalId}`,
-      );
-    }
-    return acceptedId;
-  }
-  const result = await params.gateway.call(
-    "plugin.approval.request",
-    {
-      ...commonParams,
-      agentId: "qa",
-      description: `WhatsApp plugin approval QA request ${params.run.token}`,
-      pluginId: "qa-whatsapp-plugin",
-      severity: "warning",
-      title: `WhatsApp plugin approval QA ${params.run.token}`,
-      toolName: "whatsapp_qa_tool",
-    },
-    {
-      expectFinal: false,
-      timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-  return readAcceptedApprovalRequestId(result);
-}
 
 async function waitForApprovalDecision(params: {
   approvalId: string;
@@ -247,11 +185,14 @@ export async function runWhatsAppApprovalScenario(params: {
     params.run.approvalKind === "exec"
       ? `whatsapp-qa-exec-${randomUUID()}`
       : `whatsapp-qa-plugin-${randomUUID()}`;
-  const approvalId = await requestWhatsAppApproval({
+  const approvalId = await requestLiveQaApproval({
     approvalId: requestedApprovalId,
     gateway: params.gateway,
     turnSourceTo: params.turnSourceTo,
-    run: params.run,
+    approvalKind: params.run.approvalKind,
+    channel: "whatsapp",
+    timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS,
+    token: params.run.token,
     sutAccountId: params.sutAccountId,
   });
   const observation = {

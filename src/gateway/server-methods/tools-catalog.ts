@@ -26,21 +26,9 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ToolCatalogEntry = {
-  id: string;
-  label: string;
-  description: string;
-  fullDescription?: string;
-  parameters?: Array<{ name: string; required: boolean; type?: string; description?: string }>;
-  source: "core" | "plugin";
-  pluginId?: string;
-  optional?: boolean;
-  risk?: "low" | "medium" | "high";
-  tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
-};
+type ToolCatalogGroup = ToolsCatalogResult["groups"][number];
 
-function summarizeToolParameters(schema: unknown): ToolCatalogEntry["parameters"] {
+function summarizeToolParameters(schema: unknown): ToolCatalogGroup["tools"][number]["parameters"] {
   if (!isRecord(schema) || schema.type !== "object" || !isRecord(schema.properties)) {
     return undefined;
   }
@@ -48,7 +36,7 @@ function summarizeToolParameters(schema: unknown): ToolCatalogEntry["parameters"
   return Object.entries(schema.properties)
     .filter(([name]) => name.length > 0)
     .map(([name, property]) => {
-      const parameter: NonNullable<ToolCatalogEntry["parameters"]>[number] = {
+      const parameter: NonNullable<ToolCatalogGroup["tools"][number]["parameters"]>[number] = {
         name,
         required: required.has(name),
       };
@@ -61,14 +49,6 @@ function summarizeToolParameters(schema: unknown): ToolCatalogEntry["parameters"
       return parameter;
     });
 }
-
-type ToolCatalogGroup = {
-  id: string;
-  label: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  tools: ToolCatalogEntry[];
-};
 
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
@@ -137,15 +117,13 @@ function buildPluginGroups(params: {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
     const groupId = `plugin:${pluginId}`;
-    const existing =
-      groups.get(groupId) ??
-      ({
-        id: groupId,
-        label: pluginId,
-        source: "plugin",
-        pluginId,
-        tools: [],
-      } as ToolCatalogGroup);
+    const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+      id: groupId,
+      label: pluginId,
+      source: "plugin",
+      pluginId,
+      tools: [],
+    };
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
@@ -185,15 +163,13 @@ function buildPluginGroups(params: {
       const groupId = `plugin:${entry.pluginId}`;
       // Declared-but-unresolved plugin tools still appear so operators can see
       // optional capabilities that may need config before they bind at runtime.
-      const existing =
-        groups.get(groupId) ??
-        ({
-          id: groupId,
-          label: entry.pluginName ?? entry.pluginId,
-          source: "plugin",
-          pluginId: entry.pluginId,
-          tools: [],
-        } as ToolCatalogGroup);
+      const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+        id: groupId,
+        label: entry.pluginName ?? entry.pluginId,
+        source: "plugin",
+        pluginId: entry.pluginId,
+        tools: [],
+      };
       const ownedMetadata = pluginToolMetadata.get(
         buildPluginToolMetadataKey(entry.pluginId, name),
       );

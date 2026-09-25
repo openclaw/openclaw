@@ -176,7 +176,7 @@ describe("update-startup", () => {
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
-  let refreshGatewayUpdateStatus: (typeof import("./update-startup.js"))["refreshGatewayUpdateStatus"];
+  let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
@@ -260,9 +260,9 @@ describe("update-startup", () => {
         runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
         createGatewayUpdateCheck,
         getUpdateEffectiveChannel,
-        refreshGatewayUpdateStatus,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
+      ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
       ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
       loaded = true;
     }

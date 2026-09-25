@@ -15,13 +15,11 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import {
-  createWorkerBootstrapArtifactTransferHttpCallback,
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-} from "./worker-bootstrap-artifact-transfer-http.js";
+import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -395,7 +393,7 @@ describe("worker node enrollment", () => {
       }
       return file;
     });
-    const callback = createWorkerBootstrapArtifactTransferHttpCallback(transfer);
+    const callback = createArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
       void handleWorkerBootstrapArtifactTransferHttpRequest({
         req,

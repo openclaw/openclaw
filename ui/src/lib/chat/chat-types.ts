@@ -87,6 +87,7 @@ export type ChatGoalRecovery = {
 };
 
 export type ChatComposerMemoryFallback = {
+  incognito?: boolean;
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;

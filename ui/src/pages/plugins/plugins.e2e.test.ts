@@ -376,17 +376,33 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           details: { persistence: { operation: "install", pluginId: matrixEnabled.id } },
         },
       });
+      const browseRequests = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await gateway.deferNext("plugins.list");
+      await gateway.deferNext("plugins.catalog.browse");
       await card.getByRole("button", { name: "Retry install of Matrix", exact: true }).click();
       const status = card.getByRole("button", {
         name: "View status of Matrix installation",
         exact: true,
       });
       await status.click();
+      await page.mouse.move(1400, 800);
       await card.getByText("Installation saved", { exact: true }).waitFor();
+      await gateway.resolveDeferred("plugins.list");
+      await gateway.waitForRequest("plugins.catalog.browse", { after: browseRequests });
+      await gateway.resolveDeferred("plugins.catalog.browse", {
+        ...discoveryResult,
+        items: discoveryResult.items.map((plugin) =>
+          plugin.id === matrixDiscoveryPlugin.id
+            ? { ...plugin, catalog: { ...plugin.catalog, name: "Matrix refreshed" } }
+            : plugin,
+        ),
+      });
+      await card.getByRole("link", { name: "Matrix refreshed", exact: true }).waitFor();
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const proof = createControlUiE2eArtifactDir("plugin-status-popup");
         await page.screenshot({ path: `${proof}/status.png` });
       }
+      await card.getByText("Installation saved", { exact: true }).waitFor();
       expect(await gateway.getRequests("plugins.install")).toHaveLength(2);
     } finally {
       await context.close();

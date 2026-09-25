@@ -20,7 +20,6 @@ import {
   loadSessionEntrySnapshot,
   projectSessionEntryCacheUpdate,
   readSessionEntrySideMetadata,
-  type SessionEntryCacheDatabase,
   type SessionEntrySideMetadata,
 } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
@@ -33,6 +32,7 @@ import {
   type SqliteSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import type {
+  SessionEntryCacheDatabase,
   SessionEntryCacheReadOptions,
   SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.types.js";

@@ -4,12 +4,14 @@ import {
   type CommandClientPresentationAction,
 } from "../../app/command-client-presentation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -195,6 +197,10 @@ export function createPageState(
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    captureComposerRecoveryReload: () => {
+      const options = createGatewayControlUiReloadOptions(context.gateway);
+      return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
+    },
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
@@ -337,7 +343,7 @@ export function createPageState(
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
-  state.resetToolStream = () => resetToolStream(state as never);
+  state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {

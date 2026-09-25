@@ -152,8 +152,10 @@ export const costRefreshLane: SessionCostWorkerLane = {
 };
 
 const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
+const memoryPressure = channel("openclaw.memory.critical");
+let pressureSubscribed = false;
 
-channel("openclaw.memory.critical").subscribe(() => {
+function retireIdleDatabaseWorkers(): void {
   for (const lane of databaseWorkerLanes) {
     if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
       continue;
@@ -163,7 +165,23 @@ channel("openclaw.memory.critical").subscribe(() => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
   }
-});
+}
+
+export function refreshDatabaseWorkerPressureSubscription(): void {
+  const required = databaseWorkerLanes.some(
+    (lane) =>
+      lane.pending > 0 || lane.rotation !== undefined || lane.nativeSequence > lane.retiredSequence,
+  );
+  if (required === pressureSubscribed) {
+    return;
+  }
+  pressureSubscribed = required;
+  if (required) {
+    memoryPressure.subscribe(retireIdleDatabaseWorkers);
+  } else {
+    memoryPressure.unsubscribe(retireIdleDatabaseWorkers);
+  }
+}
 
 export function pruneHistoryDatabases(): void {
   for (const [key, resource] of historyDatabases) {
@@ -192,6 +210,7 @@ export function releaseRetiredDatabaseCustody(
     }
   }
   pruneHistoryDatabases();
+  refreshDatabaseWorkerPressureSubscription();
 }
 
 export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<void> {
@@ -199,9 +218,11 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
   // rotate pauses dispatch synchronously; later factories receive a greater sequence.
   const rotation = lane.pool.rotate().then(() => releaseRetiredDatabaseCustody(lane, through));
   lane.rotation = rotation;
+  refreshDatabaseWorkerPressureSubscription();
   const finished = () => {
     if (lane.rotation === rotation) {
       lane.rotation = undefined;
+      refreshDatabaseWorkerPressureSubscription();
     }
   };
   void rotation.then(finished, finished);
@@ -211,6 +232,7 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
 // Missing reads can leave an idle worker without retaining any database custody.
 export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   historyClearTimeout(lane.idleTimer);
+  refreshDatabaseWorkerPressureSubscription();
   if (lane.nativeSequence <= lane.retiredSequence || lane.pending > 0) {
     return;
   }
@@ -323,6 +345,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }));
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
+  refreshDatabaseWorkerPressureSubscription();
   try {
     let revoked = false;
     let closing: Promise<void> | undefined;

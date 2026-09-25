@@ -239,6 +239,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       releaseAgentRunDelegatedAuthority(requesterAuthority);
       unregister();
       manager.close();
+      await manager.drain();
       clearAgentRunContext(runId);
       operator.release();
       await flushEvents();

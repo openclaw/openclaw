@@ -128,7 +128,7 @@ class ChatControllerModelSelectionTest {
                   modelTransportStarted.complete(Unit)
                   releaseModelTransport.await()
                 }
-                withEnqueue { patches += patch }
+                withEnqueue { if (method == "sessions.patch") patches += patch }
                 if ("thinkingLevel" in patch) {
                   thinkingStarted.complete(Unit)
                   releaseThinking.await()

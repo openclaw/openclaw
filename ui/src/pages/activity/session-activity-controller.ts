@@ -88,14 +88,18 @@ export class SessionActivityController implements ReactiveController {
     this.resetQuery();
   }
 
-  private resetQuery(): void {
-    this.eventRefresh.reset();
-    this.pending?.controller.abort();
-    this.pending = undefined;
+  private resetSummaries(): void {
     this.summaryPending?.abort();
     this.summaryPending = undefined;
     this.summaryAttempts.clear();
     this.summaryRetries.clear();
+  }
+
+  private resetQuery(): void {
+    this.eventRefresh.reset();
+    this.pending?.controller.abort();
+    this.pending = undefined;
+    this.resetSummaries();
     this.requestState = "idle";
     this.incomplete = false;
     this.error = undefined;
@@ -315,10 +319,7 @@ export class SessionActivityController implements ReactiveController {
     const interrupted = this.pending !== undefined || this.summaryPending !== undefined;
     this.pageActive = !leaving && document.visibilityState !== "hidden";
     if (!this.pageActive) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     this.eventRefresh.setActive(this.pageActive, leaving || interrupted);
   };
@@ -366,10 +367,7 @@ export class SessionActivityController implements ReactiveController {
   ): Promise<void> {
     this.canEnsureSummaries = canEnsureSummaries;
     if (!canEnsureSummaries) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     if (!client || !filters) {
       this.resetQuery();
@@ -429,10 +427,7 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
       this.result = undefined;
       this.incomplete = false;
     }

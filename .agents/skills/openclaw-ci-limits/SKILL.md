@@ -160,10 +160,10 @@ Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
 ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 The compact cap is 90 rows; final Node caps are 70 push and 130 PR rows.
-The current automatic main/PR source has a conservative union of 70 potentially
+The current automatic main/PR source has a conservative union of 71 potentially
 self-hosted non-Node rows, including five core-lint stripes for trusted forks,
 five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
-allowance with fourteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
+allowance with thirteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
 four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
 The six extension-lint rows remain hosted. Manual/frozen releases and other
 workflows are outside this envelope. This is conditional planning, not live
@@ -226,7 +226,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
   main/same-repository PRs add three assignments; trusted fork PRs can add six
   because their logical GitHub profile emits five lint rows. These fit the fresh
-  70-row union and reserved 84-row non-Node allowance described above.
+  71-row union and reserved 84-row non-Node allowance described above.
   Trusted automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
   Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
@@ -241,8 +241,20 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
   API and job deadlines remain unchanged.
-  The aggregate uses `!cancelled()` to report failed prerequisites without
-  holding a superseded run open after workflow cancellation.
+  The aggregate preserves failure-triggered PR cancellation through the
+  `pr-fail-fast` cause outputs; superseded runs without a failure cause still
+  skip the aggregate. PR Node matrices use native fail-fast. The same-repository
+  PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
+  eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
+  matrices remain complete. The monitor starts after preflight, observes failures
+  while the installed check planner waits, and uses the planner's successful
+  versioned count step for exact completion rather than its early reservations.
+  Existing critical-path routing serves hybrid failures; only the uncovered
+  default/explicit-Blacksmith failure case adds the same 4-class route. Retries,
+  ordinary manual dispatches and the GitHub override retain hosted aggregation.
+  The monitor consumes one existing non-Node reserve slot: the 71-row union
+  leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
+
 - Automatic canonical hybrid first attempts count every selected hosted row in
   preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
   rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
@@ -591,8 +603,11 @@ full 40-character head SHA:
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
-Use hosted exact-head gates for CI workflow tuning. Do not burn local
-`pnpm test` on unrelated full-suite proof.
+Use hosted exact-head gates for CI workflow tuning. This explicitly selects
+completed-proof mode, not the default pending-GitHub handoff in the
+[maintainer landing workflow](../openclaw-pr-maintainer/references/landing.md#review-prepare-merge).
+Do not burn local `pnpm test` on unrelated full-suite proof. Never combine
+`OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
 
 Only after the maintainer explicitly asks you to prepare or land the PR, run the
 repo-native mutating wrapper:
@@ -601,7 +616,7 @@ repo-native mutating wrapper:
 scripts/pr review-init <pr>
 scripts/pr review-artifacts-init <pr>
 scripts/pr review-validate-artifacts <pr>
-OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
+env -u OPENCLAW_PR_GATES_REMOTE OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
 ```
 
 `prepare-run` can push a prepared commit to the PR branch. Only run

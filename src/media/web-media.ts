@@ -634,10 +634,6 @@ function normalizeImageQualityPreference(value?: string): ImageQualityPreference
   }
 }
 
-function squareLongSideForPixelBudget(pixelBudget: number): number {
-  return Math.floor(Math.sqrt(pixelBudget));
-}
-
 function positiveInteger(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -661,10 +657,9 @@ function effectiveImageQualityPreference(
 function maxSideForModel(model: ImageCompressionModelPolicy | undefined): number {
   const maxSide = positiveInteger(model?.maxSidePx);
   const maxPixels = positiveInteger(model?.maxPixels);
-  const hardLimits = [
-    maxSide,
-    maxPixels ? squareLongSideForPixelBudget(maxPixels) : undefined,
-  ].filter((value): value is number => value !== undefined);
+  const hardLimits = [maxSide, maxPixels ? Math.floor(Math.sqrt(maxPixels)) : undefined].filter(
+    (value): value is number => value !== undefined,
+  );
   if (hardLimits.length > 0) {
     return Math.min(...hardLimits);
   }
@@ -699,12 +694,11 @@ function sideForPreference(
   switch (preference) {
     case "efficient":
       return Math.min(preferredSide, maxSide, 1280);
-    case "balanced":
-      return Math.min(preferredSide, maxSide);
     case "high":
       return maxSide;
+    default:
+      return Math.min(preferredSide, maxSide);
   }
-  return Math.min(preferredSide, maxSide);
 }
 
 function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undefined {
@@ -846,16 +840,12 @@ export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
         sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
         qualities: [92, 85, 78, 70, 62, 52, 42],
       };
-    case "balanced":
+    default:
       return {
         sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
         qualities: [...DEFAULT_JPEG_QUALITIES],
       };
   }
-  return {
-    sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
-    qualities: [...DEFAULT_JPEG_QUALITIES],
-  };
 }
 
 function logOptimizedImage(params: { originalSize: number; optimized: OptimizedImage }): void {

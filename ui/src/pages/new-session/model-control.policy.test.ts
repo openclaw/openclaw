@@ -69,7 +69,7 @@ describe("New Session policy presentation", () => {
   });
 
   it.each([
-    { event: "config.changed" as const, payload: {}, clearsChoices: true },
+    { event: "config.changed" as const, payload: {}, clearsChoices: false },
     {
       event: "chat.metadata.changed" as const,
       payload: { modelSelectionChanged: true },

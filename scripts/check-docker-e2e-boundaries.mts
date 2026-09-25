@@ -32,6 +32,7 @@ const livePackageBackedLanes = new Set([
 // These lanes intentionally build a focused source-checkout image instead of
 // consuming the shared package E2E images.
 const sourceCheckoutImageLanes = new Set([
+  "container-image-upgrade",
   "docker-selected-plugins",
   "plugin-binding-command-escape",
 ]);

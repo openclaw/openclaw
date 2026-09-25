@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -20,6 +20,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type RequestedSessionAgentIdResolution =
@@ -114,11 +115,11 @@ export function resolveRequestedSessionAgentInput(
   explicitAgentId?: string,
 ): Result<string | undefined, ErrorShape> {
   if (classifySessionKeyShape(key) === "malformed_agent") {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, `malformed session key "${key}"`));
+    return invalidSessionRequest(`malformed session key "${key}"`);
   }
   const agent = explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
   return agent && !agent.ok
-    ? err(errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`))
+    ? invalidSessionRequest(`Unknown agent id "${explicitAgentId}"`)
     : ok(agent?.value);
 }
 
@@ -137,10 +138,7 @@ export function resolveRequestedSessionAgentId(
   const configuredAgentIds = listAgentIds(cfg);
   const normalizedRequestedAgentId = input.value;
   if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
-    };
+    return invalidSessionRequest(`Unknown agent id "${explicitAgentId}"`);
   }
   let ownerKey = key;
   if (parsed?.agentId) {
@@ -149,19 +147,12 @@ export function resolveRequestedSessionAgentId(
       cfg.session?.scope === "global" &&
       (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
     if (keyIsGlobalMainAlias && !configuredAgentIds.includes(keyAgentId)) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
-      };
+      return invalidSessionRequest(`Unknown agent id "${parsed.agentId}"`);
     }
     if (normalizedRequestedAgentId && keyAgentId !== normalizedRequestedAgentId) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
-        ),
-      };
+      return invalidSessionRequest(
+        `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
+      );
     }
     if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
       return admitRequestedAgent(keyAgentId);
@@ -172,26 +163,18 @@ export function resolveRequestedSessionAgentId(
 
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, ownerKey);
   if (persistedStoreOwner.kind === "retired") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `session key belongs to retired agent "${persistedStoreOwner.agentId}"`,
-      ),
-    };
+    return invalidSessionRequest(
+      `session key belongs to retired agent "${persistedStoreOwner.agentId}"`,
+    );
   }
   if (normalizedRequestedAgentId) {
     if (
       persistedStoreOwner.kind === "configured" &&
       persistedStoreOwner.agentId !== normalizedRequestedAgentId
     ) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
-        ),
-      };
+      return invalidSessionRequest(
+        `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
+      );
     }
     return admitRequestedAgent(normalizedRequestedAgentId);
   }
@@ -203,8 +186,5 @@ export function resolveRequestedSessionAgentId(
     surface: `session key "${key}"`,
     hint: "Pass agentId or use an agent-prefixed session key.",
   });
-  return {
-    ok: false,
-    error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
-  };
+  return invalidSessionRequest(selectionError.message);
 }

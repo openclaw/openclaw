@@ -77,9 +77,13 @@ describe("plugin runtime symlink health findings", () => {
     },
   );
 
-  it.each(["ENOENT", "ENOTDIR"])(
-    "reports and removes dangling links while preserving live shared-cache links (%s)",
-    async (code) => {
+  it.each([
+    { code: "ENOENT", scope: "@slack" },
+    { code: "ENOTDIR", scope: "@slack" },
+    { code: "ENOENT", scope: "" },
+  ])(
+    "reports and removes dangling $scope links while preserving live shared-cache links ($code)",
+    async ({ code, scope }) => {
       if (!(await canCreateDirectorySymlink(tempDir))) {
         return;
       }
@@ -92,7 +96,8 @@ describe("plugin runtime symlink health findings", () => {
         "@slack",
         "web-api",
       );
-      const scopeRoot = path.join(path.dirname(packageRoot), "@slack");
+      const scopeRoot = path.join(path.dirname(packageRoot), scope);
+      const packageName = scope ? `${scope}/web-api` : "web-api";
       const staleLink = path.join(scopeRoot, "web-api");
       const liveTarget = path.join(legacyRoot, "openclaw-live", "node_modules", "@slack", "bolt");
       const liveLink = path.join(scopeRoot, "bolt");
@@ -106,12 +111,16 @@ describe("plugin runtime symlink health findings", () => {
       }
       await fs.symlink(missingTarget, staleLink, "dir");
       await fs.symlink(liveTarget, liveLink, "dir");
+      const packageDirectory = path.join(path.dirname(packageRoot), "ordinary-package");
+      const nestedLink = path.join(packageDirectory, "nested-stale-link");
+      await fs.mkdir(packageDirectory);
+      await fs.symlink(missingTarget, nestedLink, "dir");
 
       expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([
         {
           checkId: "core/doctor/stale-plugin-runtime-symlinks",
           severity: "warning",
-          message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
+          message: `Stale plugin-runtime symlink ${packageName} points at ${missingTarget}.`,
           path: staleLink,
           target: staleLink,
           requirement: "stale-plugin-runtime-symlink-removed",
@@ -126,6 +135,7 @@ describe("plugin runtime symlink health findings", () => {
       });
       await expect(fs.lstat(staleLink)).rejects.toMatchObject({ code: "ENOENT" });
       await expectSymlinkPresent(liveLink);
+      await expectSymlinkPresent(nestedLink);
       expect(await fs.readFile(path.join(liveLink, "package.json"), "utf8")).toBe(
         '{"name":"live-runtime"}\n',
       );

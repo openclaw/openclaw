@@ -562,7 +562,7 @@ async function runResolvedUpdate(
     };
     const retentionStartedAt = Date.now();
     progress.onStepStart?.(retentionStep);
-    await retainRuntime({
+    const retention = await retainRuntime({
       mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
       installTarget,
       env,
@@ -573,6 +573,7 @@ async function runResolvedUpdate(
       ...retentionStep,
       durationMs: Date.now() - retentionStartedAt,
       exitCode: 0,
+      diagnostics: retention ? [JSON.stringify(retention)] : undefined,
     });
     mutableUpdatePrepared = true;
   };

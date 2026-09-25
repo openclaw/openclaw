@@ -1,6 +1,9 @@
 // Google Meet plugin module implements plugin harness behavior.
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
@@ -59,6 +62,7 @@ export function setupGoogleMeetPlugin(
   config: Record<string, unknown> = {},
   options: {
     fullConfig?: Record<string, unknown>;
+    stateEnv?: NodeJS.ProcessEnv;
     gatewayAvailable?: boolean;
     gatewayRequestHandler?: (
       method: string,
@@ -166,6 +170,7 @@ export function setupGoogleMeetPlugin(
         ? await options.gatewayRequestHandler(method, params, requestOptions)
         : await invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
   );
+  const stateEnv = options.stateEnv;
   const api = createTestPluginApi({
     id: "google-meet",
     name: "Google Meet",
@@ -175,6 +180,18 @@ export function setupGoogleMeetPlugin(
     config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
+      ...(stateEnv
+        ? {
+            state: {
+              openKeyedStore<T>(storeOptions: OpenKeyedStoreOptions) {
+                return createPluginStateKeyedStoreForTests<T>("google-meet", {
+                  ...storeOptions,
+                  env: stateEnv,
+                });
+              },
+            },
+          }
+        : {}),
       gateway: {
         isAvailable: vi.fn(async () => options.gatewayAvailable === true),
         request: gatewayRequest,
@@ -318,4 +335,14 @@ export async function invokeGoogleMeetGatewayMethodForTest(
       }),
     ).catch(reject);
   });
+}
+
+export function createGoogleMeetToolGatewayForTest(
+  methods: Map<string, unknown>,
+  resultLabel = "Google Meet Gateway result",
+) {
+  const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
+  return vi.fn(async (method: string, _options: unknown, params?: unknown) =>
+    requireRecord(await invokeGoogleMeetGatewayMethodForTest(methods, method, params), resultLabel),
+  );
 }

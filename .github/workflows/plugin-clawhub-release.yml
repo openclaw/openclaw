@@ -83,7 +83,7 @@ env:
 
 jobs:
   preview_plugins_clawhub:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -496,12 +496,14 @@ jobs:
     name: Validate release publish approval
     needs: preview_plugins_clawhub
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
+      attestations: read
       contents: read
     outputs:
       direct_recovery: ${{ steps.approval.outputs.direct_recovery }}
+      parent_approval: ${{ steps.receipt.outputs.parent_approval }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -560,11 +562,38 @@ jobs:
           # recovery receipt for an unvalidated parent.
           echo "direct_recovery=${direct_recovery}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release approval receipt
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: active-or-success
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            echo "Direct dispatch keeps this workflow's environment gate; no parent receipt consumed."
+            exit 0
+          fi
+          node scripts/release-approval-receipt.mjs verify \
+            --output "$RUNNER_TEMP/openclaw-release-approval/approval.json"
+          gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" \
+            --signer-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
+            --deny-self-hosted-runners
+
   pack_plugins_clawhub_artifacts:
     name: Pack ClawHub package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -689,7 +718,7 @@ jobs:
     name: Seal prepared ClawHub packages
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: always() && inputs.dry_run && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/release-publish/')) && needs.preview_plugins_clawhub.result == 'success' && (needs.pack_plugins_clawhub_artifacts.result == 'success' || needs.pack_plugins_clawhub_artifacts.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -738,7 +767,7 @@ jobs:
     name: Seal ClawHub package transactions
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -794,7 +823,8 @@ jobs:
       ]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
-    environment: clawhub-plugin-release
+    # A verified parent receipt replaces the human gate; direct dispatch keeps it.
+    environment: ${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}
     permissions:
       actions: read
       contents: read
@@ -803,21 +833,30 @@ jobs:
         run: |
           echo "Approved CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows release publish gate."
 
-      # The automated bot-dispatched route is unchanged; direct human dispatch binds this approval
+      # The bot-dispatched route waits for the parent's child-bound transaction
+      # authorization instead of a human gate; direct human dispatch binds this approval
       # to the exact child run and to the original child attempt whose parent receipt ClawHub
       # resolves for explicit-recovery finalization (openclaw/clawhub
       # convex/lib/openClawPublishAuthorization.ts validateRecoveryReceipt).
       - name: Checkout trusted release tooling
-        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true' || needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
       - name: Setup Node
-        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true' || needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Wait for the release parent's ClawHub authorization
+        if: needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: node scripts/release-approval-receipt.mjs wait-clawhub-authorization
       - name: Write recovery environment approval receipt
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
         env:

@@ -1,6 +1,7 @@
 // QA Lab WhatsApp user-path action and inbound media scenarios.
 import { randomUUID } from "node:crypto";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
+import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";
 import {
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
@@ -247,55 +248,25 @@ export const whatsappQaOutboundMediaMatrixScenario: WhatsAppQaScenarioImplementa
           fileName: `whatsapp-qa-${mediaRootToken}.wav`,
         });
 
-        const imageStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "image",
           label: "image",
           mediaUrl: imagePath,
           message: `${token}_IMAGE`,
         });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: imageStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("image/") === true &&
-            message.text.includes(`${token}_IMAGE`),
-        });
 
-        const documentStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          forceDocument: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "document",
           label: "document",
           mediaUrl: documentPath,
           message: `${token}_DOCUMENT`,
         });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: documentStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            (message.mediaType === "application/pdf" ||
-              message.mediaFileName?.endsWith(".pdf") === true) &&
-            message.text.includes(`${token}_DOCUMENT`),
-        });
 
-        const audioStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          asVoice: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "audio",
           label: "audio",
           mediaUrl: audioPath,
           message: `${token}_AUDIO`,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("audio/") === true,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) => message.text.includes(`${token}_AUDIO`),
         });
 
         const multiStartedAt = new Date();

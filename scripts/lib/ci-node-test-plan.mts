@@ -353,8 +353,16 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
   "test/vitest/vitest.full-extensions.config.ts",
 ]);
 
+export const SOURCE_CHANNEL_TEST_POLICY = {
+  config: "test/vitest/vitest.channels.config.ts",
+  env: {
+    NODE_OPTIONS: "--max-old-space-size=8192",
+    OPENCLAW_VITEST_MAX_WORKERS: "1",
+  },
+} as const;
+
 const EXCLUDED_PROJECT_CONFIGS = new Set([
-  "test/vitest/vitest.channels.config.ts",
+  SOURCE_CHANNEL_TEST_POLICY.config,
   // checks-ui owns the Chromium project; Node stripes retain Node-driven Playwright tests.
   "test/vitest/vitest.ui-browser.config.ts",
 ]);
@@ -2386,6 +2394,7 @@ function partitionRuntimeTestFiles(configs: string[], files: string[]) {
 function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const excludedGatewayFiles = new Set([
+    ...databaseWorkerCoreTestFiles,
     ...gatewayDatabaseWorkerTestFiles,
     ...gatewayServerExcludedTestFiles,
     ...gatewayServerIsolatedTestFiles,
@@ -4504,7 +4513,11 @@ function createCompactNodeTestShardBundles(
         })
       );
     };
-    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
+    const bins = packNodeTestGroups(
+      anchorGroups,
+      canShareCompactJob,
+      options.runnerBackend === "github",
+    );
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));

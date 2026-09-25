@@ -38,6 +38,7 @@ export type PluginCatalogDetailProps = {
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (url: string) => boolean;
 };
 
 export function renderPluginReadme(readme: string | undefined): TemplateResult {
@@ -70,14 +71,14 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     backHref: props.backHref,
     backLabel: t("tabs.plugins"),
     onBack: props.onBack,
-    icon: renderArtTile(
-      plugin.id,
-      plugin.catalog.name,
-      packageIcon,
-      undefined,
-      "plugins-tile",
-      authorIcon,
-    ),
+    icon: renderArtTile(plugin.id, plugin.catalog.name, {
+      iconUrl: packageIcon,
+      authorIconUrl: authorIcon,
+      loading: Boolean(
+        (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)) ||
+        (detail.author?.imageUrl && props.iconLoading?.(detail.author.imageUrl)),
+      ),
+    }),
     titleAction: html`${
       plugin.local.action === "install" || installing
         ? renderReasonedDisabledControl(

@@ -25,6 +25,8 @@ import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.j
 import { getPendingCliDisposers } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
+const readOnlyCoreOptions = { isolateEnv: true, observe: false, pluginValidation: "core-only" };
+
 const TLS_FINGERPRINT = "ab".repeat(32);
 const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 
@@ -162,7 +164,7 @@ type GatewayRunCommandHooks = {
   beforeRun?: (opts: { reset?: boolean }) => Promise<void>;
 };
 type CliExecutionBootstrapOptions = {
-  beforeStateMigrations?: (snapshot?: ConfigSnapshotStub) => Promise<boolean>;
+  beforeStatePreparation?: (snapshot?: ConfigSnapshotStub) => Promise<boolean>;
 };
 const addGatewayRunCommandMock = vi.hoisted(() =>
   vi.fn<(command: unknown, hooks?: GatewayRunCommandHooks) => unknown>((command) => command),
@@ -1012,9 +1014,7 @@ describe("runCli exit behavior", () => {
   it("configures the gateway foreground fast path with the standard CLI bootstrap", async () => {
     await runCli(["node", "openclaw", "gateway", "--force"]);
 
-    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
-    ]);
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
     const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
@@ -1022,14 +1022,14 @@ describe("runCli exit behavior", () => {
 
     expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        beforeStateMigrations: expect.any(Function),
+        beforeStatePreparation: expect.any(Function),
         commandPath: ["gateway"],
         loadPlugins: false,
       }),
     );
     expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
-      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+      [readOnlyCoreOptions],
+      [readOnlyCoreOptions],
     ]);
     const admissionOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[1] ?? 0;
     const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
@@ -1037,7 +1037,7 @@ describe("runCli exit behavior", () => {
     expect(bootstrapOrder).toBeGreaterThan(admissionOrder);
   });
 
-  it("defers config-drift exit to the migration owner before startup migrations", async () => {
+  it("defers config-drift exit until readiness releases its lease", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       hash: "guarded",
@@ -1054,11 +1054,11 @@ describe("runCli exit behavior", () => {
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
     await hooks?.beforeRun?.({});
-    const beforeStateMigrations = (
+    const beforeStatePreparation = (
       ensureCliExecutionBootstrapMock.mock.calls[0]?.[0] as
-        | { beforeStateMigrations?: (snapshot?: ConfigSnapshotStub) => Promise<boolean> }
+        | { beforeStatePreparation?: (snapshot?: ConfigSnapshotStub) => Promise<boolean> }
         | undefined
-    )?.beforeStateMigrations;
+    )?.beforeStatePreparation;
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       hash: "guarded",
@@ -1075,7 +1075,7 @@ describe("runCli exit behavior", () => {
       throw new Error(`exit:${String(code)}`);
     }) as typeof process.exit);
     try {
-      await expect(beforeStateMigrations?.()).rejects.toMatchObject({
+      await expect(beforeStatePreparation?.()).rejects.toMatchObject({
         name: "ExitError",
         code: 1,
       });
@@ -1087,7 +1087,7 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("defers a service-mode future-config exit to the migration owner", async () => {
+  it("defers a service-mode future-config exit to readiness", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       hash: "guarded",
@@ -1101,8 +1101,8 @@ describe("runCli exit behavior", () => {
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
     await hooks?.beforeRun?.({});
-    const beforeStateMigrations =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStateMigrations;
+    const beforeStatePreparation =
+      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`exit:${String(code)}`);
@@ -1115,7 +1115,7 @@ describe("runCli exit behavior", () => {
         },
         async () => {
           await expect(
-            beforeStateMigrations?.({
+            beforeStatePreparation?.({
               exists: true,
               hash: "future",
               path: "/tmp/openclaw.json",
@@ -1142,11 +1142,11 @@ describe("runCli exit behavior", () => {
 
   it.each([
     {
-      name: "automatic startup migrations",
+      name: "ordinary state preparation",
       flags: [],
       marker: undefined,
       override: undefined,
-      expectedAction: "run automatic gateway startup migrations",
+      expectedAction: "run gateway state preparation",
       expectedExitCode: 1,
     },
     {
@@ -1209,9 +1209,7 @@ describe("runCli exit behavior", () => {
       );
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(params.expectedAction));
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-      expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
-      ]);
+      expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
       if (params.marker) {
         expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
       }
@@ -1459,7 +1457,7 @@ describe("runCli exit behavior", () => {
           try {
             await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
             expect(errorSpy).toHaveBeenCalledWith(
-              expect.stringContaining("run automatic gateway startup migrations"),
+              expect.stringContaining("run gateway state preparation"),
             );
             expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
             expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(3);
@@ -1505,7 +1503,7 @@ describe("runCli exit behavior", () => {
       try {
         await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
         expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("run automatic gateway startup migrations"),
+          expect.stringContaining("run gateway state preparation"),
         );
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
       } finally {
@@ -1605,7 +1603,7 @@ describe("runCli exit behavior", () => {
           try {
             await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
             expect(errorSpy).toHaveBeenCalledWith(
-              expect.stringContaining("run automatic gateway startup migrations"),
+              expect.stringContaining("run gateway state preparation"),
             );
             expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
             expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
@@ -1642,10 +1640,15 @@ describe("runCli exit behavior", () => {
 
       expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
-        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+        [readOnlyCoreOptions],
+        [readOnlyCoreOptions],
       ]);
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+      expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandPath: ["gateway"],
+          beforeStatePreparation: expect.any(Function),
+        }),
+      );
     });
   });
 
@@ -1998,7 +2001,7 @@ describe("runCli exit behavior", () => {
           try {
             await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
             expect(errorSpy).toHaveBeenCalledWith(
-              expect.stringContaining("run automatic gateway startup migrations"),
+              expect.stringContaining("run gateway state preparation"),
             );
             expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
           } finally {
@@ -2036,11 +2039,7 @@ describe("runCli exit behavior", () => {
       | undefined;
     await hooks?.beforeRun?.({ reset: true });
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
-      isolateEnv: true,
-      observe: false,
-      pluginValidation: "core-only",
-    });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
   });
 
@@ -2603,11 +2602,7 @@ describe("runCli exit behavior", () => {
       expect(buildProgramMock).toHaveBeenCalledTimes(1);
       expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
     }
-    expect(loadConfigMock).toHaveBeenCalledWith({
-      isolateEnv: true,
-      observe: false,
-      pluginValidation: "core-only",
-    });
+    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 

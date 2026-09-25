@@ -125,7 +125,10 @@ describe("prepared reply transcript identity", () => {
       ...incoming,
       run: {
         ...incoming.run,
-        sessionFile: resolveAdmittedRunSessionFile({ ...incoming.run })!,
+        sessionFile: resolveAdmittedRunSessionFile({
+          sessionKey: incoming.run.sessionKey,
+          sessionFile: incoming.run.sessionFile,
+        })!,
       },
     };
     expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(

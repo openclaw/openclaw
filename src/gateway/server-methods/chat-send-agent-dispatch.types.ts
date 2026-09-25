@@ -4,7 +4,7 @@ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/works
 import type { ChatRunTiming } from "../server-chat-state.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import type { ChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -12,11 +12,6 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-type PreparedChatSendAttachments = Extract<
-  Awaited<ReturnType<typeof prepareChatSendAttachments>>,
-  { ok: true }
->["value"];
 
 export type StartChatDispatchParams = {
   admissionStartedAt: number;

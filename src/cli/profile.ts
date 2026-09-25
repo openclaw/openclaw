@@ -76,10 +76,10 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
 
 export function applyCliProfileEnv(params: {
   profile: string;
-  env?: Record<string, string | undefined>;
+  env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }) {
-  const env = params.env ?? (process.env as Record<string, string | undefined>);
+  const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const profile = params.profile.trim();
   if (!profile) {
@@ -89,9 +89,8 @@ export function applyCliProfileEnv(params: {
   const inheritedProfile = normalizeOptionalString(env.OPENCLAW_PROFILE) ?? "default";
   const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
   const existingConfigPath = normalizeOptionalString(env.OPENCLAW_CONFIG_PATH);
-  const profileEnv = env as NodeJS.ProcessEnv;
-  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, profileEnv, homedir);
-  const selectedProfileStateDir = resolveProfileStateDir(profile, profileEnv, homedir);
+  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, env, homedir);
+  const selectedProfileStateDir = resolveProfileStateDir(profile, env, homedir);
   const switchesInheritedProfile = inheritedProfileStateDir !== selectedProfileStateDir;
   const inheritedSystemdServiceName = resolveGatewaySystemdServiceName(inheritedProfile);
   const inheritedServiceSelectors = {
@@ -103,7 +102,7 @@ export function applyCliProfileEnv(params: {
     existingStateDir &&
     switchesInheritedProfile &&
     resolveHomeRelativePath(existingStateDir, {
-      env: env as NodeJS.ProcessEnv,
+      env,
       homedir,
     }) === inheritedProfileStateDir,
   );
@@ -112,7 +111,7 @@ export function applyCliProfileEnv(params: {
     (!existingStateDir || switchesInheritedProfileState) &&
     existingConfigPath &&
     resolveHomeRelativePath(existingConfigPath, {
-      env: env as NodeJS.ProcessEnv,
+      env,
       homedir,
     }) === path.join(inheritedProfileStateDir, "openclaw.json"),
   );

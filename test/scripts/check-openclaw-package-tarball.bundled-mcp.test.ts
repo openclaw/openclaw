@@ -23,6 +23,10 @@ const CHECK_SCRIPT = resolve("scripts/check-openclaw-package-tarball.mts");
 const MCP_NAME = "chrome-devtools-mcp";
 const MCP_PREFIX = `node_modules/${MCP_NAME}`;
 const MCP_CLI = "build/src/bin/chrome-devtools-mcp.js";
+const MCP_PROCESS_TIMEOUT_MS = 180_000;
+// The real ~90 MiB offline install has a three-minute subprocess budget on Windows.
+// Allow fixture packing, byte comparisons, and cleanup before Vitest rejects a completed run.
+const MCP_PACKAGE_TEST_TIMEOUT_MS = MCP_PROCESS_TIMEOUT_MS + 60_000;
 const packageJson = {
   files: ["dist"],
   dependencies: { [MCP_NAME]: "1.9.0" },
@@ -63,7 +67,7 @@ function installPatchedMcp(packageRoot: string) {
     env: npm.env,
     shell: npm.shell,
     windowsVerbatimArguments: npm.windowsVerbatimArguments,
-    timeout: 180_000,
+    timeout: MCP_PROCESS_TIMEOUT_MS,
   });
   expect(packed.status, packed.stderr).toBe(0);
   // A local override supplies real pnpm metadata without registry or host-cache access.
@@ -92,7 +96,7 @@ function installPatchedMcp(packageRoot: string) {
     encoding: "utf8",
     shell: pnpm.shell,
     windowsVerbatimArguments: pnpm.windowsVerbatimArguments,
-    timeout: 180_000,
+    timeout: MCP_PROCESS_TIMEOUT_MS,
   });
   expect(installed.status, installed.stderr || installed.stdout).toBe(0);
   expect(lstatSync(join(packageRoot, MCP_PREFIX)).isSymbolicLink()).toBe(true);
@@ -134,7 +138,7 @@ describe("bundled browser MCP package", () => {
             env: npm.env,
             shell: npm.shell,
             windowsVerbatimArguments: npm.windowsVerbatimArguments,
-            timeout: 180_000,
+            timeout: MCP_PROCESS_TIMEOUT_MS,
           });
           expect(installed.status, installed.stderr).toBe(0);
           const consumerRequire = createRequire(
@@ -148,7 +152,7 @@ describe("bundled browser MCP package", () => {
             {
               cwd: consumer,
               encoding: "utf8",
-              timeout: 180_000,
+              timeout: MCP_PROCESS_TIMEOUT_MS,
               env: {
                 ...process.env,
                 CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1",
@@ -167,7 +171,7 @@ describe("bundled browser MCP package", () => {
         },
       );
     },
-    60_000,
+    MCP_PACKAGE_TEST_TIMEOUT_MS,
   );
 
   it.each([
@@ -184,7 +188,12 @@ describe("bundled browser MCP package", () => {
     {
       name: "unpinned dependency",
       manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.9.0" } },
-      error: "must be pinned to 1.9.0",
+      error: "must be pinned to a supported patched version",
+    },
+    {
+      name: "bundle without a dependency pin",
+      manifest: { bundleDependencies: [MCP_NAME] },
+      error: "must be pinned to a supported patched version",
     },
     {
       name: "missing generic declared bundle",
@@ -232,6 +241,11 @@ describe("bundled browser MCP package", () => {
     }, 60_000);
 
     it.each([
+      {
+        file: "package.json",
+        change: "modify",
+        error: "bundled chrome-devtools-mcp must be ESM version 1.9.0",
+      },
       ...[
         "build/src/TextSnapshot.js",
         "build/src/McpPage.js",
@@ -271,7 +285,12 @@ describe("bundled browser MCP package", () => {
           mkdirSync(dirname(replacement), { recursive: true });
           writeFileSync(
             replacement,
-            Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
+            file === "package.json"
+              ? JSON.stringify({
+                  ...JSON.parse(readFileSync(join(sourceRoot(), file), "utf8")),
+                  version: "1.8.0",
+                })
+              : Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
           );
           chmodSync(replacement, 0o644);
         }

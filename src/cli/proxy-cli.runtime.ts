@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
@@ -260,7 +260,11 @@ export async function runProxyValidateCommand(opts: {
   apnsAuthority?: string;
   timeoutMs?: number;
 }) {
-  const config = getRuntimeConfig();
+  const config = await loadPinnedRuntimeConfigAsync(async (assertCurrent) => {
+    const { getRuntimeConfig } = await import("../config/config.js");
+    assertCurrent();
+    return { config: getRuntimeConfig() };
+  });
   const result = await runProxyValidation({
     config: config?.proxy,
     env: process.env,

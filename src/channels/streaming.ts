@@ -31,6 +31,7 @@ import {
 import {
   getProgressDraftLineText,
   isChannelProgressAttentionLine,
+  isChannelProgressPriorityLine,
   type ChannelProgressDraftLine,
 } from "./progress-draft-lines.js";
 import {
@@ -38,7 +39,10 @@ import {
   type StreamingCompatEntry,
 } from "./streaming-config-readers.js";
 
-export { isChannelProgressAttentionLine } from "./progress-draft-lines.js";
+export {
+  isChannelProgressAttentionLine,
+  isChannelProgressPriorityLine,
+} from "./progress-draft-lines.js";
 export type { ChannelProgressDraftLine } from "./progress-draft-lines.js";
 
 export {
@@ -223,17 +227,6 @@ export type ChannelProgressDraftLineInput =
     };
 
 type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
-
-/** Lines that reserve bounded progress capacity. */
-export function isChannelProgressPriorityLine(line: string | ChannelProgressDraftLine): boolean {
-  if (typeof line === "string") {
-    return false;
-  }
-  const status = line.status?.toLowerCase();
-  return (
-    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
-  );
-}
 
 type ProgressDraftLineMetadata = {
   correlationKey?: string;
@@ -1268,12 +1261,13 @@ export function formatChannelProgressDraftText(params: ChannelProgressDraftTextP
 export function formatChannelProgressDraftTextForStreaming(
   params: ChannelProgressDraftTextParams,
 ): string {
-  return formatProgressDraftText(params, isChannelProgressPriorityLine);
+  return formatProgressDraftText(params, isChannelProgressPriorityLine, true);
 }
 
 function formatProgressDraftText(
   params: ChannelProgressDraftTextParams,
   isPriorityLine: typeof isChannelProgressAttentionLine,
+  reserveRollingLine = false,
 ): string {
   const narration = compactProgressText(
     params.narration?.replace(/\s+/g, " ").trim() ?? "",
@@ -1284,7 +1278,8 @@ function formatProgressDraftText(
   const formatLine = params.formatLine ?? ((line: string) => line);
   const attention = params.lines.filter(isPriorityLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
-    maxLines: maxLines - attention.length,
+    maxLines:
+      maxLines - Math.max(attention.length, reserveRollingLine && params.lines.length ? 1 : 0),
     maxLineChars,
     plain: params.presentation === "summary",
   }).map(formatLine);

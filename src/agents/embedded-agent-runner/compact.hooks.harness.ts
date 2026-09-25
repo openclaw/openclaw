@@ -19,6 +19,8 @@ import {
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksPluginMetadata,
+  type CompactHooksQueuedCompaction,
+  type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
 import { mockCompactHooksTools } from "./compact.hooks.tools.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
@@ -26,21 +28,6 @@ import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-type MockResolvedModel = {
-  logicalRef: { provider: string; model: string };
-  model: {
-    provider: string;
-    api: string;
-    baseUrl?: string;
-    id: string;
-    input: unknown[];
-    contextWindow?: number;
-    requestTimeoutMs?: number;
-  };
-  error: null;
-  authStorage: Pick<import("../sessions/auth-storage.js").AuthStorage, "setRuntimeApiKey">;
-  modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
-};
 type MockMemorySearchManager = {
   manager: {
     sync: (params?: unknown) => Promise<void>;
@@ -635,7 +622,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
 
 export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
-  compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+  compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
@@ -1092,7 +1079,14 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
+    compactEmbeddedAgentSession: (params, host = {}) =>
+      compactQueuedModule.compactEmbeddedAgentSession(params, {
+        ...host,
+        sourceAuthority: host.sourceAuthority ?? {
+          assertActive: host.assertActive ?? (() => {}),
+          operatorAuthority: undefined,
+        },
+      }),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };

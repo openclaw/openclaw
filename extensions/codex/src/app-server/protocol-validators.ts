@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 /**
  * Runtime validators for Codex app-server protocol payloads, including schema
@@ -26,6 +27,24 @@ import {
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
 } from "./protocol.js";
+
+export function readSupervisionResponseThreadId(value: unknown): unknown {
+  const thread = isRecord(value) ? value.thread : undefined;
+  return isRecord(thread) ? thread.id : undefined;
+}
+
+export function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 type ValidationError = {
   instancePath?: string;
