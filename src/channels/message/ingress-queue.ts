@@ -272,7 +272,7 @@ async function openChannelIngressDatabaseForListing(
   };
 }
 
-export function getChannelIngressKysely(db: DatabaseSync) {
+function getChannelIngressKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ChannelIngressDatabase>(db);
 }
 
