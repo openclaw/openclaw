@@ -31,36 +31,24 @@ export function readStateRegistryCommand(
 ): OpenClawStateReadReply {
   const admitted = { ok: true, sourceAdmitted: true } as const;
   if (command.type === "sandboxRegistry.list") {
-    return {
-      ok: true,
-      type: command.type,
-      sourceAdmitted: true,
-      entries: readSandboxRegistryInDatabase(db),
-    };
+    return { ...admitted, type: command.type, entries: readSandboxRegistryInDatabase(db) };
   }
   if (command.type === "sandboxRegistry.get") {
     return {
-      ok: true,
+      ...admitted,
       type: command.type,
-      sourceAdmitted: true,
       entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
     };
   }
   if (command.type === "sandboxRegistry.runtimeIds") {
     return {
-      ok: true,
+      ...admitted,
       type: command.type,
-      sourceAdmitted: true,
       runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
     };
   }
   if (command.type === "sandboxRegistry.browsers") {
-    return {
-      ok: true,
-      type: command.type,
-      sourceAdmitted: true,
-      entries: readSandboxBrowserRegistryInDatabase(db),
-    };
+    return { ...admitted, type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
   }
   if (command.type === "worktrees.cleanupState") {
     return {
