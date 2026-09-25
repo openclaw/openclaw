@@ -160,6 +160,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
+  /**
+   * Process-tool scope key resolved exactly once during attempt preparation.
+   * Both exec-session registration and runtime-facts snapshots consume this
+   * stored value instead of re-deriving it from different identity subsets.
+   */
+  processScopeKey?: string;
   /** Host-created authority available only after harness selection. */
   hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */

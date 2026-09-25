@@ -211,6 +211,7 @@ export type RunEmbeddedAgentParams = {
     | "nodeCwd"
     | "notifyOnExit"
     | "notifyOnExitEmptySuccess"
+    | "scopeKey"
   >;
   bashElevated?: ExecElevatedDefaults;
   /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */

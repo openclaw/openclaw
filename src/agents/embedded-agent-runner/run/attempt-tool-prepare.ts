@@ -278,6 +278,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             ...buildConversationContext(),
             exec: {
               ...attempt.execOverrides,
+              // Consume the once-resolved attempt process scope key so exec
+              // registration cannot diverge from runtime-facts snapshots.
+              scopeKey: attempt.processScopeKey ?? attempt.execOverrides?.scopeKey,
               ...(sessionPermissionPolicy
                 ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
                 : {}),

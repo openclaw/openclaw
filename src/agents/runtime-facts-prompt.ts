@@ -12,6 +12,8 @@ import { buildActiveSubagentRuntimeContext } from "./subagents/registry/subagent
 
 type RuntimeFactsParams = {
   capabilityToolNames: ReadonlySet<string>;
+  /** Explicit process-tool scope override resolved once for the owning attempt. */
+  scopeKey?: string;
   sessionKey?: string;
   sessionId?: string;
   agentId: string;
@@ -55,6 +57,24 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
   }
 }
 
+/** Renders active background process sessions as one runtime-facts section. */
+export function buildActiveExecSessionsSection(
+  sessions: ReturnType<typeof listActiveProcessSessionReferences>,
+): string {
+  return [
+    "Active exec sessions:",
+    ...(sessions.length
+      ? sessions.map((session) => {
+          const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+          const cwd = session.cwd
+            ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
+            : "";
+          return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+        })
+      : ["none"]),
+  ].join("\n");
+}
+
 export async function buildRuntimeFactsContext(
   params: RuntimeFactsParams,
 ): Promise<RuntimeContextFragment[]> {
@@ -66,20 +86,7 @@ export async function buildRuntimeFactsContext(
     const sessions = listActiveProcessSessionReferences({
       scopeKey: resolveProcessToolScopeKey(params),
     }).toSorted((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
-    sections.push(
-      [
-        "Active exec sessions:",
-        ...(sessions.length
-          ? sessions.map((session) => {
-              const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-              const cwd = session.cwd
-                ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
-                : "";
-              return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
-            })
-          : ["none"]),
-      ].join("\n"),
-    );
+    sections.push(buildActiveExecSessionsSection(sessions));
   }
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
   const subagentContext = await buildActiveSubagentRuntimeContext({

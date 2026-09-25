@@ -390,6 +390,7 @@ type SessionBoundaryAttempt = Pick<
   | "inputProvenance"
   | "onUserMessagePersistenceInvalidated"
   | "operation"
+  | "processScopeKey"
   | "prompt"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
@@ -513,6 +514,9 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     return {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+      ...(attempt.processScopeKey
+        ? { refreshActiveExecSessionsScopeKey: attempt.processScopeKey }
+        : {}),
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),

@@ -18,6 +18,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import {
@@ -119,6 +120,18 @@ async function runEmbeddedAttemptOwned(
     sandboxSessionKey,
     sessionAgentId,
   } = setup;
+  // Resolve the process-tool scope key exactly once for this attempt so
+  // exec-session registration and runtime-facts snapshots consume one stored
+  // identity instead of re-deriving it from different identity subsets.
+  const processScopeKey = resolveProcessToolScopeKey({
+    scopeKey: params.execOverrides?.scopeKey,
+    sessionKey: params.sessionKey?.trim() || params.sessionId || sandboxSessionKey,
+    sessionId: params.sessionId,
+    agentId: sessionAgentId,
+  });
+  if (processScopeKey) {
+    params = { ...params, processScopeKey };
+  }
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {

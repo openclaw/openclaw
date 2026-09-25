@@ -1,10 +1,13 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { createOpenClawCodingTools } from "../../agent-tools.js";
+import { addSession, deleteSession, getSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
@@ -187,6 +190,152 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     expect(active.promptForSession).toBe("Visible request");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "lists a real background exec registered under an exec scope-key override in next-step facts",
+    async () => {
+      const runKey = "agent:main:dashboard:scope-override-run";
+      const processScopeKey = "agent:main:worker-process-scope";
+      const tools = createOpenClawCodingTools({
+        agentId: "main",
+        config: { agents: { entries: { main: { default: true } } } } satisfies OpenClawConfig,
+        sessionKey: runKey,
+        runSessionKey: runKey,
+        sessionId: "session-1",
+        runId: "run-scope-override",
+        wrapBeforeToolCallHook: false,
+        exec: {
+          scopeKey: processScopeKey,
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          allowBackground: true,
+          backgroundMs: 0,
+          timeoutSec: 30,
+        },
+      });
+      const execTool = tools.find((tool) => tool.name === "exec");
+      const processTool = tools.find((tool) => tool.name === "process");
+      if (!execTool || !processTool) {
+        throw new Error("exec/process tools missing from coding tools");
+      }
+
+      const script = "setTimeout(() => process.exit(0), 5000)";
+      const started = await execTool.execute("scope-override-start", {
+        command: `${process.execPath} -e ${JSON.stringify(script)}`,
+        background: true,
+      });
+      const startDetails = started.details as { status?: string; sessionId?: string };
+      expect(startDetails.status).toBe("running");
+      expect(
+        started.content.some(
+          (part) => part.type === "text" && part.text?.includes("Command still running"),
+        ),
+      ).toBe(true);
+      const sessionId = startDetails.sessionId;
+      if (!sessionId) {
+        throw new Error("exec did not return a background session id");
+      }
+
+      // The authoritative registration-side scope key honors the exec override.
+      expect(getSession(sessionId)?.scopeKey).toBe(processScopeKey);
+
+      try {
+        const fixture = createInput({
+          attempt: createAttempt({
+            sessionKey: runKey,
+            sessionId: "session-1",
+            execOverrides: { scopeKey: processScopeKey },
+          }),
+        });
+        fixture.input.capabilityToolNames.add("process");
+        const context = await prepareEmbeddedAttemptPromptContext(fixture.input);
+        const content = context.runtimeContextMessageForCurrentTurn?.content ?? "";
+        expect(content).toContain("Active exec sessions:");
+        expect(content).toContain(sessionId);
+        expect(content).not.toContain("Active exec sessions:\nnone");
+      } finally {
+        await processTool.execute("scope-override-kill", {
+          action: "kill",
+          sessionId,
+        });
+        deleteSession(sessionId);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "lists a real background exec registered under a split run session key in next-step facts",
+    async () => {
+      const policySessionKey = "agent:main:dashboard:split-identity";
+      const runSessionKey = "agent:main:subagent:split-run";
+      const tools = createOpenClawCodingTools({
+        agentId: "main",
+        config: { agents: { entries: { main: { default: true } } } } satisfies OpenClawConfig,
+        sessionKey: policySessionKey,
+        runSessionKey,
+        sessionId: "session-1",
+        runId: "run-split-identity",
+        wrapBeforeToolCallHook: false,
+        exec: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          allowBackground: true,
+          backgroundMs: 0,
+          timeoutSec: 30,
+        },
+      });
+      const execTool = tools.find((tool) => tool.name === "exec");
+      const processTool = tools.find((tool) => tool.name === "process");
+      if (!execTool || !processTool) {
+        throw new Error("exec/process tools missing from coding tools");
+      }
+
+      const script = "setTimeout(() => process.exit(0), 5000)";
+      const started = await execTool.execute("split-identity-start", {
+        command: `${process.execPath} -e ${JSON.stringify(script)}`,
+        background: true,
+      });
+      const startDetails = started.details as { status?: string; sessionId?: string };
+      expect(startDetails.status).toBe("running");
+      expect(
+        started.content.some(
+          (part) => part.type === "text" && part.text?.includes("Command still running"),
+        ),
+      ).toBe(true);
+      const sessionId = startDetails.sessionId;
+      if (!sessionId) {
+        throw new Error("exec did not return a background session id");
+      }
+
+      // Registration resolves the split execution identity: runSessionKey wins.
+      expect(getSession(sessionId)?.scopeKey).toBe(runSessionKey);
+
+      try {
+        const fixture = createInput({
+          attempt: createAttempt({
+            sessionKey: policySessionKey,
+            sessionId: "session-1",
+            // Prepared attempts carry the once-resolved process scope key.
+            processScopeKey: runSessionKey,
+          }),
+        });
+        fixture.input.capabilityToolNames.add("process");
+        const context = await prepareEmbeddedAttemptPromptContext(fixture.input);
+        const content = context.runtimeContextMessageForCurrentTurn?.content ?? "";
+        expect(content).toContain("Active exec sessions:");
+        expect(content).toContain(sessionId);
+        expect(content).not.toContain("Active exec sessions:\nnone");
+      } finally {
+        await processTool.execute("split-identity-kill", {
+          action: "kill",
+          sessionId,
+        });
+        deleteSession(sessionId);
+      }
+    },
+  );
 
   it("carries changed subagent status without rewriting the system prompt", async () => {
     const fixture = createInput();

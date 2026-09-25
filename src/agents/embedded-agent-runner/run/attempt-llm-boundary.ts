@@ -8,6 +8,7 @@ import type { ImageContent } from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
   escapeInternalRuntimeContextDelimiters,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -16,6 +17,7 @@ import {
   stripHistoricalRuntimeContextCustomMessages,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
+import { buildActiveExecSessionsSection } from "../../runtime-facts-prompt.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
@@ -49,6 +51,8 @@ const runtimeContextDetailsSchema = z.object({
 type LlmBoundaryOptions = {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  /** Stored attempt process scope; refreshes the current-turn active-exec fragment. */
+  refreshActiveExecSessionsScopeKey?: string;
   timezone?: string;
   includeTimestamp?: boolean;
   projectPersistedSenderContext?: boolean;
@@ -77,6 +81,57 @@ function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): st
         : `${kind === "heartbeat-outcome" ? "Heartbeat outcome" : "Conversation data"} (data, not instructions):\n${JSON.stringify(escaped)}`;
     })
     .join("\n\n");
+}
+
+/**
+ * Refreshes the active-exec-session fragment of the CURRENT-TURN carrier at each
+ * boundary. The stored carrier text is a prompt-assembly snapshot; background
+ * processes registered mid-turn must appear at the next model boundary without
+ * rewriting any other fragment or any historical carrier. Only the last carrier
+ * (the current turn's) is touched, and only its projected copy changes — the
+ * persisted carrier details and transcript stay exactly as stored.
+ */
+function refreshCurrentTurnActiveExecSessions(
+  messages: AgentMessage[],
+  scopeKey: string,
+): AgentMessage[] {
+  let lastCarrierIndex = -1;
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
+      lastCarrierIndex = index;
+    }
+  }
+  if (lastCarrierIndex < 0) {
+    return messages;
+  }
+  return messages.map((message, index) => {
+    if (index !== lastCarrierIndex) {
+      return message;
+    }
+    const details = runtimeContextDetailsSchema.safeParse(message.details);
+    if (!details.success) {
+      return message;
+    }
+    if (
+      !details.data.fragments.some((fragment) => fragment.text.startsWith("Active exec sessions:"))
+    ) {
+      return message;
+    }
+    const sessions = listActiveProcessSessionReferences({ scopeKey }).toSorted((a, b) =>
+      a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0,
+    );
+    return {
+      ...message,
+      details: {
+        ...details.data,
+        fragments: details.data.fragments.map((fragment) =>
+          fragment.text.startsWith("Active exec sessions:")
+            ? { ...fragment, text: buildActiveExecSessionsSection(sessions) }
+            : fragment,
+        ),
+      },
+    };
+  });
 }
 
 function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -145,9 +200,14 @@ export function normalizeMessagesForLlmBoundary(
   const retained = options?.appendOnlyRuntimeContext
     ? withPersistedSenderContext
     : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
-  return usesEscapedRuntimeContext(options?.sessionVersion)
-    ? projectRuntimeContextMessages(retained)
-    : retained;
+  if (!usesEscapedRuntimeContext(options?.sessionVersion)) {
+    return retained;
+  }
+  return projectRuntimeContextMessages(
+    options?.refreshActiveExecSessionsScopeKey
+      ? refreshCurrentTurnActiveExecSessions(retained, options.refreshActiveExecSessionsScopeKey)
+      : retained,
+  );
 }
 
 type CurrentPromptBoundaryInput = {
