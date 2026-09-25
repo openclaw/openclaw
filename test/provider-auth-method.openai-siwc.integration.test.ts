@@ -9,38 +9,9 @@ const loopback = vi.hoisted<{ port: number; boundPorts: number[] }>(() => ({
   port: 0,
   boundPorts: [],
 }));
-const observation = vi.hoisted(() => ({
-  events: [] as string[],
-  disposers: [] as Array<() => void>,
-  nextServer: 0,
-  nextWizard: 0,
-  record(event: string) {
-    if (this.events.length < 32) {
-      this.events.push(event);
-    }
-  },
-  errorClass(error: unknown): string {
-    const message = error instanceof Error ? error.message : error;
-    if (message === undefined) {
-      return "absent";
-    }
-    if (message === "Login cancelled" || message === "Sign-in timed out") {
-      return message;
-    }
-    // Node's listen errors include the bound address and port; retain only a known code.
-    const code =
-      typeof message === "string"
-        ? /^(?:listen|bind|accept) (EADDRINUSE|EACCES|EADDRNOTAVAIL|EINVAL|EMFILE|ENFILE|ENOBUFS|ENOMEM|EBADF):/u.exec(
-            message,
-          )?.[1]
-        : undefined;
-    return code ?? "unclassified-redacted";
-  },
-}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guardedFetch }));
 vi.mock("node:http", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:http")>();
-  const { errorMonitor } = await import("node:events");
   return {
     ...actual,
     createServer: (...args: Parameters<typeof actual.createServer>) => {
@@ -57,20 +28,6 @@ vi.mock("node:http", async (importOriginal) => {
               loopback.boundPorts.push(address.port);
             }
           });
-          const id = ++observation.nextServer;
-          observation.record(`server:${id}:listen:${loopback.port === 0 ? "ephemeral" : "reuse"}`);
-          const onListening = () => observation.record(`server:${id}:listening`);
-          const onError = (error: unknown) =>
-            observation.record(`server:${id}:error:${observation.errorClass(error)}`);
-          const onClose = () => observation.record(`server:${id}:close`);
-          server.on("listening", onListening);
-          server.on(errorMonitor, onError);
-          server.on("close", onClose);
-          observation.disposers.push(() => {
-            server.off("listening", onListening);
-            server.off(errorMonitor, onError);
-            server.off("close", onClose);
-          });
         }
         return listen(...listenArgs);
       });
@@ -86,18 +43,8 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
   }
   const timeout = new AbortController();
   const timeoutSignal = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
-  const onTimeout = () =>
-    observation.record(`timeout:abort:${observation.errorClass(timeout.signal.reason)}`);
-  timeout.signal.addEventListener("abort", onTimeout, { once: true });
-  observation.disposers.push(() => timeout.signal.removeEventListener("abort", onTimeout));
   const start = () =>
     new WizardSession(async (prompter, signal) => {
-      const id = ++observation.nextWizard;
-      observation.record(`wizard:${id}:start:${signal.aborted ? "aborted" : "active"}`);
-      const onAbort = () =>
-        observation.record(`wizard:${id}:abort:${observation.errorClass(signal.reason)}`);
-      signal.addEventListener("abort", onAbort, { once: true });
-      observation.disposers.push(() => signal.removeEventListener("abort", onAbort));
       await runProviderPluginAuthMethodUnpersisted({
         config: {},
         runtime: createNonExitingRuntime(),
@@ -121,7 +68,6 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
     timeout.abort(new DOMException("Sign-in timed out", "TimeoutError"));
     // Retry only after the expired runner has released its callback listener.
     await session.whenSettled();
-    observation.record("wizard:1:settled");
     expect(await session.next()).toMatchObject({
       done: true,
       status: "error",
@@ -130,14 +76,7 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
 
     retry = start();
     // SIWC publishes this note only after its callback listener has bound successfully.
-    const retryStep = await retry.next();
-    expect(
-      retryStep,
-      JSON.stringify({
-        retryError: observation.errorClass(retryStep.error),
-        events: observation.events,
-      }),
-    ).toMatchObject({
+    expect(await retry.next()).toMatchObject({
       done: false,
       step: {
         type: "note",
@@ -152,8 +91,5 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
     retry?.cancel();
     await Promise.all([session.whenSettled(), retry?.whenSettled()]);
     timeoutSignal.mockRestore();
-    for (const dispose of observation.disposers.splice(0)) {
-      dispose();
-    }
   }
 });
