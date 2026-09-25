@@ -3,13 +3,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
-  runSqliteIntegrityCheckSync,
-  type SqliteIntegrityCheck,
-  type SqliteIntegrityOperation,
-} from "../infra/sqlite-integrity.js";
+  createSqliteLifecycleAggregateError,
+  runWithSqliteCoordinator,
+} from "../infra/sqlite-coordinator.js";
+import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
+import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import type { acquireStateDatabaseCoordinatorWithWait } from "../infra/state-database-coordinator-acquisition.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator-errors.js";
@@ -24,6 +23,13 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import {
+  assertAgentDatabaseOpenAuthority,
+  isAgentIntegrityPreparationChanged,
+  prepareAgentIntegrityReadOnly,
+  runAgentDatabaseIntegrityOperationSync,
+  withPreparedAgentIntegrity,
+} from "./openclaw-agent-db-integrity-preparation.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -46,32 +52,6 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 export type OpenClawAgentDatabaseWriteAdmission = <T>(
   run: (assertCurrent: () => void, validation?: OpenClawAgentDatabaseValidation) => T | Promise<T>,
 ) => Promise<T>;
-
-/** Refusal must unwind ownership without entering corruption repair or changing its caller error. */
-function assertAgentDatabaseOpenAuthority(
-  operation: SqliteIntegrityOperation<OpenClawAgentDatabase>,
-  assertCurrent?: () => void,
-): void {
-  try {
-    assertCurrent?.();
-  } catch (error) {
-    const refusal = new Error("Agent database open authority was refused", { cause: error });
-    try {
-      operation.throw(refusal);
-    } catch (cleanupError) {
-      if (cleanupError !== refusal) {
-        throw new AggregateError(
-          [error, cleanupError],
-          `Agent database authority and cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-          {
-            cause: cleanupError,
-          },
-        );
-      }
-    }
-    throw error;
-  }
-}
 
 function assertAgentDatabaseOperationCurrent(
   database: OpenClawAgentDatabase,
@@ -218,13 +198,15 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     return work;
   }
 
-  /** Run on a Worker to keep its same-connection integrity check outside the parent writer. */
+  /** Runtime mutation Workers prepare their retained reader before requesting the writer. */
   function withOpenClawAgentDatabaseAdmission<T>(
     inputOptions: OpenClawAgentDatabaseOptions,
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+    preparationValidation?: OpenClawAgentDatabaseValidation,
   ): Promise<T> {
-    const run = () => runAgentDatabaseAdmission(inputOptions, withAdmission, operation);
+    const run = () =>
+      runAgentDatabaseAdmission(inputOptions, withAdmission, operation, preparationValidation);
     const scope = getOpenClawDatabaseMaintenanceScope();
     return scope ? scope.run(() => scope.track(run())) : run();
   }
@@ -233,6 +215,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     inputOptions: OpenClawAgentDatabaseOptions,
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+    preparationValidation?: OpenClawAgentDatabaseValidation,
   ): Promise<T> {
     const options = {
       ...inputOptions,
@@ -252,78 +235,96 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           throw error;
         }
       }
-      return withOpenClawAgentDatabaseAdmission(options, withAdmission, operation);
+      return withOpenClawAgentDatabaseAdmission(
+        options,
+        withAdmission,
+        operation,
+        preparationValidation,
+      );
     }
     const admission = createOpenClawAgentDatabaseAdmission(agentId, pathname);
     const { pending } = admission;
     // This caller receives its scoped operation result; lifecycle disposal joins the open promise.
     void pending.promise.catch(() => {});
     pending.operations += 1;
-    const steps = openSteps(options, pending);
-    let check: SqliteIntegrityCheck | undefined;
-    let failure: { error: unknown } | undefined;
-    let suspended = false;
+    let preparation: ReturnType<typeof prepareAgentIntegrityReadOnly>;
+    const closePreparation = () => {
+      const captured = preparation;
+      preparation = undefined;
+      captured?.close();
+    };
     try {
       while (true) {
+        const cached = cache.databases.get(pathname);
+        if (!isMainThread && (!cached?.db.isOpen || cache.failures.has(pathname))) {
+          preparation = prepareAgentIntegrityReadOnly(
+            options,
+            () => assertOpenClawAgentDatabaseAdmissionCurrent(options, pending),
+            preparationValidation,
+          );
+        }
         const outcome = await withAdmission(async (assertCurrent, validation) => {
-          try {
-            assertCurrent();
-            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
-          } catch (error) {
-            // Revocation takes precedence over repairable integrity damage.
-            failure = {
-              error: new Error(error instanceof Error ? error.message : String(error), {
+          const assertAdmittedCurrent = (database?: DatabaseSync) => {
+            try {
+              assertCurrent();
+              assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, database);
+            } catch (error) {
+              throw new Error(error instanceof Error ? error.message : String(error), {
                 cause: error,
-              }),
-            };
+              });
+            }
+          };
+          assertAdmittedCurrent();
+          try {
+            preparation?.assertCurrent();
+          } catch (error) {
+            if (!isAgentIntegrityPreparationChanged(error)) {
+              throw error;
+            }
+            // No generator step or write-capable open has started; prepare again outside FIFO.
+            return { done: false as const, error };
           }
           pending.validation = validation;
-          suspended = false;
-          const step = failure ? steps.throw(failure.error) : steps.next();
-          if (!step.done) {
-            suspended = true;
-            return { done: false as const, check: step.value };
-          }
-          pending.releaseBorrow = retainAgentDatabase(step.value.db);
-          admission.complete(step.value);
+          const database = withPreparedAgentIntegrity(preparation, () =>
+            runAgentDatabaseIntegrityOperationSync(
+              openSteps(options, pending),
+              assertAdmittedCurrent,
+            ),
+          );
+          // Canonical repairs and subsequent checks retain this same write reservation.
+          closePreparation();
+          pending.releaseBorrow = retainAgentDatabase(database.db);
+          admission.complete(database);
           const assertOperationCurrent = () =>
-            assertAgentDatabaseOperationCurrent(step.value, options, pending, assertCurrent);
+            assertAgentDatabaseOperationCurrent(database, options, pending, assertCurrent);
           assertOperationCurrent();
           const flushMaintenance = isMainThread
             ? undefined
-            : registerDeferredSqliteWalWriteAdmission(step.value.db);
+            : registerDeferredSqliteWalWriteAdmission(database.db);
           flushMaintenance?.(assertOperationCurrent);
-          const result = await operation(step.value);
+          const result = await operation(database);
           flushMaintenance?.(assertOperationCurrent);
           return { done: true as const, result };
         });
         if (outcome.done) {
           return outcome.result;
         }
-        check = outcome.check;
-        failure = undefined;
         try {
-          pending.controller.signal.throwIfAborted();
-          runSqliteIntegrityCheckSync(check);
-        } catch (error) {
-          failure = { error };
+          closePreparation();
+        } catch (cleanupError) {
+          throw createSqliteLifecycleAggregateError(
+            [outcome.error, cleanupError],
+            "Stale agent preparation and cleanup failed",
+            outcome.error,
+          );
         }
       }
     } catch (error) {
       const failures = [error];
-      if (suspended) {
-        const cancellation = new Error(`Agent database admission failed: ${pathname}`, {
-          cause: error,
-        });
-        try {
-          // A lost scheduler cannot grant another permit. A generic refusal only
-          // unwinds this owner's handle and lease; it cannot enter index repair.
-          steps.throw(cancellation);
-        } catch (cleanupError) {
-          if (cleanupError !== cancellation) {
-            failures.push(cleanupError);
-          }
-        }
+      try {
+        closePreparation();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
       }
       const terminalFailure =
         failures.length === 1

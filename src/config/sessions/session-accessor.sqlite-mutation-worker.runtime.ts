@@ -82,7 +82,11 @@ export async function runColdMutationWorkerPort(
 ): Promise<void> {
   // SAFETY: the typed parent installs its outcome owner before sending this private request.
   const [request] = (await once(port, "message")) as [
-    { type: string; coordination: SqliteMutationWorkerCoordination },
+    {
+      type: string;
+      coordination: SqliteMutationWorkerCoordination;
+      preparationValidation?: OpenClawAgentDatabaseValidation;
+    },
   ];
   if (request.type !== "mutate") {
     throw new Error("SQLite cold mutation Worker received invalid admission");
@@ -92,16 +96,24 @@ export async function runColdMutationWorkerPort(
     0,
     data.plan.databaseOptions,
     (databaseOptions) =>
-      runColdMutationWorker(port, {
-        ...data,
-        plan: { ...data.plan, databaseOptions },
-      }),
+      runColdMutationWorker(
+        port,
+        {
+          ...data,
+          plan: { ...data.plan, databaseOptions },
+        },
+        request.preparationValidation,
+      ),
   );
   port.postMessage(response);
   port.close();
 }
 
-async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
+async function runColdMutationWorker(
+  port: MessagePort,
+  data: SessionColdWorkerData,
+  preparationValidation?: OpenClawAgentDatabaseValidation,
+) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
   // Restore materialization must finish before requesting any write admission.
@@ -142,6 +154,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
           }
         }
       },
+      preparationValidation,
     );
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
@@ -391,6 +404,7 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
+              request.preparationValidation,
             );
             return {
               type: "reclaimed",

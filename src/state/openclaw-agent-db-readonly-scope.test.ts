@@ -6,12 +6,14 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
 } from "./openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabaseReadOnlyCandidates,
   OpenClawAgentDatabaseReadOnlyScope,
@@ -23,6 +25,41 @@ import {
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+
+it("retains rollback recovery preparation without prematurely admitting schema facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const recovery = Object.assign(new Error("Synthetic read-only rollback refusal"), {
+      errcode: 776,
+    });
+    const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = nativeOpen(...args);
+      vi.spyOn(database, "prepare").mockImplementation(() => {
+        throw recovery;
+      });
+      return database;
+    });
+    try {
+      expect(() => openOpenClawAgentDatabaseReadOnly(options)).toThrow(recovery);
+      const prepared = openOpenClawAgentDatabaseReadOnly(options, { prepareIntegrity: true });
+      expect(prepared.found).toBe(true);
+      if (!prepared.found) {
+        throw new Error("Missing synthetic recovery preparation");
+      }
+      try {
+        expect(prepared.database.rollbackRecovery?.error).toBe(recovery);
+        expect(getAdmittedSqliteSchemaFacts(prepared.database.db)).toBeUndefined();
+      } finally {
+        prepared.database.close();
+      }
+    } finally {
+      open.mockRestore();
+    }
+  });
+});
 
 it("bounds query preparation while scoped reads observe new commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

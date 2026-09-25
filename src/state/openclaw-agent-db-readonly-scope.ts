@@ -59,7 +59,10 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   private borrowers = 0;
   private closing = false;
 
-  constructor(private readonly cached = false) {}
+  constructor(
+    private readonly cached = false,
+    private readonly prepareIntegrity = false,
+  ) {}
 
   get hasRetainedConnection(): boolean {
     return this.database !== undefined;
@@ -170,7 +173,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     if (!this.database) {
       let opened: ReturnType<typeof openOpenClawAgentDatabaseReadOnly>;
       try {
-        opened = openOpenClawAgentDatabaseReadOnly(options);
+        opened = openOpenClawAgentDatabaseReadOnly(options, {
+          prepareIntegrity: this.prepareIntegrity,
+        });
       } catch (error) {
         this.discardConnection();
         throw error;
@@ -243,7 +248,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     this.assertUsable();
     const opened =
       this.database?.db.isOpen && this.database.db.isTransaction
-        ? openOpenClawAgentDatabaseReadOnly(options)
+        ? openOpenClawAgentDatabaseReadOnly(options, { prepareIntegrity: this.prepareIntegrity })
         : this.acquire(options);
     if (!opened.found) {
       return opened;

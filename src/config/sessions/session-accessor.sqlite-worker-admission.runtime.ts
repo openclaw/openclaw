@@ -12,6 +12,7 @@ export function withWorkerWriteAdmission<T>(
   operationId: number,
   databaseOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+  preparationValidation?: OpenClawAgentDatabaseValidation,
 ): Promise<T> {
   let admissionId = 0;
   let finalAdmission = false;
@@ -69,8 +70,13 @@ export function withWorkerWriteAdmission<T>(
     }
     return value;
   };
-  return withOpenClawAgentDatabaseAdmission(databaseOptions, withAdmission, (database) => {
-    finalAdmission = true;
-    return operation(database);
-  });
+  return withOpenClawAgentDatabaseAdmission(
+    databaseOptions,
+    withAdmission,
+    (database) => {
+      finalAdmission = true;
+      return operation(database);
+    },
+    preparationValidation,
+  );
 }

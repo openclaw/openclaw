@@ -17,6 +17,10 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -68,6 +72,7 @@ export type SqliteReclamationWorkerRequest = {
   commitGate: SharedArrayBuffer;
   plan: SqliteSessionReclamationPlan;
   coordination: SqliteMutationWorkerCoordination;
+  preparationValidation?: OpenClawAgentDatabaseValidation;
 };
 export type SqliteReclamationWorkerCloseRequest = {
   type: "close";
@@ -83,6 +88,7 @@ export type SqliteCanonicalValidationWorkerRequest = {
   maxBytes: number;
   initializeCanonicalValidation: boolean;
   coordination: SqliteMutationWorkerCoordination;
+  preparationValidation?: OpenClawAgentDatabaseValidation;
 };
 type SqliteMutationWorkerRequest =
   | SqliteReclamationWorkerRequest
@@ -422,11 +428,21 @@ export class SqliteReclamationWorker {
           },
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
-          dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [
-              ...params.transferList,
-              ...(coordination.stateLifecycle ? [coordination.stateLifecycle] : []),
-            ]),
+          dispatch: () => {
+            this.assertCurrent(params.databaseOptions, params.claim);
+            worker.postMessage(
+              {
+                ...params.request(operationId, coordination),
+                preparationValidation: params.validationOwner?.isCurrent()
+                  ? getOpenClawAgentDatabaseValidation(params.validationOwner.database)
+                  : undefined,
+              },
+              [
+                ...params.transferList,
+                ...(coordination.stateLifecycle ? [coordination.stateLifecycle] : []),
+              ],
+            );
+          },
         }),
     );
     const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>

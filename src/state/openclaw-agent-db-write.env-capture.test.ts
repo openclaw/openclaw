@@ -62,6 +62,7 @@ vi.mock("../config/state-dir.js", () => ({
 }));
 vi.mock("./openclaw-agent-db.paths.js", () => ({
   resolveOpenClawAgentSqlitePath: boundary.route,
+  isIncognitoOpenClawAgentSqlitePath: () => false,
 }));
 vi.mock("./openclaw-agent-write-admission.js", () => ({
   SQLITE_SESSION_WRITER_QUEUES: new Map<string, StoreWriterQueue>(),

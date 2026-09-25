@@ -61,7 +61,7 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
   const open = sqlite.openNodeSqliteDatabase;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
     const database = open(...args);
-    if (args[0] === pathname) {
+    if (database.location() === pathname) {
       advance(50);
       const prepare = database.prepare.bind(database);
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
@@ -275,51 +275,31 @@ describe("agent database open timings", () => {
     },
   );
 
-  it("separates the synchronous check from readmission waiting in the completed owner log", async () => {
-    const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
+  it("prepares integrity before its single admission without charging canonical open time", async () => {
+    const { options, pathname } = createTimedOpen(0, 0, 1_200.75);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
     clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     let admissions = 0;
+    const preparationStartedAt = performance.now();
+    let admittedAt = 0;
 
     const isOpen = await withOpenClawAgentDatabaseAdmission(
       options,
       async (run) => {
         admissions += 1;
-        if (admissions === 2) {
-          advance(999.75);
-        }
+        admittedAt = performance.now();
         return await run(() => {});
       },
       (database) => database.db.isOpen,
     );
 
     expect(isOpen).toBe(true);
-    expect(admissions).toBe(2);
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-      agentId: options.agentId,
-      elapsedMs: 1_430,
-      path: pathname,
-      pid: process.pid,
-      threadId,
-      isMainThread,
-      admissionMode: "async",
-      thresholdMs: 1_000,
-      integrityGateMs: 1_120,
-      integrityGateOutcome: "healthy",
-      integrityCheckSyncMs: 120,
-      integrityOutsideCheckMs: 1_000,
-      canonicalIndexMs: 0,
-      repairedIndexCount: 0,
-      phaseDurationsMs: {
-        open: 60,
-        validation: 1_120,
-        configuration: 80,
-        schema: 90,
-        registration: 80,
-      },
-    });
+    expect(admissions).toBe(1);
+    expect(admittedAt - preparationStartedAt).toBe(1_250.75);
+    expect(performance.now() - admittedAt).toBe(310);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("includes asynchronous admission waiting once for coalesced callers", async () => {

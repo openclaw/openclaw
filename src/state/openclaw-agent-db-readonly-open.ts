@@ -3,7 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
+import {
+  sqliteExtendedResultCode,
+  sqlitePrimaryResultCode,
+} from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -28,6 +31,7 @@ export type OpenClawAgentReadOnlyDatabase = {
 
 export type OpenClawAgentReadOnlyDatabaseHandle = OpenClawAgentReadOnlyDatabase & {
   close: () => void;
+  rollbackRecovery?: { error: unknown };
 };
 
 export type OpenClawAgentDatabaseReadOnlyOpenResult =
@@ -83,7 +87,7 @@ export function withFreshOpenClawAgentDatabaseReadOnly<T>(
 /** Open one existing agent database without creating, registering, migrating, or adopting it. */
 export function openOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
-  behavior: { allowExtension?: boolean } = {},
+  behavior: { allowExtension?: boolean; prepareIntegrity?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyOpenResult {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -113,12 +117,20 @@ export function openOpenClawAgentDatabaseReadOnly(
   };
   try {
     registerOpenClawAgentDatabaseIdentity(db);
-    const database = { agentId, db, path: pathname, close };
-    if (!hasOpenClawAgentReadOnlySchema(database)) {
-      close();
-      return { found: false, reason: "schema-missing" };
+    const database: OpenClawAgentReadOnlyDatabaseHandle = { agentId, db, path: pathname, close };
+    try {
+      if (!hasOpenClawAgentReadOnlySchema(database)) {
+        close();
+        return { found: false, reason: "schema-missing" };
+      }
+      admitSqliteSchema(db);
+    } catch (error) {
+      // SQLITE_READONLY_ROLLBACK: only the canonical writer can recover this retained source.
+      if (!behavior.prepareIntegrity || sqliteExtendedResultCode(error) !== 776) {
+        throw error;
+      }
+      database.rollbackRecovery = { error };
     }
-    admitSqliteSchema(db);
     return { found: true, database };
   } catch (error) {
     close();

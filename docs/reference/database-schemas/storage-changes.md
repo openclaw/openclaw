@@ -1656,12 +1656,19 @@ deletion hooks, commit-authorization joins, archive publication bookkeeping, and
 repository/worktree cleanup retain their existing parent-side owners.
 
 Session reclamation keeps its deletion transaction on a worker connection.
-The worker opens its database under the session writer, then releases that writer
-while any required first full integrity and foreign-key checks run on the same
-connection. Unrelated session writes can continue during those checks. Workers
-can borrow the Gateway's remembered verification for the same physical agent
-database under live write admission. The worker reacquires the writer and
-revalidates current authority before index repair, schema work, or deletion.
+Before requesting the session writer, the worker retains a read-only connection
+to the existing database and completes its required full integrity and foreign-key
+checks. It may reuse remembered verification only while that proof remains current
+for the same physical source. A source requiring rollback recovery stays bound to
+its retained physical generation and receives full checks in the admitted canonical
+opener. Writer admission revalidates the retained source and live authority before
+canonical writable opening, including schema ownership and data version when the
+source permits read-only validation.
+Changed preparation can retry only before a write-capable phase begins. Rollback
+journal recovery, index repair, schema work, deletion, and required native
+settlement retain the same write reservation; they never release and reacquire it
+inside database opening. Canonical repairs still perform their required full checks.
+Failed cleanup retains admission until actual native worker exit.
 The process retains at most one validated reclamation worker connection and lease,
 with a 30-minute idle retirement. Each deletion keeps its own transaction, retained
 parent claim, numbered write admission, and current-authority checks in its own

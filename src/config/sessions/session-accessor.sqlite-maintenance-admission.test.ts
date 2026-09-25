@@ -16,6 +16,8 @@ const storage = vi.hoisted(() => ({
   run: vi.fn<WorkerOwner["run"]>(),
   committed: false,
   release: vi.fn(),
+  requestController: undefined as AbortController | undefined,
+  requestRefusal: undefined as Error | undefined,
 }));
 const options = {
   agentId: "main",
@@ -60,12 +62,18 @@ vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) =>
       commitGate: SharedArrayBuffer;
       signal: AbortSignal;
     }) => Promise<T>,
-  ) =>
-    await run({
-      assertCurrent: () => {},
+  ) => {
+    const signal = storage.requestController?.signal ?? new AbortController().signal;
+    return await run({
+      assertCurrent: () => {
+        if (signal.aborted) {
+          throw storage.requestRefusal ?? signal.reason;
+        }
+      },
       commitGate: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-      signal: new AbortController().signal,
-    }),
+      signal,
+    });
+  },
 }));
 vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>()),
@@ -99,35 +107,113 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
   };
 });
 
-test("maintenance finalization retains FIFO across preliminary admission without inverting archive ownership", async () => {
+test("cancels waiting maintenance writer admission with the owner's specific refusal", async () => {
+  storage.committed = false;
+  storage.release.mockClear();
+  storage.requestController = new AbortController();
+  const refusal = (storage.requestRefusal = new Error("Maintenance source authority was revoked"));
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const queued = createDeferredCore();
+  const value: SqliteSessionReclamationResult = {
+    kind: "maintenance-finalize",
+    value: { archivedTranscripts: [], changedEntries: [], committedEntries: [] },
+  };
+  const runAdmitted = vi.fn(async (rejected?: { error: unknown }) => {
+    if (rejected) {
+      throw rejected.error;
+    }
+    return value;
+  });
+  let holding: Promise<void> | undefined;
+  storage.run.mockImplementation(async (params) => {
+    holding = runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        writerEntered.resolve();
+        await releaseWriter.promise;
+      },
+      "session-entry.patch",
+    );
+    await writerEntered.promise;
+    const waiting = params.withWriteAdmission(runAdmitted, { admissionId: 1 });
+    queued.resolve();
+    await waiting;
+    return value;
+  });
+  const outcome: { settled: boolean; error?: unknown } = { settled: false };
+  const request = runSqliteSessionReclamation({
+    forceInProcess: false,
+    plan: {
+      kind: "maintenance-finalize",
+      agentId: "main",
+      databaseOptions: options,
+      entries: [],
+      materializedPlans: [],
+    },
+  }).then(
+    () => {
+      outcome.settled = true;
+    },
+    (error: unknown) => {
+      outcome.settled = true;
+      outcome.error = error;
+    },
+  );
+  try {
+    await queued.promise;
+    storage.requestController.abort(new Error("Generic queued writer cancellation"));
+    await nextTurn();
+    expect(outcome.settled).toBe(true);
+    expect(outcome.error).toBe(refusal);
+    expect(runAdmitted).not.toHaveBeenCalled();
+    expect(storage.committed).toBe(false);
+    expect(storage.release).toHaveBeenCalledOnce();
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([holding, request]);
+    storage.requestController = undefined;
+    storage.requestRefusal = undefined;
+  }
+});
+
+test("maintenance prepares before FIFO and retains admitted finalization through publication", async () => {
   storage.committed = false;
   storage.release.mockClear();
   const validationGap = createDeferredCore();
+  const writeAdmitted = createDeferredCore();
   const archiveEntered = createDeferredCore();
   const releaseArchive = createDeferredCore();
   const admissions: number[] = [];
   const order: string[] = [];
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
-     let released = false;
-     let continueRequested = false;
+     let requested = false;
+     let admitted = false;
+     let finishRequested = false;
+     const finish = () => {
+       if (!admitted || !finishRequested) return;
+       parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
+         result: { kind: "maintenance-finalize", value: {
+           archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
+       parentPort.close();
+     };
      parentPort.on("message", (message) => {
        if (message.type === "start") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
-       } else if (message.type === "continue") {
-         continueRequested = true;
-         if (released) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 1) {
-         parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
-         released = true;
-         if (continueRequested) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 2) {
+       } else if (message.type === "continue") {
+         if (!requested) {
+           requested = true;
+           parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+         }
+       } else if (message.type === "admission" && message.admissionId === 1) {
+         admitted = true;
          parentPort.postMessage({ type: "commit-request", operationId: 1 });
-         parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
-           result: { kind: "maintenance-finalize", value: {
-             archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
-         parentPort.close();
+         parentPort.postMessage({ type: "write-admitted" });
+         finish();
+       } else if (message.type === "finish") {
+         finishRequested = true;
+         finish();
        }
      });`,
     { eval: true, execArgv: [] },
@@ -135,6 +221,8 @@ test("maintenance finalization retains FIFO across preliminary admission without
   worker.on("message", (message) => {
     if (message.type === "validation-gap") {
       validationGap.resolve();
+    } else if (message.type === "write-admitted") {
+      writeAdmitted.resolve();
     }
   });
   storage.run.mockImplementation((params) =>
@@ -166,6 +254,7 @@ test("maintenance finalization retains FIFO across preliminary admission without
     },
   });
   let precedingWriter: Promise<void> | undefined;
+  let preparationWriter: Promise<void> | undefined;
   let laterWriter: Promise<void> | undefined;
   let laterObservedCommit = false;
   try {
@@ -186,6 +275,21 @@ test("maintenance finalization retains FIFO across preliminary admission without
     releaseArchive.resolve();
     await earlierArchive;
     await validationGap.promise;
+    let preparationWriterRan = false;
+    preparationWriter = runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        preparationWriterRan = true;
+        expect(storage.committed).toBe(false);
+        order.push("preparation-writer");
+      },
+      "session-entry.patch",
+    );
+    await nextTurn();
+    expect(preparationWriterRan).toBe(true);
+    await preparationWriter;
+    worker.postMessage({ type: "continue" }, []);
+    await writeAdmitted.promise;
     laterWriter = runExclusiveSqliteSessionWrite(
       options,
       async () => {
@@ -195,18 +299,25 @@ test("maintenance finalization retains FIFO across preliminary admission without
       "session-entry.patch",
     );
     await nextTurn();
-    expect(order).toEqual(["preceding-writer"]);
-    worker.postMessage({ type: "continue" }, []);
+    expect(order).toEqual(["preceding-writer", "preparation-writer"]);
+    worker.postMessage({ type: "finish" }, []);
     await expect(finalization).resolves.toMatchObject({ kind: "maintenance-finalize" });
     await laterWriter;
-    expect(admissions).toEqual([1, 2]);
+    expect(admissions).toEqual([1]);
     expect(laterObservedCommit).toBe(true);
-    expect(order).toEqual(["preceding-writer", "later-writer"]);
+    expect(order).toEqual(["preceding-writer", "preparation-writer", "later-writer"]);
     expect(storage.release).toHaveBeenCalledOnce();
   } finally {
     releaseArchive.resolve();
     worker.postMessage({ type: "continue" }, []);
-    await Promise.allSettled([earlierArchive, precedingWriter, finalization, laterWriter]);
+    worker.postMessage({ type: "finish" }, []);
+    await Promise.allSettled([
+      earlierArchive,
+      precedingWriter,
+      preparationWriter,
+      finalization,
+      laterWriter,
+    ]);
     await worker.terminate();
   }
 });

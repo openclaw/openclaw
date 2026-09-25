@@ -19,9 +19,16 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
+import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
+import {
+  assertAgentDeletionCleanupAliases,
+  assertAgentDeletionDatabaseCleanupAccess,
+  releaseAgentDeletionDatabaseCleanup,
+} from "./agent-deletion-cleanup.js";
+import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
 import type {
   OpenClawAgentDatabase,
+  OpenClawAgentDatabaseOptions,
   OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
 import {
@@ -44,6 +51,11 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -324,6 +336,53 @@ export function closeCachedOpenClawAgentDatabase(
   releaseAgentDeletionDatabaseCleanup(database);
   clearTimeout(cache.idleTimers.get(database.db));
   cache.idleTimers.delete(database.db);
+}
+
+/** Return the matching live cache entry without materializing a database. */
+export function getOpenClawAgentDatabaseIfOpen(
+  options: OpenClawAgentDatabaseOptions,
+): OpenClawAgentDatabase | undefined {
+  const database = findOpenClawAgentDatabaseIfOpen(options);
+  if (database) {
+    refreshAgentDatabaseIdleTimer(database);
+  }
+  return database;
+}
+
+export function findOpenClawAgentDatabaseIfOpen(
+  options: OpenClawAgentDatabaseOptions,
+): OpenClawAgentDatabase | undefined {
+  const agentId = normalizeAgentId(options.agentId);
+  assertAgentDatabaseAdmitted(agentId, { env: options.env });
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  // Incognito skips durable database leases, but still follows the agent deletion fence.
+  if (
+    isIncognitoOpenClawAgentSqlitePath(pathname, options) &&
+    readAgentDeletionJournal(agentId, { env: options.env }, "runtime")
+  ) {
+    throw new Error(`OpenClaw agent database is unavailable while agent ${agentId} is deleted.`);
+  }
+  const database = cache.databases.get(pathname);
+  if (!database?.db.isOpen) {
+    assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
+    return undefined;
+  }
+  if (cache.failures.has(pathname)) {
+    throw cache.failures.get(pathname);
+  }
+  if (database.agentId !== agentId) {
+    throw new Error(
+      `OpenClaw agent database ${pathname} is already open for agent ${database.agentId}; requested agent ${agentId}.`,
+    );
+  }
+  assertAgentDeletionDatabaseCleanupAccess(database, options);
+  observeOpenClawDatabaseMaintenanceResource(database.db);
+  return database;
+}
+
+/** Return whether the exact cached agent database pathname is still open. */
+export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
+  return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }
 
 /** Close one cached agent database identified by its exact resolved pathname. */

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -13,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
@@ -67,6 +68,117 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 describe.skipIf(Boolean(process.versions.bun))(
   "reclamation deferred maintenance native custody",
   () => {
+    it("retains write admission through actual exit after preparation reader cleanup fails", async () => {
+      const root = dirs.make("reclamation-preparation-cleanup-");
+      const env = { OPENCLAW_STATE_DIR: root };
+      const options = { agentId: "main", env };
+      ensureSessionEntrySync(
+        { ...options, sessionKey: "agent:main:fixture" },
+        { sessionId: "fixture", updatedAt: 1 },
+      );
+      const source = openOpenClawAgentDatabase(options);
+      clearOpenClawAgentIntegrityVerification(source.path, env);
+      const databaseOptions = { ...options, path: source.path };
+      const gate = new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT));
+      const release = () => {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+      };
+      onTestFinished(release);
+      const preload = path.join(root, "preparation-cleanup.cjs");
+      writeFileSync(
+        preload,
+        `
+        const { DatabaseSync } = require('node:sqlite');
+        const { workerData } = require('node:worker_threads');
+        const gate = new Int32Array(workerData.fixtureNativeGate);
+        const target = ${JSON.stringify(realpathSync(source.path))};
+        const prepare = DatabaseSync.prototype.prepare;
+        let prepared;
+        DatabaseSync.prototype.prepare = function(sql) {
+          if (!prepared && this.location() === target && /^PRAGMA integrity_check;?$/i.test(sql.trim())) prepared = this;
+          return prepare.call(this, sql);
+        };
+        const close = DatabaseSync.prototype.close;
+        DatabaseSync.prototype.close = function() {
+          if (this === prepared && this.isOpen) {
+            Atomics.add(gate, 2, 1);
+            throw new Error('synthetic preparation reader native close failure');
+          }
+          return close.call(this);
+        };
+        process.on('uncaughtExceptionMonitor', () => {
+          Atomics.store(gate, 1, 1);
+          Atomics.notify(gate, 1);
+          Atomics.wait(gate, 0, 0);
+        });
+        `,
+      );
+      nativePreload.path = preload;
+      nativePreload.gate = gate.buffer;
+      nativePreload.moduleUrl = resolveRuntimeWorkerUrl(
+        runtimeProcessEntrypoints.sessionTranscriptArchive,
+      ).href;
+      let settled = false;
+      const outcome = runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan: createLifecycleArtifactReclamationPlan({
+          agentId: options.agentId,
+          databaseOptions,
+          entries: [],
+          materializedPlans: [],
+        }),
+      }).then(
+        () => {
+          settled = true;
+          return "fulfilled";
+        },
+        () => {
+          settled = true;
+          return "rejected";
+        },
+      );
+      let follower: Promise<void> | undefined;
+      try {
+        const waiting = Atomics.waitAsync(gate, 1, 0);
+        expect(
+          await Promise.race([
+            Promise.resolve(waiting.value).then(() => "exit-pending"),
+            outcome.then(() => "settled"),
+          ]),
+        ).toBe("exit-pending");
+        expect(Atomics.load(gate, 2)).toBeGreaterThan(0);
+        const worker = nativePreload.worker;
+        if (!worker) {
+          throw new Error("Actual reclamation Worker was not captured");
+        }
+        let exited = false;
+        const exit = new Promise<void>((resolve) => {
+          worker.once("exit", () => {
+            exited = true;
+            resolve();
+          });
+        });
+        expect(settled).toBe(false);
+        let followed = false;
+        follower = runOpenClawAgentWriteAdmission(databaseOptions, () => {
+          expect(exited).toBe(true);
+          followed = true;
+        });
+        await setImmediate();
+        expect(followed).toBe(false);
+        expect(exited).toBe(false);
+        release();
+        expect(await outcome).toBe("rejected");
+        await follower;
+        await exit;
+      } finally {
+        release();
+        await nativePreload.worker?.terminate();
+        await Promise.allSettled([outcome, follower]);
+      }
+    });
+
     it.each([
       { phase: "pre", cleanup: "rollback" },
       { phase: "pre", cleanup: "close" },
