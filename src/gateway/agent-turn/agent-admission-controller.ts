@@ -2,12 +2,12 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
+  isSessionWorkRestartInterruptReason,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -176,9 +176,8 @@ export function createAgentAdmissionController(params: {
     if (admittedRunAbort?.controller.signal.aborted) {
       return undefined;
     }
-    const stopReason = isAgentRunDirectAbortReason(reason)
-      ? "rpc"
-      : AGENT_RUN_RESTART_ABORT_STOP_REASON;
+    const restartClassified = isSessionWorkRestartInterruptReason(reason);
+    const stopReason = restartClassified ? AGENT_RUN_RESTART_ABORT_STOP_REASON : "rpc";
     if (admittedRunAbort?.entry) {
       admittedRunAbort.entry.abortStopReason = stopReason;
     }
@@ -189,7 +188,7 @@ export function createAgentAdmissionController(params: {
         params.context.chatAbortControllers.get(params.runId) === entry &&
         !entry.registrationCleanupRequested;
       admittedRunAbort.controller.abort(
-        stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
+        restartClassified ? createAgentRunRestartAbortError() : reason,
       );
       return ownsRun ? { runId: params.runId } : undefined;
     }

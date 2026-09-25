@@ -1132,7 +1132,8 @@ describe("gateway agent handler", () => {
   it.each(["restart", "rpc"] as const)(
     "adopts a recovery admission interrupted by %s before the RPC",
     async (stopReason) => {
-      const reason = stopReason === "rpc" ? createAgentRunDirectAbortError() : undefined;
+      const reason =
+        stopReason === "rpc" ? createAgentRunDirectAbortError() : createAgentRunRestartAbortError();
       const sessionKey = "agent:main:main";
       const sessionId = "existing-session-id";
       const runId = "idem-recovery-admission-handoff";
@@ -1210,10 +1211,11 @@ describe("gateway agent handler", () => {
       primeMainAgentRun();
       const sessionKey = "agent:main:main";
       const sessionId = "existing-session-id";
+      const restart = interruption === "explicit restart";
       const terminal = interruption === "terminal Stop" || interruption === "already stopped";
       const reason = terminal
         ? createAgentRunDirectAbortError()
-        : interruption === "explicit restart"
+        : restart
           ? createAgentRunRestartAbortError()
           : undefined;
       const settled = createDeferredCore();
@@ -1260,7 +1262,7 @@ describe("gateway agent handler", () => {
         reason: interruption === "already stopped" ? createAgentRunRestartAbortError() : reason,
       });
       try {
-        expect(abortEntry.abortStopReason).toBe(terminal ? "rpc" : "restart");
+        expect(abortEntry.abortStopReason).toBe(restart ? "restart" : "rpc");
         if (terminal) {
           expect(abortEntry.controller.signal.reason).toBe(reason);
         }
@@ -1270,16 +1272,19 @@ describe("gateway agent handler", () => {
       }
       await flushScheduledDispatchStep();
 
-      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(!terminal);
+      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(restart);
       expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(terminal);
       if (terminal) {
         expect(observedAbortReason).toBe(reason);
       }
       expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
         runId,
-        status: "timeout",
-        stopReason: terminal ? "rpc" : "restart",
+        status: interruption === "generic" ? "error" : "timeout",
+        ...(interruption === "generic" ? {} : { stopReason: restart ? "restart" : "rpc" }),
       });
+      if (interruption === "generic") {
+        expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("stopReason");
+      }
     },
   );
 

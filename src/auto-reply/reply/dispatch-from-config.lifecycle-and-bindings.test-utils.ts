@@ -1451,9 +1451,11 @@ describe("dispatchReplyFromConfig", () => {
     await mutation;
 
     expect(result.queuedFinal).toBe(false);
+    // The lifecycle mutation interrupts without a typed reason, so admission
+    // records a user abort rather than a gateway restart.
     expect(operation?.result).toMatchObject({
       kind: "aborted",
-      code: "aborted_for_restart",
+      code: "aborted_by_user",
     });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);

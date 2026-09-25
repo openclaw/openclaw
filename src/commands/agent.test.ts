@@ -21,12 +21,6 @@ import {
   loadProviderScopedThinkingCatalog,
   readPreparedModelCatalog,
 } from "../agents/prepared-model-catalog.js";
-import {
-  createAgentRunDirectAbortError,
-  createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
-  isAgentRunRestartAbortReason,
-} from "../agents/run-termination.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -61,7 +55,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
   loadVisibleSkills,
@@ -1402,83 +1395,6 @@ describe("agentCommand", () => {
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     });
   });
-
-  it.each(["generic", "explicit restart", "terminal Stop"] as const)(
-    "preserves lifecycle interruption semantics: %s",
-    async (interruption) => {
-      await withTempHome(async (home) => {
-        const store = path.join(home, "sessions.json");
-        const sessionKey = "agent:main:subagent:lifecycle-restart";
-        const sessionId = "lifecycle-restart-session-id";
-        mockConfig(home, store);
-        await writeSessionStoreSeed(store, {
-          [sessionKey]: { sessionId, updatedAt: Date.now() },
-        });
-        let observedAbortReason: unknown;
-        const entered = createDeferredCore();
-        const cleanup = new AbortController();
-        const reason =
-          interruption === "terminal Stop"
-            ? createAgentRunDirectAbortError()
-            : interruption === "explicit restart"
-              ? createAgentRunRestartAbortError()
-              : undefined;
-        vi.mocked(runEmbeddedAgent).mockImplementationOnce(
-          async (opts) =>
-            await new Promise((resolve) => {
-              entered.resolve();
-              const finish = () => {
-                observedAbortReason = opts.abortSignal?.reason;
-                resolve(createDefaultAgentResult());
-              };
-              if (opts.abortSignal?.aborted) {
-                finish();
-                return;
-              }
-              opts.abortSignal?.addEventListener("abort", finish, { once: true });
-            }),
-        );
-
-        const command = agentCommandFromIngress(
-          {
-            message: "interrupt this lifecycle run",
-            sessionId,
-            allowModelOverride: false,
-            abortSignal: cleanup.signal,
-          },
-          runtime,
-        ).catch((error: unknown) => error);
-        try {
-          await Promise.race([
-            entered.promise,
-            command.then((result) => {
-              throw new Error("Command settled before embedded entry", { cause: result });
-            }),
-          ]);
-          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-          await interruptSessionWorkAdmissions({
-            scope: store,
-            identities: [sessionKey, sessionId],
-            reason,
-          });
-          const commandResult = await command;
-          if (interruption === "terminal Stop") {
-            expect(observedAbortReason).toBe(reason);
-            expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(true);
-          }
-          expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(
-            interruption !== "terminal Stop",
-          );
-          expect(isAgentRunRestartAbortReason(commandResult)).toBe(
-            interruption !== "terminal Stop",
-          );
-        } finally {
-          cleanup.abort(createAgentRunDirectAbortError());
-          await command;
-        }
-      });
-    },
-  );
 
   it("rejects a stale requested session id after command preparation", async () => {
     await withTempHome(async (home) => {

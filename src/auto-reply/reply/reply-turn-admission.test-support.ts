@@ -14,6 +14,15 @@ export function admitTestReplyTurn(
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
 }
 
+/** Admit a reply turn that the caller requires to own the run slot. */
+export async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyTurn>[0]) {
+  const admission = await admitTestReplyTurn(params);
+  if (admission.status !== "owned") {
+    throw new Error("Fixture requires an admitted reply operation");
+  }
+  return admission.operation;
+}
+
 export function createSessionStore(entries: Record<string, SessionEntry>): string {
   const root = tempDirs.make("openclaw-reply-admission-");
   // The store handle stays a sessions.json path; the sqlite-backed accessor
