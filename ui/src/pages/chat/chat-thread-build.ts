@@ -73,7 +73,10 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
+import {
+  latestPersistedSteerBoundary,
+  resolveAssistantTextTail,
+} from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -108,6 +111,36 @@ function canvasAssistantItemKey(
 ): string {
   const identity = canvasPreviewBaseIdentity(message, source);
   return identity ? `canvas:${identity}` : `${fallback}:canvas`;
+}
+
+function currentTurnAssistantHistoryTexts(messages: unknown[]): string[] {
+  let texts: string[] = [];
+  for (const message of messages) {
+    const normalized = safeNormalizeMessage(message);
+    if (normalized && normalizeRoleForGrouping(normalized.role) === "user") {
+      texts = [];
+      continue;
+    }
+    if (isKeyedAssistantStreamFallbackMessage(message)) {
+      continue;
+    }
+    if (!normalized || normalizeRoleForGrouping(normalized.role) !== "assistant") {
+      continue;
+    }
+    const text = sanitizeStreamText(extractTextCached(message) ?? "");
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function uncoveredStreamText(text: string, historyTexts: readonly string[]): string {
+  if (!text) {
+    return "";
+  }
+  const tail = resolveAssistantTextTail(historyTexts, text);
+  return tail ? sanitizeStreamText(tail.trimStart()) : "";
 }
 
 export function buildChatItems(
@@ -479,6 +512,10 @@ export function buildChatItems(
       bounds: resolveProjectionBounds(segment.runId, segment.boundaryRunId, afterBoundaryRunId),
     });
   };
+  // History may already own pre-tool text while the producer still emits the
+  // same unkeyed segment. Hide that copy without retiring live text that has
+  // not been persisted yet.
+  const historyTexts = currentTurnAssistantHistoryTexts(history);
   let previousAccumulatedStreamText: string | null = null;
   const maxLen = Math.max(indexedSegments.length, toolItems.length);
   for (let i = 0; i < maxLen; i++) {
@@ -495,9 +532,10 @@ export function buildChatItems(
           text,
         );
       }
-      if (visibleText.length > 0 && segment.persisted !== true) {
+      const uncoveredText = uncoveredStreamText(visibleText, historyTexts);
+      if (uncoveredText.length > 0 && segment.persisted !== true) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
-        appendStreamSegment(segment, streamKey, visibleText);
+        appendStreamSegment(segment, streamKey, uncoveredText);
         const tool = toolLookup.get(
           normalizeOptionalString(segment.runId),
           segment.toolCallId?.trim(),
