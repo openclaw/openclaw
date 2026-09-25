@@ -71,6 +71,15 @@ describe("toStreamingMarkdownParts", () => {
     ).toEqual(["one/index.ts", "two/index.ts"]);
   });
 
+  it("keeps block-art-looking paragraphs in their surrounding prose", () => {
+    const key = "prose-with-block-glyphs";
+    const intro = "Intro\n\n";
+    toStreamingMarkdownParts(intro, {}, key);
+    expect(toStreamingMarkdownParts(`${intro}▀▀▀▀\n▄▄▄▄\n\n`, {}, key).join("")).toBe(
+      "<p>Intro</p>\n<p>▀▀▀▀<br>\n▄▄▄▄</p>\n",
+    );
+  });
+
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
@@ -371,6 +380,20 @@ describe("toStreamingMarkdownParts", () => {
 });
 
 describe("indented Markdown source", () => {
+  it.each(["    ", "\t", " \t", "  \t", "   \t"])(
+    "retains indented code across completed streaming prefixes: %j",
+    (indent) => {
+      const key = `completed-indentation-${indent}`;
+      const source = `Intro\n\n${indent}code\n\n`;
+      toStreamingMarkdownParts(source, {}, key);
+      const fragment = htmlFragment(
+        toStreamingMarkdownParts(`${source}${indent}continuation\n\nAfter\n\n`, {}, key).join(""),
+      );
+      expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
+      expect(fragment.querySelector("pre code")?.textContent).toBe("code\n\ncontinuation\n");
+    },
+  );
+
   it.each(["    *literal*", "\t*literal*", "\n\n    *literal*"])(
     "renders initial code: %j",
     (source) => {

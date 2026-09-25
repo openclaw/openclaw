@@ -703,17 +703,18 @@ export function toStreamingMarkdownParts(
     previous?.options === renderKey &&
     stableMarkdown.startsWith(previous.markdown) &&
     (previous.markdown === stableMarkdown ||
-      (!/^(?: {4}|\t)/mu.test(stableMarkdown) &&
+      (!/^(?: {4}| {0,3}\t)/mu.test(stableMarkdown) &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
   let stableHtml = incremental ? previous.html : "";
   const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
   if (stableAppend) {
     const appendedHtml = renderSanitizedMarkdown(stableAppend, renderOptions);
-    // File labels are disambiguated across the whole message, not per block.
+    // File-label collisions and standalone block art depend on the whole prefix.
     stableHtml =
-      renderOptions.fileLinks &&
-      stableHtml.includes('class="markdown-file-link"') &&
-      appendedHtml.includes('class="markdown-file-link"')
+      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
+      (renderOptions.fileLinks &&
+        stableHtml.includes('class="markdown-file-link"') &&
+        appendedHtml.includes('class="markdown-file-link"'))
         ? renderSanitizedMarkdown(stableMarkdown, renderOptions)
         : stableHtml + appendedHtml;
   }
