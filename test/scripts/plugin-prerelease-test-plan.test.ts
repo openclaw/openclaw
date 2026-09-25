@@ -680,7 +680,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
-        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
+        "${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'hourly-main-')) && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
       OPENCLAW_CI_DOCS_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
