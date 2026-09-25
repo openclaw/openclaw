@@ -250,6 +250,9 @@ trap cleanup EXIT
 eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
 openclaw_e2e_wait_gateway_ready() { fixture_wait_gateway_ready "$1" "$2" 4 "$4" "$5"; }
 openclaw_e2e_probe_http() { [ -f "$FIXTURE_READY" ]; }
+probe_gateway_endpoint() {
+  printf '{"body":{"ready":true},"status":200}\\n' >"$3"
+}
 if [ "$FIXTURE_MODE" = bad-clock ]; then node() { return 17; }; fi
 phase() { shift; "$@"; }
 check_gateway_probes() { [ -f "$FIXTURE_READY" ]; printf 'baseline-probes\\n'; }
@@ -306,4 +309,11 @@ printf 'baseline-complete\\n'
   expect(result.stdout.includes("baseline-complete")).toBe(code === 0);
   expect(result.stdout.includes("baseline-probes")).toBe(code === 0);
   expect(result.stdout.includes("baseline-stopped")).toBe(code === 0);
+  const gatewayLog = path.join(artifactRoot, "missing-load-path", "baseline-gateway.log");
+  const diagnosticLog = existsSync(gatewayLog) ? readFileSync(gatewayLog, "utf8") : "";
+  const liveFailure = mode === "live-refusal" || mode === "timeout";
+  expect(diagnosticLog.includes("Startup readiness observation after failure")).toBe(liveFailure);
+  if (liveFailure) {
+    expect(diagnosticLog).toContain('{"body":{"ready":true},"status":200}');
+  }
 });

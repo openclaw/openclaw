@@ -1942,6 +1942,7 @@ probe_gateway_endpoint() {
   local path="$1"
   local expect_kind="$2"
   local out_file="$3"
+  shift 3
   local start_epoch
   local end_epoch
   local gateway_http_url="http://127.0.0.1:18789"
@@ -1952,6 +1953,7 @@ probe_gateway_endpoint() {
     --base-url "$gateway_http_url"
     --path "$path"
     --expect "$expect_kind"
+    "$@"
   )
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING:-}" ]; then
     args+=(--allow-failing "$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING")
@@ -1974,7 +1976,8 @@ start_gateway() {
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
-  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
+  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_GATEWAY_STARTUP_TRACE=1 \
+    openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
   local readiness_mode="strict"
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
