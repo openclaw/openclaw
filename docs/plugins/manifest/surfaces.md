@@ -670,12 +670,12 @@ containing the guidance in `openclaw.plugin.json`:
 }
 ```
 
-Then select the installed plugin and configure its copy in `openclaw.json`:
+Then enable the installed plugin and configure its copy under the existing
+`plugins.entries.<id>.config` object in `openclaw.json`:
 
 ```json5
 {
   plugins: {
-    slots: { supervisorGuidance: "compose-deployment" },
     entries: {
       "compose-deployment": {
         enabled: true,
@@ -697,9 +697,12 @@ Then select the installed plugin and configure its copy in `openclaw.json`:
 ```
 
 Set `OPENCLAW_SUPERVISOR_MODE=external` in the Gateway and CLI process environment
-as well. Plugin selection supplies copy, not supervisor ownership or permission
-to manage the service. Existing enablement, allowlist, and denylist policy still
-applies; add the plugin to `plugins.allow` if your deployment uses an allowlist.
+as well. The plugin supplies display copy; this environment variable remains the
+authority for external supervisor ownership. Existing enablement, allowlist, and
+denylist policy still applies; add the plugin to `plugins.allow` if your deployment
+uses an allowlist. Configure guidance on exactly one enabled plugin. If multiple
+enabled plugins provide valid configured guidance, OpenClaw keeps its built-in
+instructions rather than choosing between deployment owners.
 
 The host reads the declaration through plugin metadata without importing plugin
 runtime code. `configKey` is a literal immediate own property, not a dotted path.
@@ -723,27 +726,19 @@ reject the entire guidance object. Commands retain their exact bytes and are
 shown as literal text; OpenClaw never executes them or adds them to the system
 prompt. Keep secrets out of these user-visible values.
 
-An unset slot or `"none"`, unavailable or disabled plugin, invalid guidance, or
-omitted action preserves the existing built-in instructions. Guidance does not
-enable self-update or native service management under external supervision.
-Deployment configuration should be maintained by its supervisor so copying an
-installation does not carry stale host-specific commands to a new deployment.
+Without a valid configured provider, or when the sole provider omits the requested
+action, OpenClaw preserves its existing built-in instructions. Unavailable or
+disabled plugins and invalid guidance do not contribute. Guidance does not enable
+self-update or native service management under external supervision. Deployment
+configuration should be maintained by its supervisor so copying an installation
+does not carry stale host-specific commands to a new deployment.
 
-Existing configurations need no migration when upgrading: the selector is optional,
-and leaving it unset preserves built-in guidance. Before downgrading an installation
-that uses this feature to a version without it, remove the selector with the current
-CLI:
-
-```bash
-openclaw config unset plugins.slots.supervisorGuidance
-```
-
-For supervisor-managed or read-only configuration, remove that key from the
-supervisor’s configuration source instead. Setting the value to `"none"` is not enough
-for downgrade compatibility: older strict schemas reject the key itself. If the
-older CLI is already installed and refuses the configuration, remove the key from
-`openclaw.json` (or its managed source) before starting it again. Check the deployment
-plugin’s own version requirements before downgrading it as well.
+Guidance uses the existing plugin configuration object and introduces no root
+configuration key. Hosts without this feature retain their built-in supervisor
+instructions; the guidance values do not require a configuration migration or
+removal when downgrading. The installed plugin must still support the target host:
+its own configuration schema and [package compatibility requirements](/plugins/manifest/package-json)
+continue to apply.
 
 Plugin authors can import `SupervisorAction`, `SupervisorGuidanceV1`,
 `SupervisorDisplayGuidance`, `PluginManifestSupervisorGuidance`, and

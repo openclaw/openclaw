@@ -592,8 +592,6 @@ export const OpenClawSchemaShape = {
           memory: z.string().optional(),
           /** Select which plugin owns the context-engine slot. */
           contextEngine: z.string().optional(),
-          /** Select deployment guidance from one plugin; unset retains built-in copy. */
-          supervisorGuidance: z.string().optional(),
         })
         .optional(),
       entries: z.record(z.string(), PluginEntrySchema).optional(),

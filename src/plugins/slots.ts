@@ -22,7 +22,6 @@ const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
 const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   memory: "memory-core",
   contextEngine: "legacy",
-  supervisorGuidance: "none",
 };
 
 const PLUGIN_SLOT_KEYS = Object.keys(DEFAULT_SLOT_BY_KEY) as PluginSlotKey[];
@@ -90,8 +89,7 @@ type SlotSelection =
 export function resolveSlotSelection(slotKey: PluginSlotKey, value: unknown): SlotSelection {
   const normalized = normalizeSlotValue(value);
   if (normalized === undefined) {
-    const pluginId = defaultSlotIdForKey(slotKey);
-    return pluginId === "none" ? { kind: "off" } : { kind: "default", pluginId };
+    return { kind: "default", pluginId: defaultSlotIdForKey(slotKey) };
   }
   return normalized === null ? { kind: "off" } : { kind: "pinned", pluginId: normalized };
 }

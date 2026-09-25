@@ -272,7 +272,6 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "plugins.entries.*.enabled",
   "plugins.slots.contextEngine",
   "plugins.slots.memory",
-  "plugins.slots.supervisorGuidance",
   "secrets.providers.*.command",
   "secrets.providers.*.path",
   "secrets.providers.*.source",

@@ -25,12 +25,23 @@ const guidance = {
 beforeEach(async () => {
   home = await createTempHomeEnv("supervisor-guidance-");
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-  const pluginDir = path.join(home.home, "deployment");
+  const pluginDir = await createPlugin("deployment");
+  config = {
+    plugins: {
+      load: { paths: [pluginDir] },
+      allow: ["deployment"],
+      entries: { deployment: { enabled: true, config: { guidance } } },
+    },
+  };
+});
+
+async function createPlugin(id: string) {
+  const pluginDir = path.join(home.home, id);
   await fs.mkdir(pluginDir, { mode: 0o755 });
   await fs.writeFile(
     path.join(pluginDir, "package.json"),
     JSON.stringify({
-      name: "deployment",
+      name: id,
       version: "1.0.0",
       openclaw: { extensions: ["./index.js"] },
     }),
@@ -39,20 +50,13 @@ beforeEach(async () => {
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "deployment",
+      id,
       supervisorGuidance: { version: 1, configKey: "guidance" },
       configSchema: { type: "object", properties: { guidance: { type: "object" } } },
     }),
   );
-  config = {
-    plugins: {
-      load: { paths: [pluginDir] },
-      allow: ["deployment"],
-      slots: { supervisorGuidance: "deployment" },
-      entries: { deployment: { enabled: true, config: { guidance } } },
-    },
-  };
-});
+  return pluginDir;
+}
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -60,7 +64,7 @@ afterEach(async () => {
 });
 
 describe("external supervisor guidance", () => {
-  it("reads a selected manifest without executing the plugin and preserves lifecycle refusal", async () => {
+  it("reads a configured manifest without executing the plugin and preserves lifecycle refusal", async () => {
     const resolved = await resolveExternalSupervisorGuidance("start", { config });
     expect(resolved).toEqual({
       version: 1,
@@ -81,7 +85,7 @@ describe("external supervisor guidance", () => {
     });
   });
 
-  it.each(["disabled", "denied", "not-allowed", "missing", "unselected", "non-external"])(
+  it.each(["disabled", "denied", "not-allowed", "missing", "unconfigured", "non-external"])(
     "keeps generic guidance when %s",
     async (mode) => {
       const plugins = config.plugins!;
@@ -97,8 +101,8 @@ describe("external supervisor guidance", () => {
       if (mode === "missing") {
         plugins.load = { paths: [] };
       }
-      if (mode === "unselected") {
-        plugins.slots = {};
+      if (mode === "unconfigured") {
+        expectDefined(plugins.entries?.deployment, "deployment fixture").config = {};
       }
       if (mode === "non-external") {
         vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
@@ -106,6 +110,24 @@ describe("external supervisor guidance", () => {
       expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
     },
   );
+
+  it("requires one configured provider even when their actions do not overlap", async () => {
+    const secondDir = await createPlugin("another-supervisor");
+    const plugins = expectDefined(config.plugins, "plugins fixture");
+    plugins.load?.paths?.push(secondDir);
+    plugins.allow?.push("another-supervisor");
+    const entries = expectDefined(plugins.entries, "entries fixture");
+    entries["another-supervisor"] = {
+      enabled: true,
+      config: { guidance: { ...guidance, actions: { repair: "other repair" } } },
+    };
+    expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
+    expect(await resolveExternalSupervisorGuidance("repair", { config })).toBeUndefined();
+    entries["another-supervisor"].enabled = false;
+    expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
+      command: guidance.actions.start,
+    });
+  });
 
   it("uses fresh configured values and never renders a malformed command", async () => {
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeDefined();
