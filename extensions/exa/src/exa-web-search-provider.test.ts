@@ -45,9 +45,9 @@ describe("exa web search provider", () => {
       if (typeof requestBody !== "string") {
         throw new Error("Expected Exa request body to be a JSON string");
       }
-      expect(JSON.parse(requestBody)).toMatchObject({
-        numResults: 1,
-      });
+      expect(requestBody).toBe(
+        '{"query":"exa result count owner","numResults":1,"type":"auto","contents":{"highlights":true}}',
+      );
       expect(first).toMatchObject({
         provider: "exa",
         count: 1,
@@ -260,6 +260,14 @@ describe("exa web search provider", () => {
         numResults: 100,
         contents: args.contents,
       });
+      expect(
+        String(fetchMock.mock.calls[0]?.[1]?.body).replace(
+          /"startPublishedDate":"[^"]*"/,
+          '"startPublishedDate":"<dynamic-date>"',
+        ),
+      ).toBe(
+        '{"query":"Exa boundary","numResults":100,"type":"auto","contents":{"text":{"maxCharacters":1200},"highlights":{"maxCharacters":4000,"query":"latest model launches","numSentences":4,"highlightsPerUrl":2},"summary":{"query":"launch details"}},"startPublishedDate":"<dynamic-date>"}',
+      );
       expect(Date.parse(bodyAt(0).startPublishedDate)).not.toBeNaN();
 
       await tool.execute({ query: "cache partitions" });

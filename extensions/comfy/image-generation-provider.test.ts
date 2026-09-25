@@ -399,6 +399,9 @@ describe("comfy image-generation provider", () => {
     const submitRequest = fetchRequest(1);
     expect(submitRequest.url).toBe("http://127.0.0.1:8188/prompt");
     expect(submitRequest.auditContext).toBe("comfy-image-generate");
+    expect(submitRequest.init?.body).toBe(
+      '{"prompt":{"6":{"inputs":{"text":"draw a lobster"}},"9":{"inputs":{}}}}',
+    );
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "draw a lobster" } },
