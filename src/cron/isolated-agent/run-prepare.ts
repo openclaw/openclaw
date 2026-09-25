@@ -8,6 +8,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { buildDeliveryMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -118,6 +119,8 @@ export type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
+  deliverySystemPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -517,6 +520,16 @@ export async function prepareCronRunContext(params: {
         agentId,
       });
 
+    // Announce runs have no inbound message, so the delivery target supplies channel formatting.
+    const deliverySystemPrompt =
+      deliveryRequested && resolvedDelivery.ok
+        ? buildDeliveryMetaSystemPrompt({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            accountId: resolvedDelivery.accountId,
+          })
+        : undefined;
+
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
     const currentConversationContext =
@@ -646,6 +659,7 @@ export async function prepareCronRunContext(params: {
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
           toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
+            extraSystemPromptStatic: deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           },
@@ -692,6 +706,7 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        deliverySystemPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,
