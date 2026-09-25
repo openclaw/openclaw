@@ -112,7 +112,7 @@ const cases: ModelSelectionCase[] = [
     expectedModel: "openai/gpt-5.4",
     denied: true,
     error:
-      'Model openai/gpt-5.4 requires agent harness "codex", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+      'Model openai/gpt-5.4 requires the "codex" agent harness, but no enabled plugin provides it. Enable the `codex` plugin with `openclaw plugins enable codex`; if it is not installed, run `openclaw plugins install @openclaw/codex`. Remove any restrictive `plugins.allow` or `plugins.deny` entry for `codex`, restart the Gateway, and try again. The model change was not applied.',
   },
   {
     label: "preserves the session when the selected model requires an unavailable harness",
@@ -122,7 +122,7 @@ const cases: ModelSelectionCase[] = [
     expectedModel: workRef,
     denied: true,
     error:
-      'Model work-provider/work-only requires agent harness "missing-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+      'Model work-provider/work-only requires the "missing-harness" agent harness, but no enabled plugin provides it. Install and enable a plugin that provides the "missing-harness" harness, then restart the Gateway and try again. The model change was not applied.',
   },
   ...(["enabled", "disabled", "denied"] as const).map((harness) => ({
     label: `checks an installed ${harness} harness without loading its runtime`,
@@ -133,7 +133,7 @@ const cases: ModelSelectionCase[] = [
     expectedModel: workRef,
     denied: harness !== "enabled",
     error:
-      'Model work-provider/work-only requires agent harness "fixture-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+      'Model work-provider/work-only requires the "fixture-harness" agent harness, but no enabled plugin provides it. Install and enable a plugin that provides the "fixture-harness" harness, then restart the Gateway and try again. The model change was not applied.',
   })),
   {
     label: "loads the explicit agent model catalog",
