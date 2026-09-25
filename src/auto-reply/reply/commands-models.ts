@@ -337,11 +337,7 @@ function buildModelsCommandReply(
     };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].sort(
-    (left, right) =>
-      Number(params.currentModel === `${provider}/${right}`) -
-      Number(params.currentModel === `${provider}/${left}`),
-  );
+  const models = [...(byProvider.get(provider) ?? new Set<string>())];
   const total = models.length;
 
   if (total === 0) {
@@ -371,7 +367,8 @@ function buildModelsCommandReply(
   const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
   const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
     provider,
-    models,
+    // Interactive callback offsets are interpreted against alphabetical rows.
+    models: models.toSorted(),
     currentModel: params.currentModel,
     currentPage: interactivePage,
     totalPages: interactiveTotalPages,
@@ -393,6 +390,11 @@ function buildModelsCommandReply(
       channelData: interactiveChannelData,
     };
   }
+  models.sort(
+    (left, right) =>
+      Number(params.currentModel === `${provider}/${right}`) -
+      Number(params.currentModel === `${provider}/${left}`),
+  );
 
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
