@@ -34,7 +34,7 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default", async () => {
+  it("exposes K2.8 thinking levels with max by default", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
@@ -44,11 +44,8 @@ describe("kimi provider plugin", () => {
         reasoning: true,
       } as never),
     ).toEqual({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "on" },
-      ],
-      defaultLevel: "off",
+      levels: [{ id: "off" }, { id: "low" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "max",
     });
   });
 
