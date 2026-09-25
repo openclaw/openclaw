@@ -20,6 +20,11 @@ report, preserving the live database and its WAL files. Each new report reads a
 fresh snapshot. Checks that need writable inspection state or independent database
 verification retain their own copies; `--only` checks prepare state on demand.
 
+Doctor retires private database readers and writers before removing inspection
+snapshots. A cleanup failure preserves completed findings and check counts;
+updater runs report failed temporary-file removal as a warning. If database
+retirement fails, Doctor reports the error and leaves the private snapshot in place.
+
 ```bash
 openclaw doctor --json
 openclaw doctor --lint

@@ -96,7 +96,10 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
     return structuredClone(command);
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
-    return { type: command.type, identity: { ...command.identity } };
+    return { type: command.type, identity: structuredClone(command.identity) };
+  }
+  if (command.type === "userProfiles.githubAttribution.resolve") {
+    return { type: command.type, profileIds: [...command.profileIds] };
   }
   if (command.type === "subagents.runs") {
     return {
@@ -299,6 +302,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (command.type === "deliveryQueue.outbound") {
+    return bytes + Buffer.byteLength(command.id ?? "", "utf8");
+  }
   if (command.type === "tasks.mutationSnapshot") {
     const scope = command.input;
     const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
@@ -387,14 +393,14 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;
   }
-  if (command.type === "userProfiles.channelIdentity.resolve") {
-    return (
-      bytes +
-      Object.values(command.identity).reduce(
-        (total, value) => total + Buffer.byteLength(value, "utf8"),
-        0,
-      )
+  if (command.type === "userProfiles.githubAttribution.resolve") {
+    return command.profileIds.reduce(
+      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
+      bytes,
     );
+  }
+  if (command.type === "userProfiles.channelIdentity.resolve") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.identity), "utf8");
   }
   if (command.type === "userProfiles.email.resolve") {
     return bytes + Buffer.byteLength(command.email, "utf8");
@@ -440,7 +446,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
 
 function requestBytes(request: OpenClawStateReadRequest): number {
   return [
-    ...Object.values(request.context.environment),
+    ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
     request.context.coordinatorRuntime.directory,
     request.context.existingSchemaPath,
     request.databasePath,

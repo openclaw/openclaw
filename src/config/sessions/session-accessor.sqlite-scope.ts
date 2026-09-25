@@ -41,10 +41,10 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   prepareSqliteTargetFromSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
-  resolveUnsuffixedSqliteTargetFromSessionStorePath,
   type ResolvedSqliteStoreTarget,
 } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -361,15 +361,18 @@ export function resolveSqliteScope(
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
   }
-  const normalizedSessionKey = normalizeSqliteSessionKey(scope.sessionKey);
-  const sessionKey =
-    !normalizedSessionKey ||
+  return { agentId, ...database, sessionKey: resolveSqliteSessionKey(scope.sessionKey, agentId) };
+}
+
+/** Logical qualification is independent of the thread that resolves the physical store. */
+export function resolveSqliteSessionKey(sessionKey: string, agentId: string): string {
+  const normalizedSessionKey = normalizeSqliteSessionKey(sessionKey);
+  return !normalizedSessionKey ||
     normalizedSessionKey === "global" ||
     normalizedSessionKey === "unknown" ||
     parseAgentSessionKey(normalizedSessionKey)
-      ? normalizedSessionKey
-      : toAgentStoreSessionKey({ agentId, requestKey: normalizedSessionKey });
-  return { agentId, ...database, sessionKey };
+    ? normalizedSessionKey
+    : toAgentStoreSessionKey({ agentId, requestKey: normalizedSessionKey });
 }
 
 export function resolveSqliteReadScope(

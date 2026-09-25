@@ -135,9 +135,7 @@ describe("embedded attempt phase lifecycle state", () => {
       name: "AbortError",
     });
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReturnValue(true);
-    hoisted.waitForCompletionRequiredAsyncTasks
-      .mockRejectedValueOnce(abortError)
-      .mockResolvedValueOnce({ timedOutRunIds: ["exec-run-1"] });
+    hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
     const messages: never[] = [];
     const sessionManager = Object.assign(SessionManager.inMemory(), {
       appendCustomEntry: vi.fn(),
@@ -204,7 +202,7 @@ describe("embedded attempt phase lifecycle state", () => {
     // The aborted run settles instead of unwinding the lane task, and its
     // unfinished async tasks are not reclassified as a timeout failure.
     expect(result.promptError).toBeNull();
-    expect(hoisted.waitForCompletionRequiredAsyncTasks).toHaveBeenCalledTimes(2);
+    expect(hoisted.waitForCompletionRequiredAsyncTasks).toHaveBeenCalledOnce();
   });
 
   it("keeps projected nested tool evidence from owning the model terminal (#118274)", async () => {

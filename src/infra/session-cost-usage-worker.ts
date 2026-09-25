@@ -21,7 +21,7 @@ import {
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -393,6 +393,9 @@ export async function executeUsageCostWorker(
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
+  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
+    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+  }
   const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
@@ -493,8 +496,20 @@ export async function executeUsageCostWorker(
                 .where("session_id", "=", marker.sessionId)
                 .where("seq", ">", afterSeq)
                 .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc");
-              return executeSqliteQuerySync(opened.db, query).rows;
+                .orderBy("seq", "asc")
+                .limit(1_024);
+              const page: Array<{ seq: number; event_json: string }> = [];
+              let bytes = 0;
+              // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+              for (const row of iterateSqliteQuerySync(opened.db, query)) {
+                const size = Buffer.byteLength(row.event_json);
+                if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+                  break;
+                }
+                page.push(row);
+                bytes += size;
+              }
+              return page;
             }),
           { ...database, env },
         );
@@ -512,8 +527,10 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
+  let changed = false;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
+    await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
     if (
       !rebuild &&
@@ -546,8 +563,9 @@ export async function executeUsageCostWorker(
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
+    changed = true;
   }
-  return { kind: "refresh" };
+  return { kind: "refresh", changed };
 }
 
 export function usageCostWorkerFailure(

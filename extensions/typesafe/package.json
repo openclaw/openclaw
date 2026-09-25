@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/typesafe",
-  "version": "2026.9.5",
+  "version": "2026.9.6",
   "description": "OpenClaw TypeSafe typed decision provider",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.32"
+    "typebox": "1.3.33"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -28,7 +28,7 @@
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.5"
+      "openclawVersion": "2026.9.6"
     },
     "release": {
       "publishToClawHub": true,

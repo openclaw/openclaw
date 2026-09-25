@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -35,13 +36,16 @@ import * as verification from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
   readOpenClawAgentIntegrityVerification,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const counter = vi.hoisted(() => ({
@@ -139,6 +143,58 @@ it.each(["settled", "pending"] as const)(
   },
 );
 
+it("opens an unconfigured external store without reconstructing unknown deletion history", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-missing-history-") };
+  const external = tempDirs.make("agent-worker-external-history-");
+  const pathname = path.join(external, "retained.sqlite");
+  const retained = openOpenClawAgentDatabase({
+    agentId: "main",
+    path: pathname,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-fixture-owner-") },
+  });
+  retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
+  closeOpenClawAgentDatabaseByPath(pathname);
+  const bytes = fs.readFileSync(pathname);
+  const context = captureOpenClawStateWorkerContext({ env });
+  const assertCurrent = () => context.admission.assertCurrent();
+  const source: AgentDatabaseRequestExecutionSource = {
+    assertCurrent,
+    createAdmission: (binding) => () => ({
+      nativeLocations: binding.nativeLocations,
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        binding.authorize(request);
+        assertCurrent();
+        if (!grant()) {
+          throw new Error("External store fixture lost its admission");
+        }
+      }),
+    }),
+  };
+  const generation = createAgentDatabaseNativeGeneration(
+    "main",
+    pathname,
+    context,
+    assertCurrent,
+    assertCurrent,
+    undefined,
+    () => {},
+  );
+  const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
+  const closing = await Promise.allSettled([generation.close()]);
+  expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
+  expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
+  expect(fs.readFileSync(pathname)).toEqual(bytes);
+  expect(fs.readdirSync(external)).toEqual(["retained.sqlite"]);
+  const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+  try {
+    expect(
+      shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
+    ).toBeUndefined();
+  } finally {
+    shared.close();
+  }
+});
+
 it.each([
   "verified",
   "two-leases",
@@ -154,6 +210,7 @@ it.each([
   "version-mismatch",
   "closed-host",
   "closed-host-blocked",
+  "closed-host-blocked-last",
   "closed-host-revoked",
   "closed-host-replaced",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
@@ -165,7 +222,7 @@ it.each([
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
   const siblingLease =
-    closedHost || proof.startsWith("two-leases")
+    (closedHost && proof !== "closed-host-blocked-last") || proof.startsWith("two-leases")
       ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
       : undefined;
   if (proof === "two-leases") {
@@ -184,7 +241,7 @@ it.each([
   const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
     ? undefined
     : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (proof === "closed-host-blocked") {
+  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
     database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
     const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
     try {
@@ -274,14 +331,13 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    if (proof === "prepared-existing") {
-      expect(quickCheck).toHaveBeenCalledOnce();
-    }
+    expect(quickCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
         proof === "closed-host" ||
         proof === "closed-host-blocked" ||
+        proof === "closed-host-blocked-last" ||
         proof === "two-leases" ||
         proof === "two-leases-missing-metadata" ||
         proof === "version-mismatch"

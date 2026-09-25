@@ -5,6 +5,10 @@ import { DetachedTaskLegacyRuntimeError } from "../../../tasks/detached-task-run
 import type { setDetachedTaskDeliveryStatusByRunId } from "../../../tasks/detached-task-runtime.js";
 import { TaskRunTransitionUnsettledError } from "../../../tasks/task-registry-transition.operation.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "../../announce-idempotency.js";
 import type {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
@@ -20,6 +24,34 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
+  return buildAnnounceIdempotencyKey(
+    buildAnnounceIdFromChildRun({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+    }),
+  );
+}
+
+export const resolveLifecycleTask: SubagentLifecycleOptions["resolveSubagentTask"] = (run) => ({
+  lookup: "available",
+  task: run.killReconciliation
+    ? undefined
+    : {
+        taskId: `task-${run.runId}`,
+        runId: run.taskRunId ?? run.runId,
+        runtime: "subagent",
+        requesterSessionKey: run.requesterSessionKey,
+        ownerKey: run.requesterSessionKey,
+        scopeKind: "session",
+        task: run.task,
+        status: "succeeded",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: run.createdAt,
+      },
+});
 
 export function mockBlockedCompletionDeliveryOwner(
   completionDeliveryMocks: {
@@ -505,6 +537,93 @@ export function registerTaskFinalizationAuthorityTests({
     } finally {
       release.resolve();
       await completing.catch(() => undefined);
+    }
+  });
+
+  it.each(["replacement", "delivery revocation"] as const)(
+    "rejects %s while completion task lookup awaits publication",
+    async (change) => {
+      const entry = createRunEntry();
+      const runs = new Map([[entry.runId, entry]]);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        resolveSubagentTaskAsync: async (candidate) => {
+          entered.resolve();
+          await release.promise;
+          return resolveLifecycleTask(candidate);
+        },
+      });
+      const completing = completeRun(controller, entry, { triggerCleanup: true });
+      const settled = Promise.allSettled([completing]);
+      try {
+        await entered.promise;
+        const replacement =
+          change === "replacement" ? createRunEntry({ runId: entry.runId }) : entry;
+        if (change === "delivery revocation") {
+          entry.suppressCompletionDelivery = true;
+          entry.suppressAnnounceReason = "killed";
+        }
+        const expected = structuredClone(replacement);
+        runs.set(entry.runId, replacement);
+        release.resolve();
+        await expect(completing).rejects.toThrow("subagent task completion owner changed");
+        expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+        expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+        expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
+        expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+        expect(runs.get(entry.runId)).toEqual(expected);
+      } finally {
+        release.resolve();
+        await settled;
+      }
+    },
+  );
+
+  it("leaves a newly replaced provisional cancellation untouched while lookup awaits publication", async () => {
+    const entry = createRunEntry({
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      execution: {
+        status: "terminal",
+        endedAt: 4_000,
+        outcome: { status: "error", error: "killed" },
+      },
+      killReconciliation: { killedAt: 4_000 },
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const persist = vi.fn();
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow: persist,
+      resolveSubagentTaskAsync: async () => {
+        entered.resolve();
+        await release.promise;
+        return { lookup: "available" };
+      },
+    });
+    const completing = completeRun(controller, entry, { endedAt: 4_001, triggerCleanup: true });
+    const settled = Promise.allSettled([completing]);
+    try {
+      await entered.promise;
+      entry.killReconciliation = {
+        killedAt: 4_002,
+        taskCancellationAccepted: true,
+        suppressTaskDelivery: true,
+      };
+      const accepted = structuredClone(entry);
+      release.resolve();
+      await completing;
+      expect(entry).toEqual(accepted);
+      expect(persist).not.toHaveBeenCalled();
+      expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+      expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
+      expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await settled;
     }
   });
 }

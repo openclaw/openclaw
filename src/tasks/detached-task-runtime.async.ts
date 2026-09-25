@@ -15,7 +15,8 @@ async function mutateDetachedTask(
   legacy: (runtime: DetachedTaskLifecycleRuntime) => TaskRecord[],
   assertCurrent?: () => void,
 ): Promise<TaskRecord[]> {
-  const owner = captureDetachedTaskRuntimeOwner();
+  // Transitions settle rows that already exist; they never admit new work.
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
   const assertOwner = () => {
     owner.assertCurrent();
     assertCurrent?.();
@@ -34,6 +35,17 @@ async function mutateDetachedTask(
   }
   assertOwner();
   return result;
+}
+
+export function startTaskRunByRunIdAsync(
+  params: Parameters<DetachedTaskLifecycleRuntime["startTaskRunByRunId"]>[0],
+  assertCurrent?: () => void,
+) {
+  return mutateDetachedTask(
+    { kind: "state", params: { ...params, status: "running" } },
+    (runtime) => runtime.startTaskRunByRunId(params),
+    assertCurrent,
+  );
 }
 
 export function finalizeTaskRunByRunIdAsync(

@@ -48,6 +48,7 @@ function workerRecord(
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
     attachedSessionIds: [],
     desktopAvailable: false,
     desktopApps: [],

@@ -303,6 +303,39 @@ describe("dispatchSmsInboundEvent", () => {
     );
   });
 
+  it("cleans downloaded MMS files when sender access is revoked before dispatch", async () => {
+    const mocks = createRuntime();
+    const account = createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] });
+    mocks.resolveAgentRoute.mockImplementation(() => {
+      account.allowFrom = [];
+      return { agentId: "main", accountId: "default", sessionKey: SMS_SESSION_KEY };
+    });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account,
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      msg: {
+        from: SMS_FROM,
+        to: SMS_TO,
+        body: "photo",
+        messageSid: "MM-revoked",
+        accountSid: "AC123",
+        media: [
+          {
+            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-revoked/Media/ME${"1".repeat(32)}`,
+            contentType: "image/jpeg",
+          },
+        ],
+      },
+    });
+
+    expect(mocks.saveRemoteMedia).toHaveBeenCalledOnce();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+  });
+
   it("cleans materialized MMS files when inbound.run fails before adoption", async () => {
     const mocks = createRuntime();
     const runError = new Error("inbound dispatch failed");

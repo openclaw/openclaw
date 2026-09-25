@@ -14,6 +14,7 @@ import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { oauthCredentialMetadataSchema } from "./credential-schema.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
+import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   hasOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -435,6 +436,10 @@ function hasComparableOAuthIdentityConflict(
   existing: OAuthCredential,
   candidate: OAuthCredential,
 ): boolean {
+  // Registered identities cannot use the legacy fallback for missing account fields.
+  if (hasOidcRegistration(existing) || hasOidcRegistration(candidate)) {
+    return !isSafeToCopyOAuthIdentity(existing, candidate);
+  }
   const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
   const candidateAccountId = normalizeAuthIdentityToken(candidate.accountId);
   if (

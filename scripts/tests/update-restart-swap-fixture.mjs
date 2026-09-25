@@ -6,12 +6,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
-import ts from "typescript";
+import { transformSync } from "esbuild";
 
 export async function createDiskSwap(sourceRoot, base) {
-  const require = createRequire(
-    path.join(process.env.RESTART_DEPENDENCY_ROOT ?? sourceRoot, "package.json"),
-  );
+  const require = createRequire(path.join(sourceRoot, "package.json"));
   const expected = JSON.parse(await fs.readFile(path.join(sourceRoot, "package.json"), "utf8"))
     .dependencies["@openclaw/fs-safe"];
   const installed = JSON.parse(
@@ -19,6 +17,11 @@ export async function createDiskSwap(sourceRoot, base) {
   ).version;
   assert.equal(installed, expected, "filesystem dependency must match the candidate manifest");
   const atomic = await import(pathToFileURL(require.resolve("@openclaw/fs-safe/atomic")).href);
+  const fsSafe = new Map();
+  for (const subpath of ["errors", "root"]) {
+    const specifier = `@openclaw/fs-safe/${subpath}`;
+    fsSafe.set(specifier, await import(pathToFileURL(require.resolve(specifier)).href));
+  }
   const unexpected = [];
   // Logging, failure-fact presentation, and manifest parsing are bounded seams.
   // Package fingerprints, rename/copy/removal, transaction policy and deadlines
@@ -55,24 +58,30 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/package-update-local-overrides",
     "infra/package-update-swap-contract",
     "infra/update-npm-prefix",
+    "infra/mutation-authority",
+    "infra/fs-safe-remove",
+    "infra/errno",
     "utils/absolute-deadline",
   ];
   const modules = new Map(),
     external = new Map();
   for (const name of files) {
     const filename = path.join(sourceRoot, "src", name + ".ts");
-    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), {
-      fileName: filename,
-      compilerOptions: {
-        target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.ESNext,
-        verbatimModuleSyntax: true,
-      },
-    }).outputText;
-    modules.set(
-      path.basename(name) + ".js",
-      new vm.SourceTextModule(code, { context, identifier: filename }),
-    );
+    const code = transformSync(await fs.readFile(filename, "utf8"), {
+      sourcefile: filename,
+      loader: "ts",
+      target: "esnext",
+      format: "esm",
+      tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
+    }).code;
+    const mod = new vm.SourceTextModule(code, { context, identifier: filename });
+    modules.set(path.basename(name) + ".js", mod);
+    // Native namespaces must survive mixed, namespace, and side-effect imports.
+    for (const specifier of mod.dependencySpecifiers) {
+      if (specifier.startsWith("node:") || fsSafe.has(specifier)) {
+        external.set(specifier, new Set());
+      }
+    }
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
     )) {
@@ -97,8 +106,8 @@ export async function createDiskSwap(sourceRoot, base) {
     if (modules.has(path.basename(specifier))) {
       continue;
     }
-    const names = [...namesSet];
-    const builtin = specifier.startsWith("node:") ? await import(specifier) : undefined;
+    const native = specifier.startsWith("node:") ? await import(specifier) : fsSafe.get(specifier);
+    const names = native ? Object.keys(native) : [...namesSet];
     stubs.set(
       specifier,
       new vm.SyntheticModule(
@@ -107,8 +116,8 @@ export async function createDiskSwap(sourceRoot, base) {
           for (const name of names) {
             this.setExport(
               name,
-              builtin
-                ? builtin[name]
+              native
+                ? native[name]
                 : Object.hasOwn(values, name)
                   ? values[name]
                   : function () {

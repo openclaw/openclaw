@@ -122,12 +122,7 @@ describe("worker turn launcher terminal results", () => {
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const gate = createWorkerSessionPlacementGate(placements);
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
-      const liveEvents = createWorkerLiveEventReceiver({
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
         store: {
           ...(await createWorkerEnvironmentStore({ database })),
@@ -148,7 +143,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });

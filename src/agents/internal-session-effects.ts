@@ -11,7 +11,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
-type InternalSessionEffectsTarget = Required<
+export type InternalSessionEffectsTarget = Required<
   Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
 > & {
   sessionEntry: InternalSessionEntry;

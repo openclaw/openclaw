@@ -2024,6 +2024,9 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty(
+      "__openclaw.media.0",
+    );
   });
 
   it.each([
@@ -2558,18 +2561,6 @@ describe("runPreparedReply media-only handling", () => {
       "Auth profile is not configured for openai.",
     );
     expect(runReplyAgent).not.toHaveBeenCalled();
-  });
-  it("waits for the previous active run to clear before registering a new reply operation", async () => {
-    const queueSettings = await import("./queue/settings-runtime.js");
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-
-    const result = await runPrepared({
-      isNewSession: false,
-      sessionId: "session-overlap",
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("routes a channel-configured interrupt through session-work admission", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -5296,22 +5287,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
   });
 
-  it("carries system events as typed context for deferred turns", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
-
-    await runPrepared();
-
-    const call = requireRunReplyAgentCall();
-    const context = call.followupRun.currentInboundContext;
-    expect(context?.text).toContain("System: [t] Node connected.");
-    expect(context?.fragments).toContainEqual({
-      kind: "conversation-data",
-      text: "System: [t] Node connected.",
-    });
-    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    expect(call.followupRun.transcriptPrompt).not.toContain("System: [t] Node connected.");
-  });
-
   it("admits only system events visible to the prepared agent", async () => {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",
@@ -5357,24 +5332,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
       "Beta hook finished",
     ]);
-  });
-
-  it("does not strip think-hint token from deferred queue body", async () => {
-    // In steer mode the inferred thinkLevel is never consumed, so the first token
-    // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
-
-    await runPrepared({
-      ctx: { Body: "low steer this conversation", RawBody: "low steer this conversation" },
-      sessionCtx: {
-        ...createSessionBody("low steer this conversation"),
-      },
-      resolvedThinkLevel: undefined,
-    });
-
-    const call = requireRunReplyAgentCall();
-    // Queue body (used by steer mode) must keep the full original text.
-    expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

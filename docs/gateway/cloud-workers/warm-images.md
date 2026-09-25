@@ -8,7 +8,7 @@ How OpenClaw captures a prepared project and node runtime before enrollment, reu
 
 ## Warm images
 
-The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
+The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Its configured CLI version probe allows 30 seconds, including during a busy Gateway startup, before trying the managed fallback. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
 
 Warm images and project preparation for image capture are Linux only.
 
@@ -19,6 +19,8 @@ Forwarded host environment values reach setup, so whatever setup derives from th
 For a Gateway worktree project with a Git commit, capture happens during provisioning, before node enrollment. After profile setup, OpenClaw prepares a pristine checkout of the admitted commit and, when the dispatch caller authorizes setup, runs its committed executable `.openclaw/worktree-setup.sh` at the final workspace and `HOME` paths. It installs the verified node runtime and captures the completed environment when an image is needed. An explicit setup skip uses a separate prepared cache; without setup authority, an executable recipe keeps the existing Git-seed path. The first dispatch includes that work; subsequent sessions can reuse the image without waiting for the first session to stop. Session edits, eligible untracked files, and node enrollment credentials arrive only after capture. Repository-only sessions use the same preparation flow: OpenClaw resolves the repository instance, commit, and executable setup recipe through GitHub. Public sources fetch that exact commit on the worker without credentials. Private sources fetch authenticated Git objects into temporary Gateway storage, then transfer a verified Git pack; this preparation step never puts GitHub credentials in provider scripts, worker files, or snapshots. The Gateway creates no managed checkout and runs no project setup for this transfer. Providers without project preparation retain ordinary checkout after enrollment.
 
 Private preparation needs temporary Gateway disk space for the shallow Git objects and outgoing pack. The existing 4 GiB pack limit applies to the transferred artifact; it does not cap bytes downloaded by Git before that pack is produced. Fetch uses a bounded command timeout, and temporary files are removed after the owning work settles, including cancellation.
+
+When a transferred project has no executable setup recipe, or setup was explicitly skipped, the seed transfer also completes the prepared workspace in the same remote command. Executable recipes retain a separate current-authority check before execution. Runtime installation and credential cleanup also share one remote command before project capture; snapshot creation still waits for both to finish successfully. If either step fails, dispatch stops the incomplete worker and reports the error before enrollment.
 
 Local project preparation retains the primary Git repository as its transport source, including a bare primary repository backing a linked checkout. It keeps the admitted session commit pinned, so archiving and removing the linked session checkout does not prevent reserve refill or select the primary checkout's newer `HEAD`. Session-file synchronization still uses the session checkout.
 
@@ -94,6 +96,19 @@ can expire when unused, and lowering `keepPrevious` to `0` permits their
 retirement unless pinned or still held by an allocation.
 
 ### Ready workers
+
+Open **Settings → Connections → Cloud workers → Pool** to inspect running
+prepared workers. The view groups workers by profile and shows ready, preparing,
+releasing, and attention counts, the project and prepared commit, expiry, and
+recorded failures. Capacity includes preparation and unconfirmed cleanup;
+consumed workers leave this view unless pending cleanup still reserves capacity. The inventory
+refreshes every 10 seconds while the view is visible. A failed refresh keeps the
+last result visible with a warning. The **Profiles** tab controls reserve targets
+and the shared pool limit; **Snapshots** manages the reusable disk images.
+
+Pool details require current administrator access. API clients request them with
+`includePreparedDetails: true` on `environments.list` or `environments.status`;
+default responses retain the existing inventory shape for older clients.
 
 For an eligible local Git project or repository-only session, a successful session activation can prepare a
 dedicated worker for the next session in the background. The default target is
@@ -266,6 +281,8 @@ openclaw crabbox warm-images --json
 ```
 
 The bounded status includes checkpoint IDs, project keys, recorded runtime identity, allocation choices and phases, capture selectors, source lease IDs, backend names, and timestamps; it does not include setup commands or environment values. Doctor reports pending captures and retirements but never clears them through `doctor --fix`. A capture older than 20 minutes produces a warning and can still be preparing its source or waiting for provider readiness; allow the owning capture to settle. Only an explicitly uncertain outcome carries mandatory recovery guidance. Elapsed time does not grant permission to take over. The same reservation remains authoritative across restarts; older empty reservation markers also require explicit recovery. If inspection asks for a migration, follow [Upgrade warm-image state](/gateway/cloud-workers/warm-images#upgrade-warm-image-state) first.
+
+The Gateway groups uncertain captures into one warning with their count and selectors. It reports them again when that set changes or the plugin restarts. This reports retained ownership; it does not attempt another capture.
 
 Before recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
 

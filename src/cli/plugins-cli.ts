@@ -5,6 +5,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import type { PluginsReloadOptions } from "./plugins-reload-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -136,7 +137,10 @@ export function registerPluginsCli(program: Command) {
     .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
     .option("--json", "Print the applied runtime generation", false)
-    .action(pluginAction((runtime) => runtime.runPluginsReloadCommand));
+    .action(async (ids: string[], opts: PluginsReloadOptions) => {
+      const { runPluginsReloadCommand } = await import("./plugins-reload-command.js");
+      await runPluginsReloadCommand(ids, opts);
+    });
 
   plugins
     .command("uninstall")
@@ -167,6 +171,7 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--no-enable", "Preserve existing plugin enablement, allowlists, and denylists")
     .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",

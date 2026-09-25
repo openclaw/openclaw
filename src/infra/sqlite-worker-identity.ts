@@ -6,6 +6,7 @@ import { hasErrnoCode } from "./errno.js";
 export type DatabasePathIdentity = Readonly<{
   key: string;
   canonicalPath: string;
+  birthtime?: string;
 }>;
 
 function existingIdentity(
@@ -16,10 +17,18 @@ function existingIdentity(
   if (!file.isFile()) {
     throw new Error("SQLite worker database path must identify a regular file");
   }
-  if (file.dev !== canonicalFile.dev || file.ino !== canonicalFile.ino) {
+  if (
+    file.dev !== canonicalFile.dev ||
+    file.ino !== canonicalFile.ino ||
+    file.birthtimeNs !== canonicalFile.birthtimeNs
+  ) {
     throw new Error("SQLite database pathname changed during admission");
   }
-  return { key: `file:${file.dev}:${file.ino}`, canonicalPath };
+  return {
+    key: `file:${file.dev}:${file.ino}`,
+    canonicalPath,
+    birthtime: file.birthtimeNs.toString(),
+  };
 }
 
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
@@ -106,9 +115,17 @@ export async function readDatabasePathIdentity(
   }
 }
 
-export function assertExistingDatabaseIdentity(databasePath: string, expected: string): void {
+export function assertExistingDatabaseIdentity(
+  databasePath: string,
+  expected: string,
+  expectedBirthtime?: string,
+): void {
   const file = statSync(databasePath, { bigint: true });
-  if (!file.isFile() || `file:${file.dev}:${file.ino}` !== expected) {
+  if (
+    !file.isFile() ||
+    `file:${file.dev}:${file.ino}` !== expected ||
+    (expectedBirthtime !== undefined && file.birthtimeNs.toString() !== expectedBirthtime)
+  ) {
     throw new Error("SQLite database file identity changed before existing-only open");
   }
 }

@@ -1,6 +1,7 @@
 /** Offline Doctor target discovery and legacy-source admission. */
 import fs from "node:fs";
 import path from "node:path";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
@@ -15,13 +16,32 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  hasOrphanedSqliteSidecars,
+  resolveSqliteDatabaseFilePaths,
+} from "../infra/sqlite-files.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
+import type {
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteOptions,
+} from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+// Direct store migrations are scoped by path; broader agent discovery needs runtime config.
+export function resolveDoctorSessionSqliteConfig(
+  options: DoctorSessionSqliteOptions,
+): OpenClawConfig {
+  if (options.cfg) {
+    return options.cfg;
+  }
+  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
+  return options.store
+    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
+    : getRuntimeConfig();
+}
 
 export function resolveDoctorSessionSqliteMaintenancePaths(
   targets: readonly SessionStoreTarget[],
@@ -137,11 +157,14 @@ export function resolveDoctorSessionSqliteTargets(params: {
     );
     return {
       targets: targets
-        .filter(
-          ({ target, sqlitePath }) =>
-            !isRetained(target.storePath, target.agentId) &&
-            !isRetained(sqlitePath, target.agentId),
-        )
+        .filter(({ target, sqlitePath }) => {
+          const orphanedSidecars = hasOrphanedSqliteSidecars(sqlitePath);
+          return [target.storePath, sqlitePath].every((pathname) => {
+            const disposition = isRetained(pathname, target.agentId);
+            // Unknown history is not a deletion; an incomplete SQLite family still needs recovery.
+            return !disposition || (disposition === "unavailable" && !orphanedSidecars);
+          });
+        })
         .map(({ target }) => target),
       knownTargets: targets.map(({ target }) => target),
     };

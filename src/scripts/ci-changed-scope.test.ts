@@ -11,6 +11,7 @@ const {
   detectChangedScope,
   detectInstallSmokeScope,
   detectNodeFastScope,
+  isNodeTestDataOnlyPath,
   listChangedPaths,
   parseArgs,
   shouldRunIosScreenshots,
@@ -163,7 +164,16 @@ describe("detectChangedScope", () => {
   });
 
   it("keeps all lanes off for docs-only changes", () => {
-    expect(detectChangedScope(["docs/ci.md", "README.md"])).toEqual({
+    expect(
+      detectChangedScope([
+        "docs/ci.md",
+        "docs/docs.json",
+        "docs/.generated/config-baseline.counts.json",
+        "docs/.generated/config-baseline.sha256",
+        "docs/assets/navigation.svg",
+        "README.md",
+      ]),
+    ).toEqual({
       runNode: false,
       runMacos: false,
       runMacosNode: false,
@@ -179,6 +189,67 @@ describe("detectChangedScope", () => {
 
   it("enables node lane for node-relevant files", () => {
     expect(detectChangedScope(["src/config/defaults.ts"])).toEqual(expectedNodeOnlyScope);
+    expect(detectChangedScope(["src/wizard/i18n/locales/en.ts"])).toEqual(expectedNodeOnlyScope);
+    expect(
+      detectChangedScope([
+        "src/config/defaults.ts",
+        "docs/docs.json",
+        "docs/.generated/config-baseline.counts.json",
+        "docs/.generated/config-baseline.sha256",
+        "docs/assets/navigation.svg",
+      ]),
+    ).toEqual(expectedNodeOnlyScope);
+  });
+
+  it.each([
+    ["scripts/README.md", true],
+    ["scripts/README.mdx", true],
+    ["docs/docs.json", true],
+    ["docs/.generated/config-baseline.counts.json", true],
+    ["docs/.generated/config-baseline.sha256", true],
+    ["docs/assets/navigation.svg", true],
+    ["docs/script.ts", true],
+    ["test/fixtures/README.md", false],
+    ["src/fixtures/README.mdx", false],
+    ["docs/reference/templates/README.md", false],
+    ["docs/reference/templates/config.json", false],
+    ["docs/.i18n/fixtures/sample.json", false],
+    ["src/runtime.md", false],
+    ["src/wizard/i18n/locales/en.ts", true],
+    ["src/wizard/i18n/locales/zh-CN.ts", true],
+    ["src/wizard/i18n/locales/zh-TW.ts", true],
+    ["src/wizard/i18n/index.ts", false],
+    ["src/wizard/i18n/types.ts", false],
+    ["src/wizard/i18n/locales/helpers/format.ts", false],
+  ] as const)(
+    "classifies documentation and catalogs without excluding runtime inputs: %s",
+    (file, dataOnly) => {
+      expect(isNodeTestDataOnlyPath(file)).toBe(dataOnly);
+    },
+  );
+
+  it("routes Skills watcher ownership to desktop Node proof without native app builds", () => {
+    for (const changedPath of [
+      "src/skills/runtime/refresh.ts",
+      "src/skills/runtime/refresh-content-native.ts",
+      "src/skills/runtime/refresh-ancestor-native.ts",
+      "src/skills/runtime/refresh-watch-close.ts",
+      "src/skills/runtime/refresh-content-native.test.ts",
+      "src/skills/runtime/refresh-content-native.entries.test.ts",
+      "src/skills/runtime/refresh.native-content.integration.test.ts",
+      "src/skills/runtime/refresh.missing-root.integration.test.ts",
+      "src/skills/runtime/refresh.symbolic-source.integration.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath]), changedPath).toEqual({
+        ...expectedNodeOnlyScope,
+        runMacosNode: true,
+        runWindows: true,
+      });
+    }
+    expect(detectChangedScope(["src/skills/runtime/refreshing.ts"])).toEqual(expectedNodeOnlyScope);
+    expect(detectChangedScope(["src/skills/loading/workspace-skill-loader.ts"])).toEqual(
+      expectedNodeOnlyScope,
+    );
   });
 
   it("runs Android and Node CI for Android toolchain action changes", () => {
@@ -467,6 +538,7 @@ describe("detectChangedScope", () => {
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
     ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["scripts/lib/vitest-build-prerequisites.mts", true, false],
     ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
@@ -820,6 +892,7 @@ describe("detectChangedScope", () => {
         "scripts/ci-changed-scope.mjs",
         "scripts/lib/arg-utils.runtime.mjs",
         "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/ci-native-generated-scope.mjs",
         "scripts/lib/direct-run.mjs",
         "scripts/lib/merge-head-diff-base.mjs",
       ]) {
@@ -861,15 +934,16 @@ describe("detectChangedScope", () => {
         );
       }
       expect(Object.keys(output).toSorted()).toEqual(
-        "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+        "changed_paths_json node_test_data_only run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
           " ",
         ),
       );
       expect(output.changed_paths_json).toBe(
         failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
       );
+      expect(output.node_test_data_only).toBe("false");
       for (const [key, value] of Object.entries(output)) {
-        if (key !== "changed_paths_json") {
+        if (key !== "changed_paths_json" && key !== "node_test_data_only") {
           const selected =
             (failSafe && !key.startsWith("run_node_fast")) ||
             (key === "run_node" && Boolean(changedPath)) ||

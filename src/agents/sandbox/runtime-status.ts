@@ -11,7 +11,10 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  resolveSessionStorePathCore,
+  resolveSessionStorePathWithContext,
+} from "../../config/sessions/paths.js";
 import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
   resolveSessionEntry,
@@ -20,6 +23,7 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -82,18 +86,6 @@ function resolveMainSessionKeyForSandbox(params: {
   });
 }
 
-function resolveComparableSessionKeyForSandbox(params: {
-  cfg?: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}): string {
-  return canonicalizeMainSessionAlias({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-}
-
 type SandboxRuntimeStatusParams = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -108,6 +100,53 @@ type SandboxRuntimeStatusParams = {
 /** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
   return resolveSandboxRuntimeStatusWithRead(params, resolveSessionEntry);
+}
+
+/** Keep the classification read's captured owner alive through one asynchronous policy preparation. */
+export async function withSandboxRuntimeStatusInWorker<T>(
+  params: Omit<SandboxRuntimeStatusParams, "preparedSessionEntry">,
+  source: { env: NodeJS.ProcessEnv; cwd: string; assertCurrent: () => void },
+  consume: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => Promise<T>,
+): Promise<T> {
+  source.assertCurrent();
+  const classification = resolveSandboxClassification(params);
+  const prepare = (entry: SessionEntry | undefined) => {
+    source.assertCurrent();
+    return consume(
+      resolveSandboxRuntimeStatusWithRead(
+        { ...params, preparedSessionEntry: entry ?? null },
+        resolveSessionEntry,
+        classification,
+      ),
+    );
+  };
+  if (!classification.classificationSessionKey) {
+    const result = await prepare(undefined);
+    source.assertCurrent();
+    return result;
+  }
+  return withSessionEntryReadOnlyInWorker(
+    {
+      agentId: classification.classificationAgentId,
+      sessionKey: classification.comparableSessionKey,
+      storePath: resolveSessionStorePathWithContext(
+        params.cfg?.session?.store,
+        {
+          agentId: classification.classificationAgentId,
+          env: source.env,
+        },
+        { cwd: source.cwd },
+      ),
+      env: source.env,
+    },
+    source.assertCurrent,
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return prepare(read.value);
+    },
+  );
 }
 
 /** Classifies durable canonical keys without admitting the same store once per session. */
@@ -129,7 +168,7 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
       }),
       projection: "list" as const,
       sessionKeys: params.sessionKeys.map((sessionKey) =>
-        resolveComparableSessionKeyForSandbox({ ...params, sessionKey }),
+        canonicalizeMainSessionAlias({ ...params, sessionKey }),
       ),
     })),
   );
@@ -151,19 +190,7 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
   });
 }
 
-function resolveSandboxRuntimeStatusWithRead(
-  params: SandboxRuntimeStatusParams,
-  readSession: typeof resolveSessionEntry,
-): {
-  agentId: string;
-  sessionKey: string;
-  classificationAgentId: string;
-  classificationSessionKey: string;
-  mainSessionKey: string;
-  mode: SandboxConfig["mode"];
-  sandboxed: boolean;
-  toolPolicy: SandboxToolPolicyResolved;
-} & SandboxRuntimeIsolation {
+function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
     sessionKey,
@@ -181,11 +208,47 @@ function resolveSandboxRuntimeStatusWithRead(
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId: classificationAgentId });
-  const comparableSessionKey = resolveComparableSessionKeyForSandbox({
+  const comparableSessionKey = canonicalizeMainSessionAlias({
     cfg,
     agentId: classificationAgentId,
     sessionKey: classificationSessionKey,
   });
+  return {
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+    cfg,
+    sandboxCfg,
+    mainSessionKey,
+    comparableSessionKey,
+  };
+}
+
+function resolveSandboxRuntimeStatusWithRead(
+  params: SandboxRuntimeStatusParams,
+  readSession: typeof resolveSessionEntry,
+  classification = resolveSandboxClassification(params),
+): {
+  agentId: string;
+  sessionKey: string;
+  classificationAgentId: string;
+  classificationSessionKey: string;
+  mainSessionKey: string;
+  mode: SandboxConfig["mode"];
+  sandboxed: boolean;
+  toolPolicy: SandboxToolPolicyResolved;
+} & SandboxRuntimeIsolation {
+  const {
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+    cfg,
+    sandboxCfg,
+    mainSessionKey,
+    comparableSessionKey,
+  } = classification;
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
   const session =
     params.preparedSessionEntry !== undefined
@@ -237,10 +300,6 @@ function resolveSandboxRuntimeStatusWithRead(
   };
 }
 
-function sanitizeForSingleLineDisplay(value: string): string {
-  return escapeControlCharsVisible(value);
-}
-
 function hasUnsafeControlChars(value: string): boolean {
   return Array.from(value).some((char) => {
     const codePoint = char.codePointAt(0) ?? 0;
@@ -256,7 +315,7 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${sanitizeForSingleLineDisplay(truncateUtf16Safe(trimmed, 6))}…${sanitizeForSingleLineDisplay(sliceUtf16Safe(trimmed, -6))}`;
+  return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {

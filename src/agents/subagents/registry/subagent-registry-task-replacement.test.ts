@@ -79,7 +79,7 @@ it.each(["end", "error"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -159,12 +159,7 @@ it.each(["end", "error"] as const)(
         resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
       },
     };
-    const receiver = createWorkerLiveEventReceiver({
-      startupBindings: [
-        { sessionId, environmentId: identity.environmentId, runEpoch: identity.ownerEpoch },
-      ],
-      startupOwners: new Map([[identity.environmentId, identity.ownerEpoch]]),
-    });
+    const receiver = createWorkerLiveEventReceiver();
     const terminalEvents: string[] = [];
     const stop = onAgentEvent((event) => {
       if (
@@ -185,7 +180,9 @@ it.each(["end", "error"] as const)(
         event: { kind: "lifecycle", payload: { phase: "start", startedAt } },
       } as const;
       expect(Value.Check(WorkerLiveEventParamsSchema, startRequest)).toBe(true);
-      expect(await receiver.apply({ identity, source, request: startRequest })).toEqual({
+      expect(
+        await receiver.apply({ identity, source, request: startRequest, readAckedSeq: () => 0 }),
+      ).toEqual({
         ok: true,
         result: { ackedSeq: 1 },
       });
@@ -194,6 +191,7 @@ it.each(["end", "error"] as const)(
       expect(claimId).toBeDefined();
       expect(
         await receiver.apply({
+          readAckedSeq: () => 0,
           identity,
           source,
           request: {
@@ -257,7 +255,14 @@ it.each(["end", "error"] as const)(
         expect(placementGate.validateWorkerTurn(turnClaim)).toBe(true);
         expect(identity.runId).toBe(terminalRequest.runId);
         expect(Value.Check(WorkerLiveEventParamsSchema, terminalRequest)).toBe(true);
-        expect(await receiver.apply({ identity, source, request: terminalRequest })).toEqual({
+        expect(
+          await receiver.apply({
+            identity,
+            source,
+            request: terminalRequest,
+            readAckedSeq: () => 0,
+          }),
+        ).toEqual({
           ok: true,
           result: { ackedSeq: 3 },
         });
@@ -299,7 +304,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "rearm-rollback-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -398,7 +403,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     sessionKey: childSessionKey,
     defaultSessionId: "interrupted-task-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
     requesterSessionKey,

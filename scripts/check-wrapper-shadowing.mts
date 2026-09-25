@@ -8,6 +8,7 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
@@ -77,40 +78,62 @@ function resolveWrappedDefinition(
   if (!importedPath) {
     return null;
   }
-  const importedModule = modulesByPath.get(importedPath);
-  if (!importedModule) {
-    return null;
-  }
-  if (importedModule.valueDefinitions.has(exportName)) {
-    return { wrapped: importedPath };
-  }
 
-  for (const reExport of importedModule.namedReExports) {
-    if (reExport.exportedName !== exportName || reExport.importedName !== exportName) {
+  const reachablePaths = new Set([importedPath]);
+  const wrappedPaths = new Set<string>();
+  // Set iteration visits newly discovered modules once, including cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    const wrapped = resolveSourceModulePath(importedPath, reExport.moduleSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
+    if (moduleExports.valueDefinitions.has(exportName)) {
+      wrappedPaths.add(modulePath);
+      if (wrappedPaths.size > 1) {
+        return null;
+      }
+      continue;
+    }
+
+    const namedExports = moduleExports.namedReExports.filter(
+      (reExport) => reExport.exportedName === exportName,
+    );
+    // An explicit binding shadows stars, even when its renamed target is outside
+    // this same-name guard. Falling through would attribute a different function.
+    const specifiers =
+      namedExports.length > 0
+        ? namedExports
+            .filter((reExport) => reExport.importedName === exportName)
+            .map((reExport) => reExport.moduleSpecifier)
+        : moduleExports.starExportSpecifiers;
+    for (const specifier of specifiers) {
+      const target = resolveSourceModulePath(modulePath, specifier, modulesByPath);
+      if (target) {
+        reachablePaths.add(target);
+      }
     }
   }
-  for (const reExportSpecifier of importedModule.starExportSpecifiers) {
-    const wrapped = resolveSourceModulePath(importedPath, reExportSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
-    }
-  }
-  return null;
+
+  const [wrapped] = wrappedPaths;
+  return wrapped ? { wrapped, ...(wrapped !== importedPath ? { via: importedPath } : {}) } : null;
 }
 
 /** Finds exported wrappers that shadow the same imported source symbol. */
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
   for (const sourceModule of modules.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   )) {
     const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(modulePath, collectModuleExportNames(sourceModule.content, modulePath));
+    modulesByPath.set(
+      modulePath,
+      collectModuleExportNames(
+        sourceModule.content,
+        modulePath,
+        parser.parseSourceFile(modulePath, sourceModule.content),
+      ),
+    );
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();

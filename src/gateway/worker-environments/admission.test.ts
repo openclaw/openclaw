@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkerConnectParams } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  admitWorkerConnection,
-  validateWorkerConnectionIdentity,
-  verifyWorkerAdmissionHandshake,
-} from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { admitWorkerConnection, validateWorkerConnectionIdentity } from "./admission.js";
 import { hashWorkerCredential, type WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
@@ -73,7 +70,7 @@ describe("worker admission", () => {
     admitWorkerConnection({ store, admission: workerAdmission, expectedBuild, nowMs });
 
   it("verifies and admits the complete current build identity", () => {
-    expect(verifyWorkerAdmissionHandshake(RECEIPT, RECEIPT)).toBe(true);
+    expect(sameWorkerBuild(RECEIPT, RECEIPT)).toBe(true);
     const result = admit();
     expect(result).toMatchObject({
       ok: true,

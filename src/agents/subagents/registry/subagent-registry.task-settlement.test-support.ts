@@ -1,12 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { getTaskFlowByIdForOwner } from "../../../tasks/task-flow-owner-access.js";
 import { readTaskRegistryRevision } from "../../../tasks/task-registry-state.js";
 import {
   configureTaskRegistryRuntime,
   getTaskRegistryStore,
+  onTaskRegistryChange,
 } from "../../../tasks/task-registry.store.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -17,12 +25,16 @@ import {
   createSessionEntry,
   createSubagentRunRecord,
   mockGatewayMethods,
+  waitForFast,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
-import { makeRunningTaskParams } from "./subagent-registry.run-fixtures.test-support.js";
+import {
+  makeKilledRun,
+  makeRunningTaskParams,
+} from "./subagent-registry.run-fixtures.test-support.js";
 
 type RestoredTaskSettlementTestOptions = {
   getRegistry: () => SubagentRegistryHarness;
@@ -72,9 +84,9 @@ export function registerRestoredTaskSettlementTest({
       .mockResolvedValue({ status: "pending" });
     const settleRootWork = observeRootWork();
     try {
-      mod.registerSubagentRun({ runId, childSessionKey, task: "predecessor", collect: true });
+      await mod.registerSubagentRun({ runId, childSessionKey, task: "predecessor", collect: true });
       await writerEntered.promise;
-      mod.registerSubagentRun({ runId, childSessionKey, task: "replacement", collect: true });
+      await mod.registerSubagentRun({ runId, childSessionKey, task: "replacement", collect: true });
       rejectWriter.resolve();
       await expect(settleRootWork()).rejects.toThrow("Failed to settle subagent cleanup roots");
       expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
@@ -251,4 +263,111 @@ export function registerRestoredRunningTaskSettlementTest({
       }
     },
   );
+}
+
+export function registerReplacedGenerationTaskSettlementTest({
+  getRegistry,
+  mocks,
+}: Omit<RestoredTaskSettlementTestOptions, "hydrateAndActivateRegistry">): void {
+  it.each([
+    { name: "unchanged", replaced: false },
+    { name: "replaced by a plugin reload", replaced: true },
+  ])(
+    "settles a child task when the spawning generation is $name",
+    async ({ replaced }) => {
+      const mod = getRegistry();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const runId = `run-spawn-generation-${String(replaced)}`;
+      const spawning = createEmptyPluginRegistry();
+      setActivePluginRegistry(spawning);
+      const gateway = createPluginRegistryOwner(spawning);
+      const childEnded = createDeferred<{ status: "ok"; startedAt: number; endedAt: number }>();
+      mockGatewayMethods(mocks.callGateway, { "agent.wait": () => childEnded.promise });
+      const settled = createDeferred();
+      // The task registry publishes the terminal write; await it instead of polling.
+      const stopObserving = onTaskRegistryChange(() => {
+        if (findTaskByRunIdForStatus(runId)?.status === "succeeded") {
+          settled.resolve();
+        }
+      });
+      const settleRootWork = observeRootWork();
+      try {
+        // The spawning turn runs inside its admitted plugin generation.
+        await withPluginRuntimeRegistryScope(spawning, () =>
+          mod.registerSubagentRun({
+            runId,
+            task: "outlive a plugin reload",
+            expectsCompletionMessage: false,
+          }),
+        );
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "running" });
+        if (replaced) {
+          // A plugin enable/disable publishes the Gateway's successor while the child still runs.
+          const successor = createEmptyPluginRegistry();
+          setActivePluginRegistry(successor);
+          gateway.publish(successor);
+        }
+        childEnded.resolve({ status: "ok", startedAt: Date.now() - 1_000, endedAt: Date.now() });
+
+        await settled.promise;
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded" });
+      } finally {
+        stopObserving();
+        await settleRootWork();
+        resetPluginRuntimeStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+      // An unsettled child never publishes; fail promptly instead of waiting on retries.
+    },
+    10_000,
+  );
+}
+
+export function registerProvisionalKillCompletionSettlementTest({
+  getRegistry,
+  mocks,
+}: {
+  getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "entries">;
+}): void {
+  it("reconciles persisted completion before expiring a provisional kill", async () => {
+    const mod = getRegistry();
+    const findRequesterRun = (runId: string) =>
+      mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
+    const settleRootWork = observeRootWork();
+    try {
+      const startedAt = Date.parse("2026-03-24T11:50:00Z");
+      const killedAt = Date.parse("2026-03-24T11:55:00Z");
+      const endedAt = Date.parse("2026-03-24T11:56:00Z");
+      mocks.entries = {
+        "agent:main:subagent:child": createSessionEntry({
+          updatedAt: endedAt,
+          status: "done",
+          startedAt,
+          endedAt,
+        }),
+      };
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId: "run-killed-with-persisted-completion",
+          task: "recover persisted completion",
+          createdAt: startedAt,
+          startedAt,
+        }),
+      );
+
+      await mod.testing.sweepOnceForTests();
+
+      await waitForFast(() => {
+        const run = findRequesterRun("run-killed-with-persisted-completion");
+        expect(run?.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+        expect(run?.execution.outcome).toMatchObject({ status: "ok", startedAt, endedAt });
+        expect(run?.archiveAtMs).toBeUndefined();
+      });
+    } finally {
+      await settleRootWork();
+    }
+  });
 }

@@ -26,7 +26,30 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
-Flaky tests never block a release. A lane that fails on a test the candidate did not touch, or that passes on rerun, is a flake: rerun it once, record it, and treat it as advisory (operator lane waiver `OPENCLAW_FRV_LANE_WAIVER`, or the declared flake allowance) rather than holding npm/ClawHub publication. Only install smoke, upgrade-survivor proofs, pack budget, and the artifact children stay required. A release-critical tooling PR blocked solely by a flaky check may be admin-merged once every non-flaky required check is green.
+Every lane runs once; first failures are recorded and fixed at their owner, and
+a passing rerun alone does not establish a flake or a fix. Strict default: a
+stable publishes only from stable/full evidence with soak, blocking performance,
+and no failed non-proof lane. Operator fast path: `stable_soak_waiver` and
+`lane_waiver` (reason prefixed with the target version, input or repository
+variable) are the only way past that and are recorded everywhere the release
+is described. Required in every mode: artifact children, install smoke, both
+survivor lanes, every `update-first-hop-compat*` lane, pack/npm qualification,
+package integrity, target resolution, Linux Gateway cross-OS lanes, and
+aggregators of required inputs. Preserve identity, provenance, complete
+evidence, and existing publication approvals.
+
+The operating objectives are approximately 20 minutes to seal validation and
+publication within an hour, not measured guarantees. Source-only children start
+alongside artifact producers; candidate consumers start as soon as the candidate
+is ready. Independently sealed green children can be reused for the same exact
+target and inputs even when their parent failed, was cancelled, or remains active;
+verify their original trusted-main workflow SHA and current attempt. The sealed
+manifest supplies the SDK evidence digest, npm publication decisions, and
+approved soak-waiver defaults; it never acknowledges SDK API changes, so supply
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+sealed waiver applies only while the repository variable still holds it. Explicit
+publisher inputs are overrides; the candidate helper still validates its explicit
+SDK acknowledgement when needed.
 
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
@@ -81,14 +104,12 @@ is the work queue: no opportunistic moving-main fixes or backports. Classify
 failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
-Required checks and enforced environment approvals remain required. A passing
-sibling lane cannot waive a failure. npm + ClawHub publication is the priority
-path. macOS/Windows/Linux/Android native publication runs in parallel and never
-gates npm/ClawHub publication, GitHub release finalization, or main closeout.
-A failing native-only lane (macos-swift app lanes, advisory cross-OS
-Windows/macOS, platform publishers) is classified and repaired in parallel; it
-is never a reason to re-cut or re-run the full npm validation. Windows should
-not hold the release either: Windows node-test shards are still a required
-`ci.yml` check for npm qualification, so repair and rerun that lane in
-parallel rather than re-cutting; relaxing the enforced gate is workflow work,
-not a doc waiver. Report proof gaps and pending platforms accurately.
+Required publication proofs and enforced environment approvals remain required.
+A passing sibling cannot replace missing required evidence. npm + ClawHub is the
+priority path. macOS, Windows, Linux, and Android native publication runs in
+parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+Windows/macOS Gateway variants, Windows/macOS Node, and native-app CI results
+are recorded as advisory during validation; a stable publishes with failed ones
+only under `lane_waiver`. Classify and repair their failures in parallel without
+re-cutting or rerunning the full npm validation. Platform publishers retain their own artifact
+and updater contracts; report pending platforms and proof gaps accurately.

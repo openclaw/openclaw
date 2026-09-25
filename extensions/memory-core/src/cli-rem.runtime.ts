@@ -525,26 +525,8 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Array<{
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  score: number;
-  query: string;
-  signalCount: number;
-  dayBucket?: string;
-}> {
-  const items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query: string;
-    signalCount: number;
-    dayBucket?: string;
-  }> = [];
+): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
+  const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;

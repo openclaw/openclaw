@@ -5,10 +5,8 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -142,12 +140,7 @@ describe("cloud worker run ownership", () => {
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
       };
-      const receiver = createWorkerLiveEventReceiver({
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const receiver = createWorkerLiveEventReceiver();
       vi.useFakeTimers({
         toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
         now: turnStartedAtMs + firstToolDelayMs,
@@ -169,6 +162,7 @@ describe("cloud worker run ownership", () => {
       try {
         expect(
           await receiver.apply({
+            readAckedSeq: () => 0,
             source: turnCapability,
             identity,
             request: {
@@ -209,6 +203,7 @@ describe("cloud worker run ownership", () => {
         } else {
           expect(
             await receiver.apply({
+              readAckedSeq: () => 0,
               source: turnCapability,
               identity,
               request: {

@@ -81,7 +81,6 @@ function prepareDocsPublisher() {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "tsx.mjs",
-    "lib/mintlify-accordion.mjs",
     "docs-mdx-repair.md",
   ]) {
     const output = path.join(target, ".openclaw-sync", name);
@@ -423,6 +422,7 @@ function holdLease() {
   fs.watch(root, checkLease);
   setTimeout(checkLease, Math.max(0, deadline - Date.now()));
   checkLease();
+  return deadline;
 }
 
 function insideOwnedPath(target) {
@@ -451,7 +451,7 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
-  holdLease();
+  const actorDeadline = holdLease();
   const descendant = mode === "child" || mode === "grandchild";
   // Descendants publish their actual attempt below. Replacing a provisional PID
   // record can race a Windows reader and fail before readiness with EPERM.
@@ -463,6 +463,14 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
+    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
+      publish("backoff-ready.json", true);
+      await until(
+        () => fs.existsSync(path.join(root, "backoff-release.json")),
+        "backoff cancellation acknowledgement",
+        actorDeadline,
+      );
+    }
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
@@ -1285,6 +1293,7 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
+  const supervisorDeadline = Date.now() + 45_000;
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
     if (process.platform === "win32") {
@@ -1439,19 +1448,24 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    if (
-      options.cancelDuringBackoff &&
-      (await waitForReady(
-        () =>
-          options.performance
-            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
-            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
-        shell,
-        () => Boolean(stopping),
-      ))
-    ) {
-      await boundary("backoff-cancel");
-      shell.kill("SIGTERM");
+    if (options.cancelDuringBackoff) {
+      try {
+        await until(
+          () =>
+            Boolean(stopping) ||
+            shell.exitCode !== null ||
+            shell.signalCode !== null ||
+            fs.existsSync(path.join(root, "backoff-ready.json")),
+          "owned backoff readiness",
+          supervisorDeadline,
+        );
+        if (!stopping && shell.exitCode === null && shell.signalCode === null) {
+          await boundary("backoff-cancel");
+          shell.kill("SIGTERM");
+        }
+      } finally {
+        publish("backoff-release.json", true);
+      }
     }
     const code = await closed;
     if (stopping) {

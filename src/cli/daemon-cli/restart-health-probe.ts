@@ -16,6 +16,10 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import {
+  classifyGatewayStaleConnectionError,
+  type GatewayStaleConnectionReason,
+} from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -27,7 +31,7 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+export const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
 
 export async function readGatewayStartupPhase(params: {
   configuredProbe: ConfiguredGatewayLocalProbe;
@@ -74,6 +78,7 @@ export type GatewayReachability = {
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
+  staleConnection?: GatewayStaleConnectionReason;
 };
 
 export type GatewayHttpReadiness = {
@@ -310,6 +315,7 @@ export async function confirmGatewayReachable(params: {
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
     if (!result.reachable) {
+      result.staleConnection = classifyGatewayStaleConnectionError(error);
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }

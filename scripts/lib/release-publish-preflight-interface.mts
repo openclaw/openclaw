@@ -13,6 +13,7 @@ export type ReleasePublishPreflightOptions = {
   stableSoakWaiver?: string;
   laneWaiver?: string;
   workflowRef: string;
+  workflowSha?: string;
   releaseProfile?: string;
   publishOpenclawNpm?: boolean;
   openclawNpmResumeRunId?: string;
@@ -94,6 +95,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "stable-soak-waiver",
     "lane-waiver",
     "workflow-ref",
+    "workflow-sha",
     "release-profile",
     "publish-openclaw-npm",
     "openclaw-npm-resume-run-id",
@@ -110,15 +112,18 @@ export function parsePublishPreflightArgs(argv: string[]) {
   const parsed = parseArgs({ args: argv, options: optionDefinitions, strict: true });
   if (parsed.values.help) {
     console.log(
-      "Usage: pnpm release:publish-preflight --tag <tag> --full-release-validation-run-id <id> --workflow-ref <protected-publish-tag> [options]\n\nRead-only: evaluates publication gates and prints the exact dispatch command.\n" +
+      "Usage: pnpm release:publish-preflight --tag <tag> --full-release-validation-run-id <id> (--workflow-ref <protected-publish-tag> | --workflow-sha <trusted-main-sha>) [options]\n\nRead-only: evaluates publication gates and prints the exact dispatch command.\n--workflow-sha reuses or mints the protected release-publish/<sha12>-<epoch> tag at that trusted main SHA (tag-creation authority required).\n" +
         strings.map((key) => `  --${key} <value>`).join("\n") +
         "\n  --json  Emit the report as JSON.\n\nDefaults: repo=openclaw/openclaw, npm-dist-tag=beta, plugin-publish-scope=all-publishable, publish-openclaw-npm=true, release-profile=from-validation.\npreflight-run-id defaults to the full validation run when it owns a qualified npm preflight.",
     );
     return undefined;
   }
   const value = (key: string, fallback = "") => String(parsed.values[key] ?? fallback);
-  if (!value("tag") || !value("workflow-ref")) {
-    throw new Error("--tag and --workflow-ref are required.");
+  if (!value("tag") || Boolean(value("workflow-ref")) === Boolean(value("workflow-sha"))) {
+    throw new Error("--tag and exactly one of --workflow-ref or --workflow-sha are required.");
+  }
+  if (value("workflow-sha") && !/^[a-f0-9]{40}$/u.test(value("workflow-sha"))) {
+    throw new Error("--workflow-sha must be a lowercase 40-character commit SHA.");
   }
   if (!["true", "false"].includes(value("publish-openclaw-npm", "true"))) {
     throw new Error("--publish-openclaw-npm must be true or false.");
@@ -139,6 +144,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     stableSoakWaiver: value("stable-soak-waiver"),
     laneWaiver: value("lane-waiver"),
     workflowRef: value("workflow-ref"),
+    workflowSha: value("workflow-sha") || undefined,
     releaseProfile: value("release-profile", "from-validation"),
     publishOpenclawNpm: value("publish-openclaw-npm", "true") === "true",
     openclawNpmResumeRunId: value("openclaw-npm-resume-run-id"),

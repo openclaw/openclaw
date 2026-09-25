@@ -14,6 +14,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
+import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
@@ -56,6 +57,7 @@ type OpenAIResponsesProviderHooks = Pick<
   | "buildReplayPolicy"
   | "prepareExtraParams"
   | "wrapStreamFn"
+  | "wrapSimpleCompletionStreamFn"
   | "resolveTransportTurnState"
   | "isCacheTtlEligible"
 >;
@@ -84,6 +86,14 @@ export function buildOpenAIResponsesProviderHooks(options?: {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW
+        ? wrapOpenAIResponsesProviderStreamFn({
+            ...ctx,
+            // Isolated completions share credential policy but must remain tool-free.
+            nativeWebSearchAllowedByToolPolicy: false,
+          })
+        : undefined,
     resolveTransportTurnState: resolveOpenAITransportTurnState,
   };
 }

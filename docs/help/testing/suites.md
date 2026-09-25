@@ -18,6 +18,11 @@ Most days:
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
+The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
+running Docker daemon and a source checkout, because the npm tarball omits QA
+Lab, and the `multipass` runner needs Multipass installed. See
+[QA-specific runners](/help/testing/qa-runners).
+
 When you touch tests or want extra confidence:
 
 - Informational V8 coverage report: `pnpm test:coverage`
@@ -121,7 +126,7 @@ Native dependency policy:
       behavior.
     - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs
       when their configured no-output deadline expires. Expiry fails the run
-      even when the child shuts down with exit code zero. Set
+      without retrying the shard, even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the

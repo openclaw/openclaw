@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -178,7 +178,7 @@ async function runReadOnlyGitCommand(params: {
 type RemoteRevisionResolution =
   | { status: "ok"; revision: string }
   | { status: "missing" }
-  | { status: "unreadable"; reason: string };
+  | { status: "unreadable"; reason: string; failureCode?: "target-git-cache-stale" };
 
 async function listGitRemotes(params: {
   runCommand: GlobalCommandRunner;
@@ -247,7 +247,8 @@ async function resolveCurrentRemoteBranchRevision(params: {
     ? { status: "ok", revision: remoteRevision }
     : {
         status: "unreadable",
-        reason: `current remote target ${remote}/${branch} is not available in the local checkout`,
+        reason: `cached ${trackingRef} differs from current remote ${remote}/${branch}`,
+        failureCode: "target-git-cache-stale",
       };
 }
 
@@ -336,7 +337,11 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   timeoutMs: number;
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
-}): Promise<{ schemaVersions?: OpenClawSchemaVersions; metadataUnreadable?: string }> {
+}): Promise<{
+  schemaVersions?: OpenClawSchemaVersions;
+  metadataUnreadable?: string;
+  failureCode?: "target-git-cache-stale";
+}> {
   const runCommand: GlobalCommandRunner = (argv, options) =>
     runCommandWithTimeout(argv, {
       ...options,
@@ -385,7 +390,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
         break;
       }
       if (resolved.status === "unreadable") {
-        return { metadataUnreadable: resolved.reason };
+        return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
       }
     }
   }
@@ -565,6 +570,7 @@ export async function updateGitInstall(params: {
                   runStep: (stepParams) =>
                     runUpdateStep({ ...stepParams, progress: params.progress }),
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                   env: mergeProcessEnv([installEnv, candidateEnv]),
                   installCwd: candidateRoot,
                   expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
@@ -578,11 +584,13 @@ export async function updateGitInstall(params: {
                       managedServiceEnv: params.getManagedServiceEnv(),
                       root,
                       timeoutMs: effectiveTimeout,
+                      workTimeoutMs: params.timeoutMs ?? null,
                     }),
                 });
               },
             }
           : {
+              onTransaction: params.onTransaction,
               runGitDoctor: (root, results) =>
                 runPackageUpdateDoctor({
                   ...params,
@@ -590,6 +598,7 @@ export async function updateGitInstall(params: {
                   managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                 }),
             }),
       },

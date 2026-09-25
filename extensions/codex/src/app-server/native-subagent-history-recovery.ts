@@ -27,7 +27,10 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import {
+  normalizeIdentifier,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import type { JsonObject } from "./protocol.js";
@@ -715,21 +718,4 @@ export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): 
     completion.status === "succeeded" &&
     completion.statusLabel === "completed_without_final_message"
   );
-}
-
-export function readThreadParentThreadId(thread: JsonObject | undefined): string | undefined {
-  return (
-    readString(thread, "parentThreadId")?.trim() ??
-    readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
-  );
-}
-
-export function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | undefined {
-  const source = isJsonObject(thread?.source) ? thread.source : undefined;
-  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
-  return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
-}
-
-export function normalizeIdentifier(value: string | undefined): string | undefined {
-  return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }

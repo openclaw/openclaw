@@ -90,12 +90,10 @@ export function clearMissingManagedServiceEnvKeys(params: {
   presentKeys: Iterable<string>;
   preserveKeys?: Iterable<string>;
 }): void {
-  const presentKeys = new Set(
-    [...params.presentKeys, ...(params.preserveKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const presentKeys = normalizeServiceEnvKeys([
+    ...params.presentKeys,
+    ...(params.preserveKeys ?? []),
+  ]);
   const missingKeys = [...params.managedKeys].filter((key) => {
     const normalized = normalizeServiceEnvKey(key);
     return normalized !== null && !presentKeys.has(normalized);

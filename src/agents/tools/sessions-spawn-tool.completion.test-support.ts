@@ -3,6 +3,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { expectRegisteredSubagentRun } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
 
@@ -77,9 +78,7 @@ export function registerSessionsSpawnCompletionTests({
           ...input,
         });
         expect(visible.details).toMatchObject({ expectsCompletionMessage: expected });
-        expect(registerRun).toHaveBeenCalledWith(
-          expect.objectContaining({ expectsCompletionMessage: expected }),
-        );
+        expectRegisteredSubagentRun(registerRun, { expectsCompletionMessage: expected });
         expect(mockCallArg(registerRun, 0, 0, "registerRun").completionTarget).toBeUndefined();
       });
     },

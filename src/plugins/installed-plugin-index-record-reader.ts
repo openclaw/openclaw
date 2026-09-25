@@ -1,6 +1,7 @@
 /** Reads installed-index records back into manifest registry records. */
 import fs from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
@@ -97,8 +98,9 @@ function resolveRecoveredManagedNpmRoot(options: InstalledPluginIndexStoreOption
 function resolveRecoveredManagedNpmPluginId(params: {
   packageName: string;
   packageDir: string;
+  packageManifest: Record<string, unknown> | null;
 }): string | undefined {
-  const packageManifest = readJsonObjectFileSync(path.join(params.packageDir, "package.json"));
+  const { packageManifest } = params;
   if (!packageManifest || !hasPackagePluginMetadata(packageManifest)) {
     return undefined;
   }
@@ -147,23 +149,21 @@ function buildRecoveredManagedNpmInstallCandidatesForRoot(params: {
   const candidates: RecoveredManagedNpmInstallCandidate[] = [];
   for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
     const packageDir = path.join(params.projectRoot, "node_modules", ...packageName.split("/"));
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(packageDir);
-    } catch {
-      continue;
-    }
-    if (!stat.isDirectory()) {
+    if (!safeStatSync(packageDir)?.isDirectory()) {
       continue;
     }
     if (hasRetainedManagedNpmInstallMarker(packageDir)) {
       continue;
     }
-    const pluginId = resolveRecoveredManagedNpmPluginId({ packageName, packageDir });
+    const packageManifest = readJsonObjectFileSync(path.join(packageDir, "package.json"));
+    const pluginId = resolveRecoveredManagedNpmPluginId({
+      packageName,
+      packageDir,
+      packageManifest,
+    });
     if (!pluginId) {
       continue;
     }
-    const packageManifest = readJsonObjectFileSync(path.join(packageDir, "package.json"));
     const version =
       typeof packageManifest?.version === "string" && packageManifest.version.trim()
         ? packageManifest.version.trim()

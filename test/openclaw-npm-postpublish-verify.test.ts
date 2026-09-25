@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   realpathSync,
   rmSync,
   truncateSync,
@@ -641,6 +642,21 @@ describe("collectInstalledPackageErrors", () => {
       );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unresolved legacy context loader in a self-contained worker", () => {
+    const packageRoot = makeInstalledPackageRoot();
+    try {
+      const workerPath = join(packageRoot, "dist", "worker", WORKER_BUNDLE_ENTRY_PATH);
+      mkdirSync(dirname(workerPath), { recursive: true });
+      writeFileSync(workerPath, "/* Failed to load legacy context engine runtime. */\n", "utf8");
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
     }
   });
 
@@ -1283,6 +1299,137 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     const { installRoot, packageRoot } = makeCompanionImportFixture({ companions: [], source });
     const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
 
+    try {
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toEqual([expect.stringContaining("@discordjs/voice")]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "direct root import", root: 'import "./companion-runtime.js";' },
+    { name: "extensionless require", root: 'require("./companion-runtime");' },
+    {
+      name: "transitive root import",
+      root: 'import "./bridge.js";',
+      bridge: 'import "./companion-runtime.js";',
+    },
+    {
+      name: "mixed root and plugin chunk",
+      root: `${legacyCompanionSource}require("./companion-runtime.js");`,
+      missingImporters: "companion-runtime.js, root.js",
+    },
+    {
+      name: "plugin-marked edge reached from root",
+      root: 'import "./bridge.js";',
+      bridge:
+        '//#region extensions/discord/src/bridge.ts\nimport "./companion-runtime.js";\n//#endregion',
+    },
+  ])(
+    "rejects legacy ownership reached through $name",
+    ({ root, bridge, missingImporters = "companion-runtime.js" }) => {
+      const { installRoot, packageRoot } = makeCompanionImportFixture({
+        companions: [],
+        source: legacyCompanionSource,
+      });
+      const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
+      try {
+        writePackageFile(packageRoot, "package.json", { main: "dist/root.js" });
+        writeFileSync(join(packageRoot, "dist/root.js"), root);
+        if (bridge) {
+          writeFileSync(join(packageRoot, "dist/bridge.js"), bridge);
+        }
+        expect(
+          collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+        ).toEqual([expect.stringContaining(`dist importers: ${missingImporters}.`)]);
+      } finally {
+        rmSync(installRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves plugin ownership through hoisted static imports", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [],
+      source: legacyCompanionSource,
+    });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
+    try {
+      writeFileSync(
+        join(packageRoot, "dist/plugin-runtime.js"),
+        [
+          'import "./companion-runtime.js";',
+          "//#region extensions/discord/src/runtime.ts",
+          "export const enabled = true;",
+          "//#endregion",
+        ].join("\n"),
+      );
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toEqual([]);
+      writePackageFile(packageRoot, "package.json", { main: "dist/root.js" });
+      writeFileSync(join(packageRoot, "dist/root.js"), 'import "./plugin-runtime.js";');
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toEqual([expect.stringContaining("dist importers: companion-runtime.js.")]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { main: "dist/companion-runtime.js" },
+    { main: "dist/companion-runtime" },
+    { main: "dist/nested", fileName: "nested/index.js" },
+    { bin: { openclaw: "./dist/companion-runtime.js" } },
+    { exports: { ".": { import: "./dist/companion-runtime.js" } } },
+    { exports: { "./*": "./dist/*.js" } },
+    { exports: { "./*": "./dist/*.js" }, fileName: "nested/runtime.js" },
+  ])("keeps legacy public entrypoints root-owned: %j", ({ fileName, ...entrypoints }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [],
+      source: legacyCompanionSource,
+    });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
+    try {
+      if (fileName) {
+        mkdirSync(dirname(join(packageRoot, "dist", fileName)), { recursive: true });
+        renameSync(
+          join(packageRoot, "dist/companion-runtime.js"),
+          join(packageRoot, "dist", fileName),
+        );
+      }
+      writePackageFile(packageRoot, "package.json", { name: "openclaw", ...entrypoints });
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toEqual([expect.stringContaining("@discordjs/voice")]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "a loader bound inside a plugin region and used outside",
+      source: [
+        'import { createRequire } from "node:module";',
+        "//#region extensions/discord/src/runtime.ts",
+        "const load = createRequire(import.meta.url);",
+        'const voice = load("@discordjs/voice");',
+        "//#endregion",
+        'load("@discordjs/voice");',
+      ].join("\n"),
+    },
+    {
+      name: "region markers inside a template literal",
+      source:
+        'const text = `//#region extensions/discord/src/runtime.ts\n${require("@discordjs/voice")}\n//#endregion`;',
+    },
+  ])("rejects legacy ownership for $name", ({ source }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({ companions: [], source });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
     try {
       expect(
         collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
@@ -2038,6 +2185,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       expected: [],
       name: "accepts the oversized worker deploy entrypoint",
       relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+      source: `/* ${"x".repeat(6 * 1024 * 1024)} */\nthis is not valid JavaScript`,
     },
     {
       expected: [],
@@ -2052,7 +2200,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
       sparseSize: 80 * 1024 * 1024 + 1,
     },
-  ])("$name", ({ expected, relativePath, sparseSize }) => {
+  ])("$name", ({ expected, relativePath, source, sparseSize }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -2066,7 +2214,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         writeFileSync(filePath, "/*", "utf8");
         truncateSync(filePath, sparseSize);
       } else {
-        writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+        writeFileSync(filePath, source ?? `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
       }
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);

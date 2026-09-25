@@ -348,6 +348,15 @@ export async function finishUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
+        // An initial failure before activation cannot promise a new service startup.
+        // Keep waiting after an observed stop/rebind or any rollback handling.
+        waitForStartup:
+          params.result.status !== "error" ||
+          params.mutationStarted ||
+          params.preManagedServiceStop?.stopped === true ||
+          currentServiceStop()?.stopped === true ||
+          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
+          rollbackAttempted,
         assertCurrent,
       });
       assertCurrent();
@@ -454,7 +463,14 @@ export async function finishUpdate(
     if (!deferPluginConvergence) {
       ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
       if (params.coreAlreadyCurrent) {
-        if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
+        if (
+          params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
+          params.preManagedServiceStop.serviceMutationSkipMessage
+        ) {
+          // An absent service needs no repair. Keep the explanation without
+          // reporting a service-install command as completed maintenance.
+          defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
+        } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
           recordServiceReconciliationWarning(
             resultWithPostUpdate,
             params.preManagedServiceStop.serviceEnv ?? process.env,

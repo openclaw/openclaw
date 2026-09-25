@@ -16,6 +16,7 @@ import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatc
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyBackendHandle,
@@ -33,6 +34,11 @@ export type ReplyRunAdmissionSource = {
   sessionIds: Set<string>;
   operation: ReplyOperation;
   databaseIdentity?: OpenClawAgentDatabaseIdentity;
+};
+
+type ReplyRunCompletionObservation = {
+  changed: boolean;
+  sources: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
 };
 
 export type ReplyRunAdmissionBarrier = {
@@ -55,6 +61,7 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   sourceTurnByKey: Map<string, string>;
+  completionObservationsByKey?: Map<string, Set<ReplyRunCompletionObservation>>;
   evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   executionStartedOperations?: WeakSet<ReplyOperation>;
@@ -72,6 +79,7 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   sourceTurnByKey: new Map<string, string>(),
+  completionObservationsByKey: new Map<string, Set<ReplyRunCompletionObservation>>(),
   evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
   executionStartedOperations: new WeakSet<ReplyOperation>(),
   lifecycleAdmissionByOperation: new WeakMap<ReplyOperation, ReplyOperationAdmission>(),
@@ -82,6 +90,26 @@ export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionBy
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
 replyRunState.successorAdmissionBarriersByKey ??= new Map();
 replyRunState.sourceTurnByKey ??= new Map();
+const replyRunCompletionObservations = (replyRunState.completionObservationsByKey ??= new Map());
+
+/** Observe owner departures only for the lifetime of one awaited admission attempt. */
+export function observeReplyRunCompletions(sessionKey: string) {
+  const observations = replyRunCompletionObservations;
+  const observation: ReplyRunCompletionObservation = { changed: false, sources: new Map() };
+  const pending = observations.get(sessionKey) ?? new Set<ReplyRunCompletionObservation>();
+  pending.add(observation);
+  observations.set(sessionKey, pending);
+  return {
+    read: () => (observation.changed ? [...observation.sources.values()] : undefined),
+    dispose: () => {
+      pending.delete(observation);
+      observation.sources.clear();
+      if (pending.size === 0 && observations.get(sessionKey) === pending) {
+        observations.delete(sessionKey);
+      }
+    },
+  };
+}
 
 export function resolveReplyOperationAgentId(sessionKey: string, agentId?: string) {
   const owner = normalizeOptionalString(agentId) ?? parseAgentSessionKey(sessionKey)?.agentId;
@@ -141,6 +169,10 @@ function clearWaitSessionIds(sessionKey: string): void {
 }
 
 export function notifyReplyRunEnded(sessionKey: string): void {
+  // Rekey departures invalidate reads without granting destination-lane lineage.
+  for (const observation of replyRunCompletionObservations.get(sessionKey) ?? []) {
+    observation.changed = true;
+  }
   const waiters = replyRunState.waitersByKey.get(sessionKey);
   if (!waiters || waiters.size === 0) {
     return;
@@ -633,6 +665,22 @@ export function clearReplyRunState(params: {
     }
     return;
   }
+  for (const observation of replyRunState.completionObservationsByKey?.get(params.sessionKey) ??
+    []) {
+    if (
+      !params.operation.result ||
+      params.operation.key !== params.sessionKey ||
+      isReplyOperationAbortedForRestart(params.operation)
+    ) {
+      observation.sources.clear();
+      continue;
+    }
+    const source = resolveReplyRunAdmissionSource(params.operation, params.sessionId);
+    observation.sources.set(
+      source.databaseIdentity,
+      mergeReplyRunAdmissionSource(source, observation.sources.get(source.databaseIdentity)),
+    );
+  }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   replyRunState.sourceTurnByKey.delete(params.sessionKey);
@@ -655,7 +703,7 @@ export function markReplyRunDiagnosticProgress(params: {
   });
 }
 
-export function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
+function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
   const backend = getAttachedBackend(operation);
   const blocker =
     !operation.result && backend
@@ -678,4 +726,33 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
       resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs) &&
     !recoveryBlocked
   );
+}
+
+export function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boolean {
+  if (!operation) {
+    return false;
+  }
+  const idleMs = Date.now() - operation.lastActivityAtMs;
+  if (operation.result) {
+    return (
+      idleMs >= REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS &&
+      expireStaleReplyOperation(operation, "terminal_unreleased")
+    );
+  }
+  return isReplyRunEvidenceStale(operation) && expireStaleReplyOperation(operation, "no_activity");
+}
+
+export function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
+  if (!operation || isReplyRunRecoveryBlocked(operation)) {
+    return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
+  }
+  const ageMs = Date.now() - operation.lastActivityAtMs;
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: operation.sessionId,
+    sessionKey: operation.key,
+  });
+  const remainingMs = operation.result
+    ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
+    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
+  return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }

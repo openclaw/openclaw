@@ -8,10 +8,6 @@ import {
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import {
@@ -25,6 +21,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
@@ -360,22 +357,11 @@ export function observeEmbeddedAttemptPrompt(input: {
           imagesCount: input.imageCount,
           tools: input.tools,
         },
-        {
-          runId: attempt.runId,
-          trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-          agentId: input.hookAgentId,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          workspaceDir: attempt.workspaceDir,
-          trigger: attempt.trigger,
-          ...buildAgentHookContextChannelFields(attempt),
-          ...buildAgentHookContextIdentityFields({
-            trigger: attempt.trigger,
-            senderId: attempt.senderId,
-            chatId: attempt.chatId,
-            channelContext: attempt.channelContext,
-          }),
-        },
+        buildEmbeddedAgentHookContext(
+          attempt,
+          input.hookAgentId,
+          freezeDiagnosticTraceContext(input.diagnosticTrace),
+        ),
       )
       .catch((err: unknown) => {
         log.warn(`llm_input hook failed: ${String(err)}`);
