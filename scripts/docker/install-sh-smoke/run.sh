@@ -437,7 +437,7 @@ run_update_candidate() {
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
       "${update_env[@]}" \
-      openclaw update --tag "$UPDATE_TAG_URL" --yes --json "$@" 2>"$update_stderr_file"
+      openclaw update --channel stable --tag "$UPDATE_TAG_URL" --yes --json "$@" 2>"$update_stderr_file"
   )"
   update_status=$?
   set -e
