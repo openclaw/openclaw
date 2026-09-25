@@ -352,10 +352,7 @@ export function createAgentsApiSession(options: {
             const transcriptReady = await projectSavedState(
               turns.map((turn) => ({
                 turn,
-                items:
-                  turn.id === call.turn_id
-                    ? prefix
-                    : (itemsByTurn!.get(turn.id) ?? []),
+                items: turn.id === call.turn_id ? prefix : (itemsByTurn!.get(turn.id) ?? []),
               })),
               signal,
             );
