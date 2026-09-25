@@ -64,6 +64,7 @@ import {
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
   readCiWorkflow,
+  readinessGuardedCondition,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
   readTrackedText,
@@ -1401,12 +1402,9 @@ AFTER_CD
         qualification,
       ),
     ).toBe("parallel");
-    expect(
-      evaluateWorkflowExpression(
-        `\${{ ${workflow.jobs["checks-node-compat"].if} }}`,
-        qualification,
-      ),
-    ).toBe(false);
+    expect(evaluateWorkflowExpression(workflow.jobs["checks-node-compat"].if, qualification)).toBe(
+      false,
+    );
   });
 
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
@@ -2683,7 +2681,9 @@ AFTER_CD
       (step: WorkflowStep) => step.name === "Check plugin inventory",
     );
 
-    expect(job.if).toBe("needs.preflight.outputs.run_check_docs == 'true'");
+    expect(job.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_check_docs == 'true'"),
+    );
     expect(configDocsCheck?.run).toBe("pnpm config:docs:check");
     expect(pluginInventoryCheck?.run).toBe("pnpm plugins:inventory:check");
   });
@@ -2735,7 +2735,9 @@ AFTER_CD
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
     });
-    expect(job.if).toBe("needs.preflight.outputs.run_docker_seed_e2e == 'true'");
+    expect(job.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_docker_seed_e2e == 'true'"),
+    );
     expect(job.needs).toEqual(["preflight"]);
     expect(job["timeout-minutes"]).toBe(60);
     expect(job.permissions).toEqual({ contents: "read" });
@@ -9527,7 +9529,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(shards).toEqual(scenario.shards);
     expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
     expect(ui.needs).toEqual(["preflight"]);
-    expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
+    expect(ui.if).toBe(readinessGuardedCondition("needs.preflight.outputs.run_ui_tests == 'true'"));
     expect(ui.permissions).toEqual({ contents: "read" });
     // Hosted rows (full-release dispatches, github backend, hybrid retries,
     // fork PRs) run the Control UI suites slower than Blacksmith; a frozen

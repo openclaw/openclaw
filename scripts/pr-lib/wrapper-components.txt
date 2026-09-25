@@ -106,6 +106,7 @@ packages/terminal-core/src/theme.ts
 scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
+scripts/ci-readiness.mjs
 scripts/crabbox-untrusted-bootstrap.sh
 scripts/lib/arg-utils.mts
 scripts/lib/arg-utils.runtime.mjs

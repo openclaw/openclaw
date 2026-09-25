@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/ci-readiness.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/ci-readiness.sh" || return 1
+
 # shellcheck source=scripts/pr-lib/github.sh
 source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
 
@@ -474,6 +477,8 @@ EOF_PREP
     > .local/prep.env
 
   ls -la .local/prep.md .local/prep.env >/dev/null
+
+  request_prepared_ci "$pr" "$prep_head_sha" || return 1
 
   echo "prepare-push complete"
   echo "pr_url=${PR_URL:-}"

@@ -15,6 +15,9 @@ for runs already deferred by older workflow revisions.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+[PR CI readiness](/ci/readiness) documents the disabled-by-default, candidate-bound
+request path for deferring expensive PR validation while keeping security feedback.
+
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.

@@ -349,7 +349,10 @@ describe("PR publication ownership", () => {
       const gatesPath = join(f.local, "gates.env");
       const gates = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${staleTarget ? f.source : f.candidate}\n`;
       writeFileSync(gatesPath, gates);
+      // The materialized requester transport is covered by ci-readiness-native.
+      // Here prove that its handoff receives the published head and saved receipt.
       const result = runPublisher(f, "prepare_push 4242", [
+        'request_prepared_ci() { test "$1" = 4242 && test "$2" = "$(remote_head)" && grep -qx "PREP_HEAD_SHA=$2" .local/prep.env && echo readiness >> .local/events; }',
         "PR_HEAD_OWNER=fixture",
         "PR_HEAD_REPO_NAME=repo",
         "OPENCLAW_PR_PUSH_MODE=graphql",
@@ -364,12 +367,11 @@ describe("PR publication ownership", () => {
         return;
       }
       const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
-      expect(events).toBe("graphql\n");
+      expect(events).toBe("graphql\nreadiness\n");
       expect(hosted).not.toBe(f.candidate);
-      expect(readFileSync(gatesPath, "utf8")).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
-      expect(readFileSync(gatesPath, "utf8")).not.toMatch(
-        /VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/,
-      );
+      const publishedGates = readFileSync(gatesPath, "utf8");
+      expect(publishedGates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
+      expect(publishedGates).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/);
       expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
         `PREP_HEAD_SHA=${hosted}\n`,
       );

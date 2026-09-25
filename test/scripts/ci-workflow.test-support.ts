@@ -41,6 +41,10 @@ export const readCiWorkflow = (() => {
   return () => structuredClone(workflow);
 })();
 
+export function readinessGuardedCondition(selection: string): string {
+  return `\${{ (${selection}) && (github.event_name != 'pull_request' || needs.preflight.outputs.readiness_enforced == 'false' || (needs.preflight.outputs.readiness_enforced == 'true' && needs.preflight.outputs.readiness_attempt == github.run_attempt)) }}`;
+}
+
 export function evaluateWorkflowExpression(
   expression: unknown,
   context: {
@@ -54,6 +58,10 @@ export function evaluateWorkflowExpression(
     cancelled?: boolean;
     dispatchId?: string;
     draft?: boolean;
+    readinessBroadCi?: boolean;
+    readinessResult?: string;
+    readinessEnforced?: boolean;
+    readinessAttempt?: number;
     eventName:
       | "pull_request"
       | "pull_request_target"
@@ -124,11 +132,13 @@ export function evaluateWorkflowExpression(
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
-  const evaluableSource = source.replace(
-    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
-    (token: string, property: string | undefined) =>
-      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
-  );
+  const evaluableSource = source
+    .replaceAll("needs.*.result", "Object.values(needs).map(job => job.result)")
+    .replace(
+      /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+      (token: string, property: string | undefined) =>
+        property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+    );
   return runInNewContext(evaluableSource, {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -171,6 +181,7 @@ export function evaluateWorkflowExpression(
               pull_request: {
                 author_association: context.authorAssociation ?? "CONTRIBUTOR",
                 draft: context.draft ?? false,
+                state: "open",
                 number: context.pullRequestNumber,
                 head: {
                   sha: context.headSha,
@@ -204,6 +215,18 @@ export function evaluateWorkflowExpression(
     },
     needs: {
       ...context.additionalNeeds,
+      "security-fast": { result: "success" },
+      ...Object.fromEntries(
+        Object.entries(context.jobResults ?? {}).map(([id, result]) => [id, { result }]),
+      ),
+      readiness: {
+        result: context.readinessResult ?? "success",
+        outputs: {
+          broad_ci: String(context.readinessBroadCi ?? !context.draft),
+          enforced: String(context.readinessEnforced ?? false),
+          attempt: String(context.readinessAttempt ?? context.runAttempt ?? 1),
+        },
+      },
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
@@ -211,6 +234,8 @@ export function evaluateWorkflowExpression(
       preflight: {
         result: context.jobResults?.preflight ?? "success",
         outputs: {
+          readiness_enforced: "false",
+          readiness_attempt: String(context.runAttempt ?? 1),
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),

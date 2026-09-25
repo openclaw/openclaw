@@ -544,6 +544,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
     } else {
       throw new Error('Unexpected GraphQL request');
     }
+  } else if (endpoint?.includes('/contents/.github/ci-readiness.json?')) {
+    console.error('Not Found (HTTP 404)'); process.exit(1);
   } else if (endpoint === 'repos/fixture/repo') {
     value = {
       id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo',
@@ -617,7 +619,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       user: control.metadata.author,
       html_url: control.metadata.url,
       body: control.metadata.body,
-      labels: control.metadata.labels,
+      labels: control.metadata.labels ?? [],
       assignees: control.metadata.assignees,
       changed_files: control.metadata.changedFiles,
       additions: control.metadata.additions,
