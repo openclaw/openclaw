@@ -1,6 +1,7 @@
-/** Read-side cron codec between task-ledger detail and the stable run-history wire shape.
+/** Read-side cron codec between cron history detail and the stable run-history wire shape.
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,
@@ -8,23 +9,18 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import {
-  FAILOVER_REASONS,
-  type FailoverReason,
-} from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
-type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
-type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
-type TaskStatus = import("../tasks/task-registry.types.js").TaskStatus;
+type JsonValue = import("./store/run-history.types.js").CronJsonValue;
+type CronRunRecord = import("./store/run-history.types.js").CronRunRecord;
 type CronRunLogEntry = import("./run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
-const CRON_TASK_DETAIL_KIND = "cron-run";
-const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
+const CRON_RUN_DETAIL_KIND = "cron-run";
 const cronRunStatusSchema = z.enum(["ok", "error", "skipped"]);
 const cronCompletionStatusSchema = z.enum(["succeeded", "failed", "unknown"]);
 const cronDeliveryStatusSchema = z.enum(["delivered", "not-delivered", "unknown", "not-requested"]);
@@ -82,12 +78,7 @@ const cronRunLogEntrySchema = z.looseObject({
   status: cronRunStatusSchema.optional().catch(undefined),
   completionStatus: cronCompletionStatusSchema.optional().catch(undefined),
   error: optionalCronStringSchema,
-  errorReason: z
-    .custom<FailoverReason>(
-      (value) => typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason),
-    )
-    .optional()
-    .catch(undefined),
+  errorReason: z.enum(FAILOVER_REASONS).optional().catch(undefined),
   summary: optionalCronStringSchema,
   runId: optionalNonBlankCronStringSchema,
   diagnostics: z.unknown().optional(),
@@ -114,9 +105,37 @@ const cronRunLogEntrySchema = z.looseObject({
   sessionKey: optionalNonBlankCronStringSchema,
 });
 
+function isJsonValue(value: unknown): value is JsonValue {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (
+      current === null ||
+      typeof current === "string" ||
+      typeof current === "boolean" ||
+      typeof current === "number"
+    ) {
+      continue;
+    }
+    if (!Array.isArray(current) && !isRecord(current)) {
+      return false;
+    }
+    for (const child of Object.values(current)) {
+      pending.push(child);
+    }
+  }
+  return true;
+}
+
+/** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
+function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
+  const value = safeParseJson(serialized);
+  return isJsonValue(value) ? value : undefined;
+}
+
 function toJsonValue(value: unknown): JsonValue | undefined {
   const serialized = JSON.stringify(value);
-  return serialized === undefined ? undefined : (JSON.parse(serialized) as JsonValue);
+  return serialized === undefined ? undefined : parseCronRunDetailJson(serialized);
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
@@ -203,8 +222,8 @@ export function parseCronRunLogEntryObject(
   return entry;
 }
 
-/** Encodes cron-owned outcome fields; the generic lifecycle projection stays on TaskRecord. */
-export function cronRunLogEntryToTaskDetail(
+/** Encodes cron-owned outcome fields without changing the task lifecycle owner. */
+export function cronRunLogEntryToDetail(
   entry: CronRunLogEntry,
   options: {
     storeKey: string;
@@ -213,7 +232,7 @@ export function cronRunLogEntryToTaskDetail(
   },
 ): JsonValue {
   const detail = toJsonValue({
-    kind: CRON_TASK_DETAIL_KIND,
+    kind: CRON_RUN_DETAIL_KIND,
     status: entry.status,
     completionStatus: entry.completionStatus,
     error: entry.error ?? null,
@@ -228,7 +247,7 @@ export function cronRunLogEntryToTaskDetail(
     failureNotificationDelivery: entry.failureNotificationDelivery,
     delivery: entry.delivery,
     sessionId: entry.sessionId,
-    // TaskRecord.runId remains the internal cancellation identity.
+    // CronRunRecord.runId remains the internal cancellation identity.
     runId: entry.runId,
     runAtMs: entry.runAtMs,
     durationMs: entry.durationMs,
@@ -249,11 +268,11 @@ export function cronRunLogEntryToTaskDetail(
     provider: entry.provider,
     usage: entry.usage,
   });
-  return detail ?? { kind: CRON_TASK_DETAIL_KIND };
+  return detail ?? { kind: CRON_RUN_DETAIL_KIND };
 }
 
 /** Stores quiet-trigger recovery facts without creating a run-history detail row. */
-export function cronQuietTriggerTaskDetail(
+export function cronQuietTriggerDetail(
   storeKey: string,
   triggerEval: { fired: false; stateChanged: boolean; state?: unknown },
 ): JsonValue {
@@ -267,53 +286,55 @@ export function cronQuietTriggerTaskDetail(
   );
 }
 
-/** Returns the cron store partition recorded on a task row. */
-export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
-  return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
-    ? task.detail.storeKey
+/** Returns the cron store partition recorded on a cron row. */
+export function cronRunRecordStoreKey(record: Pick<CronRunRecord, "detail">): string | undefined {
+  return isJsonObject(record.detail) && typeof record.detail.storeKey === "string"
+    ? record.detail.storeKey
     : undefined;
 }
 
-/** Keeps history projection, recovery, and retention on one task-row timestamp. */
-export function resolveCronTaskRecordTimestamp(
-  task: Pick<TaskRecord, "endedAt" | "lastEventAt" | "createdAt">,
+/** Keeps history projection, recovery, and retention on one record-row timestamp. */
+export function resolveCronRunRecordTimestamp(
+  record: Pick<CronRunRecord, "endedAt" | "lastEventAt" | "createdAt">,
 ): number {
-  return task.endedAt ?? task.lastEventAt ?? task.createdAt;
+  return record.endedAt ?? record.lastEventAt ?? record.createdAt;
 }
 
 /** Reads internal trigger recovery data without adding it to run-history responses. */
-export function cronTaskRecordToTriggerEval(
-  task: TaskRecord,
+export function cronRunRecordToTriggerEval(
+  record: Pick<CronRunRecord, "detail">,
 ): { fired: boolean; stateChanged: boolean; state?: JsonValue } | undefined {
-  if (!isJsonObject(task.detail) || typeof task.detail.triggerFired !== "boolean") {
+  if (!isJsonObject(record.detail) || typeof record.detail.triggerFired !== "boolean") {
     return undefined;
   }
   return {
-    fired: task.detail.triggerFired,
-    stateChanged: task.detail.triggerStateChanged === true,
-    ...(task.detail.triggerStateChanged === true && "triggerState" in task.detail
-      ? { state: task.detail.triggerState }
+    fired: record.detail.triggerFired,
+    stateChanged: record.detail.triggerStateChanged === true,
+    ...(record.detail.triggerStateChanged === true && "triggerState" in record.detail
+      ? { state: record.detail.triggerState }
       : {}),
   };
 }
 
 /** Reads internal payload-script recovery data without exposing it in run history. */
-export function cronTaskRecordToScriptRunResult(
-  task: TaskRecord,
+export function cronRunRecordToScriptRunResult(
+  record: Pick<CronRunRecord, "detail">,
 ): { scriptStateChanged: true; scriptState?: JsonValue } | undefined {
-  if (!isJsonObject(task.detail) || task.detail.scriptStateChanged !== true) {
+  if (!isJsonObject(record.detail) || record.detail.scriptStateChanged !== true) {
     return undefined;
   }
   return {
     scriptStateChanged: true,
-    ...(Object.hasOwn(task.detail, "scriptState") ? { scriptState: task.detail.scriptState } : {}),
+    ...(Object.hasOwn(record.detail, "scriptState")
+      ? { scriptState: record.detail.scriptState }
+      : {}),
   };
 }
 
-/** Maps the cron outcome vocabulary onto generic task terminal states. */
-export function cronRunStatusToTaskStatus(
+/** Preserves the released history row status vocabulary. */
+export function cronRunStorageStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
-): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
+): "succeeded" | "failed" | "timed_out" {
   if (entry.status === "ok") {
     const completionStatus =
       entry.completionStatus ??
@@ -327,31 +348,31 @@ export function cronRunStatusToTaskStatus(
   return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
-/** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */
-export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry | null {
-  if (task.runtime !== "cron" || !task.sourceId || !isJsonObject(task.detail)) {
+/** Reconstructs the unchanged CronRunLogEntry wire shape from a cron record row. */
+export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEntry | null {
+  if (!record.jobId || !isJsonObject(record.detail)) {
     return null;
   }
-  if (task.detail.kind !== CRON_TASK_DETAIL_KIND) {
+  if (record.detail.kind !== CRON_RUN_DETAIL_KIND) {
     return null;
   }
-  const wireDetail = { ...task.detail };
+  const wireDetail = { ...record.detail };
   delete wireDetail.storeKey;
-  // Task detail is canonical write-time state; history reads do not rederive error reasons.
+  // Cron detail is canonical write-time state; history reads do not rederive error reasons.
   const entry = parseCronRunLogEntryObject(
     {
-      // Released rows stored these only on the generic task; current detail wins
-      // when task cancellation and the underlying execution have different outcomes.
-      error: task.error,
-      summary: task.terminalSummary,
+      // Released rows stored these only on the history row; current detail wins
+      // when operator cancellation and the underlying execution have different outcomes.
+      error: record.error,
+      summary: record.summary,
       ...wireDetail,
-      ts: resolveCronTaskRecordTimestamp(task),
-      jobId: task.sourceId,
+      ts: resolveCronRunRecordTimestamp(record),
+      jobId: record.jobId,
       action: "finished",
-      sessionKey: task.childSessionKey,
-      runId: typeof task.detail.runId === "string" ? task.detail.runId : undefined,
+      sessionKey: record.sessionKey,
+      runId: typeof record.detail.runId === "string" ? record.detail.runId : undefined,
     },
-    { jobId: task.sourceId },
+    { jobId: record.jobId },
   );
   if (!entry) {
     return null;

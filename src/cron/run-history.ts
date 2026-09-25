@@ -1,25 +1,24 @@
-/** Cron run-history reads backed by authoritative task-ledger rows. */
+/** Cron run-history reads backed by authoritative cron-owned history rows. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
-import type { CronRunLogEntry } from "./run-log-types.js";
 import {
-  cronTaskRecordStoreKey,
-  cronTaskRecordToRunLogEntry,
+  cronRunRecordStoreKey,
+  cronRunRecordToRunLogEntry,
   isCronDeliveryStatus,
   isCronRunStatus,
-} from "./task-run-detail.js";
+} from "./run-history-detail.js";
+import type { CronRunLogEntry } from "./run-log-types.js";
+import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 
 type CronRunHistorySortDir = "asc" | "desc";
 type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
-type ReadCronTaskRunHistoryPageOptions = {
+export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
   limit?: number;
   offset?: number;
@@ -37,7 +36,7 @@ type ReadCronTaskRunHistoryPageOptions = {
   entryFilter?: (entry: CronRunLogEntry) => boolean;
 };
 
-type CronTaskRunHistoryPage = {
+type CronRunHistoryPage = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;
@@ -46,18 +45,18 @@ type CronTaskRunHistoryPage = {
   nextOffset: number | null;
 };
 
-const INVALID_CRON_TASK_RUN_JOB_ID_MESSAGE = "invalid cron task run job id";
+const INVALID_CRON_RUN_JOB_ID_MESSAGE = "invalid cron run job id";
 
-export function normalizeCronTaskRunJobId(jobId: string): string {
+export function normalizeCronRunJobId(jobId: string): string {
   const trimmed = jobId.trim();
   if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
-    throw new Error(INVALID_CRON_TASK_RUN_JOB_ID_MESSAGE);
+    throw new Error(INVALID_CRON_RUN_JOB_ID_MESSAGE);
   }
   return trimmed;
 }
 
-export function isInvalidCronTaskRunJobIdError(error: unknown): boolean {
-  return error instanceof Error && error.message === INVALID_CRON_TASK_RUN_JOB_ID_MESSAGE;
+export function isInvalidCronRunJobIdError(error: unknown): boolean {
+  return error instanceof Error && error.message === INVALID_CRON_RUN_JOB_ID_MESSAGE;
 }
 
 function normalizeStatusFilter<T>(
@@ -90,15 +89,15 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
 }
 
 function compareHistoryRows(
-  left: { entry: CronRunLogEntry; task: TaskRecord },
-  right: { entry: CronRunLogEntry; task: TaskRecord },
+  left: { entry: CronRunLogEntry; record: CronRunRecord },
+  right: { entry: CronRunLogEntry; record: CronRunRecord },
   direction: CronRunHistorySortDir,
 ): number {
   const multiplier = direction === "asc" ? 1 : -1;
   return (
     multiplier * (left.entry.ts - right.entry.ts) ||
-    multiplier * (left.task.createdAt - right.task.createdAt) ||
-    multiplier * left.task.taskId.localeCompare(right.task.taskId)
+    multiplier * (left.record.createdAt - right.record.createdAt) ||
+    multiplier * left.record.id.localeCompare(right.record.id)
   );
 }
 
@@ -111,11 +110,11 @@ function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string,
   }
 }
 
-/** Reads and filters cron task rows with the legacy run-history paging contract. */
-export function readCronTaskRunHistoryPage(
-  options: ReadCronTaskRunHistoryPageOptions,
-): CronTaskRunHistoryPage {
-  const jobId = options.jobId ? normalizeCronTaskRunJobId(options.jobId) : undefined;
+export function projectCronRunHistoryPage(
+  records: readonly CronRunRecord[],
+  options: ReadCronRunHistoryPageOptions,
+): CronRunHistoryPage {
+  const jobId = options.jobId ? normalizeCronRunJobId(options.jobId) : undefined;
   const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const statuses = normalizeStatusFilter(options.statuses, options.status, isCronRunStatus);
@@ -128,14 +127,14 @@ export function readCronTaskRunHistoryPage(
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
   const sortDir: CronRunHistorySortDir = options.sortDir === "asc" ? "asc" : "desc";
-  const rows = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-    runtime: "cron",
-    sourceId: jobId,
-  })
-    .filter((task) => cronTaskRecordStoreKey(task) === options.storeKey)
-    .filter((task) => !agentId || task.agentId === agentId)
-    .map((task) => ({ task, entry: cronTaskRecordToRunLogEntry(task) }))
-    .filter((row): row is { task: TaskRecord; entry: CronRunLogEntry } => row.entry !== null)
+  const rows = records
+    .filter(
+      (record) =>
+        (!jobId || record.jobId === jobId) && cronRunRecordStoreKey(record) === options.storeKey,
+    )
+    .filter((record) => !agentId || record.agentId === agentId)
+    .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
+    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null)
     .filter(({ entry }) => {
       if (runId && entry.runId !== runId) {
         return false;
