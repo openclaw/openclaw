@@ -5,6 +5,8 @@ import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import { assignProviderModelOrder } from "./model-catalog-order.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
@@ -81,9 +83,16 @@ function createConfiguredModelCatalogSnapshot(params: {
     ],
     keyOf,
   );
+  const orderedEntries = assignProviderModelOrder(
+    configuredEntries,
+    loadManifestModelCatalog({
+      config: params.agentFacts.input.config,
+      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+    }),
+  );
   return {
-    entries: configuredEntries,
-    routeVariants: configuredEntries,
+    entries: orderedEntries,
+    routeVariants: orderedEntries,
     ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
   };
 }
@@ -117,5 +126,15 @@ export function prepareCapturedRuntimeFacts(
     ],
     createModelCatalogIdentityKeyResolver(),
   );
-  return { ...facts, modelCatalog: { ...facts.modelCatalog, entries, routeVariants: entries } };
+  const orderedEntries = assignProviderModelOrder(entries, [
+    ...loadManifestModelCatalog({
+      config: params.agentFacts.input.config,
+      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+    }),
+    ...facts.modelCatalog.entries,
+  ]);
+  return {
+    ...facts,
+    modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },
+  };
 }
