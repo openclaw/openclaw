@@ -661,7 +661,7 @@ async function loadAgentsApiWorkspaceInstructions(
     runKind: params.bootstrapContextRunKind,
     warn: (message) => embeddedAgentLog.warn(message),
   });
-  // TODO: Deliver persona, other workspace context, and memory guidance when the
-  // client implements a per-turn developer instruction carrier.
+  // Persona, other workspace context, and memory guidance remain unimplemented
+  // until the client has a per-turn developer instruction carrier.
   return prepared.instructionSnapshot.instructions || undefined;
 }
