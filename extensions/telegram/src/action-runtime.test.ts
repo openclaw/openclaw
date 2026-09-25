@@ -487,6 +487,31 @@ describe("Telegram registered action authority and input contracts", () => {
     },
   );
 
+  it("forwards the silent option to a dice roll and withdraws dice with the send gate", async () => {
+    // The shared schema accepts `silent` for dice and Bot API supports it; dropping it on the way
+    // out made silent rolls notify recipients anyway. Dice also has no gate of its own, so
+    // disabling sendMessage must reject it rather than reach the API.
+    await invoke("dice", { to: "-1001", diceEmoji: "\u{1F3B2}", silent: true });
+
+    expect(endpoints).toEqual(["/bot123456:telegram-send-http-fixture/sendDice"]);
+    expect(requests[0]!.fields).toMatchObject({
+      chat_id: "-1001",
+      emoji: "\u{1F3B2}",
+      disable_notification: true,
+    });
+
+    cfg = {
+      ...cfg,
+      channels: {
+        telegram: { ...cfg.channels!.telegram!, actions: { sendMessage: false } },
+      },
+    };
+    await expect(invoke("dice", { to: "-1001" })).rejects.toThrow(
+      "Telegram sendMessage is disabled.",
+    );
+    expect(requests).toHaveLength(1);
+  });
+
   it("rejects sending without a configured credential", async () => {
     cfg = {};
     await expect(invoke("send", { to: "123", message: "hello" })).rejects.toThrow(

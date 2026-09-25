@@ -295,6 +295,26 @@ describe("mirrorDeliveredSourceReplyToTranscript", () => {
       expect(transcriptMocks.append).not.toHaveBeenCalled();
     },
   );
+
+  // The message tool's argument object is flat, so a roll can carry send-payload fields.
+  // Telegram ignores them, so mirroring would record assistant text nobody received.
+  it("does not mirror a dice delivery carrying ignored send-payload text", async () => {
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      action: "dice",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", message: "You rolled a six" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true, messageId: "dice-1" },
+    });
+
+    expect(mirrored).toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
 });
 
 describe("beginTerminalSourceReplyDelivery", () => {

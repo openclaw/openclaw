@@ -5,6 +5,7 @@ import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
+  applyTargetToParams,
 } from "./message-action-spec.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
@@ -77,5 +78,16 @@ describe("actionHasResourceReference", () => {
     ["pin" as const, { messageId: "msg_123" }, "pinboard", false],
   ])("classifies %s resource %j on %s as %s", (action, params, channel, expected) => {
     expect(actionHasResourceReference(action, params, { channel })).toBe(expected);
+  });
+});
+
+describe("dice target routing", () => {
+  it("routes dice to the `to` field like other outbound sends", () => {
+    // Dice rides the send target contract; routing it to `channelId` would address the wrong chat.
+    expect(actionRequiresTarget("dice")).toBe(true);
+    const args: Record<string, unknown> = { target: "@testchannel" };
+    applyTargetToParams({ action: "dice", args });
+    expect(args.to).toBe("@testchannel");
+    expect(args.channelId).toBeUndefined();
   });
 });

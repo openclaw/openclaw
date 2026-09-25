@@ -19,6 +19,7 @@ type SchemaGroup =
   | "poll"
   | "channelTarget"
   | "sticker"
+  | "dice"
   | "thread"
   | "event"
   | "moderation"
@@ -154,6 +155,7 @@ const SCOPED_ACTION_GROUPS: ReadonlyArray<{
     ],
   },
   { group: "presence", actions: ["set-presence", "set-profile", "voice-status"] },
+  { group: "dice", actions: ["dice"] },
 ];
 
 function isSendOrBroadcastOnly(actions: readonly string[]): boolean {

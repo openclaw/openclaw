@@ -363,12 +363,33 @@ function matchesDeliveredSourceTargets(
   );
 }
 
+/**
+ * Actions that address their conversation by target, so an exact target match is what proves
+ * the delivery reached the current source. Reply-type actions resolve their conversation from
+ * a message id instead and are decided separately in isDeliveredCurrentSourceReply.
+ */
+const TARGET_ADDRESSED_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
+  "dice",
+  "poll",
+  "send",
+]);
+
+/**
+ * Actions whose `actionParams` text and media are the payload the channel actually delivers.
+ * The message tool's argument object is flat, so a roll or a poll can carry `message` or media
+ * fields the channel ignores; mirroring those would write text into the transcript that no
+ * recipient ever saw. Delivery classification above stays separate and keeps covering them.
+ */
+const MIRRORABLE_SOURCE_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
+  "send",
+]);
+
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
-  // Polls share the send target contract. Transcript mirroring stays send-only
-  // because poll params carry no message text to mirror.
-  if (params.action !== "send" && params.action !== "poll") {
+  // Transcript mirroring shares this predicate; actions carrying no text or media drop out
+  // on the empty-payload check there rather than needing a second action list here.
+  if (!TARGET_ADDRESSED_ACTION_NAMES.has(params.action.trim().toLowerCase())) {
     return false;
   }
   if (!hasCurrentSourceContext(params)) {
@@ -481,8 +502,12 @@ function resolveDeliveredCurrentSourceReply(
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
       // Send variants share destination proof, not transcript or restart-receipt ownership.
+      // Dice joins poll here: both address their conversation by target and deliver a visible
+      // message, while neither carries transcript text of its own.
       return (
-        (isMessageToolSendActionName(params.action) || params.action === "poll") &&
+        (isMessageToolSendActionName(params.action) ||
+          params.action === "poll" ||
+          params.action === "dice") &&
         isExactCurrentSourceConversation({ ...params, action: "send" })
       );
   }
@@ -570,6 +595,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     params,
     resolveChannelThreadAddressing(params.channel),
   );
+  if (!MIRRORABLE_SOURCE_ACTION_NAMES.has(params.action.trim().toLowerCase())) {
+    return false;
+  }
   if (!isCurrentSourceConversation(params)) {
     return false;
   }
