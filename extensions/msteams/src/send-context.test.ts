@@ -41,6 +41,7 @@ vi.mock("./conversation-store-state.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: () => ({
     logging: {
       getChildLogger: () => ({

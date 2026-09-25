@@ -149,6 +149,7 @@ vi.mock("./sdk.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: () => ({
     logging: {
       getChildLogger: () => ({
