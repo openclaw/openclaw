@@ -4617,8 +4617,8 @@ describe("runCodexAppServerAttempt", () => {
     params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
     const startParams = harness.requests.find((request) => request.method === "thread/start")
       ?.params as { dynamicTools: CodexDynamicToolSpec[] };
     expect(specNames(startParams.dynamicTools)).toContain("read");
@@ -4667,7 +4667,8 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
