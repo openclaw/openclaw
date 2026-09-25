@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import type { QaRunnerModelOption } from "../runner-contract.js";
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
@@ -23,14 +24,6 @@ type ModelRow = {
   input: string;
   available: boolean | null;
   missing: boolean;
-};
-
-export type QaRunnerModelOption = {
-  key: string;
-  name: string;
-  provider: string;
-  input: string;
-  preferred: boolean;
 };
 
 function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {

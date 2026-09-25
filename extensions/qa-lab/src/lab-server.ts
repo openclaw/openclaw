@@ -8,6 +8,7 @@ import {
   acquireDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
+import type { QaRunnerModelOption } from "../runner-contract.js";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -50,7 +51,6 @@ import type {
   QaLabServerHandle,
   QaLabServerStartParams,
 } from "./lab-server.types.js";
-import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
 import {
   qaTransportSupportsModuleFlows,

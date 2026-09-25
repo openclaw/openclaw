@@ -14,6 +14,7 @@ import type {
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
+  QaRunnerModelOption,
 } from "../../runner-contract.js";
 import type {
   QaEvidenceArtifactView,
@@ -23,7 +24,6 @@ import type {
   QaEvidenceProducerContext,
   QaEvidenceProducerContextFile,
 } from "../../shared/evidence-gallery-types.js";
-import type { QaRunnerModelOption } from "../../src/model-catalog.runtime.js";
 
 export type ReportEnvelope = {
   report: QaLabLatestReport | null;
