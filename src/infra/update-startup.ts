@@ -243,52 +243,6 @@ export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartu
   return currentUpdateCheckLifecycle().initialize();
 }
 
-/** Refreshes the read-only Dev checkout comparison used by update.status. */
-export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
-  const lifecycle = currentUpdateCheckLifecycle();
-  const pending = lifecycle.refreshes.get(cfg);
-  if (pending) {
-    return pending;
-  }
-  const refresh = lifecycle
-    .run(async (signal) => {
-      const scheduleAtStart = getUpdateSchedule();
-      const configured = normalizeUpdateChannel(cfg.update?.channel);
-      const channel =
-        configured ??
-        resolveEffectiveUpdateChannel({
-          currentVersion: VERSION,
-          ...(await lifecycle.initialize()).status,
-        }).channel;
-      const isCurrent = () =>
-        lifecycle.isCurrent() &&
-        !signal.aborted &&
-        (getUpdateSchedule() === scheduleAtStart || getUpdateSchedule()?.channel === channel);
-      if (channel !== "dev" || !isCurrent()) {
-        return;
-      }
-      const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
-      if (!isCurrent()) {
-        return;
-      }
-      const schedule = getUpdateSchedule();
-      const current =
-        schedule?.channel === channel
-          ? schedule
-          : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
-      setUpdateScheduleCache({
-        next: withUpdateInstallStatus(current, status, true, installReceipt, root),
-      });
-    })
-    .finally(() => {
-      if (lifecycle.refreshes.get(cfg) === refresh) {
-        lifecycle.refreshes.delete(cfg);
-      }
-    });
-  lifecycle.refreshes.set(cfg, refresh);
-  return refresh;
-}
-
 function recordAutoUpdateAttempt(version: string): void {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = readState();

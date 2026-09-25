@@ -48,6 +48,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -2710,7 +2711,9 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.infra.config.ts",
           forwardedArgs,
-          includePatterns: ["src/gateway/server-methods/memory-search.test.ts"],
+          includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+            file.startsWith("src/gateway/"),
+          ),
           watchMode: false,
         },
       ]);
@@ -5834,7 +5837,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
-  it("expands untargeted local runs to leaf project configs by default", () => {
+  it("expands untargeted local runs to leaf project configs by default", async () => {
+    const infraConfig = "test/vitest/vitest.infra.config.ts";
+    const infraFiles = await listVitestConfigTestFiles(infraConfig);
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -5865,6 +5870,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        const infraPlans = plans.filter((plan) => plan.config === infraConfig);
+        expect(infraPlans.length).toBeGreaterThan(1);
+        expect(
+          infraPlans.every(
+            (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
+          ),
+        ).toBe(true);
+        expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(infraFiles)].toSorted(),
+        );
         const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
         expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
         expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(

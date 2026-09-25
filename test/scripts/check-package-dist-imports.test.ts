@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -9,6 +9,59 @@ const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("collectPackageDistImports", () => {
+  it.each(["mjs", "cjs"])(
+    "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
+    (extension) => {
+      const bindings = 2048;
+      const source =
+        Array.from(
+          { length: bindings },
+          (_, index) => `const package_binding_${index} = ${index};`,
+        ).join("\n") + "\nlet package_binding_0;";
+      let searchedSlots = 0;
+      const indexOf = Array.prototype.indexOf;
+      const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
+        this: unknown[],
+        value: unknown,
+        fromIndex?: number,
+      ) {
+        if (typeof value === "string" && value.startsWith("package_binding_")) {
+          searchedSlots += this.length;
+        }
+        return indexOf.call(this, value, fromIndex);
+      });
+      try {
+        expect(() =>
+          collectPackageDistImports({
+            files: [`dist/index.${extension}`],
+            readText: () => source,
+          }),
+        ).toThrow("Identifier 'package_binding_0' has already been declared");
+      } finally {
+        observed.mockRestore();
+      }
+      expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
+    },
+  );
+
+  it("preserves sloppy CommonJS bindings and its explicit strict directive", () => {
+    const source = [
+      "function value(arg, arg) {}",
+      "var value; var value;",
+      "try {} catch (value) { var value; }",
+      'return require("./leaf.cjs");',
+    ].join("\n");
+    expect(
+      collectPackageDistImports({ files: ["dist/index.cjs"], readText: () => source }),
+    ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs" }]);
+    expect(() =>
+      collectPackageDistImports({
+        files: ["dist/index.cjs"],
+        readText: () => `"use strict";\n${source}`,
+      }),
+    ).toThrow("Argument name clash");
+  });
+
   it("leaves installed dependency modules to their own package scope", () => {
     expect(
       collectPackageDistImports({

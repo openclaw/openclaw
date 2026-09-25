@@ -1,4 +1,3 @@
-// Qa Lab Matrix module records redacted Matrix protocol behavior.
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import {
@@ -271,20 +270,15 @@ function collectStateFieldMarkers(value: unknown, depth = 0): string[] {
   return [...markers];
 }
 
-function extractStateFieldMarkers(body: Buffer, headers: Headers | IncomingHttpHeaders) {
-  const parsed = parseJsonBody(body, headers);
-  return parsed === undefined ? [] : collectStateFieldMarkers(parsed);
-}
-
 function buildBodyShape(
   body: Buffer,
   headers: Headers | IncomingHttpHeaders,
   route: string,
+  parsed: unknown,
 ): MatrixQaBodyShape {
   if (body.byteLength === 0) {
     return { kind: "empty" };
   }
-  const parsed = parseJsonBody(body, headers);
   if (parsed !== undefined) {
     return { kind: "json", fields: collectJsonFields(parsed, route) };
   }
@@ -483,24 +477,6 @@ function buildExpectation(
   };
 }
 
-function extractErrcode(body: Buffer, headers: Headers) {
-  const parsed = parseJsonBody(body, headers);
-  if (typeof parsed !== "object" || parsed === null) {
-    return undefined;
-  }
-  const errcode = (parsed as { errcode?: unknown }).errcode;
-  return typeof errcode === "string" ? errcode : undefined;
-}
-
-function extractNextBatch(body: Buffer, headers: Headers) {
-  const parsed = parseJsonBody(body, headers);
-  if (typeof parsed !== "object" || parsed === null) {
-    return undefined;
-  }
-  const nextBatch = (parsed as { next_batch?: unknown }).next_batch;
-  return typeof nextBatch === "string" ? nextBatch : undefined;
-}
-
 export async function startMatrixQaRecordingProxy(params: {
   targetBaseUrl: string;
 }): Promise<MatrixQaRecordingProxy> {
@@ -526,25 +502,28 @@ export async function startMatrixQaRecordingProxy(params: {
       : typeof context?.scenarioId === "string"
         ? context.scenarioId
         : "unattributed";
-    const requestBody = buildBodyShape(exchange.request.body, exchange.request.headers, route);
-    const responseBody = buildBodyShape(exchange.response.body, exchange.response.headers, route);
-    const requestFields = extractStateFieldMarkers(exchange.request.body, exchange.request.headers);
-    const responseFields = extractStateFieldMarkers(
-      exchange.response.body,
-      exchange.response.headers,
-    );
+    const requestJson = parseJsonBody(exchange.request.body, exchange.request.headers);
+    const responseJson = parseJsonBody(exchange.response.body, exchange.response.headers);
+    const responseMetadata =
+      typeof responseJson === "object" && responseJson !== null
+        ? (responseJson as { errcode?: unknown; next_batch?: unknown })
+        : undefined;
+    const requestFields = collectStateFieldMarkers(requestJson);
+    const responseFields = collectStateFieldMarkers(responseJson);
     const syncPrincipal = exchange.request.bearerToken ?? "anonymous";
     const syncTokens = syncTokensByPrincipal.get(syncPrincipal) ?? new Map<string, string>();
     syncTokensByPrincipal.set(syncPrincipal, syncTokens);
     const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
     const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
     const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
-    const nextBatch = extractNextBatch(exchange.response.body, exchange.response.headers);
+    const nextBatch =
+      typeof responseMetadata?.next_batch === "string" ? responseMetadata.next_batch : undefined;
     if (nextBatch && !syncTokens.has(nextBatch)) {
       syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
     }
     const nextBatchAlias = nextBatch ? syncTokens.get(nextBatch) : undefined;
-    const responseErrcode = extractErrcode(exchange.response.body, exchange.response.headers);
+    const responseErrcode =
+      typeof responseMetadata?.errcode === "string" ? responseMetadata.errcode : undefined;
     const operationFingerprint = createHash("sha256")
       .update(exchange.request.method)
       .update("\0")
@@ -559,13 +538,18 @@ export async function startMatrixQaRecordingProxy(params: {
     records.push({
       categories: resolveStateFamilies({ requestFields, responseFields, route }),
       request: {
-        body: requestBody,
+        body: buildBodyShape(exchange.request.body, exchange.request.headers, route, requestJson),
         method: exchange.request.method,
         query: requestQuery,
         route,
       },
       response: {
-        body: responseBody,
+        body: buildBodyShape(
+          exchange.response.body,
+          exchange.response.headers,
+          route,
+          responseJson,
+        ),
         ...(responseErrcode ? { errcode: responseErrcode } : {}),
         status: exchange.response.status,
       },

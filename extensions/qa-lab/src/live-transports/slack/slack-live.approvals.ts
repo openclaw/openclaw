@@ -1,10 +1,10 @@
 // QA Lab Slack native approval observation and resolution.
 import { randomUUID } from "node:crypto";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { requestLiveQaApproval } from "../shared/live-approval-request.js";
 import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import {
   writeSlackApprovalCheckpoint,
-  requestSlackApproval,
   waitForApprovalDecision,
 } from "./slack-live.approval-checkpoint.js";
 import {
@@ -300,11 +300,14 @@ export async function runSlackApprovalScenario(params: {
     params.run.approvalKind === "exec"
       ? `slack-qa-exec-${randomUUID()}`
       : `slack-qa-plugin-${randomUUID()}`;
-  const approvalId = await requestSlackApproval({
+  const approvalId = await requestLiveQaApproval({
     approvalId: requestedApprovalId,
-    channelId: params.channelId,
-    context: params.context,
-    run: params.run,
+    approvalKind: params.run.approvalKind,
+    channel: "slack",
+    gateway: params.context.gateway,
+    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
+    token: params.run.token,
+    turnSourceTo: `channel:${params.channelId}`,
     sutAccountId: params.sutAccountId,
   });
   const pending = await waitForSlackApprovalPrompt({

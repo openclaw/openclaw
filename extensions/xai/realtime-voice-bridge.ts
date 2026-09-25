@@ -76,7 +76,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.lifecycle.phase() === "terminal") {
       return;
     }
-    if (!this.canSubmitInput()) {
+    if (!this.isConnected()) {
       if (this.pendingUserMessages.length < XAI_REALTIME_MAX_PENDING_USER_MESSAGES) {
         this.pendingUserMessages.push(text);
       } else {
@@ -103,7 +103,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
-    if (!this.canSubmitInput()) {
+    if (!this.isConnected()) {
       let serialized: string;
       try {
         serialized = serializeXaiRealtimeToolResult(result);
@@ -483,10 +483,6 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     ws.send(payload);
     // Observers report a sent frame, so nested control cannot overtake it.
     this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
-  }
-
-  private canSubmitInput(): boolean {
-    return this.isConnected();
   }
 
   private failConnection(

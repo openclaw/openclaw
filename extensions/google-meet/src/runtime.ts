@@ -4,6 +4,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  endMeetingVoiceCallGatewayCall,
+  getMeetingVoiceCallGatewayCall,
+  isMeetingVoiceCallMissingError,
+  speakMeetingViaVoiceCallGateway,
+  type MeetingVoiceCallGateway,
   MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionLeaveResult,
@@ -50,15 +55,7 @@ import type {
   GoogleMeetJoinResult,
   GoogleMeetSession,
 } from "./transports/types.js";
-import {
-  createVoiceCallGateway,
-  endMeetVoiceCallGatewayCall,
-  getMeetVoiceCallGatewayCall,
-  isVoiceCallMissingError,
-  joinMeetViaVoiceCallGateway,
-  speakMeetViaVoiceCallGateway,
-  type VoiceCallGateway,
-} from "./voice-call-gateway.js";
+import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
 type ChromeAudioBridgeResult = NonNullable<
   | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
@@ -91,7 +88,7 @@ const nowIso = () => new Date().toISOString();
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
-  readonly #voiceCallGateway: VoiceCallGateway;
+  readonly #voiceCallGateway: MeetingVoiceCallGateway;
   readonly #sessions: GoogleMeetSessionRuntime;
 
   reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
@@ -419,7 +416,7 @@ export class GoogleMeetRuntime {
     if (voiceCallResult?.callId) {
       context.attachRuntimeHandles(session, {
         stop: async () => {
-          await endMeetVoiceCallGatewayCall({
+          await endMeetingVoiceCallGatewayCall({
             gateway: this.#voiceCallGateway,
             callId: voiceCallResult.callId,
           });
@@ -546,7 +543,7 @@ export class GoogleMeetRuntime {
       return;
     }
     try {
-      const status = await getMeetVoiceCallGatewayCall({
+      const status = await getMeetingVoiceCallGatewayCall({
         gateway: this.#voiceCallGateway,
         callId,
       });
@@ -570,7 +567,7 @@ export class GoogleMeetRuntime {
       return undefined;
     }
     try {
-      await speakMeetViaVoiceCallGateway({
+      await speakMeetingViaVoiceCallGateway({
         gateway: this.#voiceCallGateway,
         callId: session.twilio.voiceCallId,
         message:
@@ -580,7 +577,7 @@ export class GoogleMeetRuntime {
           "",
       });
     } catch (error) {
-      if (!isVoiceCallMissingError(error)) {
+      if (!isMeetingVoiceCallMissingError(error)) {
         throw error;
       }
       this.#sessions.markSessionEnded(session, "Voice Call is no longer active.");

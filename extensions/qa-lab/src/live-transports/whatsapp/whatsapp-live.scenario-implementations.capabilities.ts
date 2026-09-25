@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
+import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";
 import {
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
@@ -90,37 +91,45 @@ export const whatsappQaOutboundSendSerializationScenario: WhatsAppQaScenarioImpl
   },
 };
 
-export const whatsappQaOutboundPollScenario: WhatsAppQaScenarioImplementation = {
-  posture: "direct-gateway",
-  buildRun: () => {
-    const token = `WHATSAPP_QA_OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
-    const question = `${token} choose one`;
-    return {
-      afterReply: async (_reply, context) => {
-        const pollStartedAt = new Date();
-        await callWhatsAppGatewayPoll(context, {
-          label: "poll",
-          options: ["alpha", "beta"],
-          question,
-        });
-        const poll = await waitForScenarioObservedMessage(context, {
-          observedAfter: pollStartedAt,
-          match: (message) =>
-            message.kind === "poll" &&
-            message.poll?.question === question &&
-            message.poll.options.includes("alpha") &&
-            message.poll.options.includes("beta"),
-        });
-        return `poll observed with ${poll.poll?.options.length ?? 0} options`;
-      },
-      configMode: "allowlist",
-      expectReply: true,
-      input: `Reply with only this exact marker before outbound poll check: ${token}`,
-      matchText: token,
-      target: "dm",
-    };
-  },
-};
+function createWhatsAppOutboundPollScenario(
+  target: "dm" | "group",
+): WhatsAppQaScenarioImplementation {
+  const group = target === "group";
+  return {
+    posture: "direct-gateway",
+    ...(group ? { requiresGroupJid: true } : {}),
+    buildRun: () => {
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const question = `${token} choose one`;
+      return {
+        afterReply: async (_reply, context) => {
+          const pollStartedAt = new Date();
+          await callWhatsAppGatewayPoll(context, {
+            label: group ? "group-poll" : "poll",
+            options: ["alpha", "beta"],
+            question,
+          });
+          const poll = await waitForScenarioObservedMessage(context, {
+            observedAfter: pollStartedAt,
+            match: (message) =>
+              message.kind === "poll" &&
+              message.poll?.question === question &&
+              message.poll.options.includes("alpha") &&
+              message.poll.options.includes("beta"),
+          });
+          return `${group ? "group " : ""}poll observed with ${poll.poll?.options.length ?? 0} options`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `${group ? "openclawqa reply" : "Reply"} with only this exact marker before ${group ? "group " : ""}outbound poll check: ${token}`,
+        matchText: token,
+        target,
+      };
+    },
+  };
+}
+
+export const whatsappQaOutboundPollScenario = createWhatsAppOutboundPollScenario("dm");
 
 export const whatsappQaGroupOutboundMediaScenario: WhatsAppQaScenarioImplementation = {
   posture: "direct-gateway",
@@ -139,36 +148,18 @@ export const whatsappQaGroupOutboundMediaScenario: WhatsAppQaScenarioImplementat
           fileName: `whatsapp-qa-group-${mediaRootToken}.pdf`,
         });
 
-        const imageStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "image",
           label: "group-image",
           mediaUrl: imagePath,
           message: `${token}_IMAGE`,
         });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: imageStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("image/") === true &&
-            message.text.includes(`${token}_IMAGE`),
-        });
 
-        const documentStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          forceDocument: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "document",
           label: "group-document",
           mediaUrl: documentPath,
           message: `${token}_DOCUMENT`,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: documentStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            (message.mediaType === "application/pdf" ||
-              message.mediaFileName?.endsWith(".pdf") === true) &&
-            message.text.includes(`${token}_DOCUMENT`),
         });
         return "gateway send delivered image and document media to the group";
       },
@@ -192,23 +183,11 @@ export const whatsappQaGroupOutboundAudioScenario: WhatsAppQaScenarioImplementat
           buffer: createWhatsAppQaAudioOggOpusBuffer({ variant: "group-trigger" }),
           fileName: `whatsapp-qa-group-audio-${token}.ogg`,
         });
-        const audioStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          asVoice: true,
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "audio",
           label: "group-audio",
           mediaUrl: audioPath,
           message: `${token}_AUDIO`,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("audio/") === true,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: audioStartedAt,
-          match: (message) => message.text.includes(`${token}_AUDIO`),
         });
         return "gateway send delivered audio media to the group";
       },
@@ -221,38 +200,7 @@ export const whatsappQaGroupOutboundAudioScenario: WhatsAppQaScenarioImplementat
   },
 };
 
-export const whatsappQaGroupOutboundPollScenario: WhatsAppQaScenarioImplementation = {
-  posture: "direct-gateway",
-  requiresGroupJid: true,
-  buildRun: () => {
-    const token = `WHATSAPP_QA_GROUP_OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
-    const question = `${token} choose one`;
-    return {
-      afterReply: async (_reply, context) => {
-        const pollStartedAt = new Date();
-        await callWhatsAppGatewayPoll(context, {
-          label: "group-poll",
-          options: ["alpha", "beta"],
-          question,
-        });
-        const poll = await waitForScenarioObservedMessage(context, {
-          observedAfter: pollStartedAt,
-          match: (message) =>
-            message.kind === "poll" &&
-            message.poll?.question === question &&
-            message.poll.options.includes("alpha") &&
-            message.poll.options.includes("beta"),
-        });
-        return `group poll observed with ${poll.poll?.options.length ?? 0} options`;
-      },
-      configMode: "allowlist",
-      expectReply: true,
-      input: `openclawqa reply with only this exact marker before group outbound poll check: ${token}`,
-      matchText: token,
-      target: "group",
-    };
-  },
-};
+export const whatsappQaGroupOutboundPollScenario = createWhatsAppOutboundPollScenario("group");
 
 export const whatsappQaMessageActionsScenario: WhatsAppQaScenarioImplementation = {
   posture: "direct-gateway",

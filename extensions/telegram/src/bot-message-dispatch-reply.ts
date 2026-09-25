@@ -2,10 +2,9 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  collectReplyMediaEntries,
-  type LivePreviewDeliveryResult,
-  type OutboundPayloadPlan,
+import type {
+  LivePreviewDeliveryResult,
+  OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -43,7 +42,7 @@ import {
   formatTelegramGroupThreadReply,
 } from "./bot-message-dispatch-payload.js";
 import { pushToolProgress } from "./bot-message-dispatch-progress.js";
-import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
+import { deduplicateBlockSentMedia, trackBlockMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
   TelegramBufferedFinalSettlement,
   TelegramDispatchTurn as Turn,
@@ -227,19 +226,6 @@ async function settleTerminalNoVisibleDelivery(
   return toTelegramReplyDeliveryResult(turn, false);
 }
 
-function trackBlockMedia(
-  turn: Turn,
-  payload: ReplyPayload,
-  acceptedMediaUrls: readonly string[],
-): void {
-  for (const { url, sourceUrls } of collectReplyMediaEntries(payload, acceptedMediaUrls)) {
-    turn.sentBlockMediaUrls.add(url);
-    for (const source of sourceUrls ?? []) {
-      turn.sentBlockMediaUrls.add(source);
-    }
-  }
-}
-
 async function adoptProgressContinuation(
   turn: Turn,
   payload: ReplyPayload,
@@ -355,7 +341,8 @@ async function deliverReplyWithNormalization(
   const effectivePayload = controls.payload;
   const onMediaAccepted =
     info.kind === "block"
-      ? (mediaUrls: readonly string[]) => trackBlockMedia(turn, effectivePayload, mediaUrls)
+      ? (mediaUrls: readonly string[]) =>
+          trackBlockMedia(turn.sentBlockMediaUrls, effectivePayload, mediaUrls)
       : undefined;
   if (
     shouldSuppressLocalTelegramExecApprovalPrompt({

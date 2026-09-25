@@ -74,9 +74,11 @@ async function handleSessionsList(params: Record<string, unknown>) {
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
+  const publication = sessionProjection;
   return await rt.withPreparedSessionResolve(
     {
       projection: await borrowSessionRowProjection(),
+      isCurrent: () => sessionProjection === publication,
       client: null,
       p: params as SessionsResolveParams,
     },

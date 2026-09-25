@@ -465,7 +465,7 @@ openclaw config set channels.discord.token \
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
     - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
-    - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
+    - Builder mode: runs SecretRef resolvability checks for changed refs/providers. A SecretRef builder target outside the registered config secret paths also runs full schema validation, so an unsupported path fails instead of reporting a successful preview.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
     - Exec command-path trust checks run without executing providers. Exec SecretRef resolvability checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.

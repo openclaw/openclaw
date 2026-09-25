@@ -2,7 +2,9 @@
  * Browser CLI observation commands for console, PDF, and response bodies.
  */
 import type { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserPositiveIntegerOption,
@@ -10,7 +12,6 @@ import {
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 const BROWSER_CONSOLE_LEVELS = ["error", "warn", "info"] as const;
 

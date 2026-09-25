@@ -40,6 +40,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -61,6 +62,10 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import {
+  readAgentDatabaseDeletionSnapshotInDatabase,
+  readAgentDeletionJournalStatusInDatabase,
+} from "./agent-deletion-journal.read.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -123,18 +128,21 @@ serveOwnedWorkerTasks(
             if (command.type === "admit") {
               return { ok: true, type: "admit" };
             }
+            const locationArgs = [
+              input.databasePath,
+              input.location,
+              undefined,
+              input.expectedIdentity,
+              input.snapshotRoot,
+              true,
+            ] as const;
             if (command.type === "agentDatabaseRegistry.read") {
               const result = readOpenClawStateReadOnlyLocation(
                 ({ db }) => {
                   sourceAdmitted = true;
                   return readRegisteredAgentDatabaseRows(db, input.databasePath, false);
                 },
-                input.databasePath,
-                input.location,
-                undefined,
-                input.expectedIdentity,
-                input.snapshotRoot,
-                true,
+                ...locationArgs,
               );
               return {
                 ok: true,
@@ -152,12 +160,7 @@ serveOwnedWorkerTasks(
                   sourceAdmitted = true;
                   return loadSubagentSessionListRunsFromSqlite(undefined, { db });
                 },
-                input.databasePath,
-                input.location,
-                undefined,
-                input.expectedIdentity,
-                input.snapshotRoot,
-                true,
+                ...locationArgs,
               );
               if (result.status === "unavailable" && sourceAdmitted !== true) {
                 throw result.error;
@@ -179,6 +182,26 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "agentDatabaseDeletion.snapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    snapshot: readAgentDatabaseDeletionSnapshotInDatabase(
+                      db,
+                      input.databasePath,
+                      command.purpose,
+                    ),
+                  };
+                }
+                if (command.type === "agentDeletionJournal.status") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+                  };
+                }
                 if (command.type === "deliveryQueue.outbound") {
                   // Custody reads retain queue ownership admission even on a read-only connection.
                   assertOpenClawStateWriteAllowed({
@@ -454,12 +477,20 @@ serveOwnedWorkerTasks(
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
-                if (command.type === "nodeHost.config") {
+                if (
+                  command.type === "nodeHost.config" ||
+                  command.type === "operator.channelPolicy"
+                ) {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    row: readConfigMachineStateRowInDatabase(db, command.type),
+                    // Activation may precede deferred publication; never issue authority before v19.
+                    row:
+                      command.type === "operator.channelPolicy" &&
+                      (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19
+                        ? undefined
+                        : readConfigMachineStateRowInDatabase(db, command.type),
                   };
                 }
                 if (command.type === "workspace.snapshot") {
@@ -633,12 +664,7 @@ serveOwnedWorkerTasks(
                 }
                 return readStateRegistryCommand(db, command);
               },
-              input.databasePath,
-              input.location,
-              undefined,
-              input.expectedIdentity,
-              input.snapshotRoot,
-              true,
+              ...locationArgs,
             );
           },
         ),

@@ -399,6 +399,10 @@ test("sessions.get reads selected global messages from the requested agent store
       storePath: workStorePath,
     });
 
+    const cfg = {
+      agents: { entries: { main: {}, work: {} } },
+      session: { scope: "global", store: storeTemplate },
+    };
     const result = await directSessionReq<{ messages?: unknown[] }>(
       "sessions.get",
       {
@@ -407,10 +411,7 @@ test("sessions.get reads selected global messages from the requested agent store
       },
       {
         context: {
-          getRuntimeConfig: () => ({
-            agents: { entries: { main: {}, work: {} } },
-            session: { scope: "global", store: storeTemplate },
-          }),
+          getRuntimeConfig: () => cfg,
         },
       },
     );

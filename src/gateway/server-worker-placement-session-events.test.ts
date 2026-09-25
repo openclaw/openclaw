@@ -12,6 +12,7 @@ import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-s
 describe("worker placement session events", () => {
   it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
     vi.useFakeTimers();
+    const databaseIdentity = Symbol("worker-placement-database");
     const releaseReconcile = createDeferredCore();
     const reconcileActive = vi
       .fn()
@@ -63,6 +64,7 @@ describe("worker placement session events", () => {
       emitSessionIdentityMutation({
         kind: "delete",
         agentId: "main",
+        databaseIdentity,
         previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
       });
       releaseReconcile.resolve();

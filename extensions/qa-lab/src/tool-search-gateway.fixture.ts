@@ -1,9 +1,8 @@
-// Qa Lab plugin module implements Tool Search gateway flow fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   countSystemPromptChars,
@@ -14,13 +13,13 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
   readQaMockRequestCursor,
 } from "./providers/shared/debug-request-cursor.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   countToolSearchSessionLogMentions,
@@ -236,23 +235,14 @@ function applyLaneConfig(
   params: { lane: Lane; fakePluginDir: string },
 ) {
   const cfg = structuredClone(config);
-  const plugins = (cfg.plugins && typeof cfg.plugins === "object" ? cfg.plugins : {}) as Record<
-    string,
-    unknown
-  >;
-  const pluginEntries =
-    plugins.entries && typeof plugins.entries === "object"
-      ? (plugins.entries as Record<string, unknown>)
-      : {};
-  const pluginLoad =
-    plugins.load && typeof plugins.load === "object"
-      ? (plugins.load as Record<string, unknown>)
-      : {};
+  const plugins = asRecord(cfg.plugins);
+  const pluginEntries = asRecord(plugins.entries);
+  const pluginLoad = asRecord(plugins.load);
   cfg.plugins = {
     ...plugins,
     allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), FAKE_PLUGIN_ID])],
     slots: {
-      ...(plugins.slots && typeof plugins.slots === "object" ? plugins.slots : {}),
+      ...asRecord(plugins.slots),
       memory: "none",
     },
     entries: {
@@ -270,12 +260,8 @@ function applyLaneConfig(
     },
   };
 
-  const memory =
-    cfg.memory && typeof cfg.memory === "object" ? (cfg.memory as Record<string, unknown>) : {};
-  const memorySearch =
-    memory.search && typeof memory.search === "object"
-      ? (memory.search as Record<string, unknown>)
-      : {};
+  const memory = asRecord(cfg.memory);
+  const memorySearch = asRecord(memory.search);
   cfg.memory = {
     ...memory,
     search: {
@@ -284,10 +270,7 @@ function applyLaneConfig(
     },
   };
 
-  const tools = (cfg.tools && typeof cfg.tools === "object" ? cfg.tools : {}) as Record<
-    string,
-    unknown
-  >;
+  const tools = asRecord(cfg.tools);
   cfg.tools = {
     ...tools,
     alsoAllow: [
@@ -307,18 +290,9 @@ function applyLaneConfig(
           : false,
   };
 
-  const gateway = (cfg.gateway && typeof cfg.gateway === "object" ? cfg.gateway : {}) as Record<
-    string,
-    unknown
-  >;
-  const gatewayHttp =
-    gateway.http && typeof gateway.http === "object"
-      ? (gateway.http as Record<string, unknown>)
-      : {};
-  const endpoints =
-    gatewayHttp.endpoints && typeof gatewayHttp.endpoints === "object"
-      ? (gatewayHttp.endpoints as Record<string, unknown>)
-      : {};
+  const gateway = asRecord(cfg.gateway);
+  const gatewayHttp = asRecord(gateway.http);
+  const endpoints = asRecord(gatewayHttp.endpoints);
   cfg.gateway = {
     ...gateway,
     http: {
@@ -551,26 +525,25 @@ export function assertToolSearchLaneResults(params: {
   const { code, normal, targetTool } = params;
   const laneDebug = () =>
     JSON.stringify(
-      {
-        normal: {
-          plannedTools: normal.providerPlannedTools,
-          declaredToolCount: normal.providerDeclaredToolCount,
-          directoryContainsTarget: normal.providerDirectoryContainsTarget,
-          input: normal.providerInputSnippet,
-          toolOutput: normal.providerToolOutputSnippet,
-          output: truncateUtf16Safe(normal.gatewayOutputText, 300),
-          mentions: normal.sessionLogToolMentions,
-        },
-        code: {
-          plannedTools: code.providerPlannedTools,
-          declaredToolCount: code.providerDeclaredToolCount,
-          directoryContainsTarget: code.providerDirectoryContainsTarget,
-          input: code.providerInputSnippet,
-          toolOutput: code.providerToolOutputSnippet,
-          output: truncateUtf16Safe(code.gatewayOutputText, 300),
-          mentions: code.sessionLogToolMentions,
-        },
-      },
+      Object.fromEntries(
+        (
+          [
+            ["normal", normal],
+            ["code", code],
+          ] as const
+        ).map(([name, result]) => [
+          name,
+          {
+            plannedTools: result.providerPlannedTools,
+            declaredToolCount: result.providerDeclaredToolCount,
+            directoryContainsTarget: result.providerDirectoryContainsTarget,
+            input: result.providerInputSnippet,
+            toolOutput: result.providerToolOutputSnippet,
+            output: truncateUtf16Safe(result.gatewayOutputText, 300),
+            mentions: result.sessionLogToolMentions,
+          },
+        ]),
+      ),
       null,
       2,
     );
@@ -663,28 +636,21 @@ export function assertToolSearchBatchLaneResult(params: {
   const batchResult = tools.providerToolSearchResult;
   const groups =
     isRecord(batchResult) && Array.isArray(batchResult.results) ? batchResult.results : [];
-  const targetGroup = groups[0];
-  const catalogGroup = groups[1];
   assert(
     groups.length === 2 &&
-      isRecord(targetGroup) &&
-      targetGroup.query === targetTool &&
-      Array.isArray(targetGroup.candidates) &&
-      targetGroup.candidates.length === 1 &&
-      targetGroup.candidates.some(
-        (candidate) =>
-          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
-      ) &&
-      isRecord(catalogGroup) &&
-      catalogGroup.query === QA_TOOL_SEARCH_SECONDARY_TARGET &&
-      Array.isArray(catalogGroup.candidates) &&
-      catalogGroup.candidates.length === 1 &&
-      catalogGroup.candidates.some(
-        (candidate) =>
-          isRecord(candidate) &&
-          (candidate.name === QA_TOOL_SEARCH_SECONDARY_TARGET ||
-            candidate.id === QA_TOOL_SEARCH_SECONDARY_TARGET),
-      ),
+      [targetTool, QA_TOOL_SEARCH_SECONDARY_TARGET].every((target, index) => {
+        const group = groups[index];
+        return (
+          isRecord(group) &&
+          group.query === target &&
+          Array.isArray(group.candidates) &&
+          group.candidates.length === 1 &&
+          group.candidates.some(
+            (candidate) =>
+              isRecord(candidate) && (candidate.name === target || candidate.id === target),
+          )
+        );
+      }),
     `structured lane did not return both grouped search results: ${debug()}`,
   );
   const toolCallResult = tools.providerToolCallResult;

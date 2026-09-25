@@ -605,21 +605,17 @@ export function createGatewayHttpServer(opts: {
         handleControlUiRequest,
       );
       const mcpAppRoute = classifyMcpAppStandalonePath(scopedRequestPath);
-      if (
+      addAdmittedStage(
         configSnapshot.mcp?.apps?.enabled === true &&
-        (mcpAppRoute === "shell" || mcpAppRoute === "view")
-      ) {
-        requestStages.push(
-          async () =>
-            await runWithGatewayHttpWorkAdmission(res, async () => {
-              const standalone = await getMcpAppStandaloneModule();
-              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-              });
-            }),
-        );
-      }
+          (mcpAppRoute === "shell" || mcpAppRoute === "view"),
+        async () => {
+          const standalone = await getMcpAppStandaloneModule();
+          return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+            sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+            sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+          });
+        },
+      );
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {

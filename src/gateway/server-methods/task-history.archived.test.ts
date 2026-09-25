@@ -8,6 +8,7 @@ import {
   deleteSessionEntryLifecycle,
   forkSessionEntryFromParentTarget,
   upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { TASK_ARCHIVE_RECORD_CAPACITY_ERROR } from "../../config/sessions/session-accessor.sqlite-archive-stream.js";
 import * as sessionHistory from "../../config/sessions/session-history.js";
@@ -493,6 +494,7 @@ describe("archived tasks.history", () => {
         parentId: "abandoned",
         targetId: "retained-2",
       });
+      await waitForSessionTranscriptProjection(scope);
       const task = createTaskFixture("subagent", {
         requesterSessionKey,
         ownerKey: requesterSessionKey,
@@ -510,7 +512,7 @@ describe("archived tasks.history", () => {
         identifiedClient(["operator.read"], viewer.id),
         await createHistoryReadContext(),
       );
-      expect(kept.calls[0]?.[0]).toBe(true);
+      expect(kept.calls[0]?.[0], JSON.stringify(kept.calls[0]?.[2])).toBe(true);
       expect(JSON.stringify(kept.payload?.messages)).toContain("First retained message");
       const removed = await deleteSessionEntryLifecycle({
         agentId: "main",

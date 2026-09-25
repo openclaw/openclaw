@@ -358,11 +358,10 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      const entry =
-        result.session &&
-        agentSessionKeysMatchByRequestKey(result.session.key, selection.sessionKey)
-          ? result.session
-          : undefined;
+      const entry = result.session;
+      if (entry && (!entry.key || !isCurrentSessionMutation(entry))) {
+        return;
+      }
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
         state.currentSessionKey = entry.key;

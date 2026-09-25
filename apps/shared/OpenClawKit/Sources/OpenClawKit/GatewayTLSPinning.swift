@@ -919,6 +919,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
+        try Task.checkCancellation()
         // AsyncBytes owns a task delegate; without ours, its authentication
         // handling bypasses the session-level certificate policy.
         let (bytes, response) = try await self.session.bytes(for: request, delegate: self)

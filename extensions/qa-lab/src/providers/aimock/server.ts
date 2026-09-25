@@ -157,23 +157,19 @@ function resolveProviderVariant(model: string): AimockRequestSnapshot["providerV
   return "unknown";
 }
 
-function extractPlannedToolName(entry: Pick<JournalEntry, "response">) {
+function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): AimockToolFacts {
   const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ name?: unknown }> }
+    | {
+        toolCalls?: Array<{ name?: unknown; id?: unknown; callId?: unknown; toolCallId?: unknown }>;
+      }
     | undefined;
-  const name = response?.toolCalls?.[0]?.name;
-  return typeof name === "string" && name.length > 0 ? name : undefined;
-}
-
-function extractPlannedToolCallId(entry: Pick<JournalEntry, "response">) {
-  const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ id?: unknown; callId?: unknown; toolCallId?: unknown }> }
-    | undefined;
-  const candidate =
-    response?.toolCalls?.[0]?.id ??
-    response?.toolCalls?.[0]?.callId ??
-    response?.toolCalls?.[0]?.toolCallId;
-  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+  const call = response?.toolCalls?.[0];
+  const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  return {
+    plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
+    plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
+    toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
+  };
 }
 
 function extractRequestFacts(
@@ -257,11 +253,7 @@ function createDebugMount(): Mountable {
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
       // so the debug boundary remains monotonic after retained entries rotate.
       journal.add = (entry) => {
-        const tools: AimockToolFacts = {
-          plannedToolName: extractPlannedToolName(entry),
-          plannedToolCallId: extractPlannedToolCallId(entry),
-          toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
-        };
+        const tools = extractToolFacts(entry);
         const recorded = addJournalEntry(entry);
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.

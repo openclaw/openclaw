@@ -308,6 +308,7 @@ export const gatewayDatabaseWorkerTestFiles = [
 
 export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
 export const gatewayCoreTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/server-methods/**/*.test.ts",
   "packages/gateway-protocol/src/**/*.test.ts",
