@@ -116,9 +116,12 @@ export const MSTeamsConfigSchema = z
     requireMention: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
-    /** Max inbound and outbound media size in MB (default: 100MB). */
-    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
+    /** SharePoint site ID for file uploads in group chats and channels (e.g., "contoso.sharepoint.com,guid1,guid2").
+     *  When omitted, standard team channels resolve the team's own site via Graph. Group chats and
+     *  private/shared channels still require this value. */
     sharePointSiteId: z.string().optional(),
+    /** Single folder name for bot-uploaded files (default: "OpenClawShared"). Path separators are rejected. */
+    sharePointFolder: z.string().optional(),
     welcomeCard: z.boolean().optional(),
     promptStarters: z.array(z.string()).optional(),
     groupWelcomeCard: z.boolean().optional(),

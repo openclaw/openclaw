@@ -58,6 +58,9 @@ type MSTeamsActivitiesClient = {
 type MSTeamsApiClient = {
   serviceUrl?: string;
   http?: unknown;
+  teams?: {
+    getById(teamId: string): Promise<{ aadGroupId?: string }>;
+  };
   conversations: {
     activities(conversationId: string): MSTeamsActivitiesClient;
   };
@@ -183,7 +186,7 @@ function stringifyReferenceFallbackActivity(activity: unknown): string {
 
 async function getApiClientForReference(
   app: MSTeamsApp,
-  ref: MSTeamsSdkConversationReference,
+  ref: { serviceUrl: string },
 ): Promise<MSTeamsApiClient> {
   const api = getStructuralApiClient(app);
   if (sameServiceUrl(api.serviceUrl, ref.serviceUrl)) {
@@ -202,6 +205,31 @@ async function getApiClientForReference(
 
   const { Client } = await loadMSTeamsApiModule();
   return new Client(ref.serviceUrl, httpClient) as unknown as MSTeamsApiClient;
+}
+
+type TeamsGetById = (teamId: string) => Promise<{ aadGroupId?: string }>;
+
+/** Team lookup follows the stored conversation endpoint when it is not the app endpoint. */
+export async function resolveReferenceScopedTeamsGetById(
+  app: MSTeamsApp,
+  serviceUrl: string | undefined,
+): Promise<TeamsGetById | undefined> {
+  const appApi = getStructuralApiClient(app);
+  const appGetById = appApi.teams?.getById?.bind(appApi.teams);
+  if (!serviceUrl) {
+    return appGetById;
+  }
+  let normalized: string;
+  try {
+    normalized = normalizeBotFrameworkServiceUrl(serviceUrl);
+  } catch {
+    return appGetById;
+  }
+  if (sameServiceUrl(appApi.serviceUrl, normalized)) {
+    return appGetById;
+  }
+  const client = await getApiClientForReference(app, { serviceUrl: normalized });
+  return client.teams?.getById?.bind(client.teams) ?? appGetById;
 }
 
 function mergeReferenceIntoActivity(

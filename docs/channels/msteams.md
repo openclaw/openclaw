@@ -5,7 +5,7 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)). Polls and approval prompts are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
+Status: text + DM attachments are supported; standard channels auto-resolve the team SharePoint site for file sends, while group chats and private/shared channels still need `sharePointSiteId` (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)). Polls and approval prompts are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 <CardGroup cols={3}>
   <Card title="Setup" icon="rocket" href="/channels/msteams/setup">

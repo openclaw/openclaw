@@ -21,7 +21,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
@@ -32,6 +32,7 @@ import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import {
   deleteMSTeamsActivityWithReference,
+  resolveReferenceScopedTeamsGetById,
   sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
@@ -209,7 +210,14 @@ export async function sendMessageMSTeams(
   });
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
-  const { conversationId, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
+  const {
+    conversationId,
+    log,
+    conversationType,
+    tokenProvider,
+    sharePointSiteId,
+    sharePointFolder,
+  } = ctx;
 
   log.debug?.("sending proactive message", {
     conversationId,
@@ -299,9 +307,21 @@ export async function sendMessageMSTeams(
       return sendTextWithMedia(ctx, messageText, finalMediaUrl, params);
     }
 
-    // Group chat or channel: upload to configured SharePoint storage.
+    // Group chat or channel: upload to configured or team-resolved SharePoint storage.
     try {
-      const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+      const siteId = await resolveUploadSiteId({
+        configuredSiteId: sharePointSiteId,
+        teamId: ctx.ref.teamId,
+        channelId: conversationType === "channel" ? conversationId : undefined,
+        tokenProvider,
+        getTeamDetails: async (teamId) => {
+          const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
+          if (!getById) {
+            throw new Error("Teams team lookup unavailable");
+          }
+          return await getById(teamId);
+        },
+      });
       log.debug?.("uploading to SharePoint for native file card", {
         fileName,
         conversationType,
@@ -317,6 +337,7 @@ export async function sendMessageMSTeams(
         siteId,
         chatId: conversationId,
         usePerUserSharing: conversationType === "groupChat",
+        folderName: sharePointFolder,
       });
 
       log.debug?.("SharePoint upload complete", {
@@ -388,6 +409,7 @@ async function sendTextWithMedia(
     log,
     tokenProvider,
     sharePointSiteId,
+    sharePointFolder,
     mediaMaxBytes,
     replyStyle,
   } = ctx;
@@ -420,6 +442,7 @@ async function sendTextWithMedia(
       },
       tokenProvider,
       sharePointSiteId,
+      sharePointFolder,
       mediaMaxBytes,
       serviceUrlBoundary: ctx.sdkCloudOptions,
     });

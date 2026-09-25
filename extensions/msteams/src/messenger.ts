@@ -23,7 +23,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
@@ -31,7 +31,10 @@ import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
+import {
+  resolveReferenceScopedTeamsGetById,
+  sendMSTeamsActivityWithReference,
+} from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 import {
@@ -274,8 +277,12 @@ async function buildActivity(
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,
   sharePointSiteId?: string,
+  sharePointFolder?: string,
   mediaMaxBytes?: number,
-  options?: { feedbackLoopEnabled?: boolean } & MSTeamsSendHandoff,
+  options?: {
+    feedbackLoopEnabled?: boolean;
+    getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
+  } & MSTeamsSendHandoff,
 ): Promise<Record<string, unknown>> {
   const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
 
@@ -328,13 +335,17 @@ async function buildActivity(
       }
 
       if (!isPersonal && !isImage) {
-        // Non-images in group chats/channels require SharePoint because an
-        // application token has no signed-in `/me/drive` to fall back to.
-        const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
         if (!tokenProvider) {
           throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
         }
         const chatId = conversationRef.conversation?.id;
+        const siteId = await resolveUploadSiteId({
+          configuredSiteId: sharePointSiteId,
+          teamId: conversationRef.teamId,
+          channelId: conversationType === "channel" ? chatId : undefined,
+          tokenProvider,
+          getTeamDetails: options?.getTeamDetails,
+        });
 
         const uploaded = await uploadAndShareSharePoint({
           assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
@@ -345,6 +356,7 @@ async function buildActivity(
           siteId,
           chatId: chatId ?? undefined,
           usePerUserSharing: conversationType === "groupchat",
+          folderName: sharePointFolder,
         });
 
         const driveItem = await getDriveItemProperties({
@@ -393,6 +405,8 @@ export async function sendMSTeamsMessages(
     tokenProvider?: MSTeamsAccessTokenProvider;
     /** SharePoint site ID for file uploads in group chats/channels */
     sharePointSiteId?: string;
+    /** Folder name for bot-uploaded files on the SharePoint site */
+    sharePointFolder?: string;
     /** Max media size in bytes. Default: 100MB. */
     mediaMaxBytes?: number;
     /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
@@ -458,10 +472,21 @@ export async function sendMSTeamsMessages(
             params.conversationRef,
             params.tokenProvider,
             params.sharePointSiteId,
+            params.sharePointFolder,
             params.mediaMaxBytes,
             {
               feedbackLoopEnabled: params.feedbackLoopEnabled,
               assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+              getTeamDetails: async (teamId) => {
+                const getById = await resolveReferenceScopedTeamsGetById(
+                  params.app,
+                  params.conversationRef.serviceUrl,
+                );
+                if (!getById) {
+                  throw new Error("Teams team lookup unavailable");
+                }
+                return await getById(teamId);
+              },
             },
           );
 

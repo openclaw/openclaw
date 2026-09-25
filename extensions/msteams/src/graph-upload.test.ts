@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import {
@@ -253,11 +253,46 @@ async function startTimedUpload(
 }
 
 describe("graph upload helpers", () => {
-  it("requires a non-empty SharePoint site ID", () => {
-    expect(() => requireMSTeamsSharePointSiteId()).toThrow(
-      "channels.msteams.sharePointSiteId is required",
+  it("rejects when no site ID is available and no team context exists", async () => {
+    await expect(resolveUploadSiteId({ tokenProvider })).rejects.toThrow(
+      "No SharePoint site ID available",
     );
-    expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
+  });
+
+  it("returns an explicit site ID without Graph lookup", async () => {
+    const result = await resolveUploadSiteId({ configuredSiteId: " site-123 ", tokenProvider });
+    expect(result).toBe("site-123");
+    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])(
+    "rejects a blank configured site ID before discovery (%j)",
+    async (configuredSiteId) => {
+      tokenProvider.getAccessToken.mockClear();
+      await expect(
+        resolveUploadSiteId({
+          configuredSiteId,
+          teamId: "team-1",
+          channelId: "19:channel@thread.tacv2",
+          tokenProvider,
+        }),
+      ).rejects.toThrow("sharePointSiteId is blank");
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses default folder name when none is configured", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-default-folder",
+        webUrl: "https://example.com/df",
+        name: "d.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+    await runGraphUpload(fetchFn);
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/OpenClawShared/");
   });
 
   it.each([undefined, "application/pdf"])(
@@ -297,6 +332,50 @@ describe("graph upload helpers", () => {
         webUrl: "https://example.com/2",
         name: "b.txt",
       });
+    },
+  );
+
+  it("uploads to a custom folder when folderName is specified", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-custom",
+        webUrl: "https://example.com/custom",
+        name: "c.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+
+    const result = await runGraphUpload(fetchFn, { folderName: "BotUploads" });
+
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/BotUploads/");
+    expect(url).not.toContain("/OpenClawShared/");
+    expect(result.name).toBe("c.txt");
+  });
+
+  it("encodes reserved folder characters in the upload path", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-hash",
+        webUrl: "https://example.com/h",
+        name: "h.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+    await runGraphUpload(fetchFn, { folderName: "Reports#2026" });
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/Reports%232026/");
+    expect(url).not.toContain("/Reports#2026/");
+  });
+
+  it.each(["../secrets", "a/b", "a\\b", ".", ".."])(
+    "rejects folder name %s",
+    async (folderName) => {
+      const fetchFn = createGraphFetch();
+      await expect(runGraphUpload(fetchFn, { folderName })).rejects.toThrow(
+        "single folder name without path separators",
+      );
+      expect(fetchFn).not.toHaveBeenCalled();
     },
   );
 
@@ -865,6 +944,108 @@ describe("graph upload response limits", () => {
         );
       },
     );
+  });
+});
+
+describe("resolveUploadSiteId dynamic resolution", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    tokenProvider.getAccessToken.mockClear();
+  });
+
+  it("throws when no team context and no configured site", async () => {
+    await expect(resolveUploadSiteId({ tokenProvider })).rejects.toThrow(
+      "No SharePoint site ID available",
+    );
+  });
+
+  it("throws when team ID is present but group ID cannot be resolved", async () => {
+    await expect(resolveUploadSiteId({ teamId: "unknown-team", tokenProvider })).rejects.toThrow(
+      "Could not resolve AAD group ID",
+    );
+  });
+
+  it("uses getTeamDetails to resolve a cold-start group ID then discovers the site", async () => {
+    const getTeamDetails = vi.fn(async () => ({ aadGroupId: "group-cold" }));
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("membershipType", { membershipType: "standard" }),
+      fixedGraphRoute("/sites/root", { id: "site-discovered" }),
+    );
+
+    const result = await resolveUploadSiteId({
+      teamId: "19:team-cold@thread.skype",
+      channelId: "19:channel-cold@thread.tacv2",
+      tokenProvider,
+      getTeamDetails,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(result).toBe("site-discovered");
+    expect(getTeamDetails).toHaveBeenCalledWith("19:team-cold@thread.skype");
+  });
+
+  it("rejects private channels before discovering the parent team site", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("membershipType", { membershipType: "private" }),
+    );
+
+    await expect(
+      resolveUploadSiteId({
+        teamId: "19:team-private@thread.skype",
+        channelId: "19:private@thread.tacv2",
+        tokenProvider,
+        getTeamDetails: async () => ({ aadGroupId: "group-private" }),
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("standard channels only");
+    expect(fetchFn.mock.calls.some(([url]) => String(url).includes("/sites/root"))).toBe(false);
+  });
+
+  it("skips membership lookup when an explicit site is configured", async () => {
+    const fetchFn = createGraphFetch();
+    const getTeamDetails = vi.fn(async () => ({ aadGroupId: "unused" }));
+
+    const result = await resolveUploadSiteId({
+      configuredSiteId: "explicit-site",
+      teamId: "19:team@thread.skype",
+      channelId: "19:private@thread.tacv2",
+      tokenProvider,
+      getTeamDetails,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(result).toBe("explicit-site");
+    expect(getTeamDetails).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("aborts a stalled site-discovery fetch when the request deadline expires", async () => {
+    vi.useFakeTimers();
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("membershipType", { membershipType: "standard" }),
+      hangingGraphRoute("/sites/root"),
+    );
+    const discovery = resolveUploadSiteId({
+      teamId: "19:team-hang@thread.skype",
+      channelId: "19:channel-hang@thread.tacv2",
+      tokenProvider,
+      getTeamDetails: async () => ({ aadGroupId: "group-hang" }),
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForFetchCall(fetchFn, 1);
+    const signal = fetchSignal(fetchFn, 1);
+    const assertion = expectMSTeamsTimeout(
+      discovery,
+      "MS Teams SharePoint request",
+      MSTEAMS_REQUEST_TIMEOUT_MS,
+    );
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+
+    await assertion;
+    expect(signal.aborted).toBe(true);
   });
 });
 
