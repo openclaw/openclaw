@@ -594,7 +594,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (shouldForwardModelCommandToServer(args)) {
         await sendMessage(raw);
       } else if (!args) {
-        await openModelSelector();
+        openModelSelector();
       } else {
         await applySessionSetting(
           { model: /^default$/i.test(args) ? null : args },
@@ -612,7 +612,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         );
       }
     },
-    models: async () => await openModelSelector(),
+    models: () => openModelSelector(),
     think: async (args) => {
       const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
       const levels = thinkingLevels?.length
