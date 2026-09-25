@@ -515,6 +515,7 @@ export function createExecTool(
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
             agentId,
+            config: defaults?.config,
             sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
             toolCallId,

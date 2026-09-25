@@ -625,10 +625,13 @@ automation row, and revocation state on every use.
 ## Auto-allow skill CLIs
 
 When **Auto-allow skill CLIs** (`autoAllowSkills`) is enabled, executables
-referenced by known skills are treated as allowlisted on nodes (macOS node
-or headless node host). This uses `skills.bins` over the Gateway RPC to
-fetch the skill bin list. Disable this if you want strict manual
-allowlists.
+referenced by known skills are treated as allowlisted. On nodes (macOS node
+or headless node host) this uses `skills.bins` over the Gateway RPC to
+fetch the skill bin list. For Gateway-host exec, the Gateway reads the bins
+declared by the agent's own workspace skills and resolves them on the same
+`PATH` the command resolves on (the Gateway's `PATH` plus any
+`tools.exec.pathPrepend`; host exec rejects a requested `PATH`). Disable this
+if you want strict manual allowlists.
 
 Skill trust belongs to the Gateway that supplied it. Switching Gateways retires
 the previous cache, including the Mac app's trusted-binary list and an approval
