@@ -257,8 +257,18 @@ agents may still use them.
 
 ## Host readiness
 
-IsoEnvBroker must be available on the host OS. The plugin checks this before
-registering the sandbox backend.
+Before registering the sandbox backend, the plugin runs the MXC executor's own
+host probe (`wxc-exec --probe`) and requires it to select an isolation tier
+(`base-container`, `appcontainer-bfs`, or `appcontainer-dacl`). It probes the
+same executor it launches, including an `mxcBinaryPath` override. MXC's tier
+degradation warnings are logged but do not block activation. To inspect a host,
+run the executor directly:
+
+```powershell
+& node_modules\@microsoft\mxc-sdk\bin\x64\wxc-exec.exe --probe
+```
+
+Use `bin\arm64` on Arm64 hosts.
 
 Host preparation is advisory. If directory listing inside the sandbox fails with
 `Access is denied`, run this once from an elevated prompt:

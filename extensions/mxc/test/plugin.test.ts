@@ -185,7 +185,7 @@ describe("registerMxcPlugin", () => {
       registerMxcPlugin(api);
 
       expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-      expect(assertMxcReadinessMock).toHaveBeenCalledWith();
+      expect(assertMxcReadinessMock).toHaveBeenCalledWith({ executablePath: "mxc-test-binary" });
       expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
       expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
         expect.objectContaining({

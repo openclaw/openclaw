@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
@@ -19,7 +18,6 @@ import {
 } from "./workspace-skill-mounts.js";
 
 const MXC_SCHEMA_VERSION = "0.7.0-alpha";
-const PROCESS_CONTAINER_NAME_MAX_LEN = 64;
 
 type MxcFilesystemConfig = NonNullable<ContainerConfig["filesystem"]>;
 
@@ -124,7 +122,10 @@ export function buildMxcContainerConfig(params: {
     version: MXC_SCHEMA_VERSION,
     containerId: params.containerId,
     containment: params.config.containment,
-    lifecycle: { destroyOnExit: true },
+    // The raw config goes straight to wxc-exec, which only understands the wire
+    // `lifecycle.preservePolicy`; the SDK's `filesystem.clearPolicyOnExit` alias is
+    // mapped only by `createConfigFromPolicy`.
+    lifecycle: { destroyOnExit: true, preservePolicy: false },
     process: {
       commandLine: buildCommandLine(params.command, params.args ?? []),
       cwd: resolveProcessCwd(params.workdir),
@@ -142,7 +143,6 @@ export function buildMxcContainerConfig(params: {
       enforcementMode: "capabilities",
     },
     processContainer: {
-      name: processContainerName(params.runtimeId),
       leastPrivilege: true,
       capabilities: networkAllowed ? ["internetClient"] : [],
       ui: {
@@ -197,7 +197,6 @@ function buildFilesystemConfig(params: {
     readonlyPaths,
     deniedPaths: undefined,
     readwritePaths,
-    clearPolicyOnExit: true,
   };
 }
 
@@ -346,14 +345,6 @@ function buildMissingFilesystemPathMessage(
     );
   }
   return `MXC sandbox ${accessLabel} path ${pathValue} does not exist on the host.`;
-}
-
-function processContainerName(runtimeId: string): string {
-  if (runtimeId.length <= PROCESS_CONTAINER_NAME_MAX_LEN) {
-    return runtimeId;
-  }
-  const hash = createHash("sha256").update(runtimeId).digest("hex").slice(0, 8);
-  return `${runtimeId.slice(0, PROCESS_CONTAINER_NAME_MAX_LEN - hash.length - 1)}-${hash}`;
 }
 
 function resolveProcessCwd(workdir: string): string {
