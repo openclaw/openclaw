@@ -47,6 +47,11 @@ export async function fetchGatewayContextResource(
     await response.body?.cancel();
     throw new Error("Gateway credentials rejected");
   }
+  if (!response.ok) {
+    // Optional resource callers ignore error bodies. Release the stream without
+    // letting stalled cleanup delay their fallback or retryable result.
+    void response.body?.cancel().catch(() => undefined);
+  }
   return response;
 }
 
