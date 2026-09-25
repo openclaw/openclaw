@@ -792,7 +792,12 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
 
     resetGatewayWorkAdmission();
-    await vi.advanceTimersByTimeAsync(1_000);
+    const settleRootWork = observeRootWork();
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      await settleRootWork();
+    }
     await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
     await waitForFast(() => {
       const entry = findRequesterRun(runId);
