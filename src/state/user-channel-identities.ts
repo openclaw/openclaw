@@ -6,7 +6,6 @@ import {
   GATEWAY_OWNER_PROFILE_ID,
   UserChannelIdentitySchema,
 } from "../../packages/gateway-protocol/src/schema/users.js";
-import type { GatewayConfig } from "../config/types.gateway.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -21,6 +20,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import {
+  parseUserChannelAuthorizationReference,
+  type UserChannelAuthorization,
+  type UserChannelAuthorizationPolicy,
+  type UserChannelAuthorizationReference,
+} from "./user-channel-authorization.js";
 import {
   publishUserProfileAliasChange,
   publishUserChannelIdentityAuthorityChange,
@@ -45,30 +50,9 @@ import type {
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
 const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
-const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
-export type UserChannelAuthorizationReference = Readonly<z.infer<typeof referenceSchema>>;
-export type UserChannelAuthorization = {
-  reference: UserChannelAuthorizationReference;
-  subject: string;
-  grant: GatewayAccessGrantRef | null;
-};
-
-export function parseUserChannelAuthorizationReference(value: unknown) {
-  return referenceSchema.safeParse(value).data;
-}
-
-export function resolveUserChannelAuthorizationPolicy(
-  gateway: Pick<GatewayConfig, "roles" | "auth"> | undefined,
-) {
-  return { roles: gateway?.roles ?? null, identityScopes: gateway?.auth?.identityScopes ?? null };
-}
-export type UserChannelAuthorizationPolicy = ReturnType<
-  typeof resolveUserChannelAuthorizationPolicy
->;
-
 function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
   return row !== undefined && isDeepStrictEqual(JSON.parse(row.value_json), policy);
@@ -135,7 +119,7 @@ export function authorizeUserChannelIdentityInDatabase(
     return undefined;
   }
   const basis = JSON.stringify(grantSchema.parse(input.grant));
-  const original = referenceSchema.safeParse({ version: 1, id: row.authorization_id }).data;
+  const original = parseUserChannelAuthorizationReference({ version: 1, id: row.authorization_id });
   if (row.authorization_basis_json === basis && original) {
     return original;
   }

@@ -6,7 +6,7 @@ import type {
   UserChannelAuthorization,
   UserChannelAuthorizationPolicy,
   UserChannelAuthorizationReference,
-} from "./user-channel-identities.js";
+} from "./user-channel-authorization.js";
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 

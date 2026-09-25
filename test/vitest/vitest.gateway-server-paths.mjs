@@ -11,6 +11,7 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/update-run-notice-target.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
   "src/gateway/approval-fixture.test.ts",
@@ -35,6 +36,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/exec-approval-manager.test.ts",
   "src/gateway/gateway-auth-recovery.test.ts",
   "src/gateway/gateway-cli-backend.connect.test.ts",
+  "src/gateway/gateway-cli-plugin-routing.test.ts",
   "src/gateway/gateway-code-mode-clock.test.ts",
   "src/gateway/gateway-cron-process-identity.windows.test.ts",
   "src/gateway/gateway-route-model-reuse.test.ts",
@@ -187,6 +189,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
+  "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",

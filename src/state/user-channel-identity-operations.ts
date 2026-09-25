@@ -7,10 +7,10 @@ import {
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { resolveUserChannelAuthorizationPolicy } from "./user-channel-authorization.js";
 import {
   UserChannelIdentityConflictError,
   userChannelIdentitySubject,
-  resolveUserChannelAuthorizationPolicy,
 } from "./user-channel-identities.js";
 import {
   captureUserProfileAuthorityRead,
