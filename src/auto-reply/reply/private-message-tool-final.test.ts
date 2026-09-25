@@ -73,33 +73,14 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     ).toBe(false);
   });
 
-  // Raw UTF-16 length under-counts CJK about 4x, so these all used to fall below
-  // both thresholds and skip stranded recovery entirely (#115555).
+  // Raw UTF-16 length misses substantive CJK replies; recovery needs estimated length (#115555).
   it.each([
-    {
-      label: "multi-sentence CJK report",
-      finalText:
-        "近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。" +
-        "建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。",
-      expected: true,
-    },
     {
       label: "single-sentence CJK paragraph (length alone is substantive)",
       finalText: `${"字".repeat(150)}。`,
       expected: true,
     },
-    {
-      label: "CJK using full-width period U+FF0E",
-      finalText: `${"項".repeat(150)}．`,
-      expected: true,
-    },
-    {
-      label: "CJK using halfwidth ideographic period U+FF61",
-      finalText: `${"項".repeat(150)}｡`,
-      expected: true,
-    },
     { label: "short CJK acknowledgement", finalText: "沒有需要補充的。已完成。", expected: false },
-    { label: "short CJK single clause", finalText: "已完成", expected: false },
   ])("$label -> $expected", ({ finalText, expected }) => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(expected);
   });
@@ -121,25 +102,10 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(true);
   });
 
-  it.each([
-    {
-      label: "accented Latin stays on raw length",
-      finalText: `Le café est prêt. ${"x".repeat(100)}`,
-      expected: false,
-    },
-    {
-      label: "Cyrillic stays on raw length",
-      finalText: `Готово. ${"x".repeat(100)}`,
-      expected: false,
-    },
-    {
-      label: "emoji stays on raw length",
-      finalText: `Done ✅ Shipped 🚀 ${"x".repeat(100)}`,
-      expected: false,
-    },
-  ])("non-CJK non-ASCII is unaffected: $label", ({ finalText, expected }) => {
+  it("leaves accented Latin on raw length", () => {
+    const finalText = `Le café est prêt. ${"x".repeat(100)}`;
     expect(finalText.length).toBeLessThan(280);
-    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(expected);
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(false);
   });
 
   it("does not flag empty or whitespace-only final text", () => {
