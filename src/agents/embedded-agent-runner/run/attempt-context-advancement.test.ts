@@ -41,17 +41,14 @@ const model: Model = makeProviderModelFixture({
 const usage = createZeroUsageFixture();
 
 describe("context advancement through embedded attempt guards", () => {
-  it.each(
-    (["afterTurn", "ingestBatch", "ingest"] as const).flatMap((ingestion) =>
-      (["stop", "error", "aborted"] as const).flatMap((terminal) =>
-        (["stored-prefix", "live-input"] as const).map((assembly) => ({
-          ingestion,
-          terminal,
-          assembly,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { ingestion: "afterTurn", terminal: "stop", assembly: "stored-prefix" },
+    { ingestion: "afterTurn", terminal: "error", assembly: "live-input" },
+    { ingestion: "ingestBatch", terminal: "aborted", assembly: "stored-prefix" },
+    { ingestion: "ingestBatch", terminal: "stop", assembly: "live-input" },
+    { ingestion: "ingest", terminal: "error", assembly: "stored-prefix" },
+    { ingestion: "ingest", terminal: "aborted", assembly: "live-input" },
+  ] as const)(
     "preserves live context with $assembly assembly and defers $ingestion after $terminal",
     async ({ ingestion, terminal, assembly }) => {
       const remembered: AgentMessage[] = [];

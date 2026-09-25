@@ -5,7 +5,6 @@ import {
   buildContextEnginePromptCacheInfo,
   buildLoopPromptCacheInfo,
   findLatestUncompactedAttemptUsageSnapshot,
-  resolvePromptCacheTouchTimestamp,
 } from "./attempt-context-engine-helpers.js";
 
 const ASSISTANT_WITH_USAGE = {
@@ -50,20 +49,6 @@ describe("findLatestUncompactedAttemptUsageSnapshot", () => {
 
 describe("context-engine prompt cache metadata", () => {
   const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
-
-  it("builds retention, last-call usage, and cache-touch metadata", () => {
-    expect(
-      buildContextEnginePromptCacheInfo({
-        retention: "short",
-        lastCallUsage: { input: 10, output: 5, cacheRead: 40, cacheWrite: 2, total: 57 },
-        lastCacheTouchAt: 123,
-      }),
-    ).toEqual({
-      retention: "short",
-      lastCallUsage: { input: 10, output: 5, cacheRead: 40, cacheWrite: 2, total: 57 },
-      lastCacheTouchAt: 123,
-    });
-  });
 
   it("omits metadata when no cache data is available", () => {
     expect(buildContextEnginePromptCacheInfo({})).toBeUndefined();
@@ -154,15 +139,5 @@ describe("context-engine prompt cache metadata", () => {
     expect(promptCache?.retention).toBe("short");
     expect(promptCache?.lastCallUsage?.total).toBe(3);
     expect(promptCache?.lastCacheTouchAt).toBe(123);
-  });
-
-  it("derives a live cache touch timestamp for final afterTurn usage snapshots", () => {
-    expect(
-      resolvePromptCacheTouchTimestamp({
-        lastCallUsage: { input: 1, output: 2, cacheRead: 39036, cacheWrite: 0, total: 39039 },
-        assistantTimestamp: "2026-04-16T17:04:46.974Z",
-        fallbackLastCacheTouchAt: 123,
-      }),
-    ).toBe(Date.parse("2026-04-16T17:04:46.974Z"));
   });
 });

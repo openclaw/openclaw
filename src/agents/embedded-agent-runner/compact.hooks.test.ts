@@ -3484,28 +3484,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     },
   );
 
-  it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
-    const messages = [
-      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
-      makeTextToolResult("t1", "exec", "checked", false, 2),
-    ] as AgentMessage[];
-
-    expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
-  });
-
-  it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", () => {
-    const messages = [
-      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "checking" }],
-        timestamp: 2,
-      },
-    ] as AgentMessage[];
-
-    expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
-  });
-
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);

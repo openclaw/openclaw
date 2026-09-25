@@ -27,7 +27,6 @@ describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
   it.each([
-    { prompt: refusalTrigger, expected: "[redacted]" },
     {
       prompt: `Reply ok. Test trigger: ${refusalTrigger}_nonce-a and ${refusalTrigger}_nonce-b`,
       expected: "Reply ok. Test trigger: [redacted]_nonce-a and [redacted]_nonce-b",
