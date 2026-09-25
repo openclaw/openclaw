@@ -20,7 +20,6 @@ export async function resolveRequestedChannel(params: {
 }): Promise<
   | {
       cfg: OpenClawConfig;
-      sourceCfg: OpenClawConfig;
       channel: string;
     }
   | {
@@ -42,8 +41,7 @@ export async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const sourceCfg = params.config ?? params.context.getRuntimeConfig();
-  const cfg = sourceCfg;
+  const cfg = params.config ?? params.context.getRuntimeConfig();
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -52,7 +50,7 @@ export async function resolveRequestedChannel(params: {
       return { error: errorShape(ErrorCodes.INVALID_REQUEST, String(err)) };
     }
   }
-  return { cfg, sourceCfg, channel };
+  return { cfg, channel };
 }
 
 export function resolveGatewayOutboundTarget(params: {
@@ -85,23 +83,14 @@ export function resolveGatewayOutboundTarget(params: {
   return { ok: true, to: resolved.to };
 }
 
-export function resolveMessageActionRuntimeConfig(params: {
-  cfg: OpenClawConfig;
-  sourceCfg: OpenClawConfig;
-}): OpenClawConfig {
+export function resolveMessageActionRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const runtimeConfig = getRuntimeConfigSnapshot();
   const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
   if (!runtimeConfig || !runtimeSourceConfig) {
-    return params.cfg;
+    return cfg;
   }
-  const selected = selectApplicableRuntimeConfig({
-    inputConfig: params.sourceCfg,
-    runtimeConfig,
-    runtimeSourceConfig,
-  });
   // Message actions must use the hot runtime snapshot when it matches the caller's source config.
-  if (selected === runtimeConfig && selected !== params.cfg) {
-    return selected;
-  }
-  return params.cfg;
+  return (
+    selectApplicableRuntimeConfig({ inputConfig: cfg, runtimeConfig, runtimeSourceConfig }) ?? cfg
+  );
 }

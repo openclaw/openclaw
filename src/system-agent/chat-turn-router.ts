@@ -311,8 +311,7 @@ export class ChatTurnRouter {
       };
     }
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
-    const followUp = this.armFollowUp(result?.followUp);
-    const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
+    const baseText = [capture.read() || "Applied. Audit entry written.", verify]
       .filter(Boolean)
       .join("\n\n");
     if (
@@ -532,8 +531,7 @@ export class ChatTurnRouter {
       return await this.applyApprovedPersistentOperation(recordedOperation);
     }
     const result = await this.executeOperation(recordedOperation, capture, true);
-    const followUp = this.armFollowUp(result?.followUp);
-    const reply = [capture.read(), followUp].filter(Boolean).join("\n\n");
+    const reply = capture.read();
     if (result?.exitsInteractive === true) {
       return { text: reply, action: "exit" };
     }
@@ -625,14 +623,5 @@ export class ChatTurnRouter {
       return operation;
     }
     return { ...operation, requesterAgentId };
-  }
-
-  private armFollowUp(operation: SystemAgentOperation | undefined): string | null {
-    return operation?.kind === "model-setup"
-      ? [
-          "No usable inference route is configured, so OpenClaw cannot continue.",
-          "Run `openclaw onboard` on the machine running OpenClaw; it saves only a route that passes a live test.",
-        ].join("\n")
-      : null;
   }
 }

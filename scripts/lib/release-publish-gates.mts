@@ -33,6 +33,7 @@ export function evaluateReleasePublishGates(input: {
   npmDistTag: string;
   stableSoakWaiver?: string;
   laneWaiver?: string;
+  publishAcceptedWaivers?: { stableSoakWaiver?: string; laneWaiver?: string };
   consumer: ReleasePublishConsumer;
   currentStableSoakWaiver?: string;
   expectedSha?: string;
@@ -103,13 +104,20 @@ export function evaluateReleasePublishGates(input: {
   const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
   const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
   const soakRequired = consumer === "stable-closeout" || stableTag;
-  // Operator fast path: every waiver reason must name the target version so a
-  // waiver recorded for one release train cannot authorize another.
+  // Operator fast path: every waiver reason must name the target version;
+  // closeout accepts exactly the text the publish gate admitted.
   const targetVersion = input.releaseTag.replace(/^v/u, "");
-  const versionBound = (reason: string | undefined) =>
-    !reason || reason === targetVersion || reason.startsWith(`${targetVersion} `);
+  const versionBound = (reason: string | undefined, accepted?: string) =>
+    !reason ||
+    reason === targetVersion ||
+    reason.startsWith(`${targetVersion} `) ||
+    (consumer === "stable-closeout" && reason.trim() === accepted?.trim());
   const acknowledgement = input.laneWaiver?.trim();
-  if (soakRequired && (!versionBound(waiver) || !versionBound(acknowledgement))) {
+  if (
+    soakRequired &&
+    (!versionBound(waiver, input.publishAcceptedWaivers?.stableSoakWaiver) ||
+      !versionBound(acknowledgement, input.publishAcceptedWaivers?.laneWaiver))
+  ) {
     add(
       "waiver-target",
       false,
@@ -292,6 +300,10 @@ function main() {
     stableSoakWaiver: resolved.stableSoakWaiver,
     currentStableSoakWaiver: env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
     laneWaiver: env.LANE_WAIVER,
+    publishAcceptedWaivers: {
+      stableSoakWaiver: env.PUBLISHED_STABLE_SOAK_WAIVER,
+      laneWaiver: env.PUBLISHED_LANE_WAIVER,
+    },
     expectedSha: env.EXPECTED_SHA,
     expectedReleaseProfile: env.EXPECTED_RELEASE_PROFILE,
   });

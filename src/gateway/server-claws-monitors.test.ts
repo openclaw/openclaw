@@ -9,6 +9,7 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
+import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import {
   getSuspensionVisibleCronTaskRunCount,
   waitForActiveCronTaskRuns,
@@ -17,6 +18,8 @@ import * as sessionReaper from "../cron/session-reaper.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
+  findActiveCronRunReceiptInDatabase,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../cron/store/run-receipt-store.js";
@@ -26,6 +29,7 @@ import {
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as stateReader from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -187,6 +191,51 @@ describe("Claw serving monitor cleanup", () => {
       });
     },
   );
+
+  it.each([
+    { boundary: "poll", read: 1, changed: "operation" },
+    { boundary: "acknowledgement", read: 2, changed: "operation" },
+    { boundary: "acknowledgement", read: 2, changed: "local activity" },
+  ])("revalidates $changed after the $boundary receipt read", async ({ read, changed }) => {
+    const current = await fixture(false);
+    const database = openOpenClawAgentDatabase({ agentId: "worker" });
+    const monitors = await current.gateway.inspect("worker");
+    await current.withDeletion(async (deletion) => {
+      const originalRead = stateReader.executeExistingOpenClawStateRead;
+      let receiptReads = 0;
+      let active: ReturnType<typeof markCronJobActive>;
+      const reader = vi
+        .spyOn(stateReader, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const result = await originalRead(...args);
+          if (args[1].type === "cron.activeReceiptOwners" && ++receiptReads === read) {
+            if (changed === "operation") {
+              beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
+            } else {
+              active = markCronJobActive("late-local-run", { agentId: "worker" });
+            }
+          }
+          return result;
+        });
+      try {
+        await expect(
+          current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+        ).rejects.toThrow(changed === "operation" ? "deletion fence" : "cleanup state changed");
+        expect(receiptReads).toBe(read);
+        if (read === 1) {
+          expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+        }
+        await expect(
+          fs.access(path.join(current.workspaceDir, "SOUL.md")),
+        ).resolves.toBeUndefined();
+      } finally {
+        reader.mockRestore();
+        if (active) {
+          clearCronJobActive(active.jobId, active);
+        }
+      }
+    });
+  });
 
   it.each([false, true])(
     "retains files for a foreign receipt after its job row disappears (unverifiable=%s)",
@@ -561,6 +610,14 @@ describe("Claw serving monitor cleanup", () => {
     const run = current.cron.run(monitor.id, "force");
     const signal = await started.promise;
     try {
+      const receipt = findActiveCronRunReceiptInDatabase({
+        database: openOpenClawStateDatabase().db,
+        storePath: current.state.statePath("cron", "jobs.json"),
+        jobId: monitor.id,
+      });
+      if (!receipt) {
+        throw new Error("Missing held monitor receipt");
+      }
       const plan = await current.plan();
       const result = await withMonitorDrainClock(() => current.apply(plan));
       expect(signal.aborted).toBe(true);
@@ -576,9 +633,19 @@ describe("Claw serving monitor cleanup", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(readAgentDeletionJournal("worker")).toBeDefined();
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
       release.resolve();
+      await vi.waitFor(() => expect(isCronRunReceiptOwnerStale(receipt)).toBe(true));
+      expect(
+        findActiveCronRunReceiptInDatabase({
+          database: openOpenClawStateDatabase().db,
+          storePath: current.state.statePath("cron", "jobs.json"),
+          jobId: monitor.id,
+        }),
+      ).toMatchObject({ receiptId: receipt.receiptId, ownerPid: process.pid });
       const retry = await current.plan();
-      expect(await current.apply(retry)).toMatchObject({ status: "complete" });
+      const retried = await current.apply(retry);
+      expect(retried, JSON.stringify(retried.error)).toMatchObject({ status: "complete" });
     } finally {
       release.resolve();
       await run;

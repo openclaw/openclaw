@@ -224,9 +224,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          (context.existingEntry.sessionId !== expectedSession.sessionId ||
-            context.existingEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-            context.existingEntry.activeWriterRunId !== expectedSession.activeWriterRunId))
+          !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
         // Successor acceptance owns identity changes. Finalizers may update only
         // their exact still-current row and cannot recreate a deleted owner.
@@ -266,7 +264,7 @@ type CliSessionForkStoreParams = {
 
 function isSameSessionLifecycleOwner(
   current: InternalSessionEntry,
-  expected: InternalSessionEntry,
+  expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
 ): boolean {
   return (
     current.sessionId === expected.sessionId &&
@@ -400,12 +398,7 @@ export async function recordCliCompactionInStore(params: {
       sessionKey,
     },
     (currentEntry, context) => {
-      if (
-        !context.existingEntry ||
-        currentEntry.sessionId !== expectedSession.sessionId ||
-        currentEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedSession.activeWriterRunId
-      ) {
+      if (!context.existingEntry || !isSameSessionLifecycleOwner(currentEntry, expectedSession)) {
         return null;
       }
       return {

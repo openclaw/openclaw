@@ -5,6 +5,7 @@ import {
 } from "../../infra/active-node-context.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 
@@ -48,7 +49,7 @@ export function composeCliPromptContext(prompt: string, context?: CliBackendProm
 export async function prepareCliSystemPrompt(
   params: Omit<
     Parameters<typeof import("./helpers.js").buildCliAgentSystemPrompt>[0],
-    "preparedModelRuntime"
+    "preparedModelRuntime" | "preparedGitCoauthorPrompt"
   >,
 ): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
@@ -76,5 +77,11 @@ export async function prepareCliSystemPrompt(
     }
   }
   await prepareActiveNodeContext();
-  return buildCliAgentSystemPrompt({ ...params, preparedModelRuntime });
+  const preparedGitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+  return buildCliAgentSystemPrompt({ ...params, preparedModelRuntime, preparedGitCoauthorPrompt });
 }

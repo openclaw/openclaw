@@ -21,6 +21,7 @@ export type RunPluginInstallCommandParams = {
     acknowledgeInstallPolicyWarning?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
     force?: boolean;
+    enable?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;

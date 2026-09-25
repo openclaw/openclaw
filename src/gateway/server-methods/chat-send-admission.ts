@@ -23,7 +23,6 @@ import {
   isProgressCardRefreshInputProvenance,
   progressCardRefreshRunProjection,
 } from "../../sessions/input-provenance.js";
-import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
@@ -53,8 +52,8 @@ import {
   respondChatSendAdmissionError,
   respondChatSendRetry,
   respondChatSessionRoutingChanged,
+  type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
-import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import {
@@ -65,21 +64,19 @@ import {
 import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
+  releaseChatSendCallerAuthority,
 } from "./chat-send-work-admission.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
-export async function admitChatSend(params: {
-  request: NormalizedChatSendRequest;
-  session: PreparedChatSendSession;
-  respond: GatewayRequestHandlerOptions["respond"];
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-  hasCurrentClientAuthority?: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
-  onAdmissionOwned?: () => Promise<boolean>;
-  assertCurrent?: () => void;
-}) {
+export async function admitChatSend(
+  params: ChatSendPreAdmissionParams & {
+    session: PreparedChatSendSession;
+    hasCurrentClientAuthority?: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
+    onAdmissionOwned?: () => Promise<boolean>;
+  },
+) {
   params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
@@ -533,7 +530,7 @@ export async function admitChatSend(params: {
   }
   let releaseGatewayRootContinuation = () => {};
   let releaseCallerAuthority: (() => void) | undefined;
-  let capturedOperator: ReturnType<typeof retainGatewayOperatorRun>;
+  let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>>;
   // Until dispatch takes custody, interruption and callback failures release every admission hold.
   const cleanupPreDispatchAdmission = () => {
     try {
@@ -547,24 +544,23 @@ export async function admitChatSend(params: {
   };
   let interruptedActiveRun = false;
   try {
-    capturedOperator = retainGatewayOperatorRun({
+    capturedOperator = await retainGatewayOperatorRun({
       ...params,
       runId: clientRunId,
       entry: activeRunAbort.entry,
     });
-    releaseCallerAuthority = () => {
-      try {
-        capturedOperator.release?.();
-      } finally {
-        try {
-          if (request.providerReviewAcknowledgment) {
-            retireProviderReviewAcknowledgment(request.providerReviewAcknowledgment);
-          }
-        } finally {
-          session.releaseSessionTarget();
-        }
-      }
-    };
+    releaseCallerAuthority = () =>
+      releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
+    params.assertCurrent?.();
+    activeRunAbort.controller.signal.throwIfAborted();
+    capturedOperator.authority?.assertCurrent();
+    try {
+      assertSessionTargetCurrent();
+    } catch (error) {
+      cleanupPreDispatchAdmission();
+      respondChatSendAdmissionError(error, respond);
+      return { ok: false as const };
+    }
     let interruptionSettled = true;
     if (runInterruptTarget) {
       interruptedActiveRun = true;

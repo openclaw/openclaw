@@ -20,7 +20,6 @@ import {
   hasGatewayServiceEnvironmentDifference,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
-  type GatewayServiceEnv,
 } from "../../daemon/service-types.js";
 import type {
   GatewayService,
@@ -147,12 +146,7 @@ export function repairLoadedGatewayServiceForStart(
 ): Promise<GatewayServiceRepairResult<"started">>;
 export async function repairLoadedGatewayServiceForStart(
   params: GatewayServiceRepairParams & { action?: "restart" | "start" },
-): Promise<{
-  result: "restarted" | "started";
-  message: string;
-  warnings?: string[];
-  loaded: boolean;
-}> {
+): Promise<GatewayServiceRepairResult<"restarted" | "started">> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
@@ -259,7 +253,7 @@ export async function repairLoadedGatewayServiceForStart(
 
   await params.service.install({
     runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
-    env: installEnv as GatewayServiceEnv,
+    env: installEnv,
     stdout: params.stdout,
     warn: params.warn,
     programArguments,

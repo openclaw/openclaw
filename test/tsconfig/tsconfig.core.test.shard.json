@@ -9,7 +9,6 @@
     "../../src/state/openclaw-agent-db.generated.d.ts",
     "../../src/state/openclaw-state-db.generated.d.ts",
     "../../src/types/agent-sessions.d.ts",
-    "../../src/types/microsoft-teams-sdk.d.ts",
     "../../src/types/node-runtime-globals.d.ts",
     "../../src/types/qrcode.d.ts",
     "../../ui/src/css.d.ts",

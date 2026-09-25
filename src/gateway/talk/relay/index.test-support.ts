@@ -2,6 +2,8 @@
 import { vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { RealtimeVoiceBridge } from "../../../talk/provider-types.js";
+import { stopTalkRealtimeRelaySession } from "./operations.js";
+import { drainingRelaySessions } from "./state.js";
 
 export function makeRelayTransport<
   Overrides extends Partial<RealtimeVoiceBridge> = Record<never, never>,
@@ -26,4 +28,22 @@ export function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
     isConfigured: () => true,
     createBridge: () => makeRelayTransport(),
   };
+}
+
+export async function drainRelayTestSessions(activeRelaySessions: Map<string, string>) {
+  for (const [relaySessionId, connId] of activeRelaySessions) {
+    try {
+      await stopTalkRealtimeRelaySession({ relaySessionId, connId });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("Unknown realtime relay session")) {
+        throw error;
+      }
+    }
+  }
+  await Promise.all(
+    [...drainingRelaySessions].map(
+      (session) => session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
+    ),
+  );
+  activeRelaySessions.clear();
 }

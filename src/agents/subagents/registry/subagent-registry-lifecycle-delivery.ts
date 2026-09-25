@@ -235,9 +235,8 @@ export const hasPriorRequesterDeliveryMirror = async (
 };
 
 const resolveSubagentTaskTarget = (
-  params: SubagentLifecycleOptions,
   entry: SubagentRunRecord,
-  resolution = params.resolveSubagentTask(entry),
+  resolution: DetachedTaskFindResult,
 ) => {
   const durableTaskRunId = entry.taskRunId ?? entry.runId;
   return {
@@ -262,7 +261,6 @@ export const safeSetSubagentTaskDeliveryStatus = async (
     isCurrent: () => boolean;
   },
 ) => {
-  const target = resolveSubagentTaskTarget(params, args.entry);
   const runId = args.entry.runId;
   const generation = args.entry.generation;
   const delivery = args.entry.delivery;
@@ -278,6 +276,10 @@ export const safeSetSubagentTaskDeliveryStatus = async (
       throw new Error("subagent task delivery owner changed before commit");
     }
   };
+  assertCurrent();
+  const resolution = await params.resolveSubagentTaskAsync(args.entry);
+  assertCurrent();
+  const target = resolveSubagentTaskTarget(args.entry, resolution);
   try {
     await setDetachedTaskDeliveryStatusByRunIdAsync(
       {
@@ -316,20 +318,17 @@ export const finalizeSubagentTaskRun = async (
   if (!terminal) {
     return [];
   }
-  const taskResolution = args.taskResolution ?? params.resolveSubagentTask(args.entry);
-  const pendingTask =
-    taskResolution.lookup === "available" &&
-    taskResolution.task &&
-    !isTerminalTaskStatus(taskResolution.task.status)
-      ? taskResolution.task
-      : undefined;
-  const target = resolveSubagentTaskTarget(params, args.entry, taskResolution);
   // Provisional completion is staged off-registry; retain its canonical kill owner.
   const runId = args.entry.runId;
   const owner = params.runs.get(runId);
   const generation = owner?.generation;
   const execution = owner?.execution;
   const killReconciliation = owner?.killReconciliation;
+  const killIntent = owner?.killIntent;
+  const terminalOwner = owner?.terminalOwner;
+  const pauseReason = owner?.pauseReason;
+  const suppressCompletionDelivery = owner?.suppressCompletionDelivery;
+  const suppressAnnounceReason = owner?.suppressAnnounceReason;
   const assertCurrent = () => {
     if (
       !owner ||
@@ -337,11 +336,26 @@ export const finalizeSubagentTaskRun = async (
       owner.runId !== runId ||
       owner.generation !== generation ||
       owner.execution !== execution ||
-      owner.killReconciliation !== killReconciliation
+      owner.killReconciliation !== killReconciliation ||
+      owner.killIntent !== killIntent ||
+      owner.terminalOwner !== terminalOwner ||
+      owner.pauseReason !== pauseReason ||
+      owner.suppressCompletionDelivery !== suppressCompletionDelivery ||
+      owner.suppressAnnounceReason !== suppressAnnounceReason
     ) {
       throw new Error("subagent task completion owner changed before commit");
     }
   };
+  assertCurrent();
+  const taskResolution = args.taskResolution ?? (await params.resolveSubagentTaskAsync(args.entry));
+  assertCurrent();
+  const pendingTask =
+    taskResolution.lookup === "available" &&
+    taskResolution.task &&
+    !isTerminalTaskStatus(taskResolution.task.status)
+      ? taskResolution.task
+      : undefined;
+  const target = resolveSubagentTaskTarget(args.entry, taskResolution);
   const { status, error, terminalOutcome, ...details } = terminal;
   const suppressDelivery = args.entry.suppressCompletionDelivery === true;
   let finalized: Awaited<ReturnType<typeof completeTaskRunByRunIdAsync>>;

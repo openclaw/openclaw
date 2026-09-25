@@ -64,6 +64,41 @@ export function resolveGatewaySystemdServiceName(profile?: string): string {
   return `openclaw-gateway${suffix}`;
 }
 
+function isAmbiguousLegacyGatewayCandidate(legacyName: string): boolean {
+  // openclaw-node is the Node service. openclaw-gateway and
+  // openclaw-gateway-<profile> are canonical gateway names for default or
+  // another profile (node -> openclaw-node, gateway -> openclaw-gateway,
+  // gateway-lisa -> openclaw-gateway-lisa).
+  return (
+    legacyName === NODE_SYSTEMD_SERVICE_NAME ||
+    legacyName === GATEWAY_SYSTEMD_SERVICE_NAME ||
+    legacyName.startsWith(`${GATEWAY_SYSTEMD_SERVICE_NAME}-`)
+  );
+}
+
+/**
+ * Service-name candidates for a profile, preferred order.
+ *
+ * Current installs use `openclaw-gateway[-profile]`. Older multi-agent hosts
+ * used `openclaw-<profile>` (no "gateway" segment). Doctor/runtime resolution
+ * must try both for the same profile before scanning unrelated units.
+ */
+export function resolveGatewaySystemdServiceNameCandidates(profile?: string): string[] {
+  const canonical = resolveGatewaySystemdServiceName(profile);
+  const suffix = resolveGatewayProfileSuffix(profile);
+  if (!suffix) {
+    // Default profile: openclaw-gateway is current; bare openclaw is a known
+    // legacy system-unit name (parallel to openclaw-<profile> for named agents).
+    // Custom names are matched separately against their effective installation identity.
+    return canonical === "openclaw" ? [canonical] : [canonical, "openclaw"];
+  }
+  const legacy = `openclaw${suffix}`;
+  if (legacy === canonical || isAmbiguousLegacyGatewayCandidate(legacy)) {
+    return [canonical];
+  }
+  return [canonical, legacy];
+}
+
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
   if (!normalized) {

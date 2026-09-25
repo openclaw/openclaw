@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import {
+  parseConversationProgressSnapshot,
+  serializeConversationProgressSnapshot,
+} from "../config/sessions/conversation-progress-snapshot.js";
+import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   formatChannelProgressDraftLineForEntry,
@@ -9,6 +13,7 @@ import {
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
+  isChannelProgressPriorityLine,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
@@ -21,6 +26,30 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it.each([
+    ["exec", "command"],
+    ["read", "tool"],
+    ["custom_command_runner", "tool"],
+  ] as const)("lets failed %s items scroll out, including after restore", (name, itemKind) => {
+    const line = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind,
+      name,
+      status: "failed",
+    });
+    expect(line).toBeDefined();
+    const restored = parseConversationProgressSnapshot(
+      serializeConversationProgressSnapshot({ lines: [line!] }),
+    )!.lines[0]!;
+    expect(restored).toEqual(line);
+    expect(isChannelProgressPriorityLine(restored)).toBe(false);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "blocked" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "error" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
+  });
+
   it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
     const input = {
       event: "item" as const,

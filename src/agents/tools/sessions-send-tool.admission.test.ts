@@ -78,7 +78,7 @@ describe("sessions_send dispatch admission", () => {
 
   it("keeps the accepted reply source until the detached flow actually settles", async () => {
     const context = createContext();
-    const owner = createOperatorClient({ profileId: "send-owner", scopes: ["operator.write"] });
+    const owner = createOperatorClient({ profileName: "send-owner", scopes: ["operator.write"] });
     const source = captureGatewayDeviceRevocation(
       context,
       { deviceId: "send-device", role: "operator" },

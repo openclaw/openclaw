@@ -3,10 +3,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
+import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import { resetUpdateStatusState, setUpdateScheduleCache } from "../../infra/update-status-state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -26,11 +28,6 @@ import { startUpdateRunWatcher } from "../update-run-watcher.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
-
-vi.mock("../../infra/update-status-state.js", () => ({
-  getUpdateAvailable: () => null,
-  getUpdateSchedule: () => null,
-}));
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
@@ -78,10 +75,173 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   warn.mockClear();
+  gatewayUpdateCampaign.clear();
+  resetUpdateStatusState();
   await home.restore();
 });
 
 describe("update history RPCs", () => {
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "settles an applying campaign when its handed-off run finishes %s",
+    async (status) => {
+      gatewayUpdateCampaign.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      expect(gatewayUpdateCampaign.adopt().status).toBe("adopted");
+      const campaignId = gatewayUpdateCampaign.getState()?.id;
+      const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+      gatewayUpdateCampaign.bindRun(expectDefined(campaignId, "campaign id"), run.runId);
+      finishUpdateRun(run.runId, { status, reason: "database-schema-preflight" });
+
+      const respond = await requestUpdateRead("update.status");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          lastRun: expect.objectContaining({ runId: run.runId, status }),
+          schedule: { channel: "stable", autoEnabled: true },
+        }),
+      );
+      expect(gatewayUpdateCampaign.getState()).toBeUndefined();
+    },
+  );
+
+  it("reconciles the admitted campaign run even when newer history masks it", async () => {
+    gatewayUpdateCampaign.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    gatewayUpdateCampaign.adopt();
+    const campaignId = expectDefined(gatewayUpdateCampaign.getState(), "campaign state").id;
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+    gatewayUpdateCampaign.bindRun(campaignId, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true },
+      }),
+    );
+    expect(gatewayUpdateCampaign.getState()).toBeUndefined();
+  });
+
+  it("preserves status and retries campaign reconciliation after an exact-run read fails", async () => {
+    gatewayUpdateCampaign.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    gatewayUpdateCampaign.adopt();
+    const campaign = expectDefined(gatewayUpdateCampaign.getState(), "campaign state");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
+    gatewayUpdateCampaign.bindRun(campaign.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+    vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true, campaign },
+      }),
+    );
+    expect(gatewayUpdateCampaign.getState()).toEqual(campaign);
+    expect(warn).toHaveBeenCalledWith(
+      "update.status campaign run lookup failed: ledger read failed",
+    );
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ schedule: { channel: "stable", autoEnabled: true } }),
+    );
+    expect(gatewayUpdateCampaign.getState()).toBeUndefined();
+  });
+
+  it.each(["running", "unrelated"] as const)(
+    "keeps an applying campaign when the latest run is %s",
+    async (kind) => {
+      gatewayUpdateCampaign.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      gatewayUpdateCampaign.adopt();
+      const campaign = gatewayUpdateCampaign.getState();
+      const run = createUpdateRun({
+        trigger: "campaign",
+        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign?.id },
+      });
+      if (kind === "unrelated") {
+        finishUpdateRun(run.runId, { status: "failed" });
+      }
+
+      expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          schedule: { channel: "stable", autoEnabled: true, campaign },
+        }),
+      );
+      expect(gatewayUpdateCampaign.getState()).toEqual(campaign);
+    },
+  );
+
+  it("does not clear a replacement campaign after an awaited ledger read", async () => {
+    const announce = (version: string) => {
+      gatewayUpdateCampaign.announce({
+        target: { kind: "package", version },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      gatewayUpdateCampaign.adopt();
+      return expectDefined(gatewayUpdateCampaign.getState(), "campaign state");
+    };
+    const original = announce("2026.9.6");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: original.id } });
+    gatewayUpdateCampaign.bindRun(original.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const readStatus = ledger.getUpdateRunStatusAsync;
+    vi.spyOn(ledger, "getUpdateRunStatusAsync").mockImplementationOnce(async () => {
+      const status = await readStatus();
+      gatewayUpdateCampaign.clear();
+      announce("2026.9.7");
+      return status;
+    });
+
+    const respond = await requestUpdateRead("update.status");
+    const replacement = gatewayUpdateCampaign.getState();
+    expect(replacement).toMatchObject({ state: "applying" });
+    expect(replacement?.id).not.toBe(original.id);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        schedule: { channel: "stable", autoEnabled: true, campaign: replacement },
+      }),
+    );
+  });
+
   it("keeps private recovery receipts durable while status and history stay public", async () => {
     const capture = {
       manifestSha256: "a".repeat(64),
