@@ -828,6 +828,12 @@ img.chat-avatar {
     position: relative;
     z-index: 1;
   }
+
+  /* GitHub reference chips reset their link positioning; lift them too. */
+  .chat-group-messages .chat-text a.markdown-github-item {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 /* In chat these render bare (no .btn chrome) so the ghost footer-button rules
