@@ -51,6 +51,7 @@ import {
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -535,6 +536,8 @@ async function evaluateSystemRunPolicyPhase(
     requireSocket: opts.preferMacAppExecHost,
   });
   const { agentExec, globalExec, approvals } = effectivePolicy;
+  // Opt-in symlink tolerance: agent-level override wins, then the global exec config.
+  const allowSymlinkPath = agentExec?.allowSymlinkPath ?? globalExec?.allowSymlinkPath === true;
   const currentPolicySnapshot = createExecApprovalPolicySnapshot({
     file: approvals.file,
     agentId: parsed.agentId,
@@ -845,6 +848,7 @@ async function evaluateSystemRunPolicyPhase(
     argv: parsed.argv,
     shellCommand: parsed.shellPayload,
     cwd: parsed.cwd,
+    allowSymlinkPath,
   });
   if (!hardenedPaths.ok) {
     await sendSystemRunDenied(opts, parsed.execution, {
@@ -856,7 +860,10 @@ async function evaluateSystemRunPolicyPhase(
   let executionCwd = hardenedPaths.cwd;
   let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
   if (security === "allowlist" && !approvedCwdSnapshot) {
-    const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
+    const capturedCwd = captureApprovedCwdSnapshotSync(
+      executionCwd ?? process.cwd(),
+      allowSymlinkPath,
+    );
     if (!capturedCwd.ok) {
       await sendSystemRunDenied(opts, parsed.execution, {
         reason: "approval-required",
@@ -873,6 +880,25 @@ async function evaluateSystemRunPolicyPhase(
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
     });
     return null;
+  }
+  // Reject rebinding: when replaying a stored approval plan, the captured
+  // snapshot must resolve to the same filesystem identity as the plan's
+  // canonical cwd. An attacker who replaces the approved directory with a
+  // symlink to a different target would produce a new snapshot that matches
+  // itself in revalidation, but whose inode differs from the original.
+  const approvalPlan = parsed.approvalPlan ?? null;
+  if (approvedCwdSnapshot && approvalPlan?.cwd) {
+    const planCwdCapture = captureApprovedCwdSnapshotSync(approvalPlan.cwd, allowSymlinkPath);
+    if (
+      !planCwdCapture.ok ||
+      !sameFileIdentity(approvedCwdSnapshot.stat, planCwdCapture.snapshot.stat)
+    ) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: "SYSTEM_RUN_DENIED: approved cwd rebound since approval",
+      });
+      return null;
+    }
   }
 
   const plannedAllowlistArgv = resolvePlannedAllowlistArgv({

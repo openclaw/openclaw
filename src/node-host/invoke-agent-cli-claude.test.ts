@@ -374,6 +374,51 @@ describe("Claude CLI node command", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "applies the configured allowSymlinkPath before Claude CLI approval planning",
+    async () => {
+      // Before the fix the plan was built before exec policy resolution, so the
+      // opt-in flag never reached cwd hardening: a symlinked cwd was rejected
+      // with INVALID_REQUEST in both the opt-in and default cases. After the
+      // fix the opt-in reaches the system.run handler; the default still rejects.
+      const base = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-symlink-cwd-")),
+      );
+      tempDirs.push(base);
+      const linkDir = path.join(base, "link");
+      await fs.symlink(base, linkDir, "dir");
+      const executable = await executableScript("process.exit(0);");
+
+      setRuntimeConfigSnapshot({ tools: { exec: { allowSymlinkPath: true } } });
+      const optedCalls: Array<{ method: string; params: unknown }> = [];
+      const optedHandle = vi.fn(async () => {});
+      await handleInvoke(
+        frame({ argv: ["-p"], cwd: linkDir, idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
+        client(optedCalls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: optedHandle as never },
+      );
+      expect(optedHandle).toHaveBeenCalledOnce();
+
+      setRuntimeConfigSnapshot({ tools: { exec: {} } });
+      const defaultCalls: Array<{ method: string; params: unknown }> = [];
+      const defaultHandle = vi.fn(async () => {});
+      await handleInvoke(
+        frame({ argv: ["-p"], cwd: linkDir, idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
+        client(defaultCalls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: defaultHandle as never },
+      );
+      expect(defaultHandle).not.toHaveBeenCalled();
+      expect(defaultCalls).toContainEqual({
+        method: "node.invoke.result",
+        params: expect.objectContaining({ ok: false }),
+      });
+    },
+  );
+
   it.each([
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
     { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },

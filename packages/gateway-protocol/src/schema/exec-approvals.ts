@@ -253,6 +253,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
     closedObject({
       argv: Type.Array(Type.String()),
       cwd: Type.Union([Type.String(), Type.Null()]),
+      requestedCwd: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       commandText: Type.String(),
       commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       agentId: Type.Union([Type.String(), Type.Null()]),

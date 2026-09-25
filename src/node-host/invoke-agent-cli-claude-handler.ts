@@ -109,16 +109,9 @@ export async function handleClaudeCliNodeInvoke(params: {
     return;
   }
   const approvalCommand = [claudePath, ...request.argv];
-  const preparedApproval = buildSystemRunApprovalPlan({
-    command: approvalCommand,
-    ...(request.cwd ? { cwd: request.cwd } : {}),
-    ...(request.agentId ? { agentId: request.agentId } : {}),
-    ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
-  });
-  if (!preparedApproval.ok) {
-    await params.response.error("INVALID_REQUEST", preparedApproval.message);
-    return;
-  }
+  // Resolve the effective exec policy BEFORE plan binding so the opt-in
+  // allowSymlinkPath reaches cwd hardening; building the plan first hardened
+  // the cwd without the flag and rejected a configured symlinked cwd.
   const { getRuntimeConfig: getNodeRuntimeConfig } = await import("../config/config.js");
   const execPolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg: getNodeRuntimeConfig(),
@@ -127,6 +120,19 @@ export async function handleClaudeCliNodeInvoke(params: {
     defaultAsk: params.deps.resolveExecAsk(undefined),
     requireSocket: false,
   });
+  const { agentExec, globalExec } = execPolicy;
+  const allowSymlinkPath = agentExec?.allowSymlinkPath ?? globalExec?.allowSymlinkPath === true;
+  const preparedApproval = buildSystemRunApprovalPlan({
+    command: approvalCommand,
+    ...(request.cwd ? { cwd: request.cwd } : {}),
+    ...(request.agentId ? { agentId: request.agentId } : {}),
+    ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+    allowSymlinkPath,
+  });
+  if (!preparedApproval.ok) {
+    await params.response.error("INVALID_REQUEST", preparedApproval.message);
+    return;
+  }
   const approvalPlan = {
     ...preparedApproval.plan,
     policySnapshot: createExecApprovalPolicySnapshot({

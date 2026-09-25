@@ -85,6 +85,7 @@ export function hardenApprovedExecutionPaths(params: {
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
+  allowSymlinkPath?: boolean;
 }):
   | {
       ok: true;
@@ -107,7 +108,7 @@ export function hardenApprovedExecutionPaths(params: {
   // Capture an omitted cwd once on the execution host. Approval, persistence,
   // revalidation, and process launch must all bind the same directory identity.
   let hardenedCwd = params.cwd ?? process.cwd();
-  const canonicalCwd = captureApprovedCwdSnapshotSync(hardenedCwd);
+  const canonicalCwd = captureApprovedCwdSnapshotSync(hardenedCwd, params.allowSymlinkPath);
   if (!canonicalCwd.ok) {
     return canonicalCwd;
   }
@@ -162,6 +163,7 @@ export function buildSystemRunApprovalPlan(
     cwd?: unknown;
     agentId?: unknown;
     sessionKey?: unknown;
+    allowSymlinkPath?: unknown;
   },
   bindApproval = true,
 ): { ok: true; plan: SystemRunApprovalPlan } | SystemRunBindingFailure {
@@ -199,6 +201,7 @@ export function buildSystemRunApprovalPlan(
     argv: command.argv,
     shellCommand: command.shellPayload,
     cwd,
+    allowSymlinkPath: params.allowSymlinkPath === true,
   });
   if (!hardening.ok) {
     return hardening;
@@ -223,6 +226,7 @@ export function buildSystemRunApprovalPlan(
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
+      requestedCwd: cwd !== undefined && cwd !== hardening.cwd ? cwd : null,
       commandText,
       commandPreview,
       agentId: normalizeNullableString(params.agentId),
