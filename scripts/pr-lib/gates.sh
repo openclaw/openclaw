@@ -302,7 +302,7 @@ finalize_remote_crabbox_aws_gate() {
   require_active_org_admin_for_crabbox_gate >/dev/null || return 1
   log_file=".local/gates-crabbox-aws.log"
   run_quiet_logged "protected-main Crabbox AWS exact-head gate" "$log_file" \
-    ci_dispatch "$pr" --backend crabbox
+    ci_dispatch "$pr" --backend crabbox || return 1
   stamp=$(jq -c -R \
     --arg baseSha "$base_sha" \
     --arg headSha "$head_sha" '
@@ -388,13 +388,14 @@ require_correction_publication_gates() (
   [ "$PR_NUMBER" = "$pr" ] || return 1
   if [ "$qualified_head" != "$head" ]; then
     # GraphQL can assign a hosted OID for the identical reviewed local tree.
-    # Only a verified publication receipt can bind that pair.
-    local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    # The verified publication can precede the completed preparation stamp.
+    local PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+    local PREP_PUBLICATION_LEASE_SHA="" PREP_PUBLICATION_HEAD_SHA=""
     PR_NUMBER=""
-    [ -s .local/prep.env ] && source .local/prep.env || return 1
-    [ "$PR_NUMBER" = "$pr" ] && [ "$LOCAL_PREP_HEAD_SHA" = "$head" ] &&
-      [ "$PREP_HEAD_SHA" = "$qualified_head" ] &&
-      [ "$(pr_git rev-parse "$head^{tree}")" = "$(pr_git rev-parse "$qualified_head^{tree}")" ] || {
+    require_artifact .local/prep-context.env || return 1
+    source .local/prep-context.env || return 1
+    resolve_prep_publication_target "$pr" "$head" || return 1
+    [ "$PREP_PUBLICATION_HEAD_SHA" = "$qualified_head" ] || {
       echo "Correction publication requires gates for the exact reviewed candidate." >&2
       return 1
     }
