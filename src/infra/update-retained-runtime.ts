@@ -15,13 +15,23 @@ import { resolveNativePackageProjectRoot } from "./update-native-package-owner.j
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
+type RetainedUpdateRuntimeMetrics = {
+  inventoryMs: number;
+  materializationMs: number;
+  entries: number;
+  /** Allocated footprint estimate, including directories and aliases; not copied bytes. */
+  estimatedBytes: number;
+  linked: number;
+  copied: number;
+};
+
 export type RetainUpdateRuntime = (params: {
   mutationRoots: readonly string[];
   installTarget?: ResolvedGlobalInstallTarget;
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   assertCurrent: () => void;
-}) => Promise<void>;
+}) => Promise<RetainedUpdateRuntimeMetrics | void>;
 
 /** The command retains its own workers through reporting, rollback, and native settlement. */
 export async function withRetainedUpdateRuntime<T>(
@@ -35,7 +45,7 @@ export async function withRetainedUpdateRuntime<T>(
       await operation(async ({ mutationRoots, installTarget, env, timeoutMs, assertCurrent }) => {
         assertCurrent();
         if (prepared) {
-          return;
+          return undefined;
         }
         const root = await resolveOpenClawPackageRoot({ moduleUrl });
         if (!root) {
@@ -51,7 +61,7 @@ export async function withRetainedUpdateRuntime<T>(
             (entry) => isPathInside(entry, sourceRoot) || isPathInside(sourceRoot, entry),
           )
         ) {
-          return;
+          return undefined;
         }
         // Package inventories include their module owner, and native activation
         // replaces its whole project. Scratch must be a sibling of both boundaries.
@@ -128,6 +138,7 @@ export async function withRetainedUpdateRuntime<T>(
             roots.set(entry, project(entry));
           }
         }
+        const inventoryStartedAt = performance.now();
         const plan = await prepareUpdateCandidatePluginTrees({
           roots,
           project,
@@ -136,7 +147,9 @@ export async function withRetainedUpdateRuntime<T>(
           retainedHostRoot: sourceRoot,
           onProgress: assertCurrent,
         });
-        await withUpdateCandidateIoBudget(
+        const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
+        const materializationStartedAt = performance.now();
+        const counts = await withUpdateCandidateIoBudget(
           { directory: privateRoot, bytes: plan.bytes, timeoutMs },
           async (signal) =>
             await linkUpdateCandidatePluginTrees(plan, {
@@ -148,6 +161,7 @@ export async function withRetainedUpdateRuntime<T>(
               },
             }),
         );
+        const materializationMs = Math.round(performance.now() - materializationStartedAt);
         assertCurrent();
         const relocations = prepareRuntimeRelocations(
           [
@@ -159,6 +173,13 @@ export async function withRetainedUpdateRuntime<T>(
           pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
         bind(resolve);
         prepared = true;
+        return {
+          inventoryMs,
+          materializationMs,
+          entries: plan.entries.length,
+          estimatedBytes: plan.bytes,
+          ...counts,
+        };
       }),
     async () => {
       if (directory) {
