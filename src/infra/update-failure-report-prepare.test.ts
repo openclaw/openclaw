@@ -547,6 +547,41 @@ describe("update report diagnostic command boundary", () => {
       expect(report.body).not.toContain("48213");
     },
   );
+  it("renders a managed-service refusal recorded before refusal codes unchanged", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "managed-service-legacy-record",
+        result: {
+          mode: "npm",
+          status: "error",
+          reason: "managed-service-preflight",
+          durationMs: 1,
+          steps: [
+            {
+              name: "managed-service-preflight",
+              command: "",
+              cwd: "",
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [
+                {
+                  check: "managed-service-preflight",
+                  code: "managed-service-preflight",
+                  message:
+                    "This command is running inside the gateway process tree (gateway PID 48213).",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain(
+      "Failing check managed-service-preflight (managed-service-preflight): [redacted-diagnostic]",
+    );
+    expect(report.body).not.toContain("48213");
+  });
   it("does not imply rollback when candidate repair stops before activation", async () => {
     const report = await prepareUpdateFailureReport(
       {
