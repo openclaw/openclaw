@@ -55,6 +55,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.
+- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match.
 - Two publication modes (RELEASING.md "Publication modes"). Strict default: a
   stable tag needs stable/full evidence with soak and blocking performance and no
   failed non-proof lane. Operator fast path: `stable_soak_waiver` /
