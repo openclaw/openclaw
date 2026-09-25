@@ -5267,7 +5267,9 @@ describe("ci workflow guards", () => {
       repository: "openclaw/openclaw",
       runAttempt: 1,
       matrix: { task: "bundled-protocol" },
-      preflightOutputs: { diff_base_revision: result.outputs.sha },
+      preflightOutputs: {
+        diff_base_revision: expectDefined(result.outputs.sha, "scheduled diff base"),
+      },
     };
     expect(
       evaluateWorkflowExpression(ci.jobs["checks-fast-core"].env.CHECKOUT_BASE_SHA, context),
