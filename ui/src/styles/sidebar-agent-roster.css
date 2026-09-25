@@ -17,9 +17,16 @@ openclaw-sidebar-agent-roster {
   align-items: center;
   gap: 4px;
   min-height: 48px;
+  padding: 0;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* The entire agent header is the drag target; the shared section handle must
+   not occupy a roster grid cell or shift the avatar and action slots. */
+.sidebar-agent-roster__header > .sidebar-session-group-drag-handle {
+  display: none;
 }
 
 .sidebar-agent-roster__row,

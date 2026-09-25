@@ -350,6 +350,9 @@ suite.define(() => {
         await page.keyboard.press("Space");
         await actions.getByRole("menuitem", { name: "All sessions", exact: true }).waitFor();
         expect(await actions.locator("wa-dropdown-item").allTextContents()).toEqual([
+          expect.stringContaining("Move agent up"),
+          expect.stringContaining("Move agent down"),
+          expect.stringContaining("Reset agent order"),
           expect.stringContaining("Open main chat"),
           expect.stringContaining("All sessions"),
           expect.stringContaining("Collapse others"),
