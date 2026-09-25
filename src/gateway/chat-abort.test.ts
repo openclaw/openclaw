@@ -53,11 +53,9 @@ function createOps(params: {
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
   const chatRunState = createChatRunState();
-  if (buffer !== undefined) {
-    chatRunState.takeBufferDelta(runId, buffer);
-  }
+  chatRunState.updateBuffer(runId, { delta: buffer ?? "" });
+  chatRunState.takeBufferDelta(runId, buffer ?? "");
   Object.assign(chatRunState.getOrCreate(runId), {
-    ...(buffer !== undefined ? { buffer } : {}),
     deltaSentAt: Date.now(),
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
