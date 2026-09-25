@@ -134,11 +134,7 @@ function hasSqliteSignal(err: unknown): boolean {
     "message" in err && typeof err.message === "string"
       ? normalizeLowercaseStringOrEmpty(err.message)
       : "";
-  if (message.includes("sqlite")) {
-    return true;
-  }
-
-  return false;
+  return message.includes("sqlite");
 }
 
 function isBenignUncaughtNetworkMessage(message: string): boolean {
@@ -167,11 +163,7 @@ function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number
 }
 
 function extractErrorCodeWithCause(err: unknown): string | undefined {
-  const direct = extractErrorCode(err);
-  if (direct) {
-    return direct;
-  }
-  return extractErrorCode(readErrorCause(err));
+  return extractErrorCode(err) || extractErrorCode(readErrorCause(err));
 }
 
 function isFatalError(err: unknown): boolean {
@@ -229,16 +221,7 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
-/**
- * Checks if an error is a transient file watcher error that shouldn't crash the gateway.
- * These are typically resource exhaustion issues (e.g., inotify watches exhausted) that
- * can be recovered from by degrading to manual sync mode.
- *
- * Note: ENOSPC is a general POSIX error code (disk full, write failures, etc.).
- * To avoid misclassifying unrelated storage failures, we require both the ENOSPC code
- * AND a watch/inotify-related message indicator, similar to how hasSqliteSignal gates
- * SQLite errors.
- */
+/** Requires watcher evidence so ordinary ENOSPC storage failures remain fatal. */
 export function isTransientFileWatchError(err: unknown): boolean {
   if (!err) {
     return false;
@@ -258,7 +241,6 @@ export function isTransientFileWatchError(err: unknown): boolean {
     message.includes("max watches");
 
   for (const candidate of collectNestedErrorCandidates(err)) {
-    // Skip non-object candidates early
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
@@ -274,7 +256,6 @@ export function isTransientFileWatchError(err: unknown): boolean {
       if (hasFileWatchSignal(message)) {
         return true;
       }
-      // ENOSPC without watch indicator is not classified here
       continue;
     }
 
@@ -370,8 +351,7 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    // AbortError is typically an intentional cancellation (e.g., during shutdown)
-    // Log it but don't crash - these are expected during graceful shutdown
+    // Cancellation during shutdown is expected.
     if (isAbortError(reason)) {
       console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
       return;

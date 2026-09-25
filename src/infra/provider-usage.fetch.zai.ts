@@ -1,4 +1,3 @@
-// Fetches and normalizes Z.ai provider usage records.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -57,15 +56,9 @@ export async function fetchZaiUsage(
       windowLabel = `${number}m`;
     }
 
-    if (type === "TOKENS_LIMIT") {
+    if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
       windows.push({
-        label: `Tokens (${windowLabel})`,
-        usedPercent: percent,
-        resetAt: nextReset,
-      });
-    } else if (type === "TIME_LIMIT") {
-      windows.push({
-        label: "Monthly",
+        label: type === "TOKENS_LIMIT" ? `Tokens (${windowLabel})` : "Monthly",
         usedPercent: percent,
         resetAt: nextReset,
       });
