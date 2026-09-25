@@ -18,13 +18,6 @@ import type {
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
 
-function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  return coerceSecretRef(value) ?? undefined;
-}
-
 function normalizePositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return undefined;
@@ -50,7 +43,7 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
       continue;
     }
     if (key === "apiKey") {
-      const normalized = normalizeTalkSecretInput(raw);
+      const normalized = normalizeOptionalString(raw) ?? coerceSecretRef(raw) ?? undefined;
       if (normalized !== undefined) {
         provider.apiKey = normalized;
       }
