@@ -811,6 +811,8 @@ describe("skills content rescan handoff", () => {
   )(
     "falls back after native capacity failure from $source during $phase coverage",
     ({ phase, source }) => {
+      // Polling holds no native handles, so capacity codes only apply to native transports.
+      vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
       vi.useFakeTimers();
       const watches = start(phase);
       watches[source].emit(
