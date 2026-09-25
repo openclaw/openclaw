@@ -307,6 +307,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
             archivedTranscriptArtifacts: 0,
           });
         }
+        expect(workersStarted).toBe(fail ? 0 : 1);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -341,7 +342,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         channel("worker_threads").unsubscribe(onWorker);
         database.db.exec("DROP VIEW temp.transcript_events");
       }
-      expect(workersStarted).toBe(fail ? 0 : 1);
+      expect(workersStarted).toBe(fail ? 0 : 2);
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
       await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
         events,
