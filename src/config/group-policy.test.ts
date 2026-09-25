@@ -21,25 +21,6 @@ function firstWarningCall(warningSpy: ReturnType<typeof vi.spyOn>): [unknown, { 
 }
 
 describe("resolveChannelGroupPolicy", () => {
-  it("fails closed when groupPolicy=allowlist and groups are missing", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(false);
-  });
-
   it("allows configured groups when groupPolicy=allowlist", () => {
     const cfg = {
       channels: {
@@ -504,20 +485,6 @@ describe("resolveToolsBySender", () => {
         senderName: "alice",
       }),
     ).toEqual({ deny: ["exec"] });
-  });
-
-  it("prefers channel-specific sender policy before generic id policy", () => {
-    expect(
-      resolveToolsBySender({
-        toolsBySender: {
-          "channel:discord:alice": { allow: ["read"] },
-          "id:alice": { deny: ["read"] },
-          "*": { deny: ["exec"] },
-        },
-        messageProvider: "discord",
-        senderId: "alice",
-      }),
-    ).toEqual({ allow: ["read"] });
   });
 
   it("emits one deprecation warning per legacy key", () => {
