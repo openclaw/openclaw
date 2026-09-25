@@ -11,7 +11,8 @@ read_when:
 **Automatic update checks send a daily request by default.** It asks whether a
 newer version exists and includes the OpenClaw version, operating system, Node.js
 version, CPU architecture, and request surface.
-Anonymous feature statistics are opt-in.
+Settled update outcomes also send a bounded report by default, subject to the
+same automatic-request opt-outs. Anonymous feature statistics are opt-in.
 This page describes update-check telemetry, not requests made by configured
 providers, channels, or other services.
 
@@ -42,7 +43,8 @@ document.
 The output shows whether anonymous feature statistics are enabled, why they are
 enabled or disabled, the request endpoint, and the last successful check. When
 anonymous feature statistics are enabled, it prints a JSON payload preview built
-in the CLI process. It does not retrieve a payload from the running Gateway.
+in the CLI process. It does not retrieve a payload from the running Gateway or preview update-outcome
+reports; see [Update outcomes](/gateway/telemetry#update-outcomes) for that payload.
 When only anonymous feature statistics are disabled, it shows the update-only request
 and its `User-Agent` header instead. When automation or update-check policy
 disables all requests, it shows `Request: none` with the reason (`request: null`
@@ -211,6 +213,79 @@ even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 body containing anonymous feature statistics.
 
+## Update outcomes
+
+Update-outcome reporting is **on by default**, like the daily update check.
+It is controlled by the existing automatic update-request policy, not by
+`telemetry.enabled` or a separate outcome opt-in. Optional feature statistics
+remain off by default. `openclaw telemetry off` and `DO_NOT_TRACK` suppress
+feature statistics, not the daily check or update outcomes.
+
+Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both
+daily checks and outcome reports. CI and Nix mode also suppress outcomes. Unlike
+the daily-check test exception, a custom endpoint does **not** override CI
+suppression for outcomes. Current update-request policy is checked at new-run
+admission, terminal settlement, and immediately before network dispatch.
+Unreadable or invalid configuration fails closed.
+
+One outcome attempt can follow a settled success, failure, or rollback. It first
+sends a payload-free `HEAD` to the configured endpoint. Only `204` with
+`OpenClaw-Update-Results: 2` permits a schema-2 `update_result` POST. Legacy
+receivers reject the probe without receiving outcome data; unconfigured receivers
+do not advertise support. Update-request policy is checked again after this
+probe, and the probe and POST share one three-second deadline.
+It uses the same complete `OPENCLAW_TELEMETRY_ENDPOINT` URL (the Foundation endpoint
+by default), without falling back to another server. The daily GET and schema-1
+feature POST remain unchanged. The outcome request has a fixed
+`User-Agent: openclaw-update-result/1` and does not follow redirects.
+
+The closed payload contains public release-shaped from/target/resulting/running
+versions, fixed OS and architecture, install method and channel, a coarse duration
+bucket, post-check status, terminal failed stage, fixed error category/code, and
+rollback/recovery enums. Unknown values stay `unknown`. Arbitrary prereleases,
+build metadata, private refs, and Git SHAs are not transmitted. Resulting installed
+version and observed running version remain distinct; installation success does
+not establish readiness. Intermediate warnings and retries are not separate reports.
+No update trigger is claimed to prove manual versus automatic initiation.
+
+Outcomes contain no identifiers, exact client timestamps, geography, logs, paths,
+commands, configuration, plugin/provider/model inventory, exception text, or output
+streams. The companion receiver validates the closed schema and writes a separate
+outcome dataset, without the daily-check geography columns or public individual
+report access. The compatible receiver and outcome dataset need a separately
+authorized deployment before reports can be collected. The capability probe
+prevents outcome POSTs from reaching legacy or unconfigured receivers, so a client
+can safely precede receiver activation. This client change does not deploy or
+configure the receiver, and a successful capability response is not proof of a
+subsequent analytics write.
+
+Delivery is **at-most-once best effort, not exactly once**. The existing shared
+SQLite machine-state owner retains one bounded local-only record: up to 16 eligible
+new-run IDs, the last 16 attempted IDs, and the last attempt time. No new database
+or schema version is needed. Only runs created while automatic update requests are allowed are
+eligible: there is no historic scan or backfill of runs created while disabled. The terminal owner
+removes eligibility and claims at most one attempt per hour before dispatch;
+disabled, skipped, and rate-limited results are dropped. Clock rollback conservatively
+suppresses attempts. IDs and exact times never leave the host.
+
+There is no durable retry outbox, response/payload logging, or startup replay.
+A crash after claiming, process exit, timeout (three seconds), storage failure,
+or network failure can lose the report. Delivery is not awaited by update,
+recovery, or startup. Restoring an older state backup also restores its local
+suppression state, so deduplication is not a guarantee across independent restored
+copies. Aggregates count accepted reports, not unique installations or all attempts.
+The receiver's Analytics Engine retention is three months; infrastructure may
+process IP addresses transiently, but outcome rows do not store them or geography.
+Replacement endpoints have their own processing policy.
+
+An installed old updater cannot be retrofitted by candidate code. The first
+upgrade into this implementation has no admission receipt and is not reported;
+subsequent updates driven by this implementation can report even when the Gateway
+is unhealthy. A run killed before a settled terminal result can be missing, rather
+than guessed as failed. Interrupted completion can report when the existing owner
+independently verifies the installed and serving candidate. Abandonment diagnoses
+are not submitted because they can subsequently be repaired.
+
 ## Automated environments
 
 OpenClaw sends nothing when it detects an automated environment, meaning the
@@ -236,8 +311,8 @@ To go fully dark, disable the existing startup update check:
 }
 ```
 
-This stops both tiers and every automatic update request: no update request,
-anonymous feature statistics, or update notice, even when `update.auto.enabled` is `true`.
+This stops automatic update requests, including outcome reports: no daily check,
+update-outcome report, anonymous feature statistics, or update notice, even when `update.auto.enabled` is `true`.
 Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests.
 Explicit update commands remain available when you choose to run them.
 

@@ -7,6 +7,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { sendUpdateResultTelemetry } from "./update-result-telemetry.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { InterruptedUpdateGatewayObservation } from "./update-run-interruption-health.js";
@@ -161,6 +162,9 @@ export async function reconcileInterruptedUpdateRuns(
       },
       input.signal,
     );
+    if (result?.accepted && result.updateResult) {
+      void sendUpdateResultTelemetry(result.updateResult, { env });
+    }
     if (result?.accepted || observed.cleanup === "unknown") {
       console.warn(`[openclaw] ${detail}`);
     }

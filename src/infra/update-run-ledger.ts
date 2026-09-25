@@ -19,6 +19,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import {
+  admitUpdateResultTelemetry,
+  claimUpdateResultTelemetry,
+  sendUpdateResultTelemetry,
+} from "./update-result-telemetry.js";
 import {
   inspectUpdateRepairDriverAdmission,
   isStaleIdentitylessUpdateRun,
@@ -165,6 +171,9 @@ export function createUpdateRun(
         db,
         getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(admittedRow),
       );
+      if (!input.preview) {
+        admitUpdateResultTelemetry(db, admittedRow.run_id, options);
+      }
       return decodeRun(admittedRow);
     },
     options,
@@ -650,6 +659,7 @@ export function finishInterruptedUpdateBeforeActivation(
     throw new Error("Interrupted update schema is unavailable.");
   }
   const recoverySchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
+  let payload: UpdateResultPayload | undefined;
   assertCurrent();
   runExistingOpenClawStateWriteTransaction(
     ({ db, path: pathname }) => {
@@ -678,6 +688,7 @@ export function finishInterruptedUpdateBeforeActivation(
           (record) => {
             if (isDeepStrictEqual(record, expected)) {
               finishUpdateRunRecord(record, { status: "failed", reason: "interrupted" });
+              payload = claimUpdateResultTelemetry(db, record, options);
             }
           },
           options,
@@ -688,6 +699,9 @@ export function finishInterruptedUpdateBeforeActivation(
     options,
     { schemaSql: schema, operationLabel: "update.interrupted" },
   );
+  if (payload) {
+    void sendUpdateResultTelemetry(payload, { env: options.env });
+  }
 }
 
 export function recordUpdateRunVerification(

@@ -63,9 +63,9 @@ Canonical security policy and reporting:
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
 Privacy follows the same default rule.
-OpenClaw sends no usage analytics, tracking identifiers, or telemetry attribution to the project unless the operator turned that on themselves.
+OpenClaw sends no tracking identifiers to the project. Usage analytics and telemetry attribution require operator opt-in, except for the bounded update checks and update-outcome reports described below.
 This rule governs what leaves your install. It is not a rule about shared Gateways: when you join a team Gateway, the people you share it with see the work you do there, and features like Git co-author credit exist to attribute that work to you.
-The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+The setup wizard offers optional anonymous feature statistics, with no selected by default. Update checks and bounded terminal update-outcome reports are on by default under the existing update-request controls: `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` disables both. Feature-statistics opt-out and `DO_NOT_TRACK` do not disable these update requests. Outcomes contain release versions and fixed platform, installation, timing-bucket, verification, and failure categories, never identifiers, raw logs, or diagnostic prose. An outcome payload is sent only after the configured receiver advertises support for isolated outcome storage.
 See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
 ## Plugins & Memory

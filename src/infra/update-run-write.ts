@@ -5,6 +5,11 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import {
+  claimUpdateResultTelemetry,
+  sendUpdateResultTelemetry,
+} from "./update-result-telemetry.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
@@ -189,23 +194,43 @@ export function finishUpdateRun(
   },
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        const diagnostics = result.diagnostics;
-        if (diagnostics) {
-          applyUpdateRunDiagnostics(record, diagnostics);
-          if (!diagnostics.verification) {
-            for (const step of (diagnostics.steps ?? []).flatMap(updateRunStepsFromResultStep)) {
-              upsertStep(record, step);
+  let payload: UpdateResultPayload | undefined;
+  const finished = runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const saved = mutateRunInTransaction(
+        db,
+        runId,
+        (record) => {
+          if (record.status === "running") {
+            const diagnostics = result.diagnostics;
+            if (diagnostics) {
+              applyUpdateRunDiagnostics(record, diagnostics);
+              if (!diagnostics.verification) {
+                for (const step of (diagnostics.steps ?? []).flatMap(
+                  updateRunStepsFromResultStep,
+                )) {
+                  upsertStep(record, step);
+                }
+              }
             }
+            record.before = { ...record.before, ...result.before };
           }
-        }
-        record.before = { ...record.before, ...result.before };
-      }
-      finishUpdateRunRecord(record, result);
+          finishUpdateRunRecord(record, result);
+        },
+        options,
+      );
+      payload = claimUpdateResultTelemetry(db, saved, options);
+      return saved;
     },
     options,
+    {
+      schemaSql: updateRunLedgerSchema,
+      operationLabel: "update.run",
+      busyTimeoutMs: options.busyTimeoutMs,
+    },
   );
+  if (payload) {
+    void sendUpdateResultTelemetry(payload, { env: options.env });
+  }
+  return finished;
 }

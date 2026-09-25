@@ -3,6 +3,8 @@ import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import { claimUpdateResultTelemetry } from "./update-result-telemetry.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { inspectUpdateRunDriver } from "./update-run-driver.js";
@@ -82,9 +84,12 @@ export function persistInterruptedUpdateObservation(
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent("transaction");
-      const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
+      const accept = (
+        run: UpdateRunRecord | undefined,
+        updateResult?: UpdateResultPayload,
+      ): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
-        return { accepted: true, run };
+        return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
       const current = readLatestUpdateRun(db);
       const active = readActiveUpdateRun(db);
@@ -155,7 +160,8 @@ export function persistInterruptedUpdateObservation(
         detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
       });
       finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
-      return accept(persistRun(db, current, options));
+      const saved = persistRun(db, current, options);
+      return accept(saved, claimUpdateResultTelemetry(db, saved, options));
     },
     options,
     { schemaSql: updateRunLedgerSchema, operationLabel: "update.run" },

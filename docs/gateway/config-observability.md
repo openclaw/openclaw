@@ -161,6 +161,7 @@ writer is best-effort, not a lossless compliance archive.
 ```
 
 - `enabled`: include public configured channel and provider names, plugin inventory names and count, and a retained session-creation count in the existing daily update-check request (default: `false`). These fields do not measure per-plugin usage or active sessions. Interactive setup can offer an explicit opt-in with **No thanks** selected by default; non-interactive setup does not enable it automatically but can retain an explicitly enabled preference. `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` always disables feature statistics without disabling the update check.
+- Update outcomes are on by default under `update.checkOnStart` and the automatic update-request controls, independently of `telemetry.enabled` and `DO_NOT_TRACK`. Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both daily checks and outcome reports. See [update outcomes](/gateway/telemetry#update-outcomes) for fields, local limits, CI/Nix suppression, and coverage gaps.
 - `consentedAt`: ISO timestamp recording when the operator accepted or declined feature statistics. Prevents interactive setup from asking again.
 - `openclaw telemetry show` previews the request using the CLI process's current context, which can differ from the running Gateway; `openclaw telemetry on` and `openclaw telemetry off` update the preference and consent timestamp.
 - `OPENCLAW_TELEMETRY_ENDPOINT`: optional full endpoint URL for testing or a self-hosted service. Defaults to `https://telemetry.openclaw.ai/api/latest-version`.
