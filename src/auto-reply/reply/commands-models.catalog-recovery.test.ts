@@ -124,16 +124,18 @@ describe("/models browse catalog recovery", () => {
     };
     catalogMocks.authModes = { anthropic: "api_key" };
     catalogMocks.readSnapshot.mockReturnValue(pendingCatalog);
+    const acquisition = createDeferred<ModelCatalogSnapshot>();
+    let completedCatalog: ModelCatalogSnapshot | undefined;
+    catalogMocks.getPreparedOwner.mockReturnValue({
+      readFullModelCatalog: () => completedCatalog,
+      loadFullModelCatalog: async () => {
+        completedCatalog = await acquisition.promise;
+        return completedCatalog;
+      },
+    });
     const owner = await preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
       config: staleCfg,
     });
-    const acquisition = createDeferred<ModelCatalogSnapshot>();
-    let completedCatalog: ModelCatalogSnapshot | undefined;
-    owner.readFullModelCatalog = () => completedCatalog;
-    owner.loadFullModelCatalog = async () => {
-      completedCatalog = await acquisition.promise;
-      return completedCatalog;
-    };
     setPreparedModelFullCatalogAuth(refreshedCatalog, {
       authStore: catalogMocks.authStore,
       authModes: catalogMocks.authModes,
