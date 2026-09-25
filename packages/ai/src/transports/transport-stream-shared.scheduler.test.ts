@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createModelStreamCooperativeScheduler } from "./openai-transport-shared.js";
+import { createModelStreamCooperativeScheduler } from "./transport-stream-shared.js";
 
 describe("model stream cooperative scheduler", { concurrent: false }, () => {
   let now = 0;
