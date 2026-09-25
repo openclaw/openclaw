@@ -722,6 +722,7 @@ describe("Team Reports scheduler lifecycle", () => {
     const { scheduler, nextRun, store, github, discord, context } = await setup({
       discord: true,
       caughtUp: false,
+      schedule: { weekly: true, monthly: true },
     });
     github.collect.mockResolvedValueOnce({
       items: [],
@@ -750,6 +751,8 @@ describe("Team Reports scheduler lifecycle", () => {
     await nextRun();
     expect(github.collect).toHaveBeenCalledTimes(3);
     expect((await store.getPeriod("day", "2026-08-19"))?.report.totals.github.total).toBe(1);
+    expect((await store.getPeriod("week", "2026-W34"))?.report.totals.github.total).toBe(2);
+    expect((await store.getPeriod("month", "2026-08"))?.report.totals.github.total).toBe(2);
     expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
   });
 
@@ -758,14 +761,19 @@ describe("Team Reports scheduler lifecycle", () => {
     async (source) => {
       const { scheduler, nextRun, store, github, discord, context, runtimes } = await setup({
         discord: true,
+        schedule: { weekly: true, monthly: true },
       });
       await scheduler.start();
       await scheduler.generate();
       await nextRun();
       const previous = await store.getPeriod("day", "2026-08-19");
       const previousDays = await store.listPersonDays("alex");
+      const previousWeek = await store.getPeriod("week", "2026-W34");
+      const previousMonth = await store.getPeriod("month", "2026-08");
       expect(previous?.report.totals.github.total).toBe(1);
       expect(previous?.report.totals.discord.messages).toBe(1);
+      expect(previousWeek?.report.totals.github.total).toBe(1);
+      expect(previousMonth?.report.totals.discord.messages).toBe(1);
 
       const fetchImpl: NonNullable<SourceRuntime["fetchImpl"]> = async (input) => {
         const url = new URL(input);
@@ -793,6 +801,7 @@ describe("Team Reports scheduler lifecycle", () => {
           createDiscordSource(runtime()).collect(...args),
         );
       }
+      vi.setSystemTime(Date.now() + 1_000);
       const failed = await scheduler.generate();
       await nextRun();
       expect((await store.listRuns()).find((run) => run.id === failed)).toMatchObject({
@@ -801,6 +810,8 @@ describe("Team Reports scheduler lifecycle", () => {
       });
       expect(await store.getPeriod("day", "2026-08-19")).toEqual(previous);
       expect(await store.listPersonDays("alex")).toEqual(previousDays);
+      expect(await store.getPeriod("week", "2026-W34")).toEqual(previousWeek);
+      expect(await store.getPeriod("month", "2026-08")).toEqual(previousMonth);
       expect(context.serviceHealth.reportFailure).toHaveBeenCalledOnce();
       expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
 
@@ -812,6 +823,14 @@ describe("Team Reports scheduler lifecycle", () => {
       const current = await store.getPeriod("day", "2026-08-19");
       expect(current?.report.totals.github.total).toBe(0);
       expect(current?.report.totals.discord.messages).toBe(0);
+      for (const [period, key] of [
+        ["week", "2026-W34"],
+        ["month", "2026-08"],
+      ] as const) {
+        const rollup = await store.getPeriod(period, key);
+        expect(rollup?.report.totals.github.total).toBe(0);
+        expect(rollup?.report.totals.discord.messages).toBe(0);
+      }
       expect(context.serviceHealth.clearFailure).toHaveBeenCalledTimes(2);
     },
   );
@@ -909,5 +928,36 @@ describe("Team Reports scheduler lifecycle", () => {
     );
     expect((await store.getPeriod("week", "2026-W22"))?.report.totals.github.total).toBe(1);
     expect((await store.getPeriod("month", "2026-06"))?.report.totals.github.total).toBe(1);
+  });
+
+  it("preserves only rollups overlapping a rejected day at month rollover", async () => {
+    vi.setSystemTime(new Date("2026-09-01T12:00:00Z"));
+    const { scheduler, store, github, nextRun } = await setup({
+      caughtUp: false,
+      schedule: { weekly: true, monthly: true },
+    });
+    github.collect.mockResolvedValueOnce({
+      items: [],
+      status: { ...healthy, ok: false, warnings: ["GitHub access unavailable"] },
+    });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
+    expect(github.collect).toHaveBeenCalledTimes(2);
+    expect(await store.getPeriod("day", "2026-08-31")).toBeUndefined();
+    expect(await store.getPeriod("week", "2026-W36")).toBeUndefined();
+    expect(await store.getPeriod("month", "2026-08")).toBeUndefined();
+    expect((await store.getPeriod("day", "2026-09-01"))?.report.totals.github.total).toBe(1);
+    const september = await store.getPeriod("month", "2026-09");
+    expect(september?.report.totals.github.total).toBe(1);
+    expect((await store.listRuns())[0]?.status).toBe("error");
+
+    const recovered = await scheduler.generate({ date: "2026-08-31" });
+    await nextRun();
+    expect((await store.getPeriod("day", "2026-08-31"))?.report.totals.github.total).toBe(1);
+    expect((await store.getPeriod("week", "2026-W36"))?.report.totals.github.total).toBe(2);
+    expect((await store.getPeriod("month", "2026-08"))?.report.totals.github.total).toBe(1);
+    expect(await store.getPeriod("month", "2026-09")).toEqual(september);
+    expect((await store.listRuns()).find((run) => run.id === recovered)?.status).toBe("ok");
   });
 });
