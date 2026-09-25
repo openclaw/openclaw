@@ -104,13 +104,11 @@ export function repairOAuthProfileIdMismatch(params: {
   const legacyProfileId =
     params.legacyProfileId ?? `${normalizeProviderId(params.provider)}:default`;
   const legacyCfg = params.cfg.auth?.profiles?.[legacyProfileId];
-  if (!legacyCfg) {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (legacyCfg.mode !== "oauth") {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)) {
+  if (
+    !legacyCfg ||
+    legacyCfg.mode !== "oauth" ||
+    normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)
+  ) {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
@@ -139,9 +137,7 @@ export function repairOAuthProfileIdMismatch(params: {
   });
   const { email: _legacyEmail, displayName: _legacyDisplayName, ...legacyCfgRest } = legacyCfg;
 
-  const nextProfiles = {
-    ...params.cfg.auth?.profiles,
-  } as Record<string, AuthProfileConfig>;
+  const nextProfiles: Record<string, AuthProfileConfig> = { ...params.cfg.auth?.profiles };
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
     ...legacyCfgRest,

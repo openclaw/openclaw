@@ -24,6 +24,15 @@ and publishes the result. Avoid exposing a generic SQL callback to application
 code or adding an asynchronous wrapper around an existing asynchronous facade.
 The plugin KV API already has asynchronous methods over its SQLite owner.
 
+Worker inference admission, terminal completion, cancellation, and restart
+recovery execute in the shared-state worker. The inference owner registers
+pending starts before awaiting persistence, retains accepted provider and native
+work through cancellation, and keeps local settlement errors separate from the
+worker protocol's terminal outcome. Each write keeps its synchronous transaction
+and current-authority checks inside the worker admission boundary. The existing
+terminal replay keys, JSON payloads, retention limits, schema, and restart
+recovery policy remain unchanged.
+
 Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
 consumption execute in the shared-state worker. Lookups and pending scans retain
 their expiry and corrupt-row repair transactions; history pages use the read-only
@@ -91,7 +100,11 @@ caller authority before commit, and the store fences changed authority until
 committed facts are installed. Diagnostic writes preserve keyed reads only when
 the worker proves that every environment and credential field except the error
 text and update timestamp is unchanged. Transfer capabilities keep their separate
-authority and lifetime checks. List and keyed inventory reads use the projection.
+authority and lifetime checks. Attachment reads remain available during unrelated
+metadata commits only when the worker proves that the complete attachment record
+is unchanged, including the activity timestamp used by idle-cleanup guards.
+Replacement, closure, and activity changes retain their publication fence.
+List and keyed inventory reads use the projection.
 
 Bound worker execution identities and delegated approval checks prepare selected placement
 facts asynchronously through the existing placement reader. Retained checks

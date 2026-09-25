@@ -68,6 +68,7 @@ type TranscriptAppendOptions = {
   eventJson?: string;
   preparedPayload?: PreparedTranscriptPayload;
   allowStoredAlias?: boolean;
+  onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
   idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
@@ -183,6 +184,7 @@ function appendTranscriptEvent(
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,
+      onPlaceholderInserted: options.onPlaceholderInserted,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
     cursor.initialized = true;

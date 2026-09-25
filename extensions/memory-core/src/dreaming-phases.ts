@@ -373,10 +373,12 @@ function findManagedDailyDreamingHeadingIndex(
 
 function isManagedDailyDreamingBoundary(
   line: string,
+  headingLevel: number,
   blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
 ): boolean {
   const trimmed = line.trim();
-  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+  const heading = /^#{1,6}(?=\s)/.exec(trimmed);
+  return (heading !== null && heading[0].length <= headingLevel) || blockByStartMarker.has(trimmed);
 }
 
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
@@ -397,7 +399,10 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
         stripUntilIndex = cursor;
         break;
       }
-      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+      if (
+        line &&
+        isManagedDailyDreamingBoundary(line, block.heading.indexOf(" "), blockByStartMarker)
+      ) {
         stripUntilIndex = cursor - 1;
         break;
       }

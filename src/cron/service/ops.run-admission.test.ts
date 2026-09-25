@@ -278,7 +278,7 @@ describe("cron service run admission", () => {
     inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: failingJob.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_scheduled_sibling_activation
+      CREATE TRIGGER reject_scheduled_sibling_activation
       BEFORE UPDATE OF started_at_ms ON cron_run_receipts
       WHEN NEW.job_id = '${failingJob.id}'
       BEGIN
@@ -286,13 +286,16 @@ describe("cron service run admission", () => {
       END;
     `);
 
+    const timerRun = onTimer(state);
     try {
-      const timerRun = onTimer(state);
       await completingStarted.promise;
       releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
-      await expect(timerRun).rejects.toThrow();
+      await expect(timerRun).rejects.toThrow("scheduled sibling activation failed");
     } finally {
+      releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
+      await Promise.allSettled([timerRun]);
       database.exec("DROP TRIGGER IF EXISTS reject_scheduled_sibling_activation");
+      stop(state);
     }
 
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);

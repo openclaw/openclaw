@@ -1,5 +1,6 @@
 /** Shared media tool routing, auth, path, and reference helpers. */
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -13,7 +14,6 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
@@ -41,13 +41,12 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
 import {
-  applyAgentDefaultModelConfig,
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
   hasProviderAuthForTool,
@@ -85,31 +84,12 @@ type TaskRunDetailHandle = {
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
 /**
- * Applies an image-editing model as the agent default without mutating the loaded config.
- */
-export function applyImageModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageModelConfig: ImageModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
-}
-
-/**
  * Reads an optional generation timeout while preserving common tool parameter validation.
  */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {
     message: "timeoutMs must be a positive integer in milliseconds.",
   });
-}
-
-/**
- * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
- */
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
 type CapabilityProvider = {

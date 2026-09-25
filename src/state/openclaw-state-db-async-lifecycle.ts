@@ -67,8 +67,9 @@ type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
-  assertOwnerCurrent(this: void): void;
+  assertOwnerCurrent(this: void, access?: "read"): void;
   assertAdmission(this: void): void;
+  assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
   assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
   run<T>(operation: () => T): T;
@@ -166,25 +167,48 @@ export function createOpenClawDatabaseMaintenanceScope(
   const schemaMigrationChecks = new Set<(migration: AgentSchemaMigration) => void>();
   const resources = new Map<object, MaintenanceResource>();
   let closed = false;
+  let checkingOwner = false;
   let closing: Promise<void> | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Database maintenance resource scope is closed");
     }
   };
+  const assertAdmissionLifecycle = () => {
+    assertOpen();
+    const inherited = maintenanceResources.current.getStore();
+    if (closing && !(inherited?.scope === scope && inherited.active)) {
+      throw new Error("Database maintenance resource admission is closed");
+    }
+  };
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance: schemaDelegateFactory !== undefined,
-    assertOwnerCurrent() {
-      parent?.assertOwnerCurrent();
-      assertOwnerCurrent?.();
+    assertOwnerCurrent(access) {
+      if (checkingOwner) {
+        if (access === "read") {
+          return;
+        }
+        throw new Error("Database maintenance authority check cannot admit a nested effect");
+      }
+      checkingOwner = true;
+      try {
+        parent?.assertOwnerCurrent(access);
+        assertOwnerCurrent?.();
+      } finally {
+        checkingOwner = false;
+      }
     },
     assertAdmission() {
       assertOpen();
       scope.assertOwnerCurrent();
-      const inherited = maintenanceResources.current.getStore();
-      if (closing && !(inherited?.scope === scope && inherited.active)) {
-        throw new Error("Database maintenance resource admission is closed");
-      }
+      assertAdmissionLifecycle();
+    },
+    assertReadAdmission() {
+      assertAdmissionLifecycle();
+      // Current authority needs policy rows from this same store. Keep its resource
+      // custody, but do not recurse into a check already evaluating those rows.
+      scope.assertOwnerCurrent("read");
+      assertAdmissionLifecycle();
     },
     addAgentSchemaMigrationCheck(check) {
       scope.assertAdmission();

@@ -36,6 +36,11 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+Completion inputs retain their own turn identity across compaction and runtime
+context messages. If transcript persistence rejects a completion because its
+keyed input belongs to a closed turn, delivery records a permanent failure with
+the error. It does not retry other models or keep scheduling the same completion.
+
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a

@@ -124,7 +124,10 @@ const repositoryScriptEntries = [
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
+  // run.sh invokes this CLI and preloads it into updater/Doctor children.
+  "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
@@ -140,6 +143,7 @@ const repositoryScriptEntries = [
   // The first-hop shell executes the packaged admission entry probe by path.
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -221,6 +225,9 @@ const repositoryScriptEntries = [
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
+  // Security Review stages these entrypoints from isolated checkout attempts.
+  "scripts/github/security-review-event.mjs!",
+  "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
@@ -420,8 +427,6 @@ const rootEntries = [
   "src/commands/doctor/shared/deprecation-compat.ts!",
   // Compiled as the package-boundary failure canary by the extension checker.
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
-  // Mintlify executes every JavaScript file in the docs content directory on each page.
-  "docs/nav-tabs-underline.js!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -940,6 +945,8 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: bundledPluginWorkspace([
+      // The private QA Gateway package profile builds this entry by path.
+      "gateway-entry.ts!",
       // Core loads the CLI facade by basename; QA Lab also owns a nested Vite app.
       "cli.ts!",
       "web/index.html!",

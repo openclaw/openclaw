@@ -1,13 +1,13 @@
 // Agent mutation tests cover create/update/delete handlers, safe workspace file
 // access, config preconditions, trash cleanup, and workspace-state handling.
 
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
+import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import { registerAgentIdentityUpdateTests } from "./agents-identity-update.test-support.js";
 import {
   expectRecordFields,
@@ -92,7 +92,7 @@ const mocks = vi.hoisted(() => ({
   fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsRealpath: vi.fn(async (p: string) => p),
-  fsReadlink: vi.fn(async () => ""),
+  fsReadlink: vi.fn(async (_pathname: string) => ""),
   fsRm: vi.fn(async () => undefined),
   fsOpen: vi.fn(async () => ({}) as unknown),
   rootRead: vi.fn(async (_params: { rootDir: string; relativePath: string }) => ({
@@ -647,6 +647,7 @@ beforeEach(() => {
     throw createEnoentError();
   });
   mocks.fsRealpath.mockImplementation(async (p: string) => p);
+  mocks.fsReadlink.mockReset().mockResolvedValue("");
   mocks.fsOpen.mockImplementation(
     async () =>
       ({
@@ -2606,19 +2607,12 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
-  it("trashes a dangling workspace symlink before deleting its state", async () => {
-    mocks.fsAccess.mockRejectedValueOnce(
-      Object.assign(new Error("missing target"), { code: "ENOENT" }),
-    );
-
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "test-agent",
-    });
-    await promise;
-
-    expectRespondOk(respond, { ok: true });
-    expectTrashedWithinParent("/workspace/test-agent");
-    expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
+  registerAgentDeleteFilesystemTests({
+    mocks,
+    makeCall,
+    makeFileStat,
+    expectNotTrashed,
+    expectTrashedWithinParent,
   });
 
   it("keeps workspace state when another agent still owns the workspace", async () => {
@@ -2635,38 +2629,6 @@ describe("agents.delete", () => {
     expectRespondOk(respond, { ok: true });
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
     expectNotTrashed("/workspace/test-agent");
-  });
-
-  it("reports trash failures without deleting the retained directory", async () => {
-    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    const workspaceDir = await actualFs.realpath(
-      await actualFs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-")),
-    );
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId?: string) =>
-      agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
-    );
-    mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
-      if (pathname === workspaceDir) {
-        throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
-      }
-      return "/trashed";
-    });
-
-    try {
-      const { respond, promise } = makeCall("agents.delete", {
-        agentId: "test-agent",
-      });
-      await promise;
-
-      expectRespondOk(respond, {
-        failed: [{ path: workspaceDir, reason: "trash destination missing" }],
-      });
-      await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
-      expect(mocks.fsRm).not.toHaveBeenCalled();
-      expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    } finally {
-      await actualFs.rm(workspaceDir, { recursive: true, force: true });
-    }
   });
 
   it("reports an absent source without invoking the trash backend", async () => {

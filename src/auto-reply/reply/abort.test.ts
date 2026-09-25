@@ -808,7 +808,7 @@ describe("abort detection", () => {
       const signaledBeforeAcpWait = native.abortSignal.aborted;
       if (!signaledBeforeAcpWait) {
         // This is still-live parent work, not a post-closure registration claim.
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: "during-acp-wait",
           childSessionKey: "agent:main:subagent:during-acp-wait",
           requesterSessionKey: sessionKey,

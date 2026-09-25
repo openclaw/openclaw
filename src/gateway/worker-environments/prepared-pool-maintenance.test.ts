@@ -9,6 +9,75 @@ import {
 describe("prepared pool retention and source admission", () => {
   const fixture = usePreparedPoolFixture();
 
+  it("publishes current reservation identities through consumption, cleanup, and policy changes", async () => {
+    const owner = fixture.pool();
+    expect(owner.summary()).toEqual({ maxTotal: 4, reservedEnvironmentIds: [] });
+    expect(owner.target("development")).toBe(1);
+    expect(owner.target("missing")).toBe(0);
+
+    const preparing = await fixture.seed("preparing", { purpose: "build" });
+    const reserve = await fixture.ready(await fixture.seed("reserve", { reserve: true }));
+    expect(owner.summary()).toEqual({
+      maxTotal: 4,
+      reservedEnvironmentIds: ["preparing", "reserve"],
+    });
+
+    const consumed = await fixture.attach(reserve);
+    expect(owner.summary()).toEqual({ maxTotal: 4, reservedEnvironmentIds: ["preparing"] });
+    await fixture.store.requestDestroy({
+      environmentId: consumed.environmentId,
+      state: consumed.state,
+    });
+    expect(owner.summary()).toEqual({
+      maxTotal: 4,
+      reservedEnvironmentIds: ["reserve", "preparing"],
+    });
+    await fixture.teardown(consumed);
+    expect(owner.summary()).toEqual({ maxTotal: 4, reservedEnvironmentIds: ["preparing"] });
+
+    const orphaned = await fixture.attach(
+      await fixture.ready(await fixture.seed("orphaned", { reserve: true })),
+    );
+    await fixture.store.transition({
+      environmentId: orphaned.environmentId,
+      from: "attached",
+      to: "orphaned",
+    });
+    const failed = await fixture.seed("failed", { reserve: true });
+    await fixture.store.transition({
+      environmentId: failed.environmentId,
+      from: "requested",
+      to: "failed",
+    });
+    expect(owner.summary()).toEqual({
+      maxTotal: 4,
+      reservedEnvironmentIds: ["orphaned", "preparing"],
+    });
+
+    fixture.nowMs = preparing.preparation!.expiresAtMs;
+    await fixture.store.requestPreparedDestroy({
+      environmentId: preparing.environmentId,
+      ownerEpoch: preparing.ownerEpoch,
+      preparationKey: preparing.preparation!.key,
+      reason: "expired",
+      assertCurrent: () => {},
+    });
+    expect(owner.summary()).toEqual({
+      maxTotal: 4,
+      reservedEnvironmentIds: ["orphaned", "preparing"],
+    });
+
+    fixture.developmentProfile.readyWorkers = 3;
+    expect(owner.target("development")).toBe(3);
+    fixture.developmentProfile.readyWorkers = 0;
+    fixture.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+    expect(owner.target("development")).toBe(0);
+    expect(owner.summary()).toEqual({
+      maxTotal: 0,
+      reservedEnvironmentIds: ["orphaned", "preparing"],
+    });
+  });
+
   it("does not read source admission while ready capacity is full after restart", async () => {
     await fixture.attach(await fixture.ready(await fixture.seed("source")));
     const reserve = await fixture.ready(await fixture.seed("reserve", { reserve: true }));

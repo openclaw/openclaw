@@ -1,15 +1,7 @@
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import { getCommandPathWithRootOptions, isSimpleCommandHelpInvocation } from "./argv.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-
-type PrecomputedSubcommandHelpName =
-  | "config"
-  | "doctor"
-  | "gateway"
-  | "models"
-  | "plugins"
-  | "sessions"
-  | "tasks";
+import type { PrecomputedSubcommandHelpName } from "./root-help-metadata.js";
 
 type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
 type OutputPrecomputedHelpText = () => boolean;

@@ -204,7 +204,11 @@ function sqliteReadOnlyWorkerRequestArgs(pathname: string, options: SqliteReadOn
 }
 
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeWorkerUrl(
+    options.mode === "content-version"
+      ? runtimeProcessEntrypoints.sqliteSourceRevision
+      : runtimeProcessEntrypoints.sqliteReadOnly,
+  );
   return [
     ...resolveRuntimeWorkerArgv(workerUrl),
     SQLITE_READONLY_CHILD_ARG,
@@ -496,11 +500,15 @@ function runSqliteReadOnlyWorkerOnce(
   });
 }
 
-export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string | undefined,
+  mode: "sync" | "content-version" = "sync",
+): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode: "sync", stagingRoot }),
+    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),
@@ -517,11 +525,7 @@ export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: strin
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
   return readSqliteReadOnlyWorkerValue(
-    {
-      failure,
-      stderr: result.stderr,
-      stdout: result.stdout,
-    },
-    "sync",
+    { failure, stderr: result.stderr, stdout: result.stdout },
+    mode,
   );
 }

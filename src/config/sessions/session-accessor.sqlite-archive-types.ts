@@ -42,6 +42,7 @@ export type TranscriptArchiveWorkerMessage = {
 };
 
 export type TranscriptArchivePublishPlan = {
+  databaseIdentity?: string;
   agentId: string;
   archiveDirectory: string;
   databasePath: string;
@@ -106,6 +107,7 @@ export type TranscriptArchivePageResult = {
 };
 
 export type SqliteArchiveOperation =
+  | { operation: "pending"; plans: readonly { agentId: string; databasePath: string }[] }
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
   | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }
@@ -120,6 +122,7 @@ export type SqliteArchiveSessionResponse = {
   operationId: number;
   settled: true;
 } & (
+  | { type: "pending"; results: boolean[] }
   | { type: "done"; results: TranscriptArchiveWorkerResult[] }
   | { type: "published"; results: TranscriptArchivePublishResult[] }
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }

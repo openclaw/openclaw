@@ -22,8 +22,8 @@ scenario:
     - src/gateway/server-methods/environments.ts
     - src/gateway/server-methods/artifacts.ts
     - src/gateway/managed-image-attachments.ts
-    - test/e2e/qa-lab/runtime/gateway-agent-artifact-apis.e2e.test.ts
+    - src/gateway/server.agent-artifact-apis.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/runtime/gateway-agent-artifact-apis.e2e.test.ts
+    path: src/gateway/server.agent-artifact-apis.test.ts
     summary: Run a real Gateway and operator client across config-backed agents, editable files, injected environment lifecycle, SQLite task transcripts, artifact RPCs, and ticketed HTTP bytes.

@@ -1,8 +1,6 @@
-import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { resolveNewStateDir, resolveStateDir } from "../config/state-dir.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
 import {
   inspectLegacyPluginSourceCaptureRoots,
@@ -10,48 +8,14 @@ import {
 } from "../plugins/plugin-source-capture-report.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { formatBytes } from "./doctor-disk-space.js";
+import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
 
 export async function noteLegacyPluginSourceCaptures(
   env: NodeJS.ProcessEnv,
   shouldRepair = false,
 ): Promise<void> {
-  const temporaryDirectories = [env.TMPDIR, env.TMP, env.TEMP].filter(
-    (directory): directory is string => Boolean(directory?.trim()),
-  );
-  temporaryDirectories.push(
-    path.join(
-      resolveNewStateDir(() => resolveRequiredHomeDir(env)),
-      "tmp",
-    ),
-  );
-  const warnings: string[] = [];
-  try {
-    const { resolveGatewayService } = await import("../daemon/service.js");
-    const command = await resolveGatewayService().readCommand(env, {
-      requireLoaded: true,
-      timeoutMs: 5_000,
-    });
-    for (const definition of [command, command?.managedDefinition]) {
-      const directory = definition?.environment?.TMPDIR;
-      if (directory?.trim()) {
-        if (path.isAbsolute(directory)) {
-          temporaryDirectories.push(directory);
-        } else if (definition?.workingDirectory) {
-          temporaryDirectories.push(path.resolve(definition.workingDirectory, directory));
-        } else {
-          warnings.push(
-            "The managed service records a relative TMPDIR without a working directory; its legacy captures could not be inspected.",
-          );
-        }
-      }
-    }
-  } catch (error) {
-    warnings.push(`Could not inspect the managed service temporary directory: ${String(error)}`);
-  }
-  const report = await inspectLegacyPluginSourceCaptureRoots(
-    resolveStateDir(env),
-    temporaryDirectories,
-  );
+  const { directories, warnings } = await inspectDoctorTemporaryDirectories(env);
+  const report = await inspectLegacyPluginSourceCaptureRoots(resolveStateDir(env), directories);
   warnings.push(...report.warnings);
   const lines: string[] = [];
   if (report.roots.length > 0) {

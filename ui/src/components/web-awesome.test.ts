@@ -268,4 +268,80 @@ describe("Web Awesome popup lifecycle", () => {
     expect(added.size).toBeGreaterThan(0);
     expect([...added].filter((listener) => !removed.has(listener))).toEqual([]);
   });
+
+  it.each(["coalesced activation", "reposition event"] as const)(
+    "releases resize work when disconnected after %s",
+    async (transition) => {
+      const add = vi.spyOn(window, "addEventListener");
+      const remove = window.removeEventListener.bind(window);
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      const raf = vi.fn((callback: FrameRequestCallback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+      vi.stubGlobal("requestAnimationFrame", raf);
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      const anchor = document.createElement("button");
+      const popup = document.createElement("wa-popup");
+      const reposition = vi.spyOn(popup, "reposition");
+      popup.anchor = anchor;
+      popup.active = true;
+      const repositioned = vi.fn();
+      popup.addEventListener("wa-reposition", repositioned);
+      const positioned = new Promise<void>((resolve) => {
+        popup.addEventListener("wa-reposition", () => resolve(), { once: true });
+      });
+      try {
+        document.body.append(anchor, popup);
+        await popup.updateComplete;
+        await positioned;
+        repositioned.mockClear();
+        reposition.mockClear();
+        window.dispatchEvent(new Event("resize"));
+        expect(repositioned).toHaveBeenCalled();
+        expect(reposition).toHaveBeenCalled();
+
+        if (transition === "reposition event") {
+          popup.addEventListener("wa-reposition", () => popup.remove(), { once: true });
+        }
+        // Reactive changes can coalesce before the next Lit update.
+        popup.active = false;
+        popup.active = true;
+        await popup.updateComplete;
+        popup.remove();
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((callback) => callback(performance.now()));
+        await Promise.resolve();
+        repositioned.mockClear();
+        reposition.mockClear();
+
+        window.dispatchEvent(new Event("resize"));
+
+        expect(repositioned).not.toHaveBeenCalled();
+        expect(reposition).not.toHaveBeenCalled();
+      } finally {
+        popup.remove();
+        anchor.remove();
+        // Keep a failing regression from leaking its own listeners into later tests.
+        for (const [type, listener] of add.mock.calls) {
+          if ((type === "resize" || type === "scroll") && listener) {
+            remove(type, listener);
+          }
+        }
+        frames.clear();
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

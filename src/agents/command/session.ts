@@ -572,7 +572,7 @@ export function resolveExistingSessionKeyForRequest(opts: {
 }
 
 /** Resolves the session key/store targeted by one command request. */
-function resolveSessionKeyForRequest(opts: {
+export function resolveSessionKeyForRequestCore(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
@@ -580,13 +580,6 @@ function resolveSessionKeyForRequest(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
-}
-
-/** Core alias retained for runtime owners that bypass the public library facade. */
-export function resolveSessionKeyForRequestCore(
-  opts: Parameters<typeof resolveSessionKeyForRequest>[0],
-): SessionKeyResolution {
-  return resolveSessionKeyForRequest(opts);
 }
 
 /** Resolves or creates the session used by one agent command request. */

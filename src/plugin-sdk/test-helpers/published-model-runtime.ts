@@ -1,6 +1,6 @@
 import { onTestFinished, vi } from "vitest";
 import type { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
-import type { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import type { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 
 type ModelRuntimeFixtureArgs = Parameters<typeof createModelRuntimeChoiceOwnerFixture>;
 
@@ -9,7 +9,7 @@ export async function mockPublishedModelRuntimeForTest(params: {
   isCurrent?: ModelRuntimeFixtureArgs[1];
   facts?: ModelRuntimeFixtureArgs[2];
   paths?: ModelRuntimeFixtureArgs[3];
-  authStore?: Parameters<typeof setPreparedModelRuntimeAuthStore>[1];
+  authStore?: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["store"]>;
 }): Promise<void> {
   const [fixture, auth, publishedCatalog] = await Promise.all([
     import("../../agents/model-runtime-choice.test-support.js"),
@@ -23,7 +23,7 @@ export async function mockPublishedModelRuntimeForTest(params: {
     params.paths,
   );
   if (params.authStore) {
-    auth.setPreparedModelRuntimeAuthStore(owner, params.authStore);
+    auth.bindPreparedModelRuntimeAuth(owner, { store: params.authStore });
   }
   const lookup = vi
     .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")

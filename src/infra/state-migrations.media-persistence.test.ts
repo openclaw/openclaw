@@ -277,6 +277,108 @@ describe("legacy media persistence doctor migration", () => {
     expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
   });
 
+  it("keeps a singular legacy MediaUrl off the second stored attachment when migrating existing transcripts", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-singular-url-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const legacy = createEvent({
+      id: "event-singular-url",
+      parentId: null,
+      timestamp: 1000,
+      message: {
+        role: "user",
+        content: "two attachments",
+        idempotencyKey: "idem-singular-url",
+        MediaPaths: ["/media/a.png", "/media/b.png"],
+        MediaUrls: ["file:///media/a.png"],
+        MediaUrl: "file:///media/a.png",
+        __openclaw: { traceId: "trace-1" },
+      },
+    });
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      eventsBySession: { "session-a": [legacy] },
+    });
+    const { DatabaseSync } = requireNodeSqlite();
+    const trajectoryDatabase = new DatabaseSync(databasePath);
+    trajectoryDatabase
+      .prepare(
+        "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at) VALUES(?,?,?,?,?)",
+      )
+      .run(
+        "session-a",
+        0,
+        "run-1",
+        JSON.stringify({
+          type: "model.completed",
+          data: {
+            messagesSnapshot: [legacy.message],
+            modelOutput: "done",
+            timing: { totalMs: 125 },
+            toolTraces: [{ name: "read", durationMs: 5 }],
+          },
+        }),
+        4000,
+      );
+    trajectoryDatabase.close();
+
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toEqual([]);
+    expect(result.changes.join("\n")).toContain("1 trajectory row(s)");
+
+    const snapshot = readDatabaseSnapshot(databasePath);
+    const migrated = JSON.parse(snapshot.trajectoryRows[0]?.event_json ?? "null") as {
+      data?: Record<string, unknown>;
+    };
+    expect(migrated.data).toMatchObject({
+      modelOutput: "done",
+      timing: { totalMs: 125 },
+      toolTraces: [{ name: "read", durationMs: 5 }],
+    });
+    const message = (migrated.data!.messagesSnapshot as Array<Record<string, unknown>>)[0]!;
+    expect(message).toMatchObject({
+      role: "user",
+      content: "two attachments",
+      idempotencyKey: "idem-singular-url",
+    });
+    expect(message).not.toHaveProperty("MediaPaths");
+    expect(message).not.toHaveProperty("MediaUrls");
+    expect(message).not.toHaveProperty("MediaUrl");
+    expect(message["__openclaw"]).toMatchObject({
+      traceId: "trace-1",
+      media: [
+        expect.objectContaining({ path: "/media/a.png", url: "file:///media/a.png" }),
+        expect.objectContaining({ path: "/media/b.png" }),
+      ],
+    });
+    expect(
+      (message["__openclaw"] as { media: Array<Record<string, unknown>> }).media[1]?.url,
+    ).toBeUndefined();
+    const storedMessages = snapshot.rows.map(
+      (row) => (JSON.parse(row.event_json) as FixtureEvent).message,
+    );
+    expect(storedMessages[0]).toMatchObject({
+      role: "user",
+      content: "two attachments",
+      __openclaw: {
+        traceId: "trace-1",
+        media: [
+          expect.objectContaining({ path: "/media/a.png", url: "file:///media/a.png" }),
+          expect.objectContaining({ path: "/media/b.png" }),
+        ],
+      },
+    });
+    const firstStoredMessage = storedMessages[0] as Record<string, unknown>;
+    expect(
+      (firstStoredMessage["__openclaw"] as { media: Array<Record<string, unknown>> }).media[1]?.url,
+    ).toBeUndefined();
+    for (const storedMessage of storedMessages) {
+      expect(JSON.stringify(storedMessage)).not.toMatch(
+        /"Media(?:Path|Paths|Type|Types|Url|Urls)/u,
+      );
+    }
+    closeOpenClawAgentDatabasesForTest();
+  });
+
   it("migrates when valid transcript created_at rows have an unsafe aggregate", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-large-created-at-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

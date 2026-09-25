@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  type AgentsFilesGetParams,
   ErrorCodes,
   errorShape,
   validateAgentsFilesGetParams,
@@ -62,7 +63,7 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
 }
 
 function resolveAgentWorkspaceFileOrRespondError(
-  params: Record<string, unknown>,
+  params: AgentsFilesGetParams,
   respond: RespondFn,
   cfg: OpenClawConfig,
 ): {
@@ -70,19 +71,12 @@ function resolveAgentWorkspaceFileOrRespondError(
   workspaceDir: string;
   name: string;
 } | null {
-  const rawAgentId = params.agentId;
-  const agentId = resolveAgentIdOrError(
-    typeof rawAgentId === "string" || typeof rawAgentId === "number" ? String(rawAgentId) : "",
-    cfg,
-  );
+  const agentId = resolveAgentIdOrError(params.agentId, cfg);
   if (!agentId) {
-    respondAgentNotFound(respond, String(rawAgentId));
+    respondAgentNotFound(respond, params.agentId);
     return null;
   }
-  const rawName = params.name;
-  const name = (
-    typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
-  ).trim();
+  const name = params.name.trim();
   if (!ALLOWED_FILE_NAMES.has(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;

@@ -534,6 +534,32 @@ export class NewSessionDraftPersistence {
     };
   }
 
+  private isRestoreCurrent(
+    scope: DurableComposerDraftScope,
+    generation: number,
+    mutationGeneration: number,
+    signature: string,
+  ): boolean {
+    const current = this.read();
+    const currentScope = this.scope();
+    if (
+      generation !== this.restoreGeneration ||
+      mutationGeneration !== this.mutationGeneration ||
+      !currentScope ||
+      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
+      signature !==
+        chatAttachmentDraftSignature(
+          current.message,
+          current.attachments,
+          undefined,
+          current.mentions,
+        )
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   private async restoreScope(
     scope: DurableComposerDraftScope,
     generation: number,
@@ -552,21 +578,7 @@ export class NewSessionDraftPersistence {
     // An absent authoritative row clears committed facts, never in-flight IDs.
     lineage.revision = storedRevision ?? 0;
     lineage.writeId = storedWriteId;
-    const current = this.read();
-    const currentScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !currentScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
-      signature !==
-        chatAttachmentDraftSignature(
-          current.message,
-          current.attachments,
-          undefined,
-          current.mentions,
-        )
-    ) {
+    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
       return false;
     }
     this.reconcileHandoffCommit();
@@ -602,21 +614,7 @@ export class NewSessionDraftPersistence {
         return false;
       }
     }
-    const hydratedCurrent = this.read();
-    const hydratedScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !hydratedScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(hydratedScope) ||
-      signature !==
-        chatAttachmentDraftSignature(
-          hydratedCurrent.message,
-          hydratedCurrent.attachments,
-          undefined,
-          hydratedCurrent.mentions,
-        )
-    ) {
+    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
       return false;
     }
     this.revision = storedRevision;
