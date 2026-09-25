@@ -23,6 +23,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import * as runAttemptTurnRequest from "./run-attempt-turn-request.js";
 import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
@@ -53,6 +54,14 @@ describe("Codex attempt subscription recovery", () => {
       const params = createParams(sessionFile, workspaceDir);
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
+      if (nativeOwned) {
+        const native = threadStartResult(threadId);
+        params.expectedSessionRuntimeOwnership = {
+          model: "native",
+          auth: "host",
+          modelRef: { model: native.model, provider: native.modelProvider },
+        };
+      }
       let hostRevoked = false;
       const originalHost = params.hostCapabilities;
       params.hostCapabilities = {
@@ -71,6 +80,7 @@ describe("Codex attempt subscription recovery", () => {
           cwd: workspaceDir,
           dynamicToolsFingerprint: "[]",
           preserveNativeModel: true,
+          agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
           webSearchThreadConfigFingerprint: JSON.stringify({
             "features.standalone_web_search": false,
             web_search: "disabled",
@@ -190,6 +200,7 @@ describe("Codex attempt subscription recovery", () => {
         threadId: "thread-old",
         cwd: workspaceDir,
         dynamicToolsFingerprint: "[]",
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
         webSearchThreadConfigFingerprint: JSON.stringify({
           "features.standalone_web_search": false,
           web_search: "disabled",
@@ -253,7 +264,7 @@ describe("Codex attempt subscription recovery", () => {
       }
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       await harness.notify({
         method: "turn/completed",
         params: {

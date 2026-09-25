@@ -252,7 +252,7 @@ describe("managed Codex plugin refresh", () => {
           } else if (message.method === "configRequirements/read") {
             result = { requirements: null };
           } else if (message.method === "config/read") {
-            result = { config: {}, origins: {} };
+            result = { config: {}, origins: {}, layers: [] };
           } else if (message.method === "thread/start") {
             result = threadStartResult("thread-1", { cwd: params.workspaceDir });
           } else if (message.method === "turn/start") {

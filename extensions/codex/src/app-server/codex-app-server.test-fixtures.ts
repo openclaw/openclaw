@@ -86,12 +86,19 @@ export function mockClientRuntimeMethods() {
     protectPrivateTransportSecret,
     getInstanceId: () => "test-client-1",
     getTransportPid: (): number | undefined => undefined,
-    getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),
+    getRuntimeIdentity: () => ({
+      serverVersion: getServerVersion(),
+      userAgent: `codex-cli/${getServerVersion()}`,
+    }),
     getServerVersion,
   };
 }
 
-export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-codex-test") {
+export function threadStartResult(
+  threadId = "thread-1",
+  cwd = "/tmp/openclaw-codex-test",
+  instructionSources: string[] = [],
+) {
   return {
     thread: {
       id: threadId,
@@ -118,7 +125,7 @@ export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-co
     modelProvider: "openai",
     serviceTier: null,
     cwd,
-    instructionSources: [],
+    instructionSources,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },

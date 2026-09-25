@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=48b6394124b52e2c2d90edd239b4b2bd718cb43d34744d9c441e034e97e8c006
-+++ telegram-heartbeat-codex-tool.md	sha256=33119c4da5524864f403d2b0445a52993c54b9b3bca5accd10dd429c4989dd6d
+--- telegram-direct-codex-message-tool.md	sha256=9b94d7c72f5db01f2a899aa824aaa04305ede20740cc346f826268c7adbecf86
++++ telegram-heartbeat-codex-tool.md	sha256=74f7be75c36c0c4728b3a1b01c598e0292864b3c47f47ec977e64e9618f3a751
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -8,75 +8,75 @@
 -- A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 +- Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
 +- The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
-@@ -30,2 +30,2 @@
+@@ -31,2 +31,2 @@
 -  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
 -  "trigger": "user"
 +  "toolSnapshot": "codex-dynamic-tools.heartbeat-turn.json",
 +  "trigger": "heartbeat"
-@@ -98,0 +99,1 @@
+@@ -99,0 +100,1 @@
 +    "heartbeat_respond",
-@@ -138,1 +139,1 @@
+@@ -139,1 +140,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-telegram-heartbeat-codex-tool"
-@@ -151,4 +151,0 @@
+@@ -152,4 +152,0 @@
 -    "openclaw_current_sender": {
 -      "kind": "untrusted",
 -      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
 -    },
-@@ -188,2 +185,2 @@
+@@ -189,2 +186,2 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool",
 -  "turnTrigger": "user"
 +  "threadId": "thread-telegram-heartbeat-codex-tool",
 +  "turnTrigger": "heartbeat"
-@@ -228,1 +225,1 @@
+@@ -229,1 +226,1 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
-@@ -241,2 +238,2 @@
+@@ -242,2 +239,2 @@
 -    "chars": 1025,
 -    "roughTokens": 257
 +    "chars": 895,
 +    "roughTokens": 224
-@@ -261,2 +258,2 @@
+@@ -262,2 +259,2 @@
 -    "chars": 67696,
 -    "roughTokens": 16924
 +    "chars": 69189,
 +    "roughTokens": 17298
-@@ -273,2 +270,2 @@
--    "chars": 27055,
--    "roughTokens": 6764
-+    "chars": 27392,
-+    "roughTokens": 6848
-@@ -277,2 +274,2 @@
--    "chars": 94753,
--    "roughTokens": 23689
-+    "chars": 96583,
-+    "roughTokens": 24146
-@@ -281,2 +278,2 @@
--    "chars": 879,
--    "roughTokens": 220
-+    "chars": 1346,
-+    "roughTokens": 337
-@@ -530,6 +526,0 @@
+@@ -274,2 +271,2 @@
+-    "chars": 27155,
+-    "roughTokens": 6789
++    "chars": 27492,
++    "roughTokens": 6873
+@@ -278,2 +275,2 @@
+-    "chars": 94853,
+-    "roughTokens": 23714
++    "chars": 96683,
++    "roughTokens": 24171
+@@ -282,2 +279,2 @@
+-    "chars": 979,
+-    "roughTokens": 245
++    "chars": 1446,
++    "roughTokens": 362
+@@ -531,6 +527,0 @@
 -### User: OpenClaw Additional Context (openclaw_current_sender)
 -
 -```text
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 -```
 -
-@@ -557,1 +547,0 @@
+@@ -558,1 +548,0 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
-@@ -576,1 +566,1 @@
+@@ -577,1 +567,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
-@@ -579,1 +569,1 @@
+@@ -580,1 +570,1 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted. If the heartbeat_respond tool is not available in this run, reply NO_REPLY when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.
-@@ -584,1 +574,1 @@
+@@ -585,1 +575,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -604,0 +595,1 @@
+@@ -605,0 +596,1 @@
 +  "heartbeat_respond",
-@@ -755,0 +747,39 @@
+@@ -756,0 +748,39 @@
 +  },
 +  {
 +    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",

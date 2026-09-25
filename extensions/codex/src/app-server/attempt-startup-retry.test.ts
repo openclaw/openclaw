@@ -35,7 +35,14 @@ vi.mock("./desktop-generation.js", () => ({
 const tempRoots = new Set<string>();
 
 async function createStartupFailureFixture(
-  mode: "transient" | "contention" | "persistent" | "unsupported" | "overload" | "refusal",
+  mode:
+    | "transient"
+    | "contention"
+    | "persistent"
+    | "unsupported"
+    | "overload"
+    | "registration-race"
+    | "refusal",
 ) {
   const root = path.join(os.tmpdir(), `openclaw-codex-startup-retry-${randomUUID()}`);
   tempRoots.add(root);
@@ -56,7 +63,14 @@ async function createStartupFailureFixture(
       'if (attempt === 1) fs.writeFileSync(startedAtPath, String(Date.now()), "utf8");',
       'const stillContended = mode === "contention" && Date.now() - Number(fs.readFileSync(startedAtPath, "utf8")) < 750;',
       'process.stdout.write(JSON.stringify({ method: "fixture/ready" }) + "\\n");',
-      'if (mode === "persistent" || (mode === "transient" && attempt === 1) || stillContended) {',
+      'if (mode === "registration-race" && attempt === 1) {',
+      '  process.on("SIGUSR2", () => {',
+      '    fs.writeSync(2, "Error: failed to initialize sqlite state runtime: database is locked\\n");',
+      "    process.exit(1);",
+      "  });",
+      "  setInterval(() => {}, 1_000);",
+      '  fs.writeFileSync(`${spawnCountPath}.ready`, "ready");',
+      '} else if (mode === "persistent" || (mode === "transient" && attempt === 1) || stillContended) {',
       "  console.error(`Error: failed to initialize sqlite state runtime under ${codexHome}: failed to initialize state runtime at ${codexHome}`);",
       // Keep the persistent fixture alive through process registration so this
       // case reaches the retry owner; immediate-exit registration has its own case.

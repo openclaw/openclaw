@@ -45,6 +45,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
@@ -376,6 +377,7 @@ describe("Codex native configuration", () => {
         modelProvider: nativeProvider,
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
         dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
         ...(nativeSearchEnabled && transport === "unix"
           ? {
@@ -420,7 +422,7 @@ describe("Codex native configuration", () => {
           } else if (message.method === "configRequirements/read") {
             result = { requirements: null };
           } else if (message.method === "config/read") {
-            result = { config: { model_provider: configuredProvider }, origins: {} };
+            result = { config: { model_provider: configuredProvider }, origins: {}, layers: [] };
           } else if (message.method === "modelProvider/capabilities/read") {
             result = { webSearch: true };
           } else if (message.method === "thread/read") {

@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- start/resume authority must stay co-located until owner extraction. */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -25,6 +26,10 @@ import {
 } from "./plugin-thread-attestation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
+  captureCodexNativeProjectInstructions,
+  snapshotCodexNativeProjectInstructionSourceIdentities,
+} from "./project-doc-thread-config.js";
+import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
   resolveCodexThreadRolloutPath,
@@ -37,10 +42,12 @@ import {
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 import {
+  assertCodexProjectInstructionColdResumeAllowed,
   CodexThreadBindingConflictError,
   CodexThreadClientReplacementError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
+import { captureAgentInstructions } from "./thread-lifecycle-instructions.js";
 import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -59,6 +66,7 @@ export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: CodexResumeThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding | undefined> {
+  assertCodexProjectInstructionColdResumeAllowed(context.binding);
   const {
     binding: resumeBinding,
     bindingIdentity,
@@ -149,6 +157,7 @@ export async function resumeExistingCodexThread(
         userMcpServersConfigPatch,
         pluginThreadConfig?.configPatch,
         finalConfigPatch.configPatch,
+        params.nativeProjectDocsDisabledOnResume ? { project_doc_max_bytes: 0 } : undefined,
       ),
       nativeSkillIsolation,
     );
@@ -162,8 +171,9 @@ export async function resumeExistingCodexThread(
         preserveNativeModel: resumeBinding.preserveNativeModel === true,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
+        developerInstructions: params.coldDeveloperInstructions ?? params.developerInstructions,
         skillsInstructions: params.skillsInstructions,
+        environmentSelection: params.environmentSelection,
         config: resumeConfig,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -180,6 +190,30 @@ export async function resumeExistingCodexThread(
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
         : undefined;
+    const shouldCaptureNativeProjectInstructions =
+      params.captureNativeProjectInstructions === true &&
+      resumeBinding.agentWorkspaceDeveloperInstructions === undefined;
+    const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
+      ? await lifecycleTiming.measure("project-instructions-preflight", () =>
+          snapshotCodexNativeProjectInstructionSourceIdentities({
+            cwd: params.cwd,
+            codexHome:
+              params.client.getRuntimeIdentity?.()?.codexHome ??
+              resolveCodexAppServerLocalHomeDir(
+                params.appServer.start,
+                resolveCodexThreadAgentDir(params),
+              ),
+            config: resumeParams.config,
+            environmentSelection: params.environmentSelection,
+            readNativeConfig: (cwd) =>
+              params.client.request(
+                "config/read",
+                { cwd, includeLayers: true },
+                { signal: params.signal },
+              ),
+          }),
+        )
+      : undefined;
     // Keep ownership accounting atomic with the resume request: a
     // pre-aborted request retains no subscription, so it must not reserve.
     throwIfAborted();
@@ -214,6 +248,22 @@ export async function resumeExistingCodexThread(
       throw new Error(
         "Codex resumed a different model provider than the one selected for this turn",
       );
+    }
+    let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
+    if (shouldCaptureNativeProjectInstructions) {
+      if (!instructionSourceIdentitiesBeforeRequest) {
+        throw new Error("Codex project instruction preflight snapshot is missing");
+      }
+      capturedAgentWorkspaceDeveloperInstructions =
+        (await lifecycleTiming.measure("project-instructions-capture", () =>
+          captureCodexNativeProjectInstructions({
+            cwd: params.cwd,
+            instructionSources: response.instructionSources,
+            config: resumeParams.config,
+            sourceIdentitiesBeforeRequest: instructionSourceIdentitiesBeforeRequest,
+          }),
+        )) ?? null;
+      assertHandoffCurrent();
     }
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
@@ -251,6 +301,13 @@ export async function resumeExistingCodexThread(
     });
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
+    const resumedAgentInstructions = captureAgentInstructions(
+      params,
+      capturedAgentWorkspaceDeveloperInstructions !== undefined
+        ? capturedAgentWorkspaceDeveloperInstructions
+        : resumeBinding.agentWorkspaceDeveloperInstructions,
+      response.instructionSources,
+    );
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
       // Keeping its previous client id disables warm reuse after every restart.
@@ -263,6 +320,7 @@ export async function resumeExistingCodexThread(
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId,
+      ...resumedAgentInstructions,
       // Loaded native threads can ignore resume overrides; keep the prepared model for turn/start.
       model: resumeParams.model ?? response.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
@@ -493,6 +551,7 @@ export async function startFreshCodexThread(
         userMcpServersConfigPatch,
         pluginThreadConfig?.configPatch,
         finalConfigPatch.configPatch,
+        params.nativeProjectDocsDisabledOnResume ? { project_doc_max_bytes: 0 } : undefined,
       ),
       nativeSkillIsolation,
     ),
@@ -502,7 +561,7 @@ export async function startFreshCodexThread(
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
-      developerInstructions: params.developerInstructions,
+      developerInstructions: params.coldDeveloperInstructions ?? params.developerInstructions,
       skillsInstructions: params.skillsInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
@@ -538,6 +597,29 @@ export async function startFreshCodexThread(
       params.inferenceProviderRoutes,
     );
   };
+  const shouldCaptureNativeProjectInstructions =
+    params.captureNativeProjectInstructions === true && !preserveExistingBinding;
+  const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
+    ? await lifecycleTiming.measure("project-instructions-preflight", () =>
+        snapshotCodexNativeProjectInstructionSourceIdentities({
+          cwd: params.cwd,
+          codexHome:
+            params.client.getRuntimeIdentity?.()?.codexHome ??
+            resolveCodexAppServerLocalHomeDir(
+              params.appServer.start,
+              resolveCodexThreadAgentDir(params),
+            ),
+          config: startParams.config,
+          environmentSelection: params.environmentSelection,
+          readNativeConfig: (cwd) =>
+            params.client.request(
+              "config/read",
+              { cwd, includeLayers: true },
+              { signal: params.signal },
+            ),
+        }),
+      )
+    : undefined;
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       assertCurrent();
@@ -586,6 +668,28 @@ export async function startFreshCodexThread(
     return await rejectUncommittedThread(error);
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
+  let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
+  if (shouldCaptureNativeProjectInstructions) {
+    if (!instructionSourceIdentitiesBeforeRequest) {
+      return await rejectUncommittedThread(
+        new Error("Codex project instruction preflight snapshot is missing"),
+      );
+    }
+    try {
+      capturedAgentWorkspaceDeveloperInstructions =
+        (await lifecycleTiming.measure("project-instructions-capture", () =>
+          captureCodexNativeProjectInstructions({
+            cwd: params.cwd,
+            instructionSources: response.instructionSources,
+            config: startParams.config,
+            sourceIdentitiesBeforeRequest: instructionSourceIdentitiesBeforeRequest,
+          }),
+        )) ?? null;
+      assertCurrent();
+    } catch (error) {
+      return await rejectUncommittedThread(error);
+    }
+  }
   const modelProvider = resolveCodexAppServerModelProvider({
     homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
@@ -606,7 +710,11 @@ export async function startFreshCodexThread(
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
-    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+    ...captureAgentInstructions(
+      params,
+      capturedAgentWorkspaceDeveloperInstructions,
+      response.instructionSources,
+    ),
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
     dynamicToolsFingerprint,

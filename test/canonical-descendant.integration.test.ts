@@ -7,7 +7,11 @@ import {
   createPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
+import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+  createCanonicalForkFixtureForTest,
+} from "../extensions/codex/test-api.js";
 import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
@@ -567,8 +571,11 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        expect(resume.params.developerInstructions).toBe(body);
-        expectPolicyHandoff(calls, binding.threadId, body);
+        const expectedBody = [body, CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY]
+          .filter(Boolean)
+          .join("\n\n");
+        expect(resume.params.developerInstructions).toBe(expectedBody);
+        expectPolicyHandoff(calls, binding.threadId, expectedBody);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
         );
@@ -770,6 +777,39 @@ describe("canonical descendant lifecycle through real owners", () => {
             threadId: "successor-thread",
           });
         }
+      });
+    },
+    180_000,
+  );
+
+  it.each(["legacy", "environment-owned"] as const)(
+    "rejects a canonical fork from a %s source without replayable instruction authority before thread/fork",
+    async (authority) => {
+      await withFixture(async (fixture, fork) => {
+        const source = await fixture.adopt();
+        const binding = await fixture.turn(source.sessionKey, "establish canonical source");
+        const identity = fixture.identity(source.sessionKey);
+        expect(
+          await fixture.bindingStore.mutate(identity, {
+            kind: "patch",
+            threadId: binding.threadId,
+            patch:
+              authority === "legacy"
+                ? { agentWorkspaceDeveloperInstructions: undefined }
+                : {
+                    agentWorkspaceDeveloperInstructions: CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+                    projectInstructionsUnavailableToGateway: true,
+                    environmentSelectionFingerprint: "sandbox-environment-v1",
+                  },
+          }),
+        ).toBe(true);
+        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+        const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
+
+        expect(await fork(source.sessionKey, selected.entryId)).toMatchObject({ ok: false });
+        expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
+          before,
+        );
       });
     },
     180_000,
@@ -1218,6 +1258,11 @@ describe("canonical descendant lifecycle through real owners", () => {
           const source = await fixture.adopt();
           const canonical = await fixture.turn(source.sessionKey, "repeat");
           await fixture.turn(source.sessionKey, "repeat");
+          const canonicalInstructions = expectDefined(
+            canonical.agentWorkspaceDeveloperInstructions,
+            "canonical instruction authority",
+          );
+          expect(canonicalInstructions).toContain("Frozen Codex Project Instructions");
           const originalState = structuredClone(fixture.native.source);
           const current = expectDefined(
             fixture.native.threads.get(canonical.threadId),
@@ -1273,6 +1318,8 @@ describe("canonical descendant lifecycle through real owners", () => {
             firstBinding.threadId,
             forked.params.developerInstructions,
           );
+          expect(forked.params.config).toMatchObject({ project_doc_max_bytes: 0 });
+          expect(forked.params.developerInstructions).toContain(canonicalInstructions);
           const nativeFirst = expectDefined(
             fixture.native.threads.get(firstBinding.threadId),
             "first descendant",
@@ -1281,6 +1328,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           expect(nativeFirst.rawPrefix.slice(0, -1)).toEqual(currentBefore.rawPrefix);
           expect(nativeFirst.rawPrefix.at(-1)).toMatchObject({ role: "developer" });
           expect(firstBinding).not.toHaveProperty("pendingSupervisionBranch");
+          expect(firstBinding.agentWorkspaceDeveloperInstructions).toBe(canonicalInstructions);
           expect(firstBinding.nativeHookRelayGeneration).toBeTruthy();
           expect(
             [...fixture.native.subscriptions].some((key) =>
@@ -1340,6 +1388,8 @@ describe("canonical descendant lifecycle through real owners", () => {
             "cold first child resume",
           );
           expect(resumed.params.threadId).toBe(firstBinding.threadId);
+          expect(resumed.params.config).toMatchObject({ project_doc_max_bytes: 0 });
+          expect(resumed.params.developerInstructions).toContain(canonicalInstructions);
           const expectedApps =
             appPolicy === "unconfigured"
               ? undefined

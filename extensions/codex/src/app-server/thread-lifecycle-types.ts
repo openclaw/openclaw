@@ -84,9 +84,21 @@ export type CodexStartOrResumeThreadParams = {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Includes frozen project authority for physical starts and cold resumes only. */
+  coldDeveloperInstructions?: string;
   /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
   skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
+  /** Shared context-owner policy for capturing or replaying the workspace snapshot. */
+  agentWorkspaceDeveloperInstructionsAllowed?: boolean;
+  /** Capture the exact same-workspace project sources selected by Codex. */
+  captureNativeProjectInstructions?: boolean;
+  /** The current process may attest native project sources as Gateway-host-local. */
+  nativeProjectInstructionSnapshotAllowed?: boolean;
+  /** Candidate state; a fresh thread/start response must report nonempty native sources. */
+  projectInstructionsUnavailableToGateway?: boolean;
+  /** Suppress native project docs before replaying the frozen same-workspace snapshot. */
+  nativeProjectDocsDisabledOnResume?: boolean;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
   shellPathPrepend?: readonly string[];

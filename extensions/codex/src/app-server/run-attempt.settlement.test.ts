@@ -278,7 +278,14 @@ describe("Codex app-server terminal settlement", () => {
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
       const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
+      const firstPreflightStart = physical.writes.length;
       physical.send({ id: firstRequirements.id, result: { requirements: null } });
+      const firstProjectConfig = await waitForHarnessRequest(
+        physical,
+        "config/read",
+        firstPreflightStart,
+      );
+      physical.send({ id: firstProjectConfig.id, result: { config: {}, origins: {}, layers: [] } });
       const firstThread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
       const firstTurn = await waitForHarnessRequest(physical, "turn/start");
@@ -291,7 +298,17 @@ describe("Codex app-server terminal settlement", () => {
         "configRequirements/read",
         siblingStart,
       );
+      const siblingPreflightStart = physical.writes.length;
       physical.send({ id: siblingRequirements.id, result: { requirements: null } });
+      const siblingProjectConfig = await waitForHarnessRequest(
+        physical,
+        "config/read",
+        siblingPreflightStart,
+      );
+      physical.send({
+        id: siblingProjectConfig.id,
+        result: { config: {}, origins: {}, layers: [] },
+      });
       const siblingThread = await waitForHarnessRequest(physical, "thread/start", siblingStart);
       physical.send({ id: siblingThread.id, result: threadStartResult("thread-sibling") });
       const siblingTurn = await waitForHarnessRequest(physical, "turn/start", siblingStart);

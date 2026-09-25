@@ -48,6 +48,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
+  const coldDeveloperInstructions = joinPresentSections(
+    developerInstructions,
+    context.frozenNativeProjectInstructions,
+  );
   const {
     params,
     attemptClientFactory,
@@ -113,8 +117,15 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      coldDeveloperInstructions,
       skillsInstructions: context.skillsInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
+      agentWorkspaceDeveloperInstructionsAllowed:
+        context.workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed,
+      captureNativeProjectInstructions: context.captureNativeProjectInstructions,
+      nativeProjectInstructionSnapshotAllowed: context.nativeProjectInstructionSnapshotAllowed,
+      projectInstructionsUnavailableToGateway: context.projectInstructionsUnavailableToGateway,
+      nativeProjectDocsDisabledOnResume: context.nativeProjectDocsDisabledOnResume,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:

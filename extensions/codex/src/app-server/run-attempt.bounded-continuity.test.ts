@@ -15,6 +15,7 @@ import {
   tempDir,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
@@ -111,6 +112,9 @@ describe("Codex bounded assistant continuity", () => {
           historyCoveredThrough: new Date(30).toISOString(),
           dynamicToolsFingerprint:
             mode === "rotated" ? JSON.stringify([{ name: "retired-tool" }]) : "[]",
+          ...(mode === "resumed"
+            ? { agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY }
+            : {}),
           webSearchThreadConfigFingerprint: JSON.stringify({
             "features.standalone_web_search": false,
             web_search: "disabled",

@@ -26,6 +26,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
   readCodexAppServerBinding,
@@ -269,6 +270,7 @@ describe("Codex finalization generation ownership", () => {
           threadId: "thread-existing",
           cwd: workspaceDir,
           dynamicToolsFingerprint: "[]",
+          agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
           webSearchThreadConfigFingerprint: JSON.stringify({
             "features.standalone_web_search": false,
             web_search: "disabled",
@@ -428,6 +430,7 @@ describe("Codex finalization generation ownership", () => {
           threadId: "thread-existing",
           cwd: workspaceDir,
           dynamicToolsFingerprint: "[]",
+          agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
           webSearchThreadConfigFingerprint: JSON.stringify({
             "features.standalone_web_search": false,
             web_search: "disabled",

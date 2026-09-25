@@ -29,6 +29,19 @@ vi.mock("../../llm/oauth.js", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderDeprecatedAuthProfileIds: () => [],
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+}));
+
+vi.mock("../../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProviderRef: () => [],
+}));
+
 const platformModel = {
   id: "gpt-5.5",
   name: "gpt-5.5",

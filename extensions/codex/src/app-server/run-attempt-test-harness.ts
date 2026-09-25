@@ -35,7 +35,6 @@ import {
   turnStartResult,
 } from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   createCodexTestHostCapabilities,
   getCodexTestToolFactory,
@@ -72,6 +71,7 @@ export {
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
 } from "./run-attempt-hook-test-support.js";
+export { createRuntimeDynamicTool } from "./run-attempt-dynamic-tool.test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
@@ -435,14 +435,20 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
 }
 
 export function getMockRuntimeIdentity() {
-  return { serverVersion: CODEX_APP_SERVER_VERSION };
+  return {
+    serverVersion: CODEX_APP_SERVER_VERSION,
+    userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
+  };
 }
 
 export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
 
-export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+export function threadStartResult(
+  threadId = "thread-1",
+  options: { cwd?: string; instructionSources?: string[] } = {},
+) {
   const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, cwd, options.instructionSources);
 }
 
 export function createThreadStartRequest(threadId = "thread-1") {
@@ -618,9 +624,11 @@ export function createStartedThreadHarness(
 }
 
 export function createResumeHarness(
-  threadId = "thread-existing",
+  options: string | { threadId?: string; instructionSources?: string[] } = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
 ) {
+  const threadId = typeof options === "string" ? options : (options.threadId ?? "thread-existing");
+  const instructionSources = typeof options === "string" ? undefined : options.instructionSources;
   return createAppServerHarness(
     async (method, params, requestOptions) => {
       const override = await requestImpl(method, params, requestOptions);
@@ -632,7 +640,9 @@ export function createResumeHarness(
         // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
-          ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
+          ...threadStartResult(resumeParams.threadId ?? "thread-existing", {
+            instructionSources,
+          }),
           ...(resumeParams.modelProvider ? { modelProvider: resumeParams.modelProvider } : {}),
         };
       }
@@ -640,27 +650,6 @@ export function createResumeHarness(
     },
     { persistedThreads: [threadId] },
   );
-}
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
-
-export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
-  return {
-    name,
-    label: name,
-    description: name + " test tool",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: name + " done" }],
-      details: {},
-    })),
-  };
 }
 
 export function setupRunAttemptTestHooks(): void {

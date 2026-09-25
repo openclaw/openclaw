@@ -27,6 +27,7 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -291,6 +292,17 @@ export async function createCanonicalForkFixture(params: {
             webSearchAllowed: preparedTools.toolState.webSearchAllowed,
             persistentWebSearchAllowed: preparedTools.toolState.persistentWebSearchAllowed,
             developerInstructions: options.developerInstructions,
+            coldDeveloperInstructions: joinPresentSections(
+              options.developerInstructions,
+              startupBinding?.agentWorkspaceDeveloperInstructions,
+            ),
+            agentWorkspaceDeveloperInstructions:
+              startupBinding?.agentWorkspaceDeveloperInstructions,
+            agentWorkspaceDeveloperInstructionsAllowed: true,
+            captureNativeProjectInstructions:
+              startupBinding?.agentWorkspaceDeveloperInstructions === undefined,
+            nativeProjectDocsDisabledOnResume:
+              startupBinding?.agentWorkspaceDeveloperInstructions !== undefined,
             bundleMcpThreadConfig,
             sandboxExecServerEnabled: false,
             sandbox: null,

@@ -219,6 +219,12 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: requirements.id, result: { requirements: null } });
       const threadId = `thread-${label}`;
       if (index < 2) {
+        const projectConfig = await waitForHarnessRequest(
+          harness,
+          "config/read",
+          harness.writes.length,
+        );
+        harness.send({ id: projectConfig.id, result: { config: {}, origins: {}, layers: [] } });
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
         harness.send({ id: start.id, result: threadStartResult(threadId, { cwd: workspaceDir }) });
       }
@@ -249,11 +255,13 @@ describe("Codex app-server main thread cleanup", () => {
       "config/read",
       "configRequirements/read",
       "account/read",
+      "config/read",
       "thread/start",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
+      "config/read",
       "thread/start",
       "turn/start",
       "config/read",
@@ -492,6 +500,12 @@ describe("Codex app-server main thread cleanup", () => {
       });
       const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
       physical.send({ id: requirements.id, result: { requirements: null } });
+      const projectConfig = await waitForHarnessRequest(
+        physical,
+        "config/read",
+        physical.writes.length,
+      );
+      physical.send({ id: projectConfig.id, result: { config: {}, origins: {}, layers: [] } });
       const thread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");

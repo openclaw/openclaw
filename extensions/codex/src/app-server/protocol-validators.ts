@@ -28,11 +28,6 @@ import {
   type CodexTurnStartResponse,
 } from "./protocol.js";
 
-export function readSupervisionResponseThreadId(value: unknown): unknown {
-  const thread = isRecord(value) ? value.thread : undefined;
-  return isRecord(thread) ? thread.id : undefined;
-}
-
 export function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
   const rolloutPath = thread.path?.trim();
   if (

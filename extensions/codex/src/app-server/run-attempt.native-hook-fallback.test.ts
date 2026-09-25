@@ -28,6 +28,7 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
@@ -141,6 +142,7 @@ describe("Codex native hook Gateway fallback", () => {
           cwd: workspaceDir,
           model: "gpt-5.4-codex",
           modelProvider: "openai",
+          agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
           dynamicToolsFingerprint: "[]",
           webSearchThreadConfigFingerprint: JSON.stringify({
             "features.standalone_web_search": false,

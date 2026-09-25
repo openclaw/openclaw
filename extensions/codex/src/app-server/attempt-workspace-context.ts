@@ -8,7 +8,6 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   buildMemorySystemPromptAddition,
   prepareMemorySystemPromptAddition,
@@ -40,6 +39,10 @@ type CodexBootstrapContext = {
 };
 export type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
+  agentWorkspaceDeveloperInstructionsAllowed: boolean;
+  nativeProjectDocNeedsOpenClawCarrier: boolean;
+  nativeProjectInstructionSnapshotAllowed: boolean;
+  agentWorkspaceDeveloperInstructions?: string;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
   turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
@@ -53,32 +56,6 @@ export type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   memoryCollaborationInstructions?: string;
 };
 
-/** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
-export async function prepareCodexWorkspaceDeveloperInstructions(params: {
-  config: EmbeddedRunAttemptParams["config"];
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  workspaceDir: string;
-  cwd: string;
-}): Promise<string | undefined> {
-  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
-    return undefined;
-  }
-  const files = await resolveBootstrapFilesForPreparation(params);
-  const contextFiles = buildBootstrapContextForFiles(files, {
-    config: params.config,
-    agentId: params.agentId,
-  });
-  return (
-    renderCodexWorkspaceDeveloperInstructions({
-      files: selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.workspaceDir),
-      header: "## OpenClaw Agent Workspace Instructions",
-      preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-    }) ?? ""
-  );
-}
-
 /** Loads and partitions workspace snapshots, turn instructions, and memory references. */
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
@@ -86,11 +63,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   resolvedWorkspace: string;
   executionWorkspace?: string;
   effectiveWorkspace: string;
+  effectiveCwd?: string;
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
   ringZeroActive: boolean;
   sandboxed?: boolean;
+  /** Only a local stdio process attests native instruction paths as host-local. */
+  nativeProjectInstructionSourcesHostLocal?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
   const inheritsAgentWorkspace = executionWorkspace !== params.resolvedWorkspace;
@@ -100,10 +80,20 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     !params.params.disableTools &&
     !isMessageOnlyCodexSourceReply(params.params) &&
     params.params.bootstrapContextMode !== "lightweight";
-  const includeAgentWorkspaceInstructions =
+  const agentWorkspaceDeveloperInstructionsAllowed =
     injectOpenClawContext &&
     !params.ringZeroActive &&
-    (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier);
+    params.params.bootstrapContextMode !== "lightweight" &&
+    !params.params.disableTools &&
+    !isMessageOnlyCodexSourceReply(params.params);
+  const nativeProjectDocNeedsOpenClawCarrier =
+    inheritsAgentWorkspace ||
+    !isPathWithin(params.effectiveCwd ?? params.effectiveWorkspace, params.effectiveWorkspace) ||
+    restrictedProjectDocNeedsOpenClawCarrier;
+  const nativeProjectInstructionSnapshotAllowed =
+    params.nativeProjectInstructionSourcesHostLocal === true;
+  const includeAgentWorkspaceInstructions =
+    agentWorkspaceDeveloperInstructionsAllowed && nativeProjectDocNeedsOpenClawCarrier;
   try {
     const promptWorkspace = inheritsAgentWorkspace
       ? params.resolvedWorkspace
@@ -171,6 +161,13 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
       ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
       : [];
+    const agentWorkspaceDeveloperInstructions = includeAgentWorkspaceInstructions
+      ? renderCodexWorkspaceDeveloperInstructions({
+          files: threadDeveloperInstructionFiles,
+          header: "## OpenClaw Agent Workspace Instructions",
+          preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+        })
+      : undefined;
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
       ? selectCodexWorkspaceDeveloperInstructionFiles(
           contextFiles,
@@ -181,6 +178,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
+      agentWorkspaceDeveloperInstructionsAllowed,
+      nativeProjectDocNeedsOpenClawCarrier,
+      nativeProjectInstructionSnapshotAllowed,
+      agentWorkspaceDeveloperInstructions,
       promptContextFiles,
       threadDeveloperInstructionFiles,
       turnScopedDeveloperInstructionFiles,
@@ -191,13 +192,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
-        ? (params.agentWorkspaceDeveloperInstructions ??
-          renderCodexWorkspaceDeveloperInstructions({
-            files: threadDeveloperInstructionFiles,
-            header: "## OpenClaw Agent Workspace Instructions",
-            preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-          }) ??
-          "")
+        ? (params.agentWorkspaceDeveloperInstructions ?? agentWorkspaceDeveloperInstructions ?? "")
         : undefined,
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
@@ -220,6 +215,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       bootstrapFiles: [],
       contextFiles: [],
       inheritsAgentWorkspace,
+      // A failed first read of a non-native workspace is not an empty
+      // instruction selection. Leave its authority uncaptured so a later turn
+      // can retry, while preserving an already-frozen predecessor snapshot.
+      agentWorkspaceDeveloperInstructionsAllowed:
+        agentWorkspaceDeveloperInstructionsAllowed &&
+        (!nativeProjectDocNeedsOpenClawCarrier ||
+          params.agentWorkspaceDeveloperInstructions !== undefined),
+      nativeProjectDocNeedsOpenClawCarrier,
+      nativeProjectInstructionSnapshotAllowed,
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? params.agentWorkspaceDeveloperInstructions
         : undefined,
@@ -520,6 +524,14 @@ function isCodexWorkspaceRootMemoryPath(params: {
 
 function isSameCodexWorkspacePath(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
+}
+
+function isPathWithin(candidate: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 /**

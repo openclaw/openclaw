@@ -39,6 +39,31 @@ filesystem environment, so OpenClaw instead sends the bounded workspace
 lightweight, message-only, and tool-disabled internal turns suppress that
 carrier.
 
+On an ordinary same-workspace thread start, Codex discovers the applicable
+root-to-working-directory hierarchy; OpenClaw sends no duplicate workspace
+directive or file contents. For snapshot-enabled host-local threads, OpenClaw
+selects the local environment explicitly, snapshots bounded candidate files,
+then verifies the exact sources Codex reports and freezes them in the thread
+binding. Configured fallback paths, including nested paths such as
+`.config/WORKFLOW.md`, are checked before startup, but only Codex-selected
+sources enter that snapshot. Warm threads retain the already-loaded authority.
+A physical cold resume replays the complete frozen hierarchy with native
+rediscovery disabled, so edits, emptying, or removal take effect only in a new
+session. The pinned protocol cannot select an environment on `thread/resume`:
+an ordinary replaceable legacy binding rotates through explicit `thread/start`,
+while an authorityless thread attached through `/codex resume` is refused
+without replacing the user's chosen conversation. Continue it in native Codex
+or use `/new`.
+
+The experimental sandbox exec-server reads project documents inside its
+selected environment, but app-server reports only paths, not authoritative
+bytes. A nonempty native selection is environment-owned and supports only warm
+reuse while that thread remains live; physical cold resume or replacement is
+rejected even under the same environment fingerprint. An empty selection is
+recorded as frozen-empty and can cold-resume with native discovery disabled.
+See [Project instructions](/plugins/codex-harness/configuration#project-instructions)
+for the separate native byte budget and policy-restricted behavior.
+
 For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
 Codex harness forwards the other bootstrap files as developer instructions:

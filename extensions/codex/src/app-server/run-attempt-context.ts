@@ -30,6 +30,10 @@ import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profi
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+} from "./session-binding.js";
+import {
   buildDeveloperInstructions,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -49,6 +53,7 @@ export async function prepareCodexAttemptContext(
     effectiveRuntimeProviderId,
     effectiveRuntimeModelId,
     hookChannelId,
+    sandboxExecServerEnabled,
   } = runtime;
   const {
     params,
@@ -166,22 +171,78 @@ export async function prepareCodexAttemptContext(
   // The admission fence intentionally excludes this logical turn's committed results.
   historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
+  const ringZeroActive =
+    isHostScopedAgentToolActive("openclaw") &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
     agentWorkspaceDeveloperInstructions:
       connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
-    executionWorkspace: resolvedWorkspace,
+    executionWorkspace: effectiveWorkspace,
     effectiveWorkspace,
+    effectiveCwd,
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
-    ringZeroActive:
-      isHostScopedAgentToolActive("openclaw") &&
-      isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
+    ringZeroActive,
     sandboxed: sandbox?.enabled === true,
+    // Only a process spawned by this Gateway attests native paths as host-local.
+    // Loopback WebSockets and remoteWorkspaceRoot may still terminate elsewhere.
+    nativeProjectInstructionSourcesHostLocal:
+      connection.appServer.start.transport === "stdio" &&
+      !connection.appServer.remoteWorkspaceRoot &&
+      !(sandbox?.enabled === true && sandboxExecServerEnabled),
   });
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
+  // Once Codex reports the exact sources that established a same-workspace thread,
+  // replay that frozen binding with rediscovery disabled on every cold load.
+  const startupBinding = connection.mutable.startupBinding;
+  const nativeProjectInstructionSnapshotAllowed =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed &&
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed;
+  const storedBindingInstructions = startupBinding?.agentWorkspaceDeveloperInstructions;
+  const storedReplayableNativeProjectInstructions =
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    storedBindingInstructions !== undefined &&
+    storedBindingInstructions !== CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY
+      ? storedBindingInstructions
+      : undefined;
+  const storedAgentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier
+      ? storedBindingInstructions
+      : storedReplayableNativeProjectInstructions;
+  const captureNativeProjectInstructions =
+    nativeProjectInstructionSnapshotAllowed &&
+    storedAgentWorkspaceDeveloperInstructions === undefined;
+  // Environment-owned sources may be unavailable to the Gateway, but only the
+  // native lifecycle response can distinguish that from an empty selection.
+  const projectInstructionsUnavailableToGateway =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed &&
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    !workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed &&
+    storedReplayableNativeProjectInstructions === undefined;
+  const nativeProjectDocsDisabledOnResume =
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    storedAgentWorkspaceDeveloperInstructions !== undefined;
+  const agentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed
+      ? storedAgentWorkspaceDeveloperInstructions !== undefined
+        ? (storedAgentWorkspaceDeveloperInstructions ?? undefined)
+        : workspaceBootstrapContext.agentWorkspaceDeveloperInstructions
+      : undefined;
+  const frozenNativeProjectInstructions = nativeProjectDocsDisabledOnResume
+    ? (agentWorkspaceDeveloperInstructions ?? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY)
+    : undefined;
+  const currentAgentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed
+      ? nativeProjectDocsDisabledOnResume
+        ? undefined
+        : workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier ||
+            workspaceBootstrapContext.threadDeveloperInstructions === undefined
+          ? agentWorkspaceDeveloperInstructions
+          : workspaceBootstrapContext.threadDeveloperInstructions
+      : undefined;
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
@@ -190,7 +251,7 @@ export async function prepareCodexAttemptContext(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
-    agentWorkspaceDeveloperInstructions,
+    currentAgentWorkspaceDeveloperInstructions,
   );
   const watchedSessionsContext = buildCodexWatchedSessionsContext({
     attempt: runtimeParams,
@@ -240,6 +301,11 @@ export async function prepareCodexAttemptContext(
     buildActiveContextEngineRuntimeContext,
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
+    captureNativeProjectInstructions,
+    nativeProjectInstructionSnapshotAllowed,
+    projectInstructionsUnavailableToGateway,
+    nativeProjectDocsDisabledOnResume,
+    frozenNativeProjectInstructions,
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,

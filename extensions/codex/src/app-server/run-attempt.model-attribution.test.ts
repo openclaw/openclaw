@@ -25,6 +25,7 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
@@ -96,6 +97,7 @@ describe("registered Codex harness model attribution", () => {
         connectionScope: "supervision",
         supervisionSourceThreadId: "native-thread",
         conversationSourceTransferComplete: true,
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
         dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
         webSearchThreadConfigFingerprint: JSON.stringify({
           "features.standalone_web_search": false,
@@ -140,7 +142,7 @@ describe("registered Codex harness model attribution", () => {
             result = { requirements: null };
             break;
           case "config/read":
-            result = { config: { model_provider: "openai" }, origins: {} };
+            result = { config: { model_provider: "openai" }, origins: {}, layers: [] };
             break;
           case "thread/read":
             result = { thread: { ...readyThread.thread, model: nativeModel, path: rolloutPath } };
