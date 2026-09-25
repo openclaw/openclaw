@@ -1956,8 +1956,9 @@ describe("gateway server chat", () => {
       async (state) => {
         const previousAgentConfig = testState.agentConfig;
         const previousAgentsConfig = testState.agentsConfig;
-        const { storePath } = openDirectChatSession();
+        openDirectChatSession();
         try {
+          const storePath = expectDefined(testState.sessionStorePath, "direct chat session store");
           const config = {
             agents: {
               ownership: "explicit" as const,
