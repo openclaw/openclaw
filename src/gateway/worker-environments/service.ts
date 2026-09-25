@@ -37,8 +37,6 @@ import { joinWorkerTunnelStops } from "./tunnel-contract.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
-export type { WorkerEnvironmentReconcileCore } from "./service.types.js";
-
 class WorkerEnvironmentServiceError extends Error {
   constructor(
     readonly code: WorkerEnvironmentServiceErrorCode,

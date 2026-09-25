@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
@@ -33,7 +34,6 @@ import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js"
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
@@ -103,18 +103,13 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import {
-  handleNodeWorkerBundleTransferHttpRequest,
-  type NodeWorkerBundleTransferHttpCallback,
-} from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
+import { handleNodeWorkerBundleTransferHttpRequest } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
-import {
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-  type WorkerBootstrapArtifactTransferHttpCallback,
-} from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
+import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -145,8 +140,8 @@ export function createGatewayHttpServer(opts: {
   /** Strict limiter for the public join-code exchange, including loopback. */
   joinRateLimiter?: AuthRateLimiter;
   /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
-  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
-  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
+  handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -545,10 +540,7 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      const focusDocument = isControlUiFocusDocumentPath({
-        basePath: controlUiBasePath,
-        pathname: scopedRequestPath,
-      });
+      const focusDocument = isControlUiFocusPath(scopedRequestPath, controlUiBasePath);
       const publicSessionPath = publicSessionRoute.matches(
         scopedRequestPath,
         controlUiRouteBasePath,

@@ -287,11 +287,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
-        !record.leaseId
+        !record.leaseId ||
+        !record.bootstrapReceipt
       ) {
-        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
-      }
-      if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       if (record.sharedHost === null) {
