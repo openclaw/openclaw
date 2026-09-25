@@ -525,6 +525,7 @@ describe("doctor --fix include write ownership", () => {
           agents: { list: [{ id: "ops" }] },
           browser: { $include: "./browser.json" },
           gateway: { mode: "local" },
+          plugins: { enabled: false },
         });
         const includePath = path.join(path.dirname(configPath), "browser.json");
         const includeRaw = JSON.stringify({ enabled: true, actionTimeoutMs: 5000 });
