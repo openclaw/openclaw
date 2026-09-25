@@ -974,6 +974,7 @@ fn checkout_field(
             div()
                 .w(px(32.))
                 .flex_shrink_0()
+                .whitespace_nowrap()
                 .text_size(px(12.))
                 .text_color(p.muted)
                 .child(label),
