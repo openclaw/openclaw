@@ -4987,7 +4987,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
-    const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
+    const [spec] = createVitestRunSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
       baseEnv: {},
     });
 

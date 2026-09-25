@@ -9,6 +9,7 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAssetManifest } from "../../../src/gateway/control-ui-asset-manifest.ts";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 
 describe("Control UI Vite build", () => {
@@ -98,6 +99,93 @@ describe("Control UI Vite build", () => {
     expect(table).toContain(lazyName);
     expect(table).toMatch(/lazy-[^"/]+\.css/u);
     expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain(sharedName);
+  });
+
+  it("keeps page styles separate from measured JavaScript boot groups", async () => {
+    const config = createConfig();
+    const pages = fileURLToPath(new URL("../pages/", import.meta.url));
+    const first = path.join(pages, "chunk-fixture-first", "view.ts");
+    const second = path.join(pages, "chunk-fixture-second", "view.ts");
+    const modules = new Map([
+      [first, 'import "./view.css"; export const message = "first";'],
+      [second, 'import "./view.css"; export const message = "second";'],
+      [path.join(path.dirname(first), "view.css"), ".first-page { color: red; }"],
+      [path.join(path.dirname(second), "view.css"), ".second-page { color: blue; }"],
+    ]);
+    await fs.writeFile(path.join(root, "initial.css"), ".initial-page { color: green; }");
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second");',
+    );
+    config.plugins = [
+      {
+        name: "page-style-import-owners",
+        enforce: "pre",
+        resolveId(source, importer) {
+          if (source === "fixture:first") {
+            return first;
+          }
+          if (source === "fixture:second") {
+            return second;
+          }
+          if (importer && source.startsWith(".")) {
+            const resolved = path.resolve(path.dirname(importer), source);
+            if (modules.has(resolved)) {
+              return resolved;
+            }
+          }
+          return null;
+        },
+        load(id) {
+          return modules.get(id);
+        },
+      },
+      ...(config.plugins ?? []),
+    ];
+    config.build = {
+      ...config.build,
+      rolldownOptions: {
+        ...config.build?.rolldownOptions,
+        output: {
+          strictExecutionOrder: true,
+          codeSplitting: {
+            ...controlUiCodeSplitting,
+            groups: controlUiCodeSplitting.groups.map((group) =>
+              group.name === "control-ui-boot-shared"
+                ? Object.assign({}, group, { test: (id: string) => modules.has(id), minSize: 0 })
+                : group,
+            ),
+          },
+        },
+      },
+    };
+    await build(config);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const styles = await Promise.all(
+      names
+        .filter((name) => name.endsWith(".css"))
+        .map(async (name) => ({
+          name,
+          source: await fs.readFile(path.join(outDir, "assets", name), "utf8"),
+        })),
+    );
+    const initial = styles.find(({ source }) => source.includes(".initial-page"))!;
+    const firstStyle = styles.find(({ source }) => source.includes(".first-page"))!;
+    const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
+    expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).toContain(initial.name);
+    expect(html).not.toContain(firstStyle.name);
+    expect(html).not.toContain(secondStyle.name);
+    const scripts = (
+      await Promise.all(
+        names
+          .filter((name) => name.endsWith(".js"))
+          .map((name) => fs.readFile(path.join(outDir, "assets", name), "utf8")),
+      )
+    ).join("\n");
+    expect(scripts).toContain(firstStyle.name);
+    expect(scripts).toContain(secondStyle.name);
   });
 
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
