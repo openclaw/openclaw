@@ -67,16 +67,23 @@ export function renderArtTile(
     onIconError?: () => void;
     authorIconUrl?: string;
     loading?: boolean;
+    className?: string;
   } = {},
 ): TemplateResult {
-  const { iconUrl, onIconError, authorIconUrl, loading = false } = options;
+  const {
+    iconUrl,
+    onIconError,
+    authorIconUrl,
+    loading = false,
+    className = "plugins-tile",
+  } = options;
   // Fetch admission already limits requests to rendered tiles. Eager loading
   // lets the hidden image finish before replacing its skeleton.
   const renderTile = (url: string | null, onError: () => void, image: ImageLoadingState) => {
     const pending = url ? image.loading : loading;
     if (url || pending) {
       return html`<span
-        class=${`plugins-tile${pending ? " skeleton" : ""}`}
+        class=${`${className}${pending ? " skeleton" : ""}`}
         data-plugin-icon-id=${slug}
         aria-hidden="true"
       >
@@ -102,7 +109,7 @@ export function renderArtTile(
     const [from, to] = pluginFallbackGradient(slug);
     const monogram = pluginMonogram(name);
     return html`<span
-      class="plugins-tile plugins-tile--fallback"
+      class=${`${className} ${className}--fallback`}
       data-plugin-icon-id=${slug}
       style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
       aria-hidden="true"
