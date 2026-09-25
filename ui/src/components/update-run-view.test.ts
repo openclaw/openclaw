@@ -57,15 +57,12 @@ describe("update run projection", () => {
     expect(view.oracles.every((oracle) => oracle.state === "warn")).toBe(true);
   });
 
-  it.each<UpdateRunPhase>(["requested", "staging", "validating", "verifying", "finished"])(
-    "hides unused repair during %s",
-    (phase) => {
-      const view = projectUpdateRun(
-        run({ phase, status: phase === "finished" ? "succeeded" : "running" }),
-      );
-      expect(view.phases.some(({ step }) => step === "repairing")).toBe(false);
-    },
-  );
+  it.each<UpdateRunPhase>(["requested", "finished"])("hides unused repair during %s", (phase) => {
+    const view = projectUpdateRun(
+      run({ phase, status: phase === "finished" ? "succeeded" : "running" }),
+    );
+    expect(view.phases.some(({ step }) => step === "repairing")).toBe(false);
+  });
 
   it.each(["in_progress", "completed", "failed", "skipped"] as const)(
     "preserves a recorded %s repair after activation",

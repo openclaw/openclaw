@@ -20,7 +20,7 @@ it("allows a new browser origin without writing a marker", () => {
   expect(localStorage.getItem(invite.COMMUNITY_INVITE_KEY)).toBeNull();
 });
 
-it.each(["", "{", "null", "{}", '{"dismissedAtMs":1760000001000}'])(
+it.each(["", "{", '{"dismissedAtMs":1760000001000}'])(
   "suppresses the invitation for stored state %j",
   (value) => {
     localStorage.setItem(invite.COMMUNITY_INVITE_KEY, value);

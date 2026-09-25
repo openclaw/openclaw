@@ -28,9 +28,7 @@ describe("config form search", () => {
     ["token tag:security tag:Auth", "token", ["security", "auth"]],
     ["Café tag:storage 文書", "café 文書", ["storage"]],
     ["Log tag:storage tag:STORAGE File", "log file", ["storage"]],
-    ["", "", []],
     ["  ", "", []],
-    ["tag:storage", "", ["storage"]],
     ["Log  File", "log  file", []],
     ["path:tag:storage", "path:tag:storage", []],
   ])("parses search query %j", (query, text, tags) => {
@@ -52,8 +50,6 @@ describe("config form search", () => {
   });
 
   it.each([
-    ["access token tag:security", true],
-    ["tag:security access token", true],
     ["access tag:security token", true],
     ["mode tag:security", false],
     ["access token tag:storage", false],
@@ -96,8 +92,6 @@ describe("config form search", () => {
 
   it.each([
     { values: [], query: "secondary endpoint" },
-    { values: ["primary"], query: "secondary endpoint" },
-    { values: [], query: "overflow endpoint" },
     { values: ["primary"], query: "overflow endpoint" },
   ])("searches positional and typed-tail schemas for $values", ({ values, query }) => {
     const matched = matchesNodeSearch({

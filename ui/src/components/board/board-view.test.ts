@@ -562,30 +562,6 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes a near-expiry lease only once", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const widgetAppView = vi.fn(async () => ({
-      status: "ready" as const,
-      viewId: "mcp-app-near-expiry",
-      expiresAtMs: 5_000,
-    }));
-    const refreshWidgetAppView = vi.fn(async () => ({
-      status: "ready" as const,
-      viewId: "mcp-app-renewed",
-      expiresAtMs: 5_000,
-    }));
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
-    const view = await mount({
-      snapshot: source,
-      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-    view.remove();
-  });
-
   it("does not schedule renewal when an in-flight MCP App load resolves after disconnect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

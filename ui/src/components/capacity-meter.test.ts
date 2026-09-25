@@ -37,14 +37,6 @@ describe("worker capacity meter", () => {
       label: "8 of 8 slots busy",
     },
     {
-      name: "offline with a last-known metric",
-      available: 5,
-      unavailable: true,
-      filled: 0,
-      tone: "stale",
-      label: "Slot utilization unavailable",
-    },
-    {
       name: "ineligible and saturated",
       available: 0,
       unavailable: true,

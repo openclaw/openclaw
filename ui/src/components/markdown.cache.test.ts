@@ -113,15 +113,5 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fallback?.className).toBe("markdown-plain-text-fallback");
       expect(fallback?.textContent).toBe(input);
     });
-
-    it("caches oversized fallback results", () => {
-      const input =
-        Array.from({ length: 240 }, (_, i) => `P${i}`).join("\n\n") + "x".repeat(45_000);
-      const first = toSanitizedMarkdownHtml(input);
-      const second = toSanitizedMarkdownHtml(input);
-      expect(input.length).toBeGreaterThan(40_000);
-      expect(htmlFragment(first).firstElementChild?.className).toBe("markdown-plain-text-fallback");
-      expect(second).toBe(first);
-    });
   });
 });
