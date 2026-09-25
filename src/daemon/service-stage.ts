@@ -1,8 +1,8 @@
 /** Native writer facts are evidence, never serialized lifecycle authority. */
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -104,28 +104,22 @@ export async function readServiceFileState(file: string): Promise<GatewayService
   if (!before.isFile()) {
     throw new Error("Managed service artifact is not a regular file.");
   }
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const opened = await handle.stat();
-    const keys = ["dev", "ino", "mode"] as const;
-    if (!opened.isFile() || keys.some((key) => before[key] !== opened[key])) {
-      throw new Error("Managed service artifact changed before inspection.");
-    }
-    const contents = await handle.readFile();
-    const current = await fs.lstat(file);
-    if (keys.some((key) => opened[key] !== current[key])) {
-      throw new Error("Managed service artifact changed during inspection.");
-    }
-    return {
-      sha256: createHash("sha256").update(contents).digest("hex"),
-      mode: opened.mode & 0o7777,
-      dev: opened.dev,
-      ino: opened.ino,
-      size: contents.byteLength,
-      mtimeMs: opened.mtimeMs,
-      ctimeMs: opened.ctimeMs,
-    };
-  } finally {
-    await handle.close();
+  const { buffer: contents, stat: opened } = await readRegularFile({ filePath: file });
+  const keys = ["dev", "ino", "mode"] as const;
+  if (keys.some((key) => before[key] !== opened[key])) {
+    throw new Error("Managed service artifact changed before inspection.");
   }
+  const current = await fs.lstat(file);
+  if (keys.some((key) => opened[key] !== current[key])) {
+    throw new Error("Managed service artifact changed during inspection.");
+  }
+  return {
+    sha256: createHash("sha256").update(contents).digest("hex"),
+    mode: opened.mode & 0o7777,
+    dev: opened.dev,
+    ino: opened.ino,
+    size: contents.byteLength,
+    mtimeMs: opened.mtimeMs,
+    ctimeMs: opened.ctimeMs,
+  };
 }

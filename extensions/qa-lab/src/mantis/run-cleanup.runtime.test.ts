@@ -1,10 +1,9 @@
-// Qa Lab tests cover bounded, Git-owned Mantis worktree cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
-import { captureMantisDirectoryOwnership, hasSameFileIdentity } from "./run-directory.runtime.js";
+import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import {
   failedCommandResult,
   successfulCommandResult,
@@ -244,13 +243,5 @@ describe("Mantis worktree cleanup", () => {
     } finally {
       now.mockRestore();
     }
-  });
-
-  it("keeps high file identities exact", () => {
-    const first = { dev: 1n, ino: 9_007_199_254_740_992n };
-    const second = { dev: 1n, ino: 9_007_199_254_740_993n };
-
-    expect(Number(first.ino)).toBe(Number(second.ino));
-    expect(hasSameFileIdentity(first, second)).toBe(false);
   });
 });

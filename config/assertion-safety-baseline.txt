@@ -3150,7 +3150,6 @@ src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.summary.ts	2
 src/security/audit-extra.sync.ts	12
-src/security/audit-mcporter-registry.ts	1
 src/security/audit-model-refs.ts	5
 src/security/audit-plugins-trust.ts	5
 src/security/config-regex.ts	1
