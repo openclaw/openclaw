@@ -28,6 +28,23 @@ Codex harness. Unsupported routes/auth fail closed unless the harness declares
 an exact-request fallback before execution. Codex runtime failures are not
 retried through another runtime.
 
+## Agents API environment
+
+The `agentsapi` plugin accepts `plugins.entries.agentsapi.config.environment` with
+the values `openai_hosted` and `self_hosted`. Omitted configuration uses
+`openai_hosted`.
+
+For `self_hosted`, OpenClaw sends its prepared absolute workspace path as the
+Agents API `workspace_directory`. The executor must already have that directory
+at the same path. Connect the executor separately for each native session using
+the [official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
+OpenClaw does not launch or provision executors through this setting.
+
+Reset the OpenClaw session after changing its environment or a self-hosted
+workspace. Existing hosted sessions continue with omitted or explicit
+`openai_hosted` configuration. This selection does not expand the MVP's existing
+tool or media capabilities.
+
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered

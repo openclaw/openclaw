@@ -38,6 +38,7 @@ import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import { resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -46,6 +47,7 @@ export async function runAgentsApiAttempt(
   assertOwnerCurrent: () => void,
   assertHarnessCurrent: () => void,
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
+  readPluginConfig: () => unknown,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -212,6 +214,7 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
+    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -219,27 +222,39 @@ export async function runAgentsApiAttempt(
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
-    const inputs = await prepareInputs(
-      params.media,
-      params.workspaceDir,
-      assertCurrent,
-      controller.signal,
-    );
+    const sessionIdentity = [
+      params.model.id,
+      params.resolvedApiKey,
+      // Hosted settings preserve the identity of existing saved sessions.
+      ...(environment.type === "self_hosted" ? [environment] : []),
+    ];
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
+      .update(JSON.stringify(sessionIdentity))
       .digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
       // Normalize bindings created by the unmerged tools implementation.
       const toolsFingerprint = createHash("sha256")
         .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
         .digest("hex");
-      if (binding.authFingerprint !== toolsFingerprint) {
+      if (environment.type !== "openai_hosted" || binding.authFingerprint !== toolsFingerprint) {
         throw new Error(
-          "Agents API model or credential changed; reset the OpenClaw session before continuing",
+          "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
         );
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
+    if (environment.type === "self_hosted" && params.media?.length) {
+      throw new Error("Agents API file transfers require an OpenAI-hosted environment");
+    }
+    const inputs =
+      environment.type === "openai_hosted"
+        ? await prepareInputs(
+            params.media,
+            params.workspaceDir,
+            assertCurrent,
+            controller.signal,
+          )
+        : { files: [], mappingText: "" };
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
@@ -288,6 +303,7 @@ export async function runAgentsApiAttempt(
         {
           functions: surface.declarations,
           files: inputs.files,
+          environment,
           reasoning: {
             effort: reasoningEffort,
             ...(params.reasoningLevel && params.reasoningLevel !== "off"
@@ -420,14 +436,16 @@ export async function runAgentsApiAttempt(
       const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
       assertCurrent();
       try {
-        outputMedia = await collectOutputs(
-          client,
-          remoteSessionId,
-          result.turn.id,
-          assertCurrent,
-          controller.signal,
-          params.hostCapabilities.prepareReplyMedia,
-        );
+        if (environment.type === "openai_hosted") {
+          outputMedia = await collectOutputs(
+            client,
+            remoteSessionId,
+            result.turn.id,
+            assertCurrent,
+            controller.signal,
+            params.hostCapabilities.prepareReplyMedia,
+          );
+        }
       } finally {
         // Transfer failure must not discard the completed reply. The projection
         // still requires current authority before publishing or persisting it.
