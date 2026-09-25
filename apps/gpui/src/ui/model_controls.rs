@@ -638,6 +638,7 @@ impl AppView {
         let control_target = target.clone();
         let owner = cx.entity().downgrade();
         let trigger = Button::new("model-picker-trigger")
+            .accessibility_label(format!("Model: {label}"))
             .track_focus(&self.model_controls.trigger_focus)
             .ghost()
             .small()
@@ -775,6 +776,17 @@ impl AppView {
             option.value,
             option.agent_runtime.as_deref().unwrap_or("base")
         )))
+        .accessibility_label(
+            [
+                option.display_label(),
+                option.runtime_label(),
+                status.to_owned(),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(". "),
+        )
         .ghost()
         .small()
         .w_full()
@@ -969,6 +981,11 @@ impl AppView {
             .text_color(p.muted)
             .child(
                 Button::new(SharedString::from(format!("provider-{provider}")))
+                    .accessibility_label(format!(
+                        "{} models ({})",
+                        group.label,
+                        group.options.len()
+                    ))
                     .ghost()
                     .small()
                     .p_0()
@@ -1186,6 +1203,7 @@ impl AppView {
             .map(|selection| selection.label.clone())
             .unwrap_or_default();
         Button::new("model-accounts-toggle")
+            .accessibility_label(format!("Account: {label}"))
             .ghost()
             .small()
             .w_full()
@@ -1247,6 +1265,10 @@ impl AppView {
         let choice = row.clone();
         let target = target.clone();
         Button::new(SharedString::from(row.key.clone()))
+            .accessibility_label(match &row.description {
+                Some(description) => format!("{}. {description}", row.label),
+                None => row.label.clone(),
+            })
             .ghost()
             .small()
             .w_full()
@@ -1411,15 +1433,15 @@ impl AppView {
             let next = options[usize::from(!active)].id.clone();
             let target = target.clone();
             row = row.child(
-                switch("context-window-toggle", active, disabled, p).on_click(cx.listener(
-                    move |this, _, _, cx| {
+                switch("context-window-toggle", active, disabled, p)
+                    .accessibility_label(format!("Context window: {label}"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.apply_model_control_patch(
                             target.clone(),
                             json!({"contextWindow":next}),
                             cx,
                         )
-                    },
-                )),
+                    })),
             );
         } else {
             row = row.child(
@@ -1508,6 +1530,11 @@ impl AppView {
         };
         let owner = cx.entity().downgrade();
         let trigger = Button::new("effort-trigger")
+            .accessibility_label(if thinking.options.is_empty() {
+                format!("Fast mode: {}", fast.label)
+            } else {
+                format!("Thinking level: {label}")
+            })
             .ghost()
             .small()
             .h(px(30.))
@@ -1629,6 +1656,7 @@ impl AppView {
             )
             .child(
                 switch("fast-mode-toggle", fast.active, fast_disabled, p)
+                    .accessibility_label(format!("Fast responses: {}", fast.label))
                     .picker_tooltip(if fast.supported {
                         format!("Fast responses: {}", fast.label)
                     } else {
@@ -2188,6 +2216,13 @@ fn setting_row(icon: IconName, title: &str, description: &str, p: Palette) -> Di
 }
 fn switch(id: &'static str, active: bool, disabled: bool, p: Palette) -> Button {
     Button::new(id)
+        .role(Role::Switch)
+        .toggled(active)
+        .accessibility_label(if id == "fast-mode-toggle" {
+            "Fast responses"
+        } else {
+            "Context window"
+        })
         .ghost()
         .p_0()
         .w(px(36.))
