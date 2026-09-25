@@ -132,6 +132,7 @@ export async function loadPluginCatalogDetail(params: {
   const previous = current?.id === id ? current.result : null;
   if (
     previous?.detail.origin === "local" &&
+    previous.plugin.local.installed &&
     inventory &&
     !inventory.plugins.some((plugin) => plugin.id === previous.plugin.local.pluginId)
   ) {
