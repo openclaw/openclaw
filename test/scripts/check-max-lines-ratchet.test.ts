@@ -381,8 +381,13 @@ describe("check-max-lines-ratchet", () => {
     const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "is disconnected from HEAD; no verified sync merge was found",
+      ),
+    );
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {
