@@ -4,7 +4,7 @@ import { render } from "lit";
 import { expect, it, vi } from "vitest";
 import { renderChatModelPicker } from "./chat-model-picker.ts";
 
-it.each([false, true])("keeps the current choice on the first page with Default=%s", (hasDefault) => {
+it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => {
   const container = document.createElement("div");
   render(
     renderChatModelPicker({
@@ -25,7 +25,7 @@ it.each([false, true])("keeps the current choice on the first page with Default=
     }),
     container,
   );
-  const rows = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"));
+  const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
   expect(rows).toHaveLength(300);
   expect(rows.slice(0, 3).map((row) => row.dataset.chatModelOption)).toEqual(
     hasDefault
