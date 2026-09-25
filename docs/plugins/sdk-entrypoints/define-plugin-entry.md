@@ -296,12 +296,12 @@ export default definePluginEntry({
 ## Supervisor guidance contracts
 
 `openclaw/plugin-sdk/plugin-entry` exports `SupervisorAction`,
-`SupervisorGuidanceV1`, `SupervisorDisplayGuidance`,
-`PluginManifestSupervisorGuidance`, and `parseSupervisorGuidance` for deployment
-plugins. Declare the configuration property through the manifest and store its
-values in `plugins.entries.<id>.config`; no runtime registration callback is
-required. OpenClaw uses guidance only when exactly one enabled plugin provides a
-valid configured object. Runtime imports of these SDK exports require a host that
-provides them; declare the corresponding [plugin API compatibility floor](/plugins/manifest/package-json).
+`SupervisorGuidanceV1`, `SupervisorDisplayGuidance`, and `parseSupervisorGuidance`
+for deployment plugins. Put a static `SupervisorGuidanceV1` object directly in the
+manifest's `supervisorGuidance` field; no operator guidance configuration or runtime
+registration callback is required. OpenClaw uses guidance only when exactly one
+enabled plugin provides a valid object. Runtime imports of these SDK exports
+require a host that provides them; declare the corresponding
+[plugin API compatibility floor](/plugins/manifest/package-json).
 See [Supervisor guidance](/plugins/manifest/surfaces#supervisor-guidance)
-for configuration, validation limits, fallback behavior, and lifecycle policy.
+for the manifest format, validation limits, fallback behavior, and lifecycle policy.

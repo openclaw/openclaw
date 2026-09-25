@@ -22,7 +22,7 @@ import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.
 import type { CachedPluginManifestResult as PluginManifestLoadResult } from "./plugin-cache-files.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import { parseManifestSupervisorGuidance } from "./supervisor-guidance.js";
+import { parseSupervisorGuidance } from "./supervisor-guidance.js";
 
 export type * from "./manifest-types.js";
 export * from "./package-manifest.js";
@@ -249,7 +249,7 @@ export function loadPluginManifest(
   const manifestBeforeDashboard = {
     id,
     configSchema,
-    supervisorGuidance: parseManifestSupervisorGuidance(raw.supervisorGuidance),
+    supervisorGuidance: parseSupervisorGuidance(raw.supervisorGuidance),
     ...("categories" in categories ? { categories: categories.categories } : {}),
     ...(backupResources.resources !== undefined
       ? { backupResources: backupResources.resources }

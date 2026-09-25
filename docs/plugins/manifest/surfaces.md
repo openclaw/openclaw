@@ -647,68 +647,40 @@ Keep `preferOver` scoped to plugin ids that can really provide the same channel.
 ## Supervisor guidance
 
 A deployment plugin can supply the instructions OpenClaw displays when an external
-supervisor owns service management. Declare the immediate configuration property
-containing the guidance in `openclaw.plugin.json`:
+supervisor owns service management. Put the static guidance directly in
+`openclaw.plugin.json`:
 
 ```json
 {
   "id": "compose-deployment",
-  "supervisorGuidance": { "configKey": "guidance" },
+  "supervisorGuidance": {
+    "version": 1,
+    "name": "Docker Compose",
+    "runFrom": "Docker host",
+    "actions": {
+      "restart": "docker compose restart gateway",
+      "update": "docker compose pull gateway && docker compose up -d gateway"
+    }
+  },
   "configSchema": {
     "type": "object",
-    "properties": {
-      "guidance": { "type": "object" }
-    },
     "additionalProperties": false
-  },
-  "uiHints": {
-    "guidance": {
-      "label": "Supervisor guidance",
-      "help": "Display-only commands for managing this deployment from its Docker host."
-    }
   }
 }
 ```
 
-Then enable the installed plugin and configure its copy under the existing
-`plugins.entries.<id>.config` object in `openclaw.json`:
+Install and enable the plugin, then set `OPENCLAW_SUPERVISOR_MODE=external` in the
+Gateway and CLI process environment. The plugin supplies display copy; this
+environment variable remains the authority for external supervisor ownership.
+Existing enablement, allowlist, and denylist policy still applies; add the plugin
+to `plugins.allow` if your deployment uses an allowlist. Exactly one enabled plugin
+must provide valid guidance. If multiple enabled plugins do, OpenClaw keeps its
+built-in instructions rather than choosing between deployment owners, even if
+only one provides the requested action.
 
-```json5
-{
-  plugins: {
-    entries: {
-      "compose-deployment": {
-        enabled: true,
-        config: {
-          guidance: {
-            version: 1,
-            name: "Docker Compose",
-            runFrom: "Docker host",
-            actions: {
-              restart: "docker compose restart gateway",
-              update: "docker compose pull gateway && docker compose up -d gateway",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-Set `OPENCLAW_SUPERVISOR_MODE=external` in the Gateway and CLI process environment
-as well. The plugin supplies display copy; this environment variable remains the
-authority for external supervisor ownership. Existing enablement, allowlist, and
-denylist policy still applies; add the plugin to `plugins.allow` if your deployment
-uses an allowlist. Configure guidance on exactly one enabled plugin. If multiple
-enabled plugins provide valid configured guidance, OpenClaw keeps its built-in
-instructions rather than choosing between deployment owners.
-
-The host reads the declaration through plugin metadata without importing plugin
-runtime code. `configKey` is a literal immediate own property, not a dotted path.
-The declaration accepts only `configKey`; invalid declarations are ignored.
-`configKey` must be a nonempty string of at
-most 128 UTF-8 bytes; reserved prototype keys are rejected.
+The host reads the guidance through plugin metadata without importing plugin
+runtime code. The instructions belong to the plugin package; there is no guidance
+setting in `openclaw.json` or runtime registration callback.
 
 The guidance object accepts only:
 
@@ -726,22 +698,21 @@ reject the entire guidance object. Commands retain their exact bytes and are
 shown as literal text; OpenClaw never executes them or adds them to the system
 prompt. Keep secrets out of these user-visible values.
 
-Without a valid configured provider, or when the sole provider omits the requested
+Without a valid provider, or when the sole provider omits the requested
 action, OpenClaw preserves its existing built-in instructions. Unavailable or
 disabled plugins and invalid guidance do not contribute. Guidance does not enable
-self-update or native service management under external supervision. Deployment
-configuration should be maintained by its supervisor so copying an installation
-does not carry stale host-specific commands to a new deployment.
+self-update or native service management under external supervision. Package
+commands appropriate for the deployment the plugin supports; changing the copy
+requires updating the plugin manifest.
 
-Guidance uses the existing plugin configuration object and introduces no root
-configuration key. Hosts without this feature retain their built-in supervisor
-instructions; the guidance values do not require a configuration migration or
-removal when downgrading. The installed plugin must still support the target host:
-its own configuration schema and [package compatibility requirements](/plugins/manifest/package-json)
+Older hosts ignore the unfamiliar `supervisorGuidance` manifest field and retain
+their built-in supervisor instructions. No guidance configuration migration or
+removal is required when downgrading. The installed plugin must still support the
+target host; its [package compatibility requirements](/plugins/manifest/package-json)
 continue to apply.
 
 Plugin authors can import `SupervisorAction`, `SupervisorGuidanceV1`,
-`SupervisorDisplayGuidance`, `PluginManifestSupervisorGuidance`, and
-`parseSupervisorGuidance` from `openclaw/plugin-sdk/plugin-entry`. The parser
-returns validated guidance or `undefined`; it neither executes commands nor
-resolves configuration. See [Gateway supervision](/cli/gateway/restart-and-supervision).
+`SupervisorDisplayGuidance`, and `parseSupervisorGuidance` from
+`openclaw/plugin-sdk/plugin-entry`. The manifest field uses `SupervisorGuidanceV1`.
+The parser returns validated guidance or `undefined`; it neither executes commands
+nor resolves configuration. See [Gateway supervision](/cli/gateway/restart-and-supervision).

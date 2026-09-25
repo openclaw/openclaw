@@ -31,20 +31,18 @@ function discover(supervisorGuidance: unknown) {
 }
 
 describe("supervisor guidance manifest discovery", () => {
-  it("carries the config key to the metadata registry without executing plugin code", () => {
-    expect(discover({ configKey: "guidance" }).plugins).toEqual([
-      expect.objectContaining({
-        id: "deployment",
-        supervisorGuidance: { configKey: "guidance" },
-      }),
+  it("carries package-owned copy to the metadata registry without executing plugin code", () => {
+    const guidance = { version: 1, name: "Deployment manager", actions: { start: "deploy start" } };
+    expect(discover(guidance).plugins).toEqual([
+      expect.objectContaining({ id: "deployment", supervisorGuidance: guidance }),
     ]);
   });
 
   it.each([
-    { version: 2, configKey: "guidance" },
-    { configKey: "guidance", command: "run" },
-    { configKey: "" },
-    { configKey: "__proto__" },
+    { configKey: "guidance" },
+    { version: 2, name: "Deployment manager", actions: { start: "deploy start" } },
+    { version: 1, name: "Deployment manager", actions: {} },
+    { version: 1, name: "Deployment manager", actions: { start: "unsafe\ncommand" } },
   ])("keeps the plugin discoverable but ignores malformed guidance metadata (%#)", (value) => {
     const registry = discover(value);
     expect(registry.plugins).toHaveLength(1);

@@ -25,11 +25,6 @@ export type SupervisorDisplayGuidance = {
   command: string;
 };
 
-export type PluginManifestSupervisorGuidance = {
-  /** Immediate own property of plugins.entries.<id>.config, not a dotted path. */
-  configKey: string;
-};
-
 const ACTIONS: readonly SupervisorAction[] = [
   "start",
   "stop",
@@ -51,20 +46,6 @@ function isText(value: unknown, maxLength: number): value is string {
     value.trim() === value &&
     !FORBIDDEN_TEXT.test(value)
   );
-}
-
-export function parseManifestSupervisorGuidance(
-  value: unknown,
-): PluginManifestSupervisorGuidance | undefined {
-  if (
-    !isRecord(value) ||
-    !isText(value.configKey, 128) ||
-    Object.keys(value).some((key) => key !== "configKey") ||
-    ["__proto__", "constructor", "prototype"].includes(value.configKey)
-  ) {
-    return undefined;
-  }
-  return { configKey: value.configKey };
 }
 
 /** Reject the complete descriptor on malformed copy; never rewrite command bytes. */

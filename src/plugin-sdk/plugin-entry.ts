@@ -260,7 +260,6 @@ export function definePluginEntry({
 
 export { parseSupervisorGuidance } from "../plugins/supervisor-guidance.js";
 export type {
-  PluginManifestSupervisorGuidance,
   SupervisorAction,
   SupervisorDisplayGuidance,
   SupervisorGuidanceV1,

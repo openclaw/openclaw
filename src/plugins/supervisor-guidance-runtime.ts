@@ -1,12 +1,11 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  parseSupervisorGuidance,
-  type SupervisorAction,
-  type SupervisorDisplayGuidance,
+import type {
+  SupervisorAction,
+  SupervisorDisplayGuidance,
+  SupervisorGuidanceV1,
 } from "./supervisor-guidance.js";
 
 /** Resolve display data without activating plugin code or granting lifecycle authority. */
@@ -21,29 +20,19 @@ export async function resolveExternalSupervisorGuidance(
   try {
     const config = options.config ?? (await readGuidanceConfig(env));
     const plugins = normalizePluginsConfig(config.plugins);
-    const candidates = new Set(
-      Object.entries(plugins.entries)
-        .filter(
-          ([id, entry]) =>
-            entry.enabled !== false && !plugins.deny.includes(id) && isRecord(entry.config),
-        )
-        .map(([id]) => id),
-    );
-    if (!plugins.enabled || candidates.size === 0) {
+    if (!plugins.enabled) {
       return undefined;
     }
-    // The Gateway reuses captured metadata; cold CLI consumers discover manifests
-    // only when an operator has configured a potentially eligible plugin.
+    // Reuse captured metadata without importing the package's runtime code.
     const { loadPluginManifestRegistryCore } = await import("./manifest-registry.js");
     const { withArtifactPreservingStateReads } =
       await import("../state/openclaw-state-db-readonly.js");
     const registry = withArtifactPreservingStateReads(() =>
       loadPluginManifestRegistryCore({ config, env }),
     );
-    let guidance: ReturnType<typeof parseSupervisorGuidance>;
+    let guidance: SupervisorGuidanceV1 | undefined;
     for (const plugin of registry.plugins) {
       if (
-        !candidates.has(plugin.id) ||
         !plugin.supervisorGuidance ||
         !resolveEffectivePluginActivationState({
           id: plugin.id,
@@ -56,20 +45,12 @@ export async function resolveExternalSupervisorGuidance(
       ) {
         continue;
       }
-      const pluginConfig = plugins.entries[plugin.id]?.config;
-      const key = plugin.supervisorGuidance.configKey;
-      const configured = parseSupervisorGuidance(
-        isRecord(pluginConfig) && Object.hasOwn(pluginConfig, key) ? pluginConfig[key] : undefined,
-      );
-      if (!configured) {
-        continue;
-      }
       // Resolve one owner before choosing an action so conflicting providers cannot
       // silently split lifecycle instructions between different supervisors.
       if (guidance) {
         return undefined;
       }
-      guidance = configured;
+      guidance = plugin.supervisorGuidance;
     }
     const command = guidance?.actions[action];
     if (!guidance || !command || !isGatewayExternallySupervised(env)) {

@@ -179,12 +179,13 @@ For upgrades and rollbacks, have the supervisor create a consolidated WAL-consis
 
 Deployment plugins can replace the displayed supervisor instructions with
 [manifest-backed supervisor guidance](/plugins/manifest/surfaces#supervisor-guidance).
-Configure the name, optional command location, and action commands in the declared
-property under `plugins.entries.<id>.config` of one enabled plugin. This changes
-copy only. If no enabled plugin has valid configured guidance, more than one does,
-or the sole provider omits the action, OpenClaw retains its built-in instructions
-and existing lifecycle policy. Older hosts also retain their built-in copy; no
-new root configuration key or downgrade cleanup is required.
+The plugin package declares the name, optional command location, and action commands
+directly in its `openclaw.plugin.json` manifest. Install and enable the appropriate
+plugin; no guidance settings are added to `openclaw.json`. This changes copy only.
+If no enabled plugin has valid guidance, more than one does, or the sole provider
+omits the action, OpenClaw retains its built-in instructions and existing lifecycle
+policy. Older hosts ignore the manifest field and retain their built-in copy; no
+guidance configuration cleanup is required when downgrading.
 
 `OPENCLAW_SERVICE_REPAIR_POLICY=external` remains a separate Doctor repair policy. It does not declare runtime ownership; supervisors that need both behaviors should set both variables.
 

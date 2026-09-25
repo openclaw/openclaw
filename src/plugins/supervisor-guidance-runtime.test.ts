@@ -30,12 +30,12 @@ beforeEach(async () => {
     plugins: {
       load: { paths: [pluginDir] },
       allow: ["deployment"],
-      entries: { deployment: { enabled: true, config: { guidance } } },
+      entries: { deployment: { enabled: true } },
     },
   };
 });
 
-async function createPlugin(id: string) {
+async function createPlugin(id: string, copy: unknown = guidance) {
   const pluginDir = path.join(home.home, id);
   await fs.mkdir(pluginDir, { mode: 0o755 });
   await fs.writeFile(
@@ -51,8 +51,8 @@ async function createPlugin(id: string) {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id,
-      supervisorGuidance: { configKey: "guidance" },
-      configSchema: { type: "object", properties: { guidance: { type: "object" } } },
+      supervisorGuidance: copy,
+      configSchema: { type: "object", additionalProperties: false },
     }),
   );
   return pluginDir;
@@ -64,7 +64,8 @@ afterEach(async () => {
 });
 
 describe("external supervisor guidance", () => {
-  it("reads a configured manifest without executing the plugin and preserves lifecycle refusal", async () => {
+  it("reads package copy without plugin configuration or runtime execution and preserves lifecycle refusal", async () => {
+    delete config.plugins!.entries;
     const resolved = await resolveExternalSupervisorGuidance("start", { config });
     expect(resolved).toEqual({
       version: 1,
@@ -85,7 +86,7 @@ describe("external supervisor guidance", () => {
     });
   });
 
-  it.each(["disabled", "denied", "not-allowed", "missing", "unconfigured", "non-external"])(
+  it.each(["disabled", "denied", "not-allowed", "missing", "globally-disabled", "non-external"])(
     "keeps generic guidance when %s",
     async (mode) => {
       const plugins = config.plugins!;
@@ -101,8 +102,8 @@ describe("external supervisor guidance", () => {
       if (mode === "missing") {
         plugins.load = { paths: [] };
       }
-      if (mode === "unconfigured") {
-        expectDefined(plugins.entries?.deployment, "deployment fixture").config = {};
+      if (mode === "globally-disabled") {
+        plugins.enabled = false;
       }
       if (mode === "non-external") {
         vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
@@ -111,15 +112,17 @@ describe("external supervisor guidance", () => {
     },
   );
 
-  it("requires one configured provider even when their actions do not overlap", async () => {
-    const secondDir = await createPlugin("another-supervisor");
+  it("requires one enabled provider even when their actions do not overlap", async () => {
+    const secondDir = await createPlugin("another-supervisor", {
+      ...guidance,
+      actions: { repair: "other repair" },
+    });
     const plugins = expectDefined(config.plugins, "plugins fixture");
     plugins.load?.paths?.push(secondDir);
     plugins.allow?.push("another-supervisor");
     const entries = expectDefined(plugins.entries, "entries fixture");
     entries["another-supervisor"] = {
       enabled: true,
-      config: { guidance: { ...guidance, actions: { repair: "other repair" } } },
     };
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
     expect(await resolveExternalSupervisorGuidance("repair", { config })).toBeUndefined();
@@ -129,17 +132,18 @@ describe("external supervisor guidance", () => {
     });
   });
 
-  it("uses fresh configured values and never renders a malformed command", async () => {
-    expect(await resolveExternalSupervisorGuidance("start", { config })).toBeDefined();
+  it("ignores operator copy and falls back for malformed package guidance", async () => {
     expectDefined(config.plugins?.entries?.deployment, "deployment fixture").config = {
-      guidance: { ...guidance, actions: { start: "new deployment command" } },
+      guidance: { ...guidance, actions: { start: "operator override" } },
     };
     expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
-      command: "new deployment command",
+      command: guidance.actions.start,
     });
-    expectDefined(config.plugins?.entries?.deployment, "deployment fixture").config = {
-      guidance: { ...guidance, actions: { start: "unsafe\ncommand" } },
-    };
+    const malformedDir = await createPlugin("malformed", {
+      ...guidance,
+      actions: { start: "unsafe\ncommand" },
+    });
+    config = { plugins: { load: { paths: [malformedDir] }, allow: ["malformed"] } };
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
   });
 });
