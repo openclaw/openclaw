@@ -2,7 +2,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { refreshUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import type { UpdateRunLedgerOptions } from "../../infra/update-run-codec.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { finishUpdateRunLedger as finishLedgerRun } from "../../infra/update-run-write.js";
+import { finishUpdateRun as finishLedgerRun } from "../../infra/update-run-write.js";
 
 /** Stable recovery entry used by installed managed-update drivers. */
 export async function finishUpdateRun(

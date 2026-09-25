@@ -73,10 +73,7 @@ export {
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
 
-export {
-  finishUpdateRunLedger as finishUpdateRun,
-  recordUpdateRunDiagnostics,
-} from "./update-run-write.js";
+export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
