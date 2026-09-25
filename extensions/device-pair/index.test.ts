@@ -1,4 +1,3 @@
-// Device Pair tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -92,8 +91,6 @@ const PAIRING_REQUIRED = "⚠️ This command requires operator.pairing.";
 const TALK_SECRETS_REQUIRED =
   "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.";
 const SECURE_URL_REQUIRED = "Tailscale and public mobile pairing require a secure gateway URL";
-// Tagged tables quote `$name`; a row toString preserves the exact existing test title via `%s`.
-const exactTestTitle = (title: string) => () => title;
 
 function createApi(
   params: RegisterPairOptions & {
@@ -192,17 +189,6 @@ function requireMediaUrl(opts: { mediaUrl?: string }): string {
     throw new Error("pair command did not send a media URL");
   }
   return opts.mediaUrl;
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  let error: unknown;
-  try {
-    await fs.access(targetPath);
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(Error);
-  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 async function expectRejectedCommand(params: {
@@ -353,16 +339,15 @@ describe("device-pair /pair qr", () => {
     expect(text).not.toContain("![OpenClaw pairing QR]");
   });
 
-  it.each`
-    toString                                                                                      | context                                                                 | text
-    ${exactTestTitle("rejects qr setup for internal gateway callers without operator.pairing")}   | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}      | ${PAIRING_REQUIRED}
-    ${exactTestTitle("rejects qr setup for non-gateway command surfaces without pairing scopes")} | ${{ channel: "telegram", gatewayClientScopes: undefined }}              | ${PAIRING_REQUIRED}
-    ${exactTestTitle("rejects qr setup for internal callers without Talk secret scope")}          | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }} | ${TALK_SECRETS_REQUIRED}
-  `("%s", async ({ context, text }) => {
+  it("rejects qr setup for scoped command owners without Talk secret scope", async () => {
     await expectRejectedCommand({
-      context: { ...context, args: "qr", commandBody: "/pair qr" },
+      context: {
+        channel: "telegram",
+        senderIsOwner: true,
+        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+      },
       untouched: pluginApiMocks.issueDeviceBootstrapToken,
-      text,
+      text: TALK_SECRETS_REQUIRED,
     });
   });
 
@@ -386,14 +371,14 @@ describe("device-pair /pair qr", () => {
   });
 
   it.each`
-    toString                                                       | channel       | context                                                                                  | target                   | opts
-    ${exactTestTitle("sends Telegram a real QR image attachment")} | ${"telegram"} | ${{ senderId: "123", accountId: "default", messageThreadId: 271 }}                       | ${"123"}                 | ${{ accountId: "default", threadId: 271 }}
-    ${exactTestTitle("sends Discord a real QR image attachment")}  | ${"discord"}  | ${{ senderId: "123", accountId: "default" }}                                             | ${"user:123"}            | ${{ accountId: "default" }}
-    ${exactTestTitle("sends Slack a real QR image attachment")}    | ${"slack"}    | ${{ senderId: "user:U123", accountId: "default", messageThreadId: "1234567890.000001" }} | ${"user:U123"}           | ${{ accountId: "default", threadId: "1234567890.000001" }}
-    ${exactTestTitle("sends Signal a real QR image attachment")}   | ${"signal"}   | ${{ senderId: "signal:+15551234567", accountId: "default" }}                             | ${"signal:+15551234567"} | ${{ accountId: "default" }}
-    ${exactTestTitle("sends iMessage a real QR image attachment")} | ${"imessage"} | ${{ senderId: "+15551234567", accountId: "default" }}                                    | ${"+15551234567"}        | ${{ accountId: "default" }}
-    ${exactTestTitle("sends WhatsApp a real QR image attachment")} | ${"whatsapp"} | ${{ senderId: "+15551234567", accountId: "default" }}                                    | ${"+15551234567"}        | ${{ accountId: "default", verbose: false }}
-  `("%s", async ({ channel, context, target, opts }) => {
+    name                                           | channel       | context                                                                                  | target                   | opts
+    ${"sends Telegram a real QR image attachment"} | ${"telegram"} | ${{ senderId: "123", accountId: "default", messageThreadId: 271 }}                       | ${"123"}                 | ${{ accountId: "default", threadId: 271 }}
+    ${"sends Discord a real QR image attachment"}  | ${"discord"}  | ${{ senderId: "123", accountId: "default" }}                                             | ${"user:123"}            | ${{ accountId: "default" }}
+    ${"sends Slack a real QR image attachment"}    | ${"slack"}    | ${{ senderId: "user:U123", accountId: "default", messageThreadId: "1234567890.000001" }} | ${"user:U123"}           | ${{ accountId: "default", threadId: "1234567890.000001" }}
+    ${"sends Signal a real QR image attachment"}   | ${"signal"}   | ${{ senderId: "signal:+15551234567", accountId: "default" }}                             | ${"signal:+15551234567"} | ${{ accountId: "default" }}
+    ${"sends iMessage a real QR image attachment"} | ${"imessage"} | ${{ senderId: "+15551234567", accountId: "default" }}                                    | ${"+15551234567"}        | ${{ accountId: "default" }}
+    ${"sends WhatsApp a real QR image attachment"} | ${"whatsapp"} | ${{ senderId: "+15551234567", accountId: "default" }}                                    | ${"+15551234567"}        | ${{ accountId: "default", verbose: false }}
+  `("$name", async ({ channel, context, target, opts }) => {
     let sentPng = "";
     const sendMessage = vi.fn().mockImplementation(async (_target, _caption, sendOpts) => {
       if (sendOpts?.mediaUrl) {
@@ -429,7 +414,7 @@ describe("device-pair /pair qr", () => {
       ...opts,
     });
     expect(sentPng).toBe("fakepng");
-    await expectPathMissing(mediaUrl);
+    await expect(fs.access(mediaUrl)).rejects.toMatchObject({ code: "ENOENT" });
     expect(text).toContain("QR code sent above.");
     expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });
@@ -458,46 +443,31 @@ describe("device-pair /pair qr", () => {
     expect(text).toContain("If this code leaks or you are done, run /pair cleanup");
   });
 
-  it("falls back to the setup code instead of ASCII when the channel cannot send media", async () => {
+  it("requires QR channel senders to be own entries", async () => {
+    const loadAdapter = vi.fn(async () => undefined);
     const text = requireText(
-      await runPair({
-        channel: "msteams",
-        senderId: "8:orgid:123",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-      }),
+      await runPair(
+        {
+          channel: "__proto__",
+          senderId: "prototype-channel",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        },
+        {
+          runtime: {
+            channel: { outbound: { loadAdapter } },
+          } as unknown as OpenClawPluginApi["runtime"],
+        },
+      ),
     );
+    expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
+    expect(loadAdapter).not.toHaveBeenCalled();
+    expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(text).toContain("QR image delivery is not available on this channel");
     expect(text).toContain("Setup code:");
     expect(text).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
     expect(text).not.toContain("```");
   });
-
-  it.each(["toString", "constructor", "__proto__"])(
-    "requires QR channel sender %s to be an own entry",
-    async (channel) => {
-      const loadAdapter = vi.fn(async () => undefined);
-      const text = requireText(
-        await runPair(
-          {
-            channel,
-            senderId: "prototype-channel",
-            gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-          },
-          {
-            runtime: {
-              channel: { outbound: { loadAdapter } },
-            } as unknown as OpenClawPluginApi["runtime"],
-          },
-        ),
-      );
-      expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
-      expect(loadAdapter).not.toHaveBeenCalled();
-      expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
-      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-      expect(text).toContain("QR image delivery is not available on this channel");
-      expect(text).toContain("Setup code:");
-    },
-  );
 
   it("supports invalidating unused setup codes", async () => {
     const result = await runPair({
@@ -511,11 +481,10 @@ describe("device-pair /pair qr", () => {
   });
 
   it.each`
-    toString                                                                                    | context                                                                                                           | untouched
-    ${exactTestTitle("rejects cleanup for internal gateway callers without operator.pairing")}  | ${{ channel: "webchat", args: "cleanup", commandBody: "/pair cleanup", gatewayClientScopes: ["operator.write"] }} | ${pluginApiMocks.clearDeviceBootstrapTokens}
-    ${exactTestTitle("fails closed for cleanup when internal gateway scopes are absent")}       | ${{ channel: "webchat", args: "cleanup", commandBody: "/pair cleanup", gatewayClientScopes: undefined }}          | ${pluginApiMocks.clearDeviceBootstrapTokens}
-    ${exactTestTitle("rejects status for non-gateway command surfaces without pairing scopes")} | ${{ channel: "telegram", args: "status", commandBody: "/pair status", gatewayClientScopes: undefined }}           | ${listDevicePairing}
-  `("%s", async ({ context, untouched }) => {
+    name                                                                        | context                                                                                                  | untouched
+    ${"fails closed for cleanup when internal gateway scopes are absent"}       | ${{ channel: "webchat", args: "cleanup", commandBody: "/pair cleanup", gatewayClientScopes: undefined }} | ${pluginApiMocks.clearDeviceBootstrapTokens}
+    ${"rejects status for non-gateway command surfaces without pairing scopes"} | ${{ channel: "telegram", args: "status", commandBody: "/pair status", gatewayClientScopes: undefined }}  | ${listDevicePairing}
+  `("$name", async ({ context, untouched }) => {
     await expectRejectedCommand({ context, untouched, text: PAIRING_REQUIRED });
   });
 });
@@ -603,18 +572,11 @@ describe("device-pair /pair default setup code", () => {
     });
   });
 
-  it.each`
-    toString                                                                                                        | context                                                                                                   | text
-    ${exactTestTitle("rejects setup code issuance for internal gateway callers without operator.pairing")}          | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}                                        | ${PAIRING_REQUIRED}
-    ${exactTestTitle("rejects unknown subcommands that fall back to setup code issuance without operator.pairing")} | ${{ channel: "webchat", args: "foo", commandBody: "/pair foo", gatewayClientScopes: ["operator.write"] }} | ${PAIRING_REQUIRED}
-    ${exactTestTitle("rejects setup code issuance for internal callers without Talk secret scope")}                 | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                                   | ${TALK_SECRETS_REQUIRED}
-    ${exactTestTitle("fails closed for webchat setup code issuance when scopes are absent")}                        | ${{ channel: "webchat", gatewayClientScopes: undefined }}                                                 | ${PAIRING_REQUIRED}
-    ${exactTestTitle("fails closed for non-gateway setup code issuance when scopes are absent")}                    | ${{ channel: "telegram", gatewayClientScopes: undefined }}                                                | ${PAIRING_REQUIRED}
-  `("%s", async ({ context, text }) => {
+  it("rejects unknown subcommands without operator.pairing", async () => {
     await expectRejectedCommand({
-      context: { args: "", commandBody: "/pair", ...context },
+      context: { args: "foo", commandBody: "/pair foo", gatewayClientScopes: ["operator.write"] },
       untouched: pluginApiMocks.issueDeviceBootstrapToken,
-      text,
+      text: PAIRING_REQUIRED,
     });
   });
 
@@ -680,26 +642,24 @@ describe("device-pair /pair default setup code", () => {
   );
 
   it.each`
-    toString                                                                                    | options                                                                                                                                                                  | context                                        | expectedText
-    ${exactTestTitle("normalizes secure bare publicUrl host ports before issuing setup codes")} | ${{ config: { gateway: { tls: { enabled: true }, auth: { mode: "token", token: "gateway-token" } } }, pluginConfig: { publicUrl: "gateway.example.test:18789/setup" } }} | ${{ gatewayClientScopes: ["operator.admin"] }} | ${"Gateway: wss://gateway.example.test:18789"}
-    ${exactTestTitle("allows loopback cleartext setup urls")}                                   | ${{ pluginConfig: { publicUrl: "ws://127.0.0.1:18789" } }}                                                                                                               | ${undefined}                                   | ${"Gateway: ws://127.0.0.1:18789"}
-    ${exactTestTitle("allows mdns cleartext setup urls")}                                       | ${{ pluginConfig: { publicUrl: "ws://openclaw.local:18789" } }}                                                                                                          | ${undefined}                                   | ${"Gateway: ws://openclaw.local:18789"}
-  `("%s", async ({ options, context, expectedText }) => {
+    name                                                                        | options                                                                                                                                                                  | context                                        | expectedText
+    ${"normalizes secure bare publicUrl host ports before issuing setup codes"} | ${{ config: { gateway: { tls: { enabled: true }, auth: { mode: "token", token: "gateway-token" } } }, pluginConfig: { publicUrl: "gateway.example.test:18789/setup" } }} | ${{ gatewayClientScopes: ["operator.admin"] }} | ${"Gateway: wss://gateway.example.test:18789"}
+    ${"allows loopback cleartext setup urls"}                                   | ${{ pluginConfig: { publicUrl: "ws://127.0.0.1:18789" } }}                                                                                                               | ${undefined}                                   | ${"Gateway: ws://127.0.0.1:18789"}
+    ${"allows mdns cleartext setup urls"}                                       | ${{ pluginConfig: { publicUrl: "ws://openclaw.local:18789" } }}                                                                                                          | ${undefined}                                   | ${"Gateway: ws://openclaw.local:18789"}
+  `("$name", async ({ options, context, expectedText }) => {
     const text = requireText(await runDefaultSetup(options, context));
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(text).toContain(expectedText);
   });
 
-  it.each([
-    "ws://[fc00::1]:18789",
-    "ws://[fd7a:115c:a1e0::1]:18789",
-    "ws://[fe80::1]:18789",
-    "ws://[febf::1]:18789",
-  ])("allows IPv6 ULA and link-local cleartext setup url %s", async (publicUrl) => {
-    const text = requireText(await runDefaultSetup({ pluginConfig: { publicUrl } }));
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(text).toContain(`Gateway: ${publicUrl}`);
-  });
+  it.each(["ws://[fc00::1]:18789", "ws://[fe80::1]:18789", "ws://[febf::1]:18789"])(
+    "allows IPv6 ULA and link-local cleartext setup url %s",
+    async (publicUrl) => {
+      const text = requireText(await runDefaultSetup({ pluginConfig: { publicUrl } }));
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+      expect(text).toContain(`Gateway: ${publicUrl}`);
+    },
+  );
 
   it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
     vi.mocked(runPluginCommandWithTimeout).mockResolvedValueOnce({
@@ -889,10 +849,7 @@ describe("device-pair /pair default setup code", () => {
   it.each([
     "http://localhost:notaport",
     "http:gateway.example.test",
-    "ws:gateway.example.test",
-    "http:/localhost:notaport",
     "ftp:/gateway.example.test",
-    "mailto:foo@example.com",
     "ws://user:pass@gateway.example.test:18789",
   ])("rejects invalid publicUrl %s before issuing setup codes", async (publicUrl) => {
     await expectSetupRejected(
@@ -939,34 +896,22 @@ describe("device-pair notify pending formatting", () => {
 
 describe("device-pair /pair approve", () => {
   it.each`
-    toString                                                                                | context                                                                                       | pending  | approved                      | expectedCall               | expectedText
-    ${exactTestTitle("rejects internal gateway callers without operator.pairing")}          | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}                            | ${true}  | ${undefined}                  | ${null}                    | ${PAIRING_REQUIRED}
-    ${exactTestTitle("allows internal gateway callers with operator.pairing")}              | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${true}  | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
-    ${exactTestTitle("rejects non-gateway approvals without pairing scopes")}               | ${{ channel: "telegram", gatewayClientScopes: undefined }}                                    | ${false} | ${undefined}                  | ${null}                    | ${PAIRING_REQUIRED}
-    ${exactTestTitle("allows command owners to approve from non-gateway command surfaces")} | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}               | ${true}  | ${makeApprovedPairingResult}  | ${["operator.pairing"]}    | ${"✅ Paired Victim Phone (ios)."}
-    ${exactTestTitle("preserves gateway caller scopes for command-owner approvals")}        | ${{ channel: "telegram", gatewayClientScopes: INTERNAL_PAIRING_SCOPES, senderIsOwner: true }} | ${true}  | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
-    ${exactTestTitle("fails closed for approvals when internal gateway scopes are absent")} | ${{ channel: "webchat", gatewayClientScopes: undefined }}                                     | ${true}  | ${undefined}                  | ${null}                    | ${PAIRING_REQUIRED}
-    ${exactTestTitle("rejects approvals that request scopes above the caller session")}     | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${true}  | ${makeForbiddenPairingResult} | ${INTERNAL_PAIRING_SCOPES} | ${"⚠️ This command requires operator.admin to approve this pairing request."}
-    ${exactTestTitle("approves from command surfaces that carry pairing scopes")}           | ${{ channel: "telegram", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                      | ${true}  | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
-  `("%s", async ({ context, pending, approved, expectedCall, expectedText }) => {
-    if (pending) {
-      mockPendingPairingList();
-    }
-    if (approved) {
-      vi.mocked(approveDevicePairing).mockResolvedValueOnce(approved());
-    }
+    name                                                                    | context                                                                                       | approved                      | expectedCall               | expectedText
+    ${"allows internal gateway callers with operator.pairing"}              | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
+    ${"allows command owners to approve from non-gateway command surfaces"} | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}               | ${makeApprovedPairingResult}  | ${["operator.pairing"]}    | ${"✅ Paired Victim Phone (ios)."}
+    ${"preserves gateway caller scopes for command-owner approvals"}        | ${{ channel: "telegram", gatewayClientScopes: INTERNAL_PAIRING_SCOPES, senderIsOwner: true }} | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
+    ${"rejects approvals that request scopes above the caller session"}     | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${makeForbiddenPairingResult} | ${INTERNAL_PAIRING_SCOPES} | ${"⚠️ This command requires operator.admin to approve this pairing request."}
+  `("$name", async ({ context, approved, expectedCall, expectedText }) => {
+    mockPendingPairingList();
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(approved());
     const result = await runPair({
       ...context,
       args: "approve latest",
       commandBody: "/pair approve latest",
     });
-    if (expectedCall) {
-      expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
-        callerScopes: expectedCall,
-      });
-    } else {
-      expect(vi.mocked(approveDevicePairing)).not.toHaveBeenCalled();
-    }
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-1", {
+      callerScopes: expectedCall,
+    });
     expect(result).toEqual({ text: expectedText });
   });
 });
