@@ -51,23 +51,18 @@ export function recordAgentHarnessToolResultTelemetry(params: {
   }
   // Only a live invocation may accept new media; committed effects remain evidence.
   if (!params.isError && params.result && !params.signal.aborted) {
-    const media = extractToolResultMediaArtifact(params.result);
+    const media = recordAgentHarnessToolResultMedia({
+      facts: params.telemetry,
+      toolName: params.toolName,
+      result: params.result,
+      mediaTrustResult: params.coreTtsToolResult ?? params.mediaTrustResult,
+      trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
+    });
     if (media) {
-      const mediaUrls = filterToolResultMediaUrls(
-        params.toolName,
-        media.mediaUrls,
-        params.coreTtsToolResult ?? params.mediaTrustResult ?? params.result,
-        params.trustedLocalMediaToolNames,
-      );
-      const seen = new Set(params.telemetry.toolMediaUrls);
       const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
       const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
       let retainsCoreTtsMedia = false;
-      for (const mediaUrl of mediaUrls) {
-        if (!seen.has(mediaUrl)) {
-          seen.add(mediaUrl);
-          params.telemetry.toolMediaUrls.push(mediaUrl);
-        }
+      for (const mediaUrl of media.mediaUrls) {
         if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
           autoDeliveryMediaUrls.add(mediaUrl);
           retainsCoreTtsMedia = true;
@@ -82,9 +77,6 @@ export function recordAgentHarnessToolResultTelemetry(params: {
         !params.telemetry.coreTtsToolResults.includes(params.coreTtsToolResult)
       ) {
         params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
-      }
-      if (media.audioAsVoice) {
-        params.telemetry.toolAudioAsVoice = true;
       }
     }
   }

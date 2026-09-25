@@ -123,6 +123,10 @@ On macOS and Windows, native service-managed profile names must be lowercase. Ru
 
 Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
 
+On Linux, discovery also recognizes legacy `openclaw-<profile>` unit names. A custom system unit can belong to the default installation when its OpenClaw launcher, service account, profile, and state/config paths identify that installation. Discovery uses systemd's effective command and environment, including drop-ins and environment files. If multiple custom units match or a wrapper makes their identity unclear, specify the intended unit with `OPENCLAW_SYSTEMD_UNIT`; OpenClaw does not choose the first unit carrying its marker.
+
+Doctor offers duplicate user-unit cleanup only when both managers' loaded Gateway commands identify the selected account, profile, state/config paths, and matching port selection. It rechecks the units after confirmation. Different or unverifiable identities leave the user unit in place.
+
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing
 configuration, authentication tokens, or service files. The error keeps its

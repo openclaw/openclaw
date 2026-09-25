@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -838,6 +839,63 @@ describe("GitHub tool identity", () => {
     const publication = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
     expect(publication).toMatchObject({ profileId, account: { login: "renamed-user" } });
   });
+
+  it.each(["verification", "staging"] as const)(
+    "preserves the stable credential when refresh authority closes during %s",
+    async (phase) => {
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+      const root = tempDirs.make("openclaw-github-refresh-authority-");
+      const profileDir = path.join(root, "profile");
+      await fs.mkdir(profileDir, { mode: 0o700 });
+      const hosts = path.join(profileDir, "hosts.yml");
+      const config = path.join(profileDir, "config.yml");
+      await fs.writeFile(hosts, "previous credential\n", { mode: 0o600 });
+      await fs.writeFile(config, "version: 1\neditor: vim\n", { mode: 0o600 });
+      const revoked = new Error("GitHub refresh authority closed");
+      let authorized = true;
+      let revokedAtBoundary = false;
+      const revoke = () => {
+        authorized = false;
+        revokedAtBoundary = true;
+      };
+      vi.mocked(fetch).mockImplementation(async () => {
+        if (phase === "verification") {
+          revoke();
+        }
+        return new Response(JSON.stringify({ id: 202, login: "managed-user" }));
+      });
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          phase === "staging" &&
+          path.dirname(String(args[0])) === profileDir &&
+          typeof args[1] === "number" &&
+          (args[1] & fsConstants.O_EXCL) !== 0
+        ) {
+          revoke();
+        }
+        return handle;
+      });
+
+      await expect(
+        refreshManagedGitHubProfile({
+          profileDir,
+          token: "replacement-credential",
+          expectedAccountId: 202,
+          assertCurrent: () => {
+            if (!authorized) {
+              throw revoked;
+            }
+          },
+        }),
+      ).rejects.toBe(revoked);
+      expect(revokedAtBoundary).toBe(true);
+      expect(await fs.readFile(hosts, "utf8")).toBe("previous credential\n");
+      expect(await fs.readFile(config, "utf8")).toBe("version: 1\neditor: vim\n");
+      expect((await fs.readdir(profileDir)).toSorted()).toEqual(["config.yml", "hosts.yml"]);
+    },
+  );
 
   it("keeps the previous generation after the new version commits", async () => {
     const root = tempDirs.make("openclaw-github-rotate-");

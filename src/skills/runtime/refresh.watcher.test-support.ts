@@ -1,10 +1,18 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ok } from "@openclaw/normalization-core/result";
 import type { FSWatcherEventMap } from "chokidar";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { trackSkillsWatcherClose } from "./refresh-watch-close.js";
+
+// Keep the global timer so mocked-timer callers control this checkpoint.
+export function waitForSkillsWatcherTurn(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 export function useSkillsWatcherFixture() {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -55,6 +63,7 @@ function createMockWatcher() {
   const events = new EventEmitter();
   const watcher = {
     closed: false,
+    add: vi.fn((_paths: string | readonly string[]) => watcher),
     getWatched: vi.fn((): Record<string, string[]> => ({})),
     on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
       events.on(event, callback);
@@ -81,8 +90,21 @@ export function createSkillsWatcherMock() {
     createdWatchers.push(watcher);
     return watcher;
   });
-  const nativeWatchMock = (watchRoot: string, ignored: WatchOptions["ignored"]) =>
-    watchMock(watchRoot, { depth: 0, followSymlinks: false, usePolling: false, ignored });
+  const nativeWatchMock = (watchRoot: string, ignored: WatchOptions["ignored"]) => {
+    const watcher = watchMock(watchRoot, {
+      depth: 0,
+      followSymlinks: false,
+      usePolling: false,
+      ignored,
+    });
+    const close = watcher.close.bind(watcher);
+    return Object.assign(watcher, {
+      close: vi.fn(async () => {
+        await close();
+        return ok(undefined);
+      }),
+    });
+  };
   const nativeContentWatchMock = (
     watchRoot: string,
     options: Pick<WatchOptions, "depth" | "ignored">,
@@ -139,5 +161,32 @@ export function createSkillsWatcherMock() {
     return { watchRoot, options, watcher: createdWatchers[index]! };
   }
 
-  return { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot };
+  const readyAll = async () => {
+    let count: number;
+    do {
+      count = createdWatchers.length;
+      // Include observing/verifying generations and replacements admitted only
+      // after their actual owner closes. Held-verifier cases drive readiness explicitly.
+      for (const watcher of createdWatchers) {
+        watcher.emit("ready");
+      }
+      await waitForSkillsWatcherTurn();
+    } while (createdWatchers.length !== count);
+  };
+  const watcherAdmissions = (root: string, shallow: boolean) =>
+    watchMock.mock.calls.flatMap(([watched, options], index) =>
+      watched === root.replaceAll("\\", "/") && (options.depth === 0) === shallow
+        ? [createdWatchers[index]]
+        : [],
+    );
+
+  return {
+    createdWatchers,
+    watchMock,
+    nativeWatchMock,
+    nativeContentWatchMock,
+    watchForSkillRoot,
+    readyAll,
+    watcherAdmissions,
+  };
 }

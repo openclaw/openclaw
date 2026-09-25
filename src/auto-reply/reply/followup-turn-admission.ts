@@ -140,12 +140,9 @@ export async function admitFollowupTurn(params: {
     initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
-  const resolveRunSessionFile = (source: FollowupRun["run"], sessionId: string) =>
+  const resolveRunSessionFile = (source: FollowupRun["run"]) =>
     resolveAdmittedRunSessionFile({
-      agentId: source.agentId,
-      sessionId,
       sessionKey: replySessionKey,
-      storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
@@ -185,7 +182,7 @@ export async function admitFollowupTurn(params: {
       run = {
         ...run,
         sessionId: operation.sessionId,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
+        sessionFile: resolveRunSessionFile(run),
         cliSessionBindingFacts: undefined,
         autoFallbackPrimaryProbe: undefined,
         modelSelectionLocked: false,
@@ -244,7 +241,7 @@ export async function admitFollowupTurn(params: {
     if (activeEntry?.sessionId === operation.sessionId) {
       run = {
         ...run,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
+        sessionFile: resolveRunSessionFile(run),
         modelSelectionLocked: activeEntry.modelSelectionLocked === true,
         ...(lifecycleRevisionChanged
           ? {
@@ -337,7 +334,7 @@ export async function admitFollowupTurn(params: {
           run: {
             ...turn.queued.run,
             sessionId: entry.sessionId,
-            sessionFile: resolveRunSessionFile(turn.queued.run, entry.sessionId),
+            sessionFile: resolveRunSessionFile(turn.queued.run),
             cliSessionBindingFacts: undefined,
             autoFallbackPrimaryProbe: undefined,
             modelSelectionLocked: entry.modelSelectionLocked === true,

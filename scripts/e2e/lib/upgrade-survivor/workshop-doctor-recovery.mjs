@@ -13,6 +13,7 @@ import {
   seedWorkshopLegacyProposals,
 } from "./workshop-legacy-proposals.mjs";
 
+const PHYSICAL_INDEX = "idx_audit_events_kind_sequence";
 const INDEX = "idx_skill_workshop_collection_reviews_workspace_time";
 const INDEX_SQL = `CREATE INDEX ${INDEX} ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)`;
 const REVIEW = {
@@ -184,6 +185,245 @@ export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
   return seeded;
 }
 
+function inspectPhysicalState(filename) {
+  const database = new DatabaseSync(filename, { readOnly: true });
+  try {
+    return {
+      findings: database
+        .prepare("PRAGMA integrity_check(2147483647)")
+        .all()
+        .map((row) => row.integrity_check),
+      rows: database
+        .prepare("SELECT * FROM audit_events NOT INDEXED ORDER BY sequence")
+        .all()
+        .map((row) => Object.assign({}, row)),
+      foreignKeys: database
+        .prepare("PRAGMA foreign_key_check")
+        .all()
+        .map((row) => Object.assign({}, row)),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function seedPhysicalIndex(stateDir, artifactRoot, stage) {
+  assert(["baseline", "candidate"].includes(stage));
+  const filename = databasePath(stateDir);
+  const original = Buffer.from(`physical-${stage}-original`);
+  const replacement = Buffer.from(`physical-${stage}-modified`);
+  const database = new DatabaseSync(filename);
+  let pageSize;
+  let rootPage;
+  try {
+    database
+      .prepare(`INSERT INTO audit_events
+      (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id)
+      VALUES (?, ?, 1, ?, ?, 'received', 'ok', 'system', 'fixture')`)
+      .run(
+        `survivor-physical-${stage}`,
+        `survivor-physical-${stage}`,
+        Date.now(),
+        original.toString(),
+      );
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
+    pageSize = Number(database.prepare("PRAGMA page_size").get().page_size);
+    const index = database
+      .prepare("SELECT tbl_name, rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?")
+      .get(PHYSICAL_INDEX);
+    assert.equal(index?.tbl_name, "audit_events");
+    rootPage = Number(index.rootpage);
+  } finally {
+    database.close();
+  }
+  const healthy = inspectPhysicalState(filename);
+  assert.deepEqual(healthy.findings, ["ok"]);
+  assert.deepEqual(healthy.foreignKeys, []);
+  const bytes = fs.readFileSync(filename);
+  const start = (rootPage - 1) * pageSize;
+  const page = bytes.subarray(start, start + pageSize);
+  assert.equal(page[0], 0x0a, "Physical fixture requires an index leaf page");
+  const offset = page.indexOf(original);
+  assert.equal(original.length, replacement.length);
+  assert(
+    offset >= 0 && !page.includes(original, offset + 1),
+    "Index key is not unique in its page",
+  );
+  const keyOffset = start + offset;
+  const changed = Buffer.from(bytes);
+  replacement.copy(changed, keyOffset);
+  assert.deepEqual(changed.subarray(0, keyOffset), bytes.subarray(0, keyOffset));
+  assert.deepEqual(
+    changed.subarray(keyOffset + original.length),
+    bytes.subarray(keyOffset + original.length),
+  );
+  assert.notDeepEqual(changed.subarray(keyOffset, keyOffset + original.length), original);
+  const healthyPath = path.join(artifactRoot, `physical-${stage}-healthy.sqlite`);
+  fs.writeFileSync(healthyPath, bytes, { mode: 0o600 });
+  fs.writeFileSync(filename, changed);
+  assert.equal(sha256(fs.readFileSync(filename)), sha256(changed));
+  const damaged = inspectPhysicalState(filename);
+  assert(
+    damaged.findings.some((finding) => finding.endsWith(`missing from index ${PHYSICAL_INDEX}`)),
+  );
+  assert(
+    damaged.findings.every((finding) => finding.endsWith(`index ${PHYSICAL_INDEX}`)),
+    "Physical fixture has damage beyond the selected index",
+  );
+  assert.deepEqual(damaged.rows, healthy.rows, "Index fixture changed table payloads");
+  assert.deepEqual(damaged.foreignKeys, []);
+  const seeded = {
+    index: PHYSICAL_INDEX,
+    rootPage,
+    pageSize,
+    keyOffset,
+    keyBytes: original.length,
+    healthyPath,
+    healthySha256: sha256(bytes),
+    damagedSha256: sha256(changed),
+    ...damaged,
+    recoveryDirectories: fs
+      .readdirSync(path.dirname(filename))
+      .filter((name) => name.startsWith("openclaw-index-recovery-")),
+  };
+  writeJson(path.join(artifactRoot, `physical-${stage}-seeded.json`), seeded);
+  return seeded;
+}
+
+function assertPhysicalUpdateRefusal(stateDir, artifactRoot, observations, packageRoot, exitCode) {
+  assert.equal(exitCode, 1, "Published updater must refuse physical index corruption");
+  const baseline = readJson(path.join(artifactRoot, "workshop-baseline.json"));
+  assert.deepEqual(
+    installedIdentity(packageRoot),
+    baseline,
+    "Refusal replaced the published build",
+  );
+  const seeded = readJson(path.join(artifactRoot, "physical-baseline-seeded.json"));
+  const filename = databasePath(stateDir);
+  assert.equal(
+    sha256(fs.readFileSync(filename)),
+    seeded.damagedSha256,
+    "Refusal changed damaged bytes",
+  );
+  assert.deepEqual(inspectPhysicalState(filename), {
+    findings: seeded.findings,
+    rows: seeded.rows,
+    foreignKeys: seeded.foreignKeys,
+  });
+  assert.equal(sha256(fs.readFileSync(seeded.healthyPath)), seeded.healthySha256);
+  const result = readJson(path.join(artifactRoot, "update.json"));
+  assert.equal(result.ok, false);
+  assert.match(result.error?.message ?? "", /SQLite integrity_check failed/u);
+  assert(result.error.message.includes(PHYSICAL_INDEX));
+  const updater = processWitness(observations, baseline, {
+    role: "update",
+    exitCode: 1,
+    malformedAtStart: false,
+    physicalIndexCorruptAtStart: true,
+  });
+  const doctorStarted = fs
+    .readdirSync(path.join(observations, "diagnostics"))
+    .filter((name) => /^process-\d+-started\.json$/u.test(name))
+    .some((name) =>
+      ["doctor", "post-core"].includes(readJson(path.join(observations, "diagnostics", name)).role),
+    );
+  assert.equal(doctorStarted, false, "Physical refusal occurred after candidate handoff");
+  writeJson(path.join(artifactRoot, "physical-baseline-refusal.json"), {
+    status: "physical-index-refused-before-candidate",
+    automaticRepair: false,
+    index: PHYSICAL_INDEX,
+    damagedSha256: seeded.damagedSha256,
+    healthySha256: seeded.healthySha256,
+    updater,
+  });
+}
+
+function restorePhysicalBaselineFixture(stateDir, artifactRoot) {
+  const seeded = readJson(path.join(artifactRoot, "physical-baseline-seeded.json"));
+  const filename = databasePath(stateDir);
+  assert.equal(sha256(fs.readFileSync(filename)), seeded.damagedSha256);
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    assert(
+      !fs.existsSync(`${filename}${suffix}`),
+      "Fixture restoration requires a closed consolidated database",
+    );
+  }
+  const bytes = fs.readFileSync(seeded.healthyPath);
+  assert.equal(sha256(bytes), seeded.healthySha256);
+  // Restore only this stopped synthetic fixture; this is not a product repair claim.
+  fs.writeFileSync(filename, bytes);
+  assert.equal(sha256(fs.readFileSync(filename)), seeded.healthySha256);
+  const restored = inspectPhysicalState(filename);
+  assert.deepEqual(restored.findings, ["ok"]);
+  assert.deepEqual(restored.rows, seeded.rows);
+  assert.deepEqual(restored.foreignKeys, []);
+  writeJson(path.join(artifactRoot, "physical-baseline-restoration.json"), {
+    status: "healthy-harness-fixture-restored",
+    healthySha256: seeded.healthySha256,
+  });
+}
+
+function assertPhysicalDoctorRepair(stateDir, artifactRoot, observations, logPath) {
+  const seeded = readJson(path.join(artifactRoot, "physical-candidate-seeded.json"));
+  const filename = databasePath(stateDir);
+  const repaired = inspectPhysicalState(filename);
+  assert.deepEqual(repaired.findings, ["ok"]);
+  assert.deepEqual(repaired.foreignKeys, []);
+  for (const row of seeded.rows) {
+    assert.deepEqual(
+      repaired.rows.find((current) => current.event_id === row.event_id),
+      row,
+      "Doctor changed a retained audit payload",
+    );
+  }
+  const directories = fs
+    .readdirSync(path.dirname(filename))
+    .filter(
+      (name) =>
+        name.startsWith("openclaw-index-recovery-") && !seeded.recoveryDirectories.includes(name),
+    );
+  assert.equal(directories.length, 1, "Doctor must retain one new damaged-image backup");
+  const backupPath = path.join(path.dirname(filename), directories[0], "database.sqlite");
+  const backup = inspectPhysicalState(backupPath);
+  assert.deepEqual(backup.findings, seeded.findings, "Backup lost the original index corruption");
+  for (const row of seeded.rows) {
+    assert.deepEqual(
+      backup.rows.find((current) => current.event_id === row.event_id),
+      row,
+    );
+  }
+  assert.deepEqual(backup.foreignKeys, []);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert(log.includes(`Rebuilt corrupt shared-state SQLite indexes: ${PHYSICAL_INDEX}`));
+  assert(log.includes(`Saved pre-repair SQLite backup: ${backupPath}`));
+  // ARTIFACT_ROOT is host-mounted and survives successful container disposal.
+  const retainedPath = path.join(artifactRoot, "physical-candidate-damaged.sqlite");
+  fs.copyFileSync(backupPath, retainedPath);
+  fs.chmodSync(retainedPath, 0o600);
+  const backupSha256 = sha256(fs.readFileSync(backupPath));
+  assert.equal(sha256(fs.readFileSync(retainedPath)), backupSha256);
+  const doctor = processWitness(
+    observations,
+    readJson(path.join(artifactRoot, "workshop-candidate.json")),
+    {
+      role: "doctor",
+      exitCode: 0,
+      updateInProgress: false,
+      malformedAtStart: false,
+      physicalIndexCorruptAtStart: true,
+    },
+  );
+  writeJson(path.join(artifactRoot, "physical-candidate-repair.json"), {
+    status: "explicit-candidate-physical-index-repaired",
+    index: PHYSICAL_INDEX,
+    rowsPreserved: seeded.rows.length,
+    backupPath,
+    retainedPath,
+    backupSha256,
+    doctor,
+  });
+}
+
 function observeProcess() {
   const role = process.argv[2];
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -214,11 +454,18 @@ function observeProcess() {
   const legacyFixture = process.env.OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE;
   const doctorResultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
   let malformedAtStart;
+  let physicalIndexCorruptAtStart;
   let legacySeed;
   let legacyAtStart;
   let startupCaptureError;
   try {
-    malformedAtStart = hasMalformedWorkshopIndex(databasePath(stateDir));
+    const filename = databasePath(stateDir);
+    malformedAtStart = hasMalformedWorkshopIndex(filename);
+    physicalIndexCorruptAtStart =
+      !malformedAtStart &&
+      inspectPhysicalState(filename).findings.some((finding) =>
+        finding.endsWith(`index ${PHYSICAL_INDEX}`),
+      );
     if (legacyFixture && fs.existsSync(legacyFixture)) {
       legacySeed = readJson(legacyFixture);
       if (!malformedAtStart) {
@@ -235,6 +482,7 @@ function observeProcess() {
     identity,
     updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1",
     malformedAtStart,
+    physicalIndexCorruptAtStart,
     ...(legacyAtStart ? { legacyAtStart } : {}),
     ...(startupCaptureError !== undefined ? { startupCaptureError } : {}),
   };
@@ -502,10 +750,29 @@ export function completeWorkshopRecovery(stateDir, artifactRoot) {
   return result;
 }
 
+function completePhysicalRecovery(stateDir, artifactRoot) {
+  const physicalRefusal = readJson(path.join(artifactRoot, "physical-baseline-refusal.json"));
+  const physicalRestoration = readJson(
+    path.join(artifactRoot, "physical-baseline-restoration.json"),
+  );
+  const physicalRepair = readJson(path.join(artifactRoot, "physical-candidate-repair.json"));
+  assert.equal(physicalRefusal.status, "physical-index-refused-before-candidate");
+  assert.equal(physicalRefusal.automaticRepair, false);
+  assert.equal(physicalRestoration.status, "healthy-harness-fixture-restored");
+  assert.equal(physicalRepair.status, "explicit-candidate-physical-index-repaired");
+  assert.equal(sha256(fs.readFileSync(physicalRepair.retainedPath)), physicalRepair.backupSha256);
+  const baselineSeed = readJson(path.join(artifactRoot, "physical-baseline-seeded.json"));
+  assert.equal(sha256(fs.readFileSync(baselineSeed.healthyPath)), baselineSeed.healthySha256);
+  const catalog = completeWorkshopRecovery(stateDir, artifactRoot);
+  const result = { ...catalog, physicalRefusal, physicalRestoration, physicalRepair };
+  writeJson(path.join(artifactRoot, "workshop-doctor-recovery.json"), result);
+  return result;
+}
+
 const direct =
   process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (direct) {
-  const [mode, first, second, third] = process.argv.slice(2);
+  const [mode, first, second, third, fourth] = process.argv.slice(2);
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   assert(stateDir && artifacts, "Missing isolated survivor paths");
@@ -528,18 +795,28 @@ if (direct) {
     captureWorkshopBaseline(first, artifacts);
   } else if (mode === "candidate") {
     captureWorkshopCandidate(first, artifacts, second);
+  } else if (mode === "physical-seed") {
+    seedPhysicalIndex(stateDir, artifacts, first);
+  } else if (mode === "physical-restore") {
+    restorePhysicalBaselineFixture(stateDir, artifacts);
+  } else if (mode === "physical-doctor") {
+    assertPhysicalDoctorRepair(stateDir, artifacts, first, second);
   } else if (mode === "seed") {
     seedWorkshopIndex(stateDir, artifacts, first);
   } else if (mode === "seed-legacy") {
     seedWorkshopLegacyProposals(stateDir, artifacts);
   } else if (mode === "refusal") {
-    assertWorkshopUpdateRefusal(stateDir, artifacts, first, second, Number(third));
+    if (fourth === "physical") {
+      assertPhysicalUpdateRefusal(stateDir, artifacts, first, second, Number(third));
+    } else {
+      assertWorkshopUpdateRefusal(stateDir, artifacts, first, second, Number(third));
+    }
   } else if (mode === "doctor") {
     assertWorkshopDoctorRepair(stateDir, artifacts, first, second);
   } else if (mode === "upgrade") {
     assertWorkshopRecoveredUpgrade(stateDir, artifacts, first, second);
   } else if (mode === "complete") {
-    completeWorkshopRecovery(stateDir, artifacts);
+    completePhysicalRecovery(stateDir, artifacts);
   } else {
     throw new Error(`Unknown Workshop recovery fixture mode: ${mode}`);
   }

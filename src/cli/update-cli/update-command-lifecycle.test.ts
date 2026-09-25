@@ -230,6 +230,9 @@ describe("update plugin lifecycle lease boundaries", () => {
     // shared host path while real recovery admission is running.
     mocks.databasePath = path.join(dirs.make("update-lease-order-"), "state", "openclaw.sqlite");
     vi.clearAllMocks();
+    vi.mocked(updatePluginsAfterCoreUpdate).mockReset();
+    vi.mocked(completePostCorePluginUpdate).mockReset();
+    vi.mocked(continuePostCoreUpdateInFreshProcess).mockReset();
     mocks.verifyGateway
       .mockReset()
       .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });

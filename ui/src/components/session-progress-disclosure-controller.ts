@@ -173,7 +173,10 @@ class ProgressDisclosureController {
     if (this.touching || this.scrolling) {
       return;
     }
-    this.flushGesture();
+    // The idle timer can precede the first native offset; no movement has settled yet.
+    if (!this.gesture?.valid || this.gesture.distancePx > 0) {
+      this.flushGesture();
+    }
     if (this.state.distancePx > 0) {
       this.dispatch({ type: "settle" });
       this.apply();
@@ -187,6 +190,9 @@ class ProgressDisclosureController {
     this.touching = observation.touching;
     if (observation.type === "offset") {
       this.scrolling = observation.scrolling;
+      if (observation.programmatic && this.gesture?.distancePx === 0) {
+        this.gesture = undefined;
+      }
       if (!observation.programmatic && observation.delta !== 0) {
         if (this.gesture) {
           this.gesture.distancePx += Math.max(0, -observation.delta);

@@ -5,10 +5,8 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {

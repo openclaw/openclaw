@@ -61,10 +61,8 @@ import {
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import {
-  resolveMatrixCredentialsDir,
-  resolveMatrixStateLayoutChildDepth,
-} from "./src/storage-paths.js";
+import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
+import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
@@ -143,37 +141,13 @@ async function collectLegacyMatrixStateRoots(
   filename: string,
   options?: { includeMatrixRoot?: boolean },
 ): Promise<string[]> {
-  const matrixRoot = path.join(stateDir, "matrix");
-  const roots: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
-      if (isStorageRoot && entry.isFile() && entry.name === filename) {
-        roots.push(dir);
-        continue;
-      }
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      // Only enter owned layout containers; archived and arbitrary descendants
-      // must never become migration roots just because they contain a known file.
-      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
-      if (childDepth !== null) {
-        await visit(entryPath, childDepth);
-      }
-    }
-  }
-  await visit(matrixRoot, 0);
-  return roots
-    .filter((root) => options?.includeMatrixRoot || path.resolve(root) !== path.resolve(matrixRoot))
-    .toSorted();
+  const { entries } = await walkMatrixStateFiles(
+    stateDir,
+    (name, depth) =>
+      name === filename &&
+      (depth === 2 || depth === 4 || (depth === 0 && options?.includeMatrixRoot === true)),
+  );
+  return entries.map((entry) => path.dirname(entry.path)).toSorted();
 }
 
 async function* readLegacyMatrixSyncCaches(stateDir: string) {

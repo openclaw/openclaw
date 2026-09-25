@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS } from "../app-routes.ts";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
@@ -73,7 +73,6 @@ export interface ShellViewHost
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
-  enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
@@ -233,7 +232,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       router: host.runtime.router,
       activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-      enabledRouteIds: host.enabledRouteIds(),
+      enabledRouteIds: APP_ROUTE_IDS,
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       connectionStatus,

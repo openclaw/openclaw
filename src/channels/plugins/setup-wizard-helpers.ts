@@ -568,30 +568,15 @@ export async function runSingleChannelSecretStep(
   action: SingleChannelSecretInputPromptResult["action"];
   resolvedValue?: string;
 }> {
-  const promptState = buildSingleChannelSecretPromptState({
-    accountConfigured: params.accountConfigured,
-    hasConfigToken: params.hasConfigToken,
-    allowEnv: params.allowEnv,
-    envValue: params.envValue,
-  });
+  const promptState = buildSingleChannelSecretPromptState(params);
 
   if (!promptState.accountConfigured && params.onMissingConfigured) {
     await params.onMissingConfigured();
   }
 
   const result = await promptSingleChannelSecretInput({
-    cfg: params.cfg,
-    prompter: params.prompter,
-    providerHint: params.providerHint,
-    credentialLabel: params.credentialLabel,
-    secretInputMode: params.secretInputMode,
-    accountConfigured: promptState.accountConfigured,
-    canUseEnv: promptState.canUseEnv,
-    hasConfigToken: promptState.hasConfigToken,
-    envPrompt: params.envPrompt,
-    keepPrompt: params.keepPrompt,
-    inputPrompt: params.inputPrompt,
-    preferredEnvVar: params.preferredEnvVar,
+    ...params,
+    ...promptState,
   });
 
   if (result.action === "use-env") {
@@ -761,6 +746,7 @@ export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawCo
 ): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
   return async ({ cfg, prompter, accountId }) =>
     await promptParsedAllowFromForAccount({
+      ...params,
       cfg: cfg as TConfig,
       accountId,
       defaultAccountId:
@@ -768,14 +754,6 @@ export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawCo
           ? params.defaultAccountId(cfg as TConfig)
           : params.defaultAccountId,
       prompter,
-      ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
-      ...(params.noteLines ? { noteLines: params.noteLines } : {}),
-      message: params.message,
-      placeholder: params.placeholder,
-      parseEntries: params.parseEntries,
-      getExistingAllowFrom: params.getExistingAllowFrom,
-      ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
-      applyAllowFrom: params.applyAllowFrom,
     });
 }
 
@@ -796,18 +774,12 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     ...(params.enabled ? { enabled: true } : {}),
   });
   return createPromptParsedAllowFromForAccount({
-    defaultAccountId: params.defaultAccountId,
-    ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
-    ...(params.noteLines ? { noteLines: params.noteLines } : {}),
-    message: params.message,
-    placeholder: params.placeholder,
-    parseEntries: params.parseEntries,
+    ...params,
     getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
         ?.allowFrom ??
       [],
-    ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
     applyAllowFrom: ({ cfg, allowFrom }: { cfg: OpenClawConfig; allowFrom: string[] }) =>
       setAllowFrom(cfg, allowFrom),
   });

@@ -27,11 +27,11 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - packages/sdk/src/client.ts
-    - packages/sdk/src/app-sdk-composed-resources.e2e.test.ts
+    - src/gateway/server.app-sdk-composed-resources.test.ts
     - src/gateway/agent-turn/agent-job.ts
     - src/gateway/server-methods/artifacts.ts
     - src/gateway/server-methods/environments.ts
   execution:
     kind: vitest
-    path: packages/sdk/src/app-sdk-composed-resources.e2e.test.ts
+    path: src/gateway/server.app-sdk-composed-resources.test.ts
     summary: Run handler-backed deterministic assertions and real-Gateway schema and behavior proof through the source-internal preview SDK.

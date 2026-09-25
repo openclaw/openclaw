@@ -331,15 +331,9 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
     return { regex: null, source: trimmed, flags, reason: "empty" };
   }
   const cacheKey = `${flags}::${trimmed}`;
-  if (safeRegexCache.has(cacheKey)) {
-    return (
-      safeRegexCache.get(cacheKey) ?? {
-        regex: null,
-        source: trimmed,
-        flags,
-        reason: "invalid-regex",
-      }
-    );
+  const cached = safeRegexCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   let result: SafeRegexCompileResult;

@@ -22,27 +22,6 @@ import {
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
 
-type SystemRunParamsLike = {
-  command?: unknown;
-  rawCommand?: unknown;
-  systemRunPlan?: unknown;
-  cwd?: unknown;
-  env?: unknown;
-  timeoutMs?: unknown;
-  needsScreenRecording?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
-  turnSourceChannel?: unknown;
-  turnSourceTo?: unknown;
-  turnSourceAccountId?: unknown;
-  turnSourceThreadId?: unknown;
-  approved?: unknown;
-  approvalDecision?: unknown;
-  approvalSource?: unknown;
-  runId?: unknown;
-  suppressNotifyOnExit?: unknown;
-};
-
 type ApprovalLookup = {
   getSnapshot: (recordId: string) => Promise<ExecApprovalRecord | null>;
   consumeAllowOnce?: (recordId: string) => Promise<boolean>;
@@ -154,7 +133,7 @@ function matchesOptionalString(params: {
 
 function canBridgeNoDeviceChatApprovalFromBackend(params: {
   snapshot: ExecApprovalRecord;
-  rawParams: SystemRunParamsLike;
+  rawParams: Record<string, unknown>;
   client: ApprovalClient | null;
 }): boolean {
   if (
@@ -259,12 +238,11 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     }
   | { ok: false; message: string; details?: Record<string, unknown> }
 > {
-  const obj = asNullableRecord(opts.rawParams);
-  if (!obj) {
+  const p = asNullableRecord(opts.rawParams);
+  if (!p) {
     return { ok: true, params: opts.rawParams };
   }
 
-  const p = obj as SystemRunParamsLike;
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const hasApprovalSource = p.approvalSource != null;
@@ -285,7 +263,7 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
 
   // Always strip control fields from user input. If the override is allowed,
   // we re-add trusted fields based on the gateway approval record.
-  const next: Record<string, unknown> = pickSystemRunParams(obj);
+  const next = pickSystemRunParams(p);
 
   if (!wantsApprovalOverride) {
     const cmdTextResolution = resolveSystemRunCommandRequest({
@@ -434,20 +412,12 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
     next.rawCommand = resolveForwardedRawCommand(runtimeContext.plan);
-    if (runtimeContext.cwd) {
-      next.cwd = runtimeContext.cwd;
-    } else {
-      delete next.cwd;
-    }
-    if (runtimeContext.agentId) {
-      next.agentId = runtimeContext.agentId;
-    } else {
-      delete next.agentId;
-    }
-    if (runtimeContext.sessionKey) {
-      next.sessionKey = runtimeContext.sessionKey;
-    } else {
-      delete next.sessionKey;
+    for (const key of ["cwd", "agentId", "sessionKey"] as const) {
+      if (runtimeContext[key]) {
+        next[key] = runtimeContext[key];
+      } else {
+        delete next[key];
+      }
     }
   }
 
@@ -476,7 +446,8 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   // Normal path: enforce the decision and provenance recorded by the Gateway.
-  if (snapshot.decision === "allow-once") {
+  const approvalDecision = snapshot.decision;
+  if (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
     if (approvalSource !== null) {
       return systemRunApprovalGuardError({
         code: "APPROVAL_SOURCE_MISMATCH",
@@ -484,54 +455,35 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
         details: { runId },
       });
     }
-    if (recordedResolutionSource === "auto-review") {
-      if (!runtimeContext.plan) {
-        return systemRunApprovalGuardError({
-          code: "APPROVAL_PLAN_REQUIRED",
-          message: "auto-review approval requires an approved execution plan",
-          details: { runId },
-        });
-      }
+    if (
+      approvalDecision === "allow-once" &&
+      recordedResolutionSource === "auto-review" &&
+      !runtimeContext.plan
+    ) {
+      return systemRunApprovalGuardError({
+        code: "APPROVAL_PLAN_REQUIRED",
+        message: "auto-review approval requires an approved execution plan",
+        details: { runId },
+      });
     }
     if (
-      typeof manager.consumeAllowOnce !== "function" ||
-      !(await manager.consumeAllowOnce(runId))
+      approvalDecision === "allow-once" &&
+      (typeof manager.consumeAllowOnce !== "function" || !(await manager.consumeAllowOnce(runId)))
     ) {
       return systemRunApprovalRequired(runId);
     }
-    if (recordedResolutionSource === "auto-review") {
+    if (approvalDecision === "allow-once" && recordedResolutionSource === "auto-review") {
       // Source is derived only from the consumed server-side record. Never
       // forward caller-supplied explicit flags as auto-review authority.
       next.approvalSource = "auto-review";
-      return {
-        ok: true,
-        params: next,
-        approvalAuthority: { recordId: runId, decision: "allow-once" },
-      };
+    } else {
+      next.approved = true;
+      next.approvalDecision = approvalDecision;
     }
-    next.approved = true;
-    next.approvalDecision = "allow-once";
     return {
       ok: true,
       params: next,
-      approvalAuthority: { recordId: runId, decision: "allow-once" },
-    };
-  }
-
-  if (snapshot.decision === "allow-always") {
-    if (approvalSource !== null) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_SOURCE_MISMATCH",
-        message: "approval source does not match approval record",
-        details: { runId },
-      });
-    }
-    next.approved = true;
-    next.approvalDecision = "allow-always";
-    return {
-      ok: true,
-      params: next,
-      approvalAuthority: { recordId: runId, decision: "allow-always" },
+      approvalAuthority: { recordId: runId, decision: approvalDecision },
     };
   }
 

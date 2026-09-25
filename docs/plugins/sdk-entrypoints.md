@@ -200,8 +200,13 @@ Hosts can provide `watchSkills(request, onChange, signal)` to notify the existin
 snapshot cache when admitted Skill sources change. Keep the subscription alive
 until aborted, and send `change` after the initial scan and later edits. Send
 `unavailable` if file watching stops: preparation then refreshes on each call,
-without reopening the subscription. Hosts without `watchSkills` use that same
-fallback. `skills.load.watch: false` disables the subscription and this fallback.
+without reopening the subscription. After recovery, send `available` only when
+all subscribed sources have verified watch coverage and edits made during the
+outage have been reconciled. This restores snapshot reuse without adding a content
+revision. A `change` alone never clears unavailable state. Hosts that only send
+`change` and `unavailable` retain preparation fallback after an outage. Hosts
+without `watchSkills` always use that fallback. `skills.load.watch: false`
+disables the subscription and this fallback.
 Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,

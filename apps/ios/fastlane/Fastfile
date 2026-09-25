@@ -867,7 +867,7 @@ def release_notes_metadata_path(release_version:, app_store_revision:)
 end
 
 def app_review_notes_markdown_path
-  File.join(ios_root, "APP-REVIEW-NOTES.md")
+  File.join(ios_root, "APP-REVIEW-NOTES-APPLE.md")
 end
 
 def app_review_notes_pdf_path

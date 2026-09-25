@@ -30,8 +30,8 @@ import type {
   RunStepOptions,
   UpdateRunResult,
   UpdateRunnerOptions,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const PREFLIGHT_MAX_COMMITS = 10;
 const PREFLIGHT_TEMP_PREFIX =

@@ -35,6 +35,7 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { readAdmittedStateContentVersion } from "./openclaw-state-db-content-version.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabase,
@@ -738,4 +739,12 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     }
     return withOpenClawStateReadOnlyLocation(operation, pathname, prepared);
   });
+}
+
+export function readCurrentOpenClawStateDatabaseContentVersion(
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  const pathname = resolveReadOnlyPath(options);
+  const env = options.env ?? process.env;
+  return stateSnapshotReads.exit(() => readAdmittedStateContentVersion(pathname, env));
 }
