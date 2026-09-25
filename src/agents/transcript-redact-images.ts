@@ -28,18 +28,6 @@ function sanitizeOpaqueImageBase64(
   return mimeType ? sanitizeInlineImageBase64({ mimeType, base64 }) : undefined;
 }
 
-function isValidOpaqueImageBase64(base64: string, mimeType: string | undefined): boolean {
-  return sanitizeOpaqueImageBase64(base64, mimeType) !== undefined;
-}
-
-function isOpaqueImageDataBlock(value: Record<string, unknown>): boolean {
-  return (
-    (value.type === "image" || value.type === "base64") &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
 export function sanitizeTranscriptImageRecord(
   source: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -98,24 +86,6 @@ export function sanitizeTranscriptImageDataUrlField(params: {
       : undefined;
   }
   return sanitizeImageDataUrlField(params.source, params.key, params.value);
-}
-
-export function shouldPreserveTranscriptImagePayload(
-  source: Record<string, unknown>,
-  key: string,
-  item: unknown,
-  preserveImageDataUrlFields: boolean,
-): boolean {
-  if (typeof item !== "string") {
-    return false;
-  }
-  if (key === "data" && isOpaqueImageDataBlock(source)) {
-    return true;
-  }
-  if (preserveImageDataUrlFields && key === "url") {
-    return startsWithDataUrl(item) && sanitizeInlineImageDataUrlForStorage(item) !== undefined;
-  }
-  return sanitizeImageDataUrlField(source, key, item) !== undefined;
 }
 
 export function shouldPreserveNestedTranscriptImageDataUrlFields(

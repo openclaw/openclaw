@@ -9,6 +9,7 @@ import {
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { hasExactCommandDurableExecApproval } from "../infra/exec-approvals-allow-always.js";
 import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
@@ -69,7 +70,6 @@ type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
-  transportRawCommand: string;
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
@@ -102,27 +102,6 @@ type NodeAllowAlwaysCoverage = {
   complete: boolean;
   patterns: AllowAlwaysPattern[];
 };
-
-function hasExactCommandDurableApproval(params: {
-  allowlist: readonly ExecAllowlistEntry[];
-  commandText: string;
-}): boolean {
-  const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand) {
-    return false;
-  }
-  const commandPattern = `=command:${crypto
-    .createHash("sha256")
-    .update(normalizedCommand)
-    .digest("hex")
-    .slice(0, 16)}`;
-  return params.allowlist.some(
-    (entry) =>
-      entry.source === "allow-always" &&
-      (entry.pattern === commandPattern ||
-        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
-  );
-}
 
 function extractPreparedNodeShellPayload(argv: readonly string[]): string | null {
   const extracted = extractShellCommandFromArgv([...argv]);
@@ -440,7 +419,6 @@ export async function prepareNodeSystemRun(params: {
     plan: prepared.plan,
     argv: prepared.plan.argv,
     rawCommand: prepared.plan.commandText,
-    transportRawCommand: prepared.plan.commandText,
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
@@ -596,7 +574,7 @@ export async function analyzeNodeApprovalRequirement(params: {
               command: entry.command,
               allowlistEligible:
                 !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
-              exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
+              exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
               }),
