@@ -139,7 +139,10 @@ import {
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
-import { createEmbeddedSessionReader } from "./embedded-session-reader.js";
+import {
+  createEmbeddedSessionReader,
+  readEmbeddedHistorySessionInfo,
+} from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -449,51 +452,27 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
-    if (!opts.runId) {
-      // Session-scoped abort for local embedded: abort all matching runs.
-      let aborted = false;
-      const runIds: string[] = [];
-      for (const [runId, run] of this.runs) {
-        if (run.isBtw) {
-          continue;
-        }
-        if (run.sessionKey !== opts.sessionKey) {
-          continue;
-        }
-        if (opts.sessionKey === "global") {
-          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-          const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-          const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-          if (runAgentId !== requestedAgentId) {
-            continue;
-          }
-        }
-        if (!this.isAbortableRun(runId, run)) {
-          continue;
-        }
-        run.controller.abort();
-        aborted = true;
-        runIds.push(runId);
+    const runIds: string[] = [];
+    const candidates = opts.runId ? [[opts.runId, this.runs.get(opts.runId)] as const] : this.runs;
+    for (const [runId, run] of candidates) {
+      if (!run || (!opts.runId && run.isBtw) || run.sessionKey !== opts.sessionKey) {
+        continue;
       }
-      return { ok: true, aborted, runIds };
-    }
-    const run = this.runs.get(opts.runId);
-    if (!run || run.sessionKey !== opts.sessionKey) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    if (opts.sessionKey === "global") {
-      const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-      const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-      const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-      if (runAgentId !== requestedAgentId) {
-        return { ok: true, aborted: false, runIds: [] };
+      if (opts.sessionKey === "global") {
+        const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+        const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
+        const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
+        if (runAgentId !== requestedAgentId) {
+          continue;
+        }
       }
+      if (!this.isAbortableRun(runId, run)) {
+        continue;
+      }
+      run.controller.abort();
+      runIds.push(runId);
     }
-    if (!this.isAbortableRun(opts.runId, run)) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    run.controller.abort();
-    return { ok: true, aborted: true, runIds: [opts.runId] };
+    return { ok: true, aborted: runIds.length > 0, runIds };
   }
 
   async loadImage(opts: TuiImageRequest): Promise<TuiImageData> {
@@ -597,17 +576,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
     const projection = await this.sessionProjection;
-    if (projection) {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    }
     const target = {
       key: canonicalKey,
       agentId: sessionAgentId,
       storePath: readSource?.path ?? storePath,
     };
-    const current = projection?.describe(target);
     const sessionInfo =
       entry && (entry.incognito || isIncognitoSessionKey(canonicalKey))
         ? buildGatewaySessionRow({
@@ -621,11 +594,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lightweightListRow: true,
             skipTranscriptUsageFallback: true,
           })
-        : entry &&
-            current &&
-            current.entry.sessionId === sessionId &&
-            current.entry.lifecycleRevision === entry.lifecycleRevision
-          ? (projection?.snapshot(target).row ?? undefined)
+        : entry && projection
+          ? await readEmbeddedHistorySessionInfo(projection, target, {
+              sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            })
           : undefined;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     if (sessionInfo) {

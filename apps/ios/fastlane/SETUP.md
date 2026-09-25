@@ -6,9 +6,9 @@ Install the pinned Ruby bundle:
 cd apps/ios
 # Install Ruby 3.4.10 with mise or another .ruby-version-aware manager.
 ruby --version
-gem install bundler -v 2.6.9
-bundle _2.6.9_ install
-bundle _2.6.9_ check
+gem install bundler -v 4.0.21
+bundle _4.0.21_ install
+bundle _4.0.21_ check
 ```
 
 The expected runtime is recorded in `apps/ios/.ruby-version`, and the Gemfile
@@ -87,7 +87,7 @@ pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
 ```
 
-`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
 
 Shared encrypted signing storage:
 
@@ -104,7 +104,7 @@ Validate auth:
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
 ```
 
 App Store Connect API auth is required when:
@@ -128,7 +128,7 @@ pnpm ios:screenshots
 
 The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
-The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs and result bundles stay in `apps/ios/build/SnapshotTestResults`.
+The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; result bundles and the capture-attempt ledger stay in `apps/ios/build/SnapshotTestResults`.
 
 Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
 
@@ -251,7 +251,7 @@ APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
 ```
 
 4. Prepare and finalize the shared mobile release:

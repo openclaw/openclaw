@@ -33,11 +33,11 @@ describe("subagent registry nested agent tracking", () => {
     subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("listSubagentRunsForRequester returns children of the requesting session", () => {
+  it("listSubagentRunsForRequester returns children of the requesting session", async () => {
     const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-orch",
       childSessionKey: "agent:main:subagent:orch-uuid",
       requesterSessionKey: "agent:main:main",
@@ -48,7 +48,7 @@ describe("subagent registry nested agent tracking", () => {
     });
 
     // Depth-1 orchestrator spawns a depth-2 leaf
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf",
       childSessionKey: "agent:main:subagent:orch-uuid:subagent:leaf-uuid",
       requesterSessionKey: "agent:main:subagent:orch-uuid",
@@ -75,10 +75,10 @@ describe("subagent registry nested agent tracking", () => {
     expect(leafRuns).toHaveLength(0);
   });
 
-  it("announce uses requesterSessionKey to route to the correct parent", () => {
+  it("announce uses requesterSessionKey to route to the correct parent", async () => {
     const { registerSubagentRun } = subagentRegistry;
     // Register a sub-sub-agent whose parent is a sub-agent.
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-subsub",
       childSessionKey: "agent:main:subagent:orch:subagent:child",
       requesterSessionKey: "agent:main:subagent:orch",
@@ -101,11 +101,11 @@ describe("subagent registry nested agent tracking", () => {
     );
   });
 
-  it("countActiveRunsForSession only counts active children of the specific session", () => {
+  it("countActiveRunsForSession only counts active children of the specific session", async () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
 
     // Main spawns orchestrator (active)
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-orch-active",
       childSessionKey: "agent:main:subagent:orch1",
       requesterSessionKey: "agent:main:main",
@@ -115,7 +115,7 @@ describe("subagent registry nested agent tracking", () => {
     });
 
     // Orchestrator spawns two leaves
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf-1",
       childSessionKey: "agent:main:subagent:orch1:subagent:leaf1",
       requesterSessionKey: "agent:main:subagent:orch1",
@@ -124,7 +124,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanup: "keep",
     });
 
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf-2",
       childSessionKey: "agent:main:subagent:orch1:subagent:leaf2",
       requesterSessionKey: "agent:main:subagent:orch1",

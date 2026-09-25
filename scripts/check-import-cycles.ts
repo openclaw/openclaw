@@ -145,16 +145,22 @@ function main(): number {
     }),
   );
   const resolveSource = createSourceResolver(files);
-  const graph = new Map(
-    files.map((file): [string, string[]] => [
-      file,
-      collectRuntimeStaticImports(
-        file,
-        resolveSource,
-        parser.parseSourceFile(file, readFileSync(path.join(repoRoot, file), "utf8")),
-      ),
-    ]),
-  );
+  const graph = new Map<string, string[]>();
+  // Native snapshots reload their root list. Keep only one bounded batch of syntax trees.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const batch = files.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((file) => ({
+        fileName: file,
+        text: readFileSync(path.join(repoRoot, file), "utf8"),
+      })),
+    );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const file = batch[index]!;
+      graph.set(file, collectRuntimeStaticImports(file, resolveSource, sourceFile));
+    }
+  }
   const components = collectStronglyConnectedComponents(graph);
 
   console.log(`Import cycle check: ${components.length} runtime value cycle(s).`);

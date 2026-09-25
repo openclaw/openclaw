@@ -30,7 +30,6 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -157,14 +156,12 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
-const bindingServiceMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
-  unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
-}));
+const { mocks: bindingServiceMocks, module: bindingServiceModule } = await vi.hoisted(async () => {
+  const { createAcpBindingMocks } = await import("./session-binding.test-mocks.js");
+  return createAcpBindingMocks(vi);
+});
 
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => bindingServiceMocks,
-}));
+vi.mock("../../infra/outbound/session-binding-service.js", () => bindingServiceModule);
 vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => managerMocks,

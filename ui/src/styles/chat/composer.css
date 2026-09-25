@@ -2351,7 +2351,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: inherit;
   min-width: 0;
   min-height: 32px;
-  flex: 1;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
   padding: 6px 0;
   border: 0;
   background: transparent;
@@ -2405,6 +2406,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {

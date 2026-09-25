@@ -416,6 +416,8 @@ describe("CI changed Node test plan", () => {
     "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/agents/agent-bundle-mcp-retention.test.ts",
+        "src/agents/mcp-stdio-client.cleanup.real.test.ts",
         "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
@@ -504,9 +506,11 @@ describe("CI changed Node test plan", () => {
         const selectedEntry = selectedGroup
           ? { kind: "group" as const, name: selectedGroup.shard_name, plan: selectedGroup }
           : { kind: "target" as const, name: target, target };
-        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual(
-          buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
-        );
+        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual({
+          ...buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
+          // Repacking changes the label, but every execution policy stays fixed.
+          ...(selectedGroup ? { OPENCLAW_VITEST_SHARD_NAME: selectedGroup.shard_name } : {}),
+        });
         expect(selectedJob.runner).toBe(ownerJob.runner);
         expect(selectedJob.requiresDist).toBe(ownerJob.requiresDist);
         expect(selectedJob.planConcurrency).toBe(ownerJob.planConcurrency);
@@ -1609,7 +1613,7 @@ describe("CI changed Node test plan", () => {
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     ["packages/gateway-client/src/index.ts", true],
     ["pnpm-lock.yaml", true],
-    ["patches/@awesome.me__webawesome@3.12.0.patch", true],
+    ["patches/@awesome.me__webawesome@3.13.0.patch", true],
     [".npmrc", true],
     ["scripts/check-control-ui-performance-base.mts", true],
     ["scripts/lib/control-ui-i18n-config.ts", true],
@@ -2843,6 +2847,34 @@ describe("CI changed Node test plan", () => {
       requiresDist: false,
       pretestBuildMode: "runtime",
     });
+  });
+
+  it.each([1, 13])("prepares generic E2E targets across %s files", (fileCount) => {
+    const cwd = argvTempDirs.make("changed-e2e-preparation-");
+    const targets = Array.from(
+      { length: fileCount },
+      (_, index) => `src/example/case-${String(index).padStart(2, "0")}.e2e.test.ts`,
+    );
+    for (const target of targets) {
+      mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+      writeFileSync(path.join(cwd, target), "export {};\n");
+    }
+    const gitOptions = { cwd, env: createNestedGitEnv() };
+    execFileSync("git", ["init", "-q"], gitOptions);
+    execFileSync("git", ["add", "--", ...targets], gitOptions);
+    const shards = createChangedNodeTestShards(targets, { cwd })?.filter((shard) => shard.targets);
+    expect(shards).toHaveLength(Math.ceil(fileCount / 12));
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual(targets);
+    for (const shard of shards ?? []) {
+      expect(shard).toMatchObject({
+        configs: [],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        pretestBuildMode: "private-qa",
+      });
+      expect(shard.targets!.length).toBeLessThanOrEqual(12);
+      expect(shard.planConcurrency).toBeUndefined();
+    }
   });
 
   it("retains delivery-cache coverage and private QA preparation", () => {

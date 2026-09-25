@@ -7,7 +7,12 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-tree.js";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import {
+  collectProcessAncestorPids,
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+  MAX_ANCESTOR_WALK_DEPTH,
+} from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
@@ -48,14 +53,6 @@ const STALE_SIGKILL_WAIT_MS = 400;
 const PORT_FREE_POLL_INTERVAL_MS = 50;
 const PORT_FREE_TIMEOUT_MS = 2000;
 const POLL_SPAWN_TIMEOUT_MS = 400;
-
-/**
- * Upper bound on the ancestor-PID walk. A real-world chain is shallow
- * (pid1 → systemd → gateway → plugin-host → sidecar ≈ 5); 32 generously covers
- * nested-supervisor setups (k8s pod → containerd-shim → runc → …) while still
- * providing a hard stop against corrupted process tables or ppid cycles.
- */
-const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -238,20 +235,7 @@ export function getSelfAndAncestorPidsSync(
   if (!readTransitiveParent) {
     return pids;
   }
-  // Transitive ancestor walk. Each hop's validity (positive pid, not already
-  // seen) is enforced by the per-iteration `parent` check below; the entry
-  // invariant `current > 0` is established above and preserved by `current =
-  // parent` after the same check, so no separate top-of-loop guard is needed.
-  let current = immediateParent;
-  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
-    const parent = readTransitiveParent(current);
-    if (parent == null || parent <= 0 || pids.has(parent)) {
-      break;
-    }
-    pids.add(parent);
-    current = parent;
-  }
-  return pids;
+  return collectProcessAncestorPids(immediateParent, readTransitiveParent);
 }
 
 function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {

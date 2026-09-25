@@ -1210,6 +1210,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
+        "test/scripts/android-access-workflow.test.ts",
       ],
     ],
     [
@@ -3179,6 +3180,16 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it.each(["scripts/docker/setup.sh", "scripts/lib/build-metadata.sh"])(
+    "routes stubbed Docker setup checks to tooling for %s",
+    (target) => {
+      const plan = buildVitestRunPlans([target]).find((candidate) =>
+        candidate.includePatterns?.includes("test/scripts/docker-setup.test.ts"),
+      );
+      expect(plan).toMatchObject({ config: "test/vitest/vitest.tooling.config.ts" });
+    },
+  );
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [

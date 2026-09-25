@@ -121,19 +121,13 @@ import {
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
+  resolveWhatsAppStructuredReply,
   extractBlockStreamingMarkerDirectives,
   extractSlackProgressCommentaryDirectives,
   QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   findNamedToolDefinition,
-  isQaToolSearchFixture,
   buildExplicitSessionsSpawnArgs,
   buildQaA2aMessageToolMirrorSessionsSendArgs,
   hasToolErrorOutput,
@@ -632,15 +626,6 @@ async function buildResponsesPayload(
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const currentImageRequest = extractCurrentImageRequest(input, body);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(input)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
   const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
@@ -737,11 +722,7 @@ async function buildResponsesPayload(
         ],
       });
     }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))
-    ) {
+    if (!hasCompletedToolOutput && targetTool) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
@@ -1396,14 +1377,9 @@ async function buildResponsesPayload(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
     );
   }
-  if (whatsAppLocationMarker) {
-    return buildAssistantEvents(whatsAppLocationMarker);
-  }
-  if (whatsAppContactMarker) {
-    return buildAssistantEvents(whatsAppContactMarker);
-  }
-  if (whatsAppStickerMarker) {
-    return buildAssistantEvents(whatsAppStickerMarker);
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return buildAssistantEvents(whatsAppStructuredReply);
   }
   const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
   if (slackMpimHistoryReply !== undefined) {

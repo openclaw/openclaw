@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 const fileState = z.strictObject({
@@ -17,20 +17,9 @@ const fileState = z.strictObject({
   mtimeMs: z.number().finite(),
   ctimeMs: z.number().finite(),
 });
-const GatewayServiceStagedFilesSchema = z.strictObject({
-  files: z
-    .array(
-      z.strictObject({
-        sourcePath: z.string().max(4096).refine(path.isAbsolute),
-        before: fileState.nullable(),
-        after: fileState,
-      }),
-    )
-    .min(1)
-    .max(16),
-});
-export type GatewayServiceStagedFiles = z.infer<typeof GatewayServiceStagedFilesSchema>;
-const definitionFile = GatewayServiceStagedFilesSchema.shape.files.element.extend({
+const definitionFile = z.strictObject({
+  sourcePath: z.string().max(4096).refine(path.isAbsolute),
+  before: fileState.nullable(),
   after: fileState.nullable(),
   prepared: fileState.nullable().optional(),
 });

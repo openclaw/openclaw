@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { resolveStateDir } from "../config/paths.js";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { resolveUserPath } from "../utils.js";

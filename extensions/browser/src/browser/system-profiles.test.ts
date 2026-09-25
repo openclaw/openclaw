@@ -7,9 +7,15 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
 const profileMocks = vi.hoisted(() => ({
   managedUserDataDir: "",
+  tempRoot: "",
   cookiesSetManyViaPlaywright: vi.fn(async (params: { cookies: unknown[] }) => ({
     added: params.cookies.length,
   })),
+}));
+
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
+  resolvePreferredOpenClawTmpDir: () => profileMocks.tempRoot,
 }));
 
 vi.mock("./chrome.js", () => ({
@@ -124,6 +130,7 @@ function createManagedProfileFixture() {
 describe("system profile cookie reader", () => {
   beforeEach(() => {
     profileMocks.cookiesSetManyViaPlaywright.mockClear();
+    profileMocks.tempRoot = tempDirs.make("openclaw-system-cookies-test-");
   });
 
   it("snapshots, decrypts, and applies the domain allowlist", async () => {
@@ -149,6 +156,31 @@ describe("system profile cookie reader", () => {
       }),
     ]);
     expect(readSecret).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+  });
+
+  it("removes cookie snapshot scratch when opening the source database fails", async () => {
+    const homeDir = createSystemProfileFixture();
+    const cookiesFile = path.join(
+      homeDir,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+      "Default",
+      "Network",
+      "Cookies",
+    );
+    fs.rmSync(cookiesFile);
+    fs.mkdirSync(cookiesFile);
+
+    await expect(
+      readSystemProfileCookies(
+        { browser: "chrome", systemProfile: "Default" },
+        { platform: "darwin", homeDir },
+      ),
+    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR" });
+    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
   });
 
   it("keeps the existing import flow on the shared reader", async () => {

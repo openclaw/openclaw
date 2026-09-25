@@ -137,27 +137,25 @@ describe("OpenAI plugin manifest", () => {
       (choice) => choice.provider === "openai" && choice.method === "api-key",
     );
 
-    expect(openAiLogin?.choiceLabel).toBe("ChatGPT Login");
-    expect(openAiLogin?.choiceHint).toBe("Sign in with your ChatGPT or Codex subscription");
+    expect(openAiLogin?.choiceLabel).toBe("Codex login (browser)");
+    expect(openAiLogin?.choiceHint).toBe("Sign in to Codex with your ChatGPT account");
     expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
     expect(openAiLogin?.groupId).toBe("openai");
     expect(openAiLogin?.groupLabel).toBe("OpenAI");
-    expect(openAiLogin?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
-    expect(openAiDeviceCode?.choiceLabel).toBe("ChatGPT Device Pairing");
-    expect(openAiDeviceCode?.choiceHint).toBe(
-      "Pair your ChatGPT account in browser with a device code",
-    );
+    expect(openAiLogin?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
+    expect(openAiDeviceCode?.choiceLabel).toBe("Codex login (device code)");
+    expect(openAiDeviceCode?.choiceHint).toBe("Approve Codex access using a code in your browser");
     expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
     expect(openAiDeviceCode?.onboardingFeatured).toBe(true);
     expect(openAiLogin?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
-    expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
+    expect(openAiDeviceCode?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
     expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
     expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
     expect(apiKey?.groupId).toBe("openai");
     expect(apiKey?.groupLabel).toBe("OpenAI");
-    expect(apiKey?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
+    expect(apiKey?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
     expect(choices.map((choice) => choice.choiceLabel)).not.toContain(
       "OpenAI Codex (ChatGPT OAuth)",
     );

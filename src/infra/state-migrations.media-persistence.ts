@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -19,12 +20,16 @@ import {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   renewAgentDatabaseMaintenanceAuthorityIfPresent,
 } from "../state/openclaw-agent-db-lease.js";
+import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
+import {
+  assertOpenClawAgentSchemaContains,
+  assertSupportedAgentSchemaVersion,
+} from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   ensureOpenClawAgentDatabaseSchema,
   migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema,
@@ -32,12 +37,14 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  clearOpenClawAgentDatabaseOpenFailure,
   withAgentDatabaseMaintenanceLease,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "../state/openclaw-agent-storage-schema.js";
+import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
@@ -49,8 +56,9 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
+import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
+import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -121,6 +129,8 @@ async function migrateAgentDatabase(params: {
   agentId: string;
   canonicalArchivePaths: Set<string>;
   beforeTransaction?: () => void;
+  changes: string[];
+  env: NodeJS.ProcessEnv;
   pathname: string;
 }) {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
@@ -145,6 +155,33 @@ async function migrateAgentDatabase(params: {
       agentId: params.agentId,
       pathname: params.pathname,
     });
+    assertSupportedAgentSchemaVersion(database, params.pathname);
+    const indexChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+      label: `agent ${params.agentId}`,
+      assertCurrent: () => {
+        assertAgentDatabaseMaintenanceAuthority();
+        assertOpenClawAgentDatabaseOwner(database, params);
+      },
+    });
+    params.changes.push(...indexChanges);
+    if (
+      indexChanges.length > 0 ||
+      agentDatabaseLifecycle.terminal.peek(params.pathname) ||
+      readOpenClawDatabaseQuarantineFailure("agent", params.pathname, { env: params.env })
+    ) {
+      runSqliteImmediateTransactionSync(database, () => {
+        if (indexChanges.length === 0) {
+          assertSqliteIntegrity(database, params.pathname);
+        }
+        assertAgentDatabaseMaintenanceAuthority();
+        assertOpenClawAgentDatabaseOwner(database, params);
+        if (!clearOpenClawAgentDatabaseOpenFailure(params.pathname, { env: params.env })) {
+          throw new Error(
+            `Repaired ${params.pathname}, but its quarantine record could not be cleared.`,
+          );
+        }
+      });
+    }
     let userVersion = readSqliteUserVersion(database);
     const initialVersion = userVersion;
     if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -473,6 +510,8 @@ export async function migrateLegacyMediaPersistence(
         try {
           const result = await migrateAgentDatabase({
             agentId: entry.agentId,
+            changes,
+            env,
             canonicalArchivePaths,
             beforeTransaction: params.hooks?.beforeDatabaseTransaction
               ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)

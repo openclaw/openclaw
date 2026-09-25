@@ -5,18 +5,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
-import {
-  openSqliteWorkerStore,
-  runSqliteWorkerStoreWrite,
-  type SqliteWorkerStore,
-} from "./sqlite-worker-store.js";
-import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
+import { runSqliteWorkerStoreWrite } from "./sqlite-worker-store.js";
+import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import {
   acquireStateDatabaseCoordinator,
   captureStateDatabaseCoordinatorRuntime,
@@ -25,27 +21,7 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
-
-async function open(databasePath: string, input?: FixtureOpenInput) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath,
-    input,
-  });
-  stores.add(store);
-  return store;
-}
+const { tempDirs: dirs, open } = useSqliteWorkerStoreFixture("sqlite-worker-preparation-");
 
 it.each([
   { mib: 0, owner: "client" },
@@ -257,9 +233,7 @@ if (!isMainThread) {
       );
       const worker = posts.mock.contexts[0];
       posts.mockRestore();
-      if (!store || !(worker instanceof Worker)) {
-        throw new Error("Expected the fixture's lifecycle worker");
-      }
+      assert(store && worker instanceof Worker, "Expected the fixture's lifecycle worker");
       let exited = false;
       worker.once("exit", () => {
         exited = true;

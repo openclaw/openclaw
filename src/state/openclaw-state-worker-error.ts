@@ -28,6 +28,7 @@ type ErrorNode = ErrorIdentity & {
   message: string;
   code?: string | number;
   errcode?: number;
+  errno?: number;
   nativeOpen?: true;
   stateDatabasePath?: string;
   cause?: ErrorValue;
@@ -94,6 +95,7 @@ export function encodeOpenClawStateWorkerError(
         (identity.type !== "error" && identity.type !== "aggregate");
       const code = "code" in current ? current.code : undefined;
       const errcode = "errcode" in current ? current.errcode : undefined;
+      const errno = "errno" in current ? current.errno : undefined;
       nodes.push({
         ...identity,
         name: current.name,
@@ -102,6 +104,7 @@ export function encodeOpenClawStateWorkerError(
           ? { code }
           : {}),
         ...(isNativeErrorCode(errcode) ? { errcode } : {}),
+        ...(typeof errno === "number" && Number.isInteger(errno) ? { errno } : {}),
         ...(nativeOpen ? { nativeOpen: true } : {}),
         ...(stateDatabasePath === undefined ? {} : { stateDatabasePath }),
         ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
@@ -145,6 +148,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
     "message",
     "code",
     "errcode",
+    "errno",
     "nativeOpen",
     "stateDatabasePath",
     "cause",
@@ -168,6 +172,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       typeof value.code !== "string" &&
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||
     ("errcode" in value && !isNativeErrorCode(value.errcode)) ||
+    ("errno" in value && (typeof value.errno !== "number" || !Number.isInteger(value.errno))) ||
     ("nativeOpen" in value && value.nativeOpen !== true) ||
     ("stateDatabasePath" in value && typeof value.stateDatabasePath !== "string") ||
     ("cause" in value && !isErrorValue(value.cause, count))
@@ -182,6 +187,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       ? { code: value.code }
       : {}),
     ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
+    ...(typeof value.errno === "number" ? { errno: value.errno } : {}),
     ...(value.nativeOpen === true ? { nativeOpen: true } : {}),
     ...(typeof value.stateDatabasePath === "string"
       ? { stateDatabasePath: value.stateDatabasePath }
@@ -252,19 +258,14 @@ function decodeErrorGraph(
       if (node.stateDatabasePath !== undefined) {
         markOpenClawStateDatabaseFailure(error, node.stateDatabasePath);
       }
-      if (node.code !== undefined) {
-        Object.defineProperty(error, "code", {
-          value: node.code,
-          configurable: true,
-          writable: true,
-        });
-      }
-      if (node.errcode !== undefined) {
-        Object.defineProperty(error, "errcode", {
-          value: node.errcode,
-          configurable: true,
-          writable: true,
-        });
+      for (const key of ["code", "errcode", "errno"] as const) {
+        if (node[key] !== undefined) {
+          Object.defineProperty(error, key, {
+            value: node[key],
+            configurable: true,
+            writable: true,
+          });
+        }
       }
       if (node.cause) {
         Object.defineProperty(error, "cause", {

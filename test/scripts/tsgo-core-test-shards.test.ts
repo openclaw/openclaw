@@ -429,7 +429,11 @@ process.exit(result.status??1);
         ],
       );
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
-      const check = async (paths = [leaf]) => {
+      const check = async (
+        paths = [leaf],
+        stripe?: string,
+        expectedGraphListings = TSGO_CORE_GRAPHS.length,
+      ) => {
         write("compiler-events.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
@@ -438,6 +442,7 @@ process.exit(result.status??1);
               pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
               driver,
               ...changedArgs(paths),
+              ...(stripe === undefined ? [] : ["--stripe", stripe]),
             ],
             env,
             undefined,
@@ -448,37 +453,43 @@ process.exit(result.status??1);
           .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
           .trim()
           .split("\n")
+          .filter(Boolean)
           .map((line) => JSON.parse(line) as string[]);
         expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
-          TSGO_CORE_GRAPHS.length,
+          expectedGraphListings,
         );
         // Discovery and diagnostic checks both use project mode.
         const builds = calls
           .filter((args) => !args.includes("--listFilesOnly") && !args.includes("--showConfig"))
           .map((args) => args[args.indexOf("-p") + 1]);
-        return { result, builds };
+        return { result, builds, calls };
       };
-      const initial = await check();
+      const initial = await check([leaf], "1/5");
       expect(initial.result.status, initial.result.stderr).toBe(0);
-      expect(initial.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-other.json"]);
+      expect(initial.builds).toEqual([]);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
       );
-      const validConsumer = await check([helper]);
+      const validConsumer = await check([helper], "2/5");
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
-      expect(validConsumer.builds).toEqual([
+      expect(validConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-other.json"]);
+      const invalidStripe = await check([helper], "0/5", 0);
+      expect(invalidStripe.result.status).not.toBe(0);
+      expect(invalidStripe.result.stderr).toContain("Invalid core test stripe");
+      expect(invalidStripe.calls).toEqual([]);
+      // A removed rename source keeps every canonical graph assigned to this stripe.
+      const renamed = await check([leaf, "src/agents/old.test.ts"], "2/5");
+      expect(renamed.result.status, renamed.result.stderr).toBe(0);
+      expect(renamed.builds).toEqual(selectTsgoCoreTestStripe("2/5")!.map((shard) => shard.config));
+      write(helper, "export type Value = string;\n");
+      const brokenConsumer = await check([helper], "3/5");
+      expect(brokenConsumer.result.status).not.toBe(0);
+      expect(brokenConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-tools.json"]);
+      expect([...validConsumer.builds, ...brokenConsumer.builds]).toEqual([
         "test/tsconfig/tsconfig.core.test.agents-other.json",
         "test/tsconfig/tsconfig.core.test.agents-tools.json",
       ]);
-      // A removed rename source has no current root: keep the full canonical check.
-      const renamed = await check([leaf, "src/agents/old.test.ts"]);
-      expect(renamed.result.status, renamed.result.stderr).toBe(0);
-      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
-      write(helper, "export type Value = string;\n");
-      const brokenConsumer = await check([helper]);
-      expect(brokenConsumer.result.status).not.toBe(0);
-      expect(brokenConsumer.builds).toEqual(validConsumer.builds);
       expect(brokenConsumer.result.stdout + brokenConsumer.result.stderr).toContain(
         "consumer.test.ts(2,7): error TS2322",
       );

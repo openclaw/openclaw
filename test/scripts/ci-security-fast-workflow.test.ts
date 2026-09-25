@@ -254,7 +254,7 @@ describe("security-fast workflow", () => {
     expect(checkoutHarness.with?.["sparse-checkout"]).toContain(scannerPath);
     expect(job.steps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
     expect(install.run).toContain("python3 --version");
-    expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.29.0");
+    expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
     expect(install.run).not.toContain("pre-commit-hooks");
     expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
     // The first-party key scan runs before any package install can fail or

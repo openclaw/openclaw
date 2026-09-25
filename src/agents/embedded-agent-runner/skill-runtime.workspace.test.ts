@@ -15,10 +15,17 @@ import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
 const libraryFixture = vi.hoisted(() => ({ entries: [] as SkillEntry[] }));
-vi.mock("../../skills/library/selection.js", () => ({
-  loadSkillLibrarySelection: (selections: readonly unknown[]) =>
-    selections.length > 0 ? libraryFixture.entries : [],
-}));
+vi.mock("../../skills/library/selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../skills/library/selection.js")>();
+  const selectedEntries = (selections: readonly unknown[]) =>
+    selections.length > 0 ? libraryFixture.entries : [];
+  return {
+    ...actual,
+    loadSkillLibrarySelection: selectedEntries,
+    prepareSkillLibrarySelection: async (selections: readonly unknown[]) =>
+      selectedEntries(selections),
+  };
+});
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {

@@ -263,12 +263,7 @@ describe("Codex finalization generation ownership", () => {
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        harness.waitForMethod("turn/start"),
-        run.then(() => {
-          throw new Error("Resumed attempt settled before turn/start");
-        }),
-      ]);
+      await run.waitForTurnAccepted();
       abort.abort("cancel resumed attempt");
       await harness.waitForMethod("turn/interrupt");
       await harness.notify({

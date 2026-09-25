@@ -584,11 +584,14 @@ export async function snapshotUpdateCandidateState(
   const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
+  const { createUpdateCandidateExecApprovalsProjection } =
+    await import("./update-candidate-exec-approvals.js");
   const targetPath = (source: string) =>
     path.join(
       resolveUpdateCandidateStatePath(sourceRoot, input.targetStateDir, path.dirname(source)),
       path.basename(source),
     );
+  const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
   const files = await collectStateDatabasePaths(input);
@@ -616,6 +619,7 @@ export async function snapshotUpdateCandidateState(
             transform: (db: DatabaseSync) => {
               contentVersion = readStateSchemaContentVersion(db);
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
+              execApprovals.rebaseReceipt(db);
               // Source process leases cannot own the independently opened rehearsal copy.
               for (const table of ["agent_database_leases", "state_leases"] as const) {
                 if (tableExists(db, table)) {
@@ -671,6 +675,7 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
+  await execApprovals.copySources();
   const versions = publishStateDatabaseVersions(files, inspected);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
