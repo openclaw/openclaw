@@ -4,6 +4,7 @@ import OpenClawKit
 import OpenClawNativeState
 import Testing
 import WatchConnectivity
+import XCTest
 @testable import OpenClawWatchApp
 
 @MainActor
@@ -692,11 +693,15 @@ struct WatchInboxStoreOperationTests {
                     receiver.replayChatDelivery()
                 }
             }
-            receiver.replayChatDelivery()
-            let deadline = ContinuousClock.now + .seconds(5)
-            while store.savedChatDeliveryReceipt != receipt, ContinuousClock.now < deadline {
-                await Task.yield()
+            let replayed = XCTestExpectation(description: "The retained wake reloads the saved receipt")
+            withObservationTracking {
+                _ = store.savedChatDeliveryReceipt
+            } onChange: {
+                replayed.fulfill()
             }
+            receiver.replayChatDelivery()
+            let result = await XCTWaiter.fulfillment(of: [replayed], timeout: 5)
+            #expect(result == .completed)
             #expect(store.savedChatDeliveryReceipt == receipt)
             // A terminal receipt has no outbound command: this proof never activates WCSession.
             #expect(try await readyJournal.pendingCommands(nowMs: now).isEmpty)

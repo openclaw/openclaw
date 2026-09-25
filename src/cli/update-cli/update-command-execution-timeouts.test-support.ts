@@ -51,6 +51,14 @@ export function registerExecutionTimeoutTests() {
       });
 
       expect(execution?.result.status, JSON.stringify(execution?.result)).toBe("ok");
+      if (kind === "package") {
+        expect(mocks.runPackageUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timeoutMs: timeoutMs ?? 30 * 60_000,
+            workTimeoutMs: timeoutMs ?? null,
+          }),
+        );
+      }
       expect(execution?.mutationStarted).toBe(true);
       expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(2);
       expect(mocks.prepareMutableUpdate.mock.calls.at(-1)?.[1]).toBe(

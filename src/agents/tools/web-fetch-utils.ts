@@ -86,13 +86,8 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
       if (quote === '"' || quote === "'") {
         const valueStart = pos + 1;
         const valueEnd = rawTag.indexOf(quote, valueStart);
-        if (valueEnd === -1) {
-          value = rawTag.slice(valueStart);
-          pos = rawTag.length;
-        } else {
-          value = rawTag.slice(valueStart, valueEnd);
-          pos = valueEnd + 1;
-        }
+        value = rawTag.slice(valueStart, valueEnd === -1 ? undefined : valueEnd);
+        pos = valueEnd === -1 ? rawTag.length : valueEnd + 1;
       } else {
         const valueStart = pos;
         while (
@@ -131,10 +126,6 @@ function skipUnsupportedAttribute(rawTag: string, start: number): number {
   return pos;
 }
 
-function contextText(context: RenderContext): string {
-  return context.parts.join("");
-}
-
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
   context?.parts.push(value);
@@ -148,27 +139,26 @@ function closeContext(
   parent: RenderContext,
   state: { title?: string },
 ): void {
-  const label = normalizeWhitespace(contextText(context));
+  const label = normalizeWhitespace(context.parts.join(""));
   if (!label && context.kind !== "title" && !(context.kind === "anchor" && context.href)) {
     return;
   }
+  if (context.kind === "title") {
+    state.title ??= label || undefined;
+    return;
+  }
+  if (parent.kind === "title") {
+    parent.parts.push(label);
+    return;
+  }
   switch (context.kind) {
-    case "title":
-      state.title ??= label || undefined;
-      return;
     case "anchor":
-      if (parent.kind === "title") {
-        parent.parts.push(label);
-      } else {
-        parent.parts.push(
-          context.href && label ? `[${label}](${context.href})` : label || context.href || "",
-        );
-      }
+      parent.parts.push(
+        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+      );
       return;
     case "heading":
-      if (parent.kind === "title") {
-        parent.parts.push(label);
-      } else if (parent.kind === "anchor") {
+      if (parent.kind === "anchor") {
         parent.parts.push(label);
         parent.hasText ||= Boolean(label);
       } else {
@@ -176,14 +166,10 @@ function closeContext(
       }
       return;
     case "list-item":
-      if (parent.kind === "title") {
-        parent.parts.push(label);
-      } else {
-        if (parent.kind === "anchor") {
-          parent.hasText ||= Boolean(label);
-        }
-        parent.parts.push(`\n- ${label}`);
+      if (parent.kind === "anchor") {
+        parent.hasText ||= Boolean(label);
       }
+      parent.parts.push(`\n- ${label}`);
       return;
     case "root":
       parent.parts.push(label);
@@ -194,12 +180,8 @@ function closeTopContext(stack: RenderContext[], state: { title?: string }): boo
   if (stack.length < 2) {
     return false;
   }
-  const context = stack.pop();
-  const parent = stack[stack.length - 1];
-  if (!context || !parent) {
-    return false;
-  }
-  closeContext(context, parent, state);
+  const context = stack.pop()!;
+  closeContext(context, stack[stack.length - 1]!, state);
   return true;
 }
 
@@ -246,7 +228,8 @@ function closeOpenAnchorWithText(stack: RenderContext[], state: { title?: string
   return false;
 }
 
-function htmlFragmentToMarkdown(html: string): { text: string; title?: string } {
+/** Converts sanitized HTML into coarse markdown plus an optional title. */
+export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
   const state: { title?: string } = {};
@@ -349,7 +332,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
   }
 
   return {
-    text: normalizeWhitespace(contextText(root)),
+    text: normalizeWhitespace(root.parts.join("")),
     title: state.title,
   };
 }
@@ -362,11 +345,6 @@ export function normalizeWhitespace(value: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
-}
-
-/** Converts sanitized HTML into coarse markdown plus an optional title. */
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
-  return htmlFragmentToMarkdown(html);
 }
 
 /** Removes markdown decoration for plain text extraction. */

@@ -1,40 +1,23 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  renderSettingsEmpty,
-  renderSettingsSection,
-  renderSettingsSegmented,
-} from "../../components/settings-ui.ts";
+import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
+import type { SkillLibraryController } from "./library-controller.ts";
 import { renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
+import { renderSkillLibraryToolbar } from "./library-toolbar.ts";
 import { renderSkillLibraryStatus } from "./skill-status.ts";
 
-export function renderSkillLibrary(library: SkillLibraryController) {
+export function renderSkillLibrary(
+  library: SkillLibraryController,
+  navigationActions: TemplateResult,
+) {
   const list = library.list;
-  const options: Array<{ value: LibraryView; label: string }> = [];
-  const hasLibraries = Boolean(list?.entries.length);
-  if (list?.multipleProfiles || hasLibraries || list?.defaultTarget === "personal") {
-    if (list?.profileId) {
-      options.push({ value: "mine", label: t("skillLibrary.mine") });
-    }
-    if (
-      list?.multipleProfiles ||
-      list?.entries.some((entry) => entry.shared || entry.ownerProfileId === null)
-    ) {
-      options.push({ value: "team", label: t("skillLibrary.team") });
-    }
-    options.push(
-      { value: "all", label: t("skillLibrary.all") },
-      { value: "workspace", label: t("skillLibrary.inventory") },
-    );
-  }
   const query = library.query.toLowerCase().trim();
   const entries = (list?.entries ?? []).filter((entry) => {
     const scopeMatches =
@@ -52,53 +35,7 @@ export function renderSkillLibrary(library: SkillLibraryController) {
     );
   });
   return html`
-    <div class="plugins-toolbar">
-      ${
-        options.length > 0
-          ? renderSettingsSegmented({
-              value: library.view ?? "workspace",
-              ariaLabel: t("skillLibrary.library"),
-              options,
-              onChange: (view) => {
-                library.view = view;
-                library.changed();
-              },
-            })
-          : nothing
-      }
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => library.create()}
-      >
-        ${t("skillLibrary.create")}
-      </button>
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => {
-          library.importOpen = true;
-          library.importSource = null;
-          library.changed();
-        }}
-      >
-        ${t("skillLibrary.import")}
-      </button>
-      ${
-        !library.showWorkspace
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${library.loading || library.busy}
-              @click=${() => void library.load()}
-            >
-              ${t("common.refresh")}
-            </button>`
-          : nothing
-      }
-    </div>
+    ${renderSkillLibraryToolbar(library, navigationActions)}
     ${
       list?.defaultTarget === "unavailable"
         ? html`<p class="muted">${t("skillLibrary.signIn")}</p>`

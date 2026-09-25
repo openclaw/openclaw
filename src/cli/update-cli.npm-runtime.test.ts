@@ -212,7 +212,7 @@ describe("update-cli", () => {
       expect.objectContaining({ command: installCommand }),
     );
     const installOptions = requiredInstallCall[1] as { timeoutMs?: number };
-    expect(typeof installOptions.timeoutMs).toBe("number");
+    expect(installOptions.timeoutMs).toBeUndefined();
   });
 
   it("prepends portable Git PATH for package updates on Windows", async () => {

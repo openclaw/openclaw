@@ -16,6 +16,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { selectFile } from "./chat-attachment-picker.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   closeStagedPane,
   ChatPaneComposerHandoff,
@@ -25,7 +26,7 @@ import {
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
@@ -113,7 +114,7 @@ describe("cross-region Home composer ownership", () => {
     const notify = vi.fn(() => persistence.persistChangedState());
     current.requestUpdate = notify;
     persistence.start();
-    const unsubscribe = subscribeChatOutboxProjection(current);
+    const unsubscribe = chatOutboxOwner(current).subscribe(current);
     const view = { presented: true, owner };
     const handoff = new ChatPaneComposerHandoff(context, {
       state: () => current,

@@ -191,7 +191,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(previous),
         },
       ]),
-      { ...manifest, packages: [] },
       targetPlan,
       {
         installPackages,
@@ -267,7 +266,6 @@ describe("applyClawPackageUpdate", () => {
             currentDigest: digestClawPackageRef(legacy),
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -316,7 +314,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(legacy),
         },
       ]),
-      { ...manifest, packages: [] },
       { ...addPlan, actions: [] },
       { readRefs: () => [legacy], replaceExpected },
     );
@@ -341,7 +338,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(oldSkill),
         },
       ]),
-      { ...manifest, packages: [] },
       { ...addPlan, actions: [] },
       {
         readRefs: () => [oldSkill],
@@ -369,7 +365,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "added",
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -398,7 +393,6 @@ describe("applyClawPackageUpdate", () => {
             currentDigest: digestClawPackageRef(planned),
           },
         ]),
-        { ...manifest, packages: [] },
         { ...addPlan, actions: [] },
         { readRefs: () => [observed], replaceExpected },
       ),
@@ -490,7 +484,6 @@ describe("applyClawPackageUpdate", () => {
               reason: "owned upgrade",
             },
           ]),
-          manifest,
           targetPlan,
           {
             env,
@@ -616,7 +609,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "owned upgrade",
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -647,7 +639,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "changed",
           },
         ]),
-        manifest,
         addPlan,
         { installPackages, readRefs: () => [oldSkill], replaceExpected },
       ),

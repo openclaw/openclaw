@@ -35,8 +35,9 @@ export function bindLlmOperatorAuthority(
     source: CompletionOperatorSource,
   ) => Promise<LlmCompleteResult>,
 ): (params: LlmCompleteParams) => Promise<LlmCompleteResult> {
-  return (params) =>
-    runWithAsyncWorkResources(async (onAcquired) => {
+  return (input) => {
+    const params = { ...input };
+    return runWithAsyncWorkResources(async (onAcquired) => {
       // Only the host-issued context-engine capability identifies bounded system maintenance.
       // A request's caller/purpose fields cannot change its execution authority.
       if (hostCaller?.kind === "context-engine") {
@@ -47,13 +48,13 @@ export function bindLlmOperatorAuthority(
           bindModelExecution: () => undefined,
         });
       }
-      const capturedOperator = withOperatorAuthorization(() =>
-        captureAmbientGatewayOperatorAuthority({
-          missingBindingError: () =>
-            new Error("Plugin model completion requires its current Gateway binding."),
-          retainInherited: true,
-        }),
-      );
+      const capturedOperator = await captureAmbientGatewayOperatorAuthority({
+        missingBindingError: () =>
+          new Error("Plugin model completion requires its current Gateway binding."),
+        retainInherited: true,
+      }).catch((cause: unknown) => {
+        throw createLlmOperatorAuthorizationError(cause);
+      });
       const resources = new AsyncDisposableStack();
       if (capturedOperator?.release) {
         resources.defer(capturedOperator.release);
@@ -92,4 +93,5 @@ export function bindLlmOperatorAuthority(
         },
       });
     });
+  };
 }

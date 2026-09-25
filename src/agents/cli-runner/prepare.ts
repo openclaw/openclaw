@@ -50,10 +50,6 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
@@ -107,11 +103,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  remapSkillReferencePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../embedded-agent-runner/sandbox-skills.js";
+import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
@@ -125,7 +117,6 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -179,6 +170,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -239,14 +231,6 @@ const defaultPrepareDeps = {
 };
 const prepareDeps = { ...defaultPrepareDeps };
 
-function resolveCliSessionInvalidatedReason(
-  reusableCliSession: CliReusableSession,
-): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
-  return reusableCliSession.mode === "invalidate"
-    ? reusableCliSession.invalidatedReason
-    : undefined;
-}
-
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
@@ -262,81 +246,6 @@ function prependCliSessionDriftUserContext(
     ...context,
     text: [note, context.text].join("\n\n"),
     ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
-
-async function resolveCliSkillsPrompt(params: {
-  assertCurrent: () => void;
-  agentId: string;
-  config: RunCliAgentParams["config"];
-  sessionKey: string;
-  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
-  workspaceDir: string;
-  executionWorkspaceDir: string;
-}): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
-  params.assertCurrent();
-  const skillsSnapshot =
-    params.skillsSnapshot ??
-    (
-      await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config ?? {},
-        agentId: params.agentId,
-        watch: false,
-      })
-    ).snapshot;
-  params.assertCurrent();
-  const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-    skillsSnapshot,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  params.assertCurrent();
-  const {
-    skillsEligibility,
-    skillUsagePaths,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot: skillsSnapshotForRun,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: sandboxWorkspace ? { ...sandboxWorkspace, enabled: true } : undefined,
-    skillsAnchorWorkspace: sandboxWorkspace?.workspaceDir ?? params.workspaceDir,
-    skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-    await resolveEmbeddedRunSkillEntries({
-      assertCurrent: params.assertCurrent,
-      workspaceDir: skillsWorkspaceDir,
-      ...(sandboxWorkspace ? {} : { executionWorkspaceDir: params.executionWorkspaceDir }),
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly,
-    });
-  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  return {
-    ...(sandboxWorkspace ? { usagePaths: skillUsagePaths } : {}),
-    prompt: await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      ...(sandboxWorkspace ? {} : { loadEntries: loadSkillEntries }),
-      workspaceDir: skillsPromptWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    }),
   };
 }
 
@@ -388,42 +297,6 @@ function shouldResolveAuthProfileForExecution(params: {
     return params.policy.oauthRefreshOwner === "core";
   }
   return params.authCredential.type === "api_key" || params.authCredential.type === "token";
-}
-
-type CliAuthProfileResolutionFailure =
-  | { kind: "unmaterialized" }
-  | { kind: "resolved-as-other"; resolvedProfileId: string };
-
-function describeCliAuthProfileResolutionFailure(
-  profileId: string,
-  failure: CliAuthProfileResolutionFailure,
-): string {
-  switch (failure.kind) {
-    case "resolved-as-other":
-      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
-    case "unmaterialized":
-      return `could not materialize selected auth profile "${profileId}"`;
-  }
-  return failure satisfies never;
-}
-
-function buildCliAuthProfileResolutionError(params: {
-  backendId: string;
-  profileId: string;
-  provider: string;
-  agentDir: string;
-  failure: CliAuthProfileResolutionFailure;
-}): CliAuthProfilePreparationError {
-  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
-    profileId: params.profileId,
-  });
-  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new CliAuthProfilePreparationError({
-    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-    profileId: params.profileId,
-    provider: params.provider,
-    agentDir: params.agentDir,
-  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -783,6 +656,21 @@ async function prepareCliRunContextWithinReadFence(
     })
   ) {
     const authProfileId = effectiveAuthProfileId;
+    const profileResolutionError = (provider: string, resolvedProfileId?: string) => {
+      const loginCommand = buildOAuthRefreshFailureLoginCommand(provider, {
+        profileId: authProfileId,
+      });
+      const reason =
+        resolvedProfileId !== undefined
+          ? `selected auth profile "${authProfileId}" resolved as "${resolvedProfileId}"`
+          : `could not materialize selected auth profile "${authProfileId}"`;
+      return new CliAuthProfilePreparationError({
+        message: `CLI backend "${backendResolved.id}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+        profileId: authProfileId,
+        provider,
+        agentDir,
+      });
+    };
     const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
     const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
       cfg: params.config,
@@ -795,26 +683,19 @@ async function prepareCliRunContextWithinReadFence(
     });
     params.assertCurrent?.();
     if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+      );
     }
     if (
       resolvedAuth &&
       backendAuthPolicy?.strictSelectedProfile &&
       resolvedAuth.profileId !== authProfileId
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        resolvedAuth.profileId,
+      );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
@@ -824,13 +705,7 @@ async function prepareCliRunContextWithinReadFence(
       (!authCredential ||
         (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: resolvedAuth?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(resolvedAuth?.provider ?? params.provider);
     }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
@@ -1853,7 +1728,8 @@ async function prepareCliRunContextWithinReadFence(
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
     const reusableCliSessionId = resolveCliSessionId(reusableCliSession);
-    const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
+    const invalidatedReason =
+      reusableCliSession.mode === "invalidate" ? reusableCliSession.invalidatedReason : undefined;
     if (invalidatedReason) {
       cliBackendLog.info(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,

@@ -93,7 +93,7 @@ export async function listPluginOpenClawHostLinkIssues(
   };
 }
 
-/** Relinks registry-owned plugin packages to the current OpenClaw host package. */
+/** Relinks registered plugin packages to the current OpenClaw host package. */
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {

@@ -140,6 +140,9 @@ overflow summary.
   stop path for multi-owner sessions.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
+- A queued request that expires or is cancelled before execution settles only
+  that request. Its saved input stays marked cancelled; it does not end the
+  active turn, pause its goal, or add an active-run failure to the conversation.
 
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort

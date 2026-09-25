@@ -126,15 +126,6 @@ export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry):
   return entry?.abortStopReason?.trim() || "rpc";
 }
 
-export function deleteGatewayDedupeEntries(params: {
-  dedupe: AgentTurnContext["dedupe"];
-  keys: readonly string[];
-}) {
-  for (const key of params.keys) {
-    params.dedupe.delete(key);
-  }
-}
-
 type TaskSettlementAdmission =
   | { taskTrackingMode: "none"; assertSettlementCurrent?: () => void }
   | {

@@ -17,6 +17,7 @@ export type SqliteSchemaFacts = {
   readonly userVersion: number;
   readonly schemaVersion: number;
   readonly tables: ReadonlySet<string>;
+  readonly tableSql: ReadonlyMap<string, string | null>;
 };
 
 type SchemaOwner = {
@@ -370,7 +371,7 @@ export function getAdmittedSqliteSchemaFacts(
       );
       const tables = executeWithCachedStatement(
         database,
-        "SELECT name FROM main.sqlite_schema WHERE type = 'table'",
+        "SELECT name, sql FROM main.sqlite_schema WHERE type = 'table'",
         [],
         (s) => s.all(),
       );
@@ -379,6 +380,13 @@ export function getAdmittedSqliteSchemaFacts(
         userVersion: Number(userVersion?.user_version ?? 0),
         schemaVersion,
         tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
+        tableSql: new Map(
+          tables.flatMap((row) =>
+            typeof row.name === "string"
+              ? [[row.name, typeof row.sql === "string" ? row.sql : null] as const]
+              : [],
+          ),
+        ),
       };
     });
   }

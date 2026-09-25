@@ -115,7 +115,7 @@ describe("subagent timing completion", () => {
         skipMaintenance: true,
       });
     }
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey,

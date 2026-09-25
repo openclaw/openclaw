@@ -13,7 +13,8 @@ import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
@@ -390,7 +391,14 @@ export async function readScheduledTaskCommand(
     }
     if (
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(
+        (inspectionError: unknown) => {
+          if (inspectionError instanceof ServiceInspectionError) {
+            throw inspectionError;
+          }
+          return false;
+        },
+      ))
     ) {
       return null;
     }
@@ -404,7 +412,11 @@ async function isScheduledTaskDefinitionAbsent(
   timeoutMs?: number,
 ): Promise<boolean> {
   // A missing script can still belong to a registered task or Startup login item.
-  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  if (probe.status === "unknown") {
+    throw new ServiceInspectionError("windows-task-inspection-failed", probe.diagnostic);
+  }
+  if (probe.status !== "missing") {
     return false;
   }
   for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {

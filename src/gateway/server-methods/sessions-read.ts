@@ -47,7 +47,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
@@ -428,7 +428,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       },
     );
   },
-  "sessions.resolve": ({ params, respond, context, client }) => {
+  "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
@@ -436,24 +436,29 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!projection) {
       throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const resolved = resolveSessionKeyFromResolveParams({
-      projection,
-      client,
-      p: params,
-    });
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    if ("missing" in resolved) {
-      respond(true, { ok: false }, undefined);
-      return;
-    }
-    if ("ambiguous" in resolved) {
-      respond(true, { ok: false, candidates: resolved.candidates }, undefined);
-      return;
-    }
-    respond(true, resolved, undefined);
+    await withPreparedSessionResolve(
+      {
+        projection,
+        client,
+        p: params,
+        isCurrent: () => getSessionRowProjection(context) === projection,
+      },
+      (resolved) => {
+        if (!resolved.ok) {
+          respond(false, undefined, resolved.error);
+          return;
+        }
+        if ("missing" in resolved) {
+          respond(true, { ok: false }, undefined);
+          return;
+        }
+        if ("ambiguous" in resolved) {
+          respond(true, { ok: false, candidates: resolved.candidates }, undefined);
+          return;
+        }
+        respond(true, resolved, undefined);
+      },
+    );
   },
   ...sessionByKeyReadHandlers,
   ...sessionMaintenanceHandlers,

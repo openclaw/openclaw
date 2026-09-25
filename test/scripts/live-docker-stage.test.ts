@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -898,6 +899,9 @@ describe("frozen bundle committed contract", () => {
         cpSync(path.dirname(installedNative), nativePackage, {
           recursive: true,
           dereference: true,
+          mode: constants.COPYFILE_FICLONE,
+          // Keep executable copies on libuv's close-on-exec path on Node 24.19.
+          filter: () => true,
         });
         if (shape === "owned pnpm" || shape === "native donor link") {
           const nativeLink = path.join(
