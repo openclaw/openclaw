@@ -13,7 +13,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { restoreTaskExecutionSnapshot } from "./task-execution-owner.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { clearTaskActivity } from "./task-registry-activity.js";
 import {
   clearTaskFlowSyncRetries,
   receiveTaskRegistryRestoreResult,
@@ -114,6 +113,15 @@ type TaskRegistryRestoreState =
 let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
   deliverTaskRegistryObserverEvent(createEvent, recordTaskRegistryPublication);
+}
+
+export function clearTaskActivity(taskId: string): void {
+  const activity = taskActivityByTaskId.get(taskId);
+  if (activity?.flushTimer) {
+    clearTimeout(activity.flushTimer);
+  }
+  activity?.preparedItems.clear();
+  taskActivityByTaskId.delete(taskId);
 }
 
 function clearTaskRegistryEphemeralState(): void {

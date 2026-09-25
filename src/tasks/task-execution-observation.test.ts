@@ -13,7 +13,8 @@ import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-re
 import { claimAgentRunContext, resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-records.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
-import { clearTaskActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
+import { clearTaskActivity } from "./task-registry-state.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 const taskIds = new Set<string>();

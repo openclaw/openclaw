@@ -82,7 +82,7 @@ export async function applyTaskRegistryMaintenanceRetention(
       },
       async (beginRecovery) => {
         try {
-          const result = await store.runInitialMutationAsync(
+          const writeResult = await store.runInitialMutationAsync(
             context,
             { type: "tasks.applyRetention", input },
             assertCurrent,
@@ -93,7 +93,9 @@ export async function applyTaskRegistryMaintenanceRetention(
             },
           );
           committed =
-            result.kind === "unchanged" ? result : readTaskRetentionCommit(result, input, source);
+            writeResult.kind === "unchanged"
+              ? writeResult
+              : readTaskRetentionCommit(writeResult, input, source);
           if (!committed) {
             throw new Error("Task retention returned no committed outcome");
           }
