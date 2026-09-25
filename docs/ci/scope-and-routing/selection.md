@@ -13,10 +13,11 @@ Runner placement is separate from coverage selection. On automatic canonical hyb
 
 ## Scope and routing
 
-Full main CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci).
+Main-tier CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci).
 Main-push lane selection below describes the opt-in `OPENCLAW_CI_ON_PUSH=true`
-path. Hourly runs use ordinary full manual coverage, including Android, without
-changed-path filtering.
+path. Hourly runs select the complete main tier, including Android, without
+changed-path filtering. Full manual and release validation additionally select
+the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 

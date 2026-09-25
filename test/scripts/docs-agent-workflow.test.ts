@@ -516,6 +516,13 @@ describe("Docs Agent full-CI admission", () => {
     }
     expect(evaluate(producer.if, { ...context, eventName: "push" })).toBe(true);
     expect(evaluate(producer.if, { ...context, eventName: "pull_request" })).toBe(true);
+    expect(
+      evaluate(producer.if, {
+        ...context,
+        eventName: "schedule",
+        preflightOutputs: { checkout_revision: mainSha, validation_tier: "main" },
+      }),
+    ).toBe(false);
     for (const outcome of [{ failed: true }, { cancelled: true }]) {
       expect(evaluate(producer.if, { ...context, eventName: "schedule", ...outcome })).toBe(false);
     }
