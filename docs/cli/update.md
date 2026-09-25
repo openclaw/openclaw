@@ -117,12 +117,18 @@ sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
 read-only request before issue creation. Fallback and pending outcomes retain the
 sanitized report locally; a confirmed issue keeps only its durable issue URL.
-If the CLI is missing or that check cannot confirm authentication, OpenClaw
-provides a prefilled issue link without starting issue creation. If the exact
-report exceeds the browser URL limit, OpenClaw keeps the sanitized body locally
-and returns to the action menu, where reporting can be chosen and confirmed
-again. A report preparation or submission
-error also returns to that menu; Diagnose runs only when selected explicitly.
+If the CLI is missing, authentication is unavailable, or GitHub rejects the
+upload, OpenClaw keeps the sanitized report locally and returns to the previous
+action menu. Fix the problem, then choose **Report update failure** and confirm
+again to retry the same report, or choose **Report in browser** to review and
+submit it with your browser's GitHub account. The browser choice is available
+when the prepared report fits a prefilled link and no uncertain upload is pending;
+it does not require the GitHub CLI. Completed update and Doctor checks are not
+rerun. Preparation or submission errors also return to the menu. An uncertain
+upload stays pending: **Check report status** looks for the existing issue without
+creating another one, and no browser handoff is offered.
+Successful submission, explicit exit, and cancellation retain their normal
+behavior; Diagnose runs only when selected explicitly.
 In the Control UI, an interrupted
 pre-create preparation becomes retryable after its local reservation expires.
 After an uncertain creation result, OpenClaw checks for an issue matching the
@@ -162,7 +168,15 @@ package once, then lets that candidate decide whether the live installation can
 be updated. Registry targets and explicit artifacts such as `--tag ./openclaw.tgz`
 use the same flow. The stage is reused for verification, canary rehearsal, and
 activation; a refusal or pre-mutation failure removes it and leaves the installed
-package and serving Gateway in place.
+package and serving Gateway in place. After admission and package verification,
+a matching installed version and artifact build identity remain a no-op unless
+the update needs to replace the installation method or a separate serving root.
+The temporary candidate is removed without activating it.
+
+When replacement is needed, the updater retains its running worker files before
+changing the installed package. Linux OverlayFS installations use private copies
+so hard-link copy-up cannot invalidate the retained files’ identity checks.
+Other supported filesystems keep the hard-link fast path and copy fallback.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the

@@ -308,6 +308,7 @@ export function createAgentDatabaseNativeGeneration(
             agentId,
             agentPath: pathname,
             admission: context.admission,
+            onRegistryChange: source.onRegistryChange,
           })
         : undefined;
       const openStore = () =>
@@ -382,6 +383,7 @@ export function createAgentDatabaseNativeGeneration(
         agentId,
         agentPath: pathname,
         admission: context.admission,
+        onRegistryChange: source.onRegistryChange,
       });
       await settleAgentRegistration(registration, async () => {
         await runSqliteWorkerStoreOperation(
@@ -443,7 +445,10 @@ export function createAgentDatabaseNativeGeneration(
           try {
             await opening.then(
               (store) => store?.close(),
-              () => closeUnclaimedSharedStateSqliteWorkers(pathname),
+              () =>
+                openedStore
+                  ? openedStore.close()
+                  : closeUnclaimedSharedStateSqliteWorkers(pathname),
             );
           } catch (error) {
             errors.push(error);

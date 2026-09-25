@@ -23,7 +23,10 @@ import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
+import {
+  canonicalizeNativeProgressCardInput,
+  type CodexNativePlan,
+} from "./plan-compaction-state.js";
 import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
@@ -207,13 +210,7 @@ export function activateCodexAttemptTurn(
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
       ...(progressCardTool
         ? {
-            onNativePlanUpdate: async (update: {
-              markdown?: string;
-              steps: Array<{
-                step: string;
-                status: "pending" | "in_progress" | "completed";
-              }>;
-            }) => {
+            onNativePlanUpdate: async (update: CodexNativePlan) => {
               nativePlanUpdateOrdinal += 1;
               try {
                 const input = canonicalizeNativeProgressCardInput(update);

@@ -119,7 +119,7 @@ const WINDOWS_SCOPE_RE =
 const WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE =
   /^src\/infra\/advertised-lan-host(?:\.windows)?(?:\.test)?\.ts$/;
 const WINDOWS_SECRETREF_SCOPE_RE =
-  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:fs-safe|fs-safe-defaults|permissions)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
+  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:boundary-file-read|fs-safe)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
@@ -315,7 +315,7 @@ export function detectChangedScope(changedPaths) {
       WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path) ||
       WINDOWS_PROCESS_IDENTITY_SCOPE_RE.test(path) ||
-      /^scripts\/lib\/ci-windows-test-plan\.mts$|^test\/scripts\/ci-windows-test-plan\.test\.ts$/u.test(
+      /^scripts\/lib\/(?:ci-windows-test-plan|vitest-build-prerequisites)\.mts$|^test\/scripts\/ci-windows-test-plan\.test\.ts$/u.test(
         path,
       ) ||
       (!facts.isTestOnly &&

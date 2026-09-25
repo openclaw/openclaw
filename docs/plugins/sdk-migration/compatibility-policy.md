@@ -105,6 +105,13 @@ result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;
 callers must carry prepared rows forward rather than reconstructing them from IDs.
 
+Both builders return the currently published menu rows without waiting for full
+discovery. Results may be partial while acquisition continues in the background;
+`pendingProviders` identifies providers still refreshing. Keep known choices usable
+and call the builder again when the menu is reopened. Awaiting a menu builder is
+not a complete-inventory guarantee. Use the catalog's explicit refresh operation
+when requesting inventory acquisition rather than treating a menu read as one.
+
 Use `getModelsRuntimeChoices(data, provider, model)` from the same SDK subpath
 for a selected model. A nonempty array contains that model's eligible runtime
 choices. An empty array means the current observation permits no runtime for

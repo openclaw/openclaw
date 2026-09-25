@@ -31,8 +31,8 @@ The dispatcher summary names the child `CI hourly-main-<run>-<attempt>` run.
 run and its `openclaw/ci-gate` job. Hourly CI children share one non-canceling
 concurrency slot with a coalesced pending tip. Ordinary manual/release CI stays
 independent, and subsequent security-only pushes cannot cancel hourly work.
-The hourly dispatcher defers during `OPENCLAW_RELEASE_PRIORITY_RUN`; its
-manual action remains available, like ordinary manual CI.
+The hourly dispatcher and manual CI remain available during release validation;
+`OPENCLAW_RELEASE_PRIORITY_RUN` does not control their admission.
 
 The standalone Docs, Node Runtime Conformance, Plugin Init Scaffold Validation,
 and Sandbox Common Smoke workflows also run hourly at minute 23, retaining
@@ -78,7 +78,7 @@ protocol-method metadata guards there against the exact push `before` SHA,
 so hourly manual CI's main-against-itself comparison cannot lose these checks;
 Workflow Sanity retains its existing push scope. The full CI aggregate job is
 skipped on default main pushes, **not** on runnable PRs or full manual runs.
-Existing release-priority deferral still applies to CodeQL and Workflow Sanity.
+CodeQL and Workflow Sanity also remain available during release validation.
 PR required-check names and security-review enforcement are unchanged.
 
 Publishing and its prerequisite checks stay event-driven: docs mirror and
@@ -99,6 +99,28 @@ retried at the next hourly opportunity, and manual dispatch remains available.
 If full CI takes longer than an hour, the current run finishes while GitHub
 coalesces pending hourly children. No measured cost savings or strict completion
 interval is claimed.
+
+## Nightly Full Release Validation
+
+`Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs at
+04:00 UTC with the `stable` profile, soak and blocking performance,
+`reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
+Both `ref` and `expected_sha` carry the scheduler's exact main SHA, so a main
+push after the event cannot move the target. A still-active parent for the same
+SHA shares the SHA-specific Full Release Validation concurrency group and queues
+this dispatch; a completed one is validated again and adopts its own
+exact-target evidence through reuse. The parent automatically
+uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured; the five-minute dispatcher
+stays on ordinary `ubuntu-24.04` runners.
+
+Find the parent for the SHA shown in the dispatcher summary:
+
+```bash
+gh run list --workflow full-release-validation.yml --branch main --event workflow_dispatch
+```
+
+**A successful dispatcher is not a passing validation result**; inspect the
+Full Release Validation parent and its evidence.
 
 ## OpenClaw Performance
 

@@ -437,7 +437,7 @@ export function mergeCodexThreadConfigs(
     if (!config) {
       continue;
     }
-    merged = mergeJsonObjects(merged ?? {}, config);
+    merged = mergeJsonObjects(merged ?? {}, normalizeShellEnvironmentOverrides(config));
   }
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -671,6 +671,25 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
       destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
   };
+}
+
+// Native request keys may be dotted. Normalize each policy patch before merging
+// layers so a retained dotted key cannot override the final managed environment.
+function normalizeShellEnvironmentOverrides(config: JsonObject): JsonObject {
+  let normalized = { ...config };
+  for (const [key, value] of Object.entries(config)) {
+    if (!key.startsWith("shell_environment_policy.")) {
+      continue;
+    }
+    delete normalized[key];
+    let patch: JsonValue = value;
+    for (const segment of key.split(".").toReversed()) {
+      patch = { [segment]: patch };
+    }
+    // SAFETY: the nonempty dotted key wraps the value in an object before merging.
+    normalized = mergeJsonObjects(normalized, patch as JsonObject);
+  }
+  return normalized;
 }
 
 function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {

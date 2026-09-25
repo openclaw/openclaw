@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { appendRegularFile, appendRegularFileSync } from "../infra/regular-file.js";
+import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { redactSensitiveText, serializeRedactedFileLogRecord } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";

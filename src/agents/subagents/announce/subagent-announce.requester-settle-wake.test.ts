@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   promoteRequesterFinalAttachment,
@@ -213,7 +214,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ]);
     }
     findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
-      const event = transcripts.get(sessionId)?.findLast(match);
+      const event = transcripts
+        .get(sessionId)
+        ?.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
@@ -582,7 +585,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
               __openclaw: { runId: child?.runId },
             },
           };
-          return match(event) ? { event } : undefined;
+          return matchesTranscriptEvent(event, match) ? { event } : undefined;
         });
       }
 

@@ -45,7 +45,10 @@ afterEach(() => {
 
 // Each `gh run view --json status,...` poll advances that run through its
 // states; a workflow dispatch creates the next run id in `runs` order.
-function fixture(runs: Record<string, RunState[]>) {
+function fixture(
+  runs: Record<string, RunState[]>,
+  readFailure?: { count: number; message: string },
+) {
   const root = mkdtempSync(join(tmpdir(), "release-publish-children-"));
   roots.push(root);
   mkdirSync(join(root, "bin"));
@@ -72,6 +75,12 @@ const state = JSON.parse(readFileSync(root + '/state.json', 'utf8'));
 const save = () => writeFileSync(root + '/state.json', JSON.stringify(state));
 const json = args.includes('--json') ? args[args.indexOf('--json') + 1] : '';
 const jq = args.includes('--jq') ? args[args.indexOf('--jq') + 1] : '';
+const readFailure = ${JSON.stringify(readFailure) ?? "null"};
+if (readFailure && json === 'status,url,updatedAt') {
+  state.reads = (state.reads ?? 0) + 1; save();
+  appendFileSync(root + '/calls', 'read ' + state.reads + '\\n');
+  if (state.reads <= readFailure.count) { console.error(readFailure.message); process.exit(7); }
+}
 const url = (id) => 'https://github.com/${repository}/actions/runs/' + id;
 if (args[0] === 'run' && args[1] === 'view') {
   const id = args[args.indexOf('--repo') + 2];
@@ -194,5 +203,25 @@ describe("plugin npm child failure propagation", () => {
     expect(result.dispatches).toHaveLength(0);
     expect(result.outputs).toBe("plugin_npm_completed=true\nplugin_npm_run_id=91\n");
     expect(result.summary).toContain("plugin-npm-release.yml: success");
+  });
+});
+
+describe("parent read retries", () => {
+  it.each([
+    { count: 2, message: "gh: Server Error (HTTP 502)", calls: 3, succeeds: true },
+    { count: 4, message: "gh: Server Error (HTTP 502)", calls: 4, succeeds: false },
+    { count: 4, message: "gh: Not Found (HTTP 404)", calls: 1, succeeds: false },
+  ])("bounds retries for $message ($count failures)", ({ count, message, calls, succeeds }) => {
+    const result = fixture({ 91: [succeeded[1]!] }, { count, message }).run(
+      'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"\n' +
+        'wait_for_run plugin-npm-release.yml 91 "$PARENT_WORKFLOW_SHA"',
+    );
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 7);
+    expect(result.events.filter((event) => event.startsWith("read "))).toHaveLength(calls);
+    if (succeeds) {
+      expect(result.summary).toContain("plugin-npm-release.yml: success");
+    } else {
+      expect(result.stderr).toContain(message);
+    }
   });
 });

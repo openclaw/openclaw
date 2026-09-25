@@ -773,7 +773,8 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       scenario === "projects-doctor" ||
       scenario === "projects-startup-migration" ||
       scenario === "taskflow-restoration" ||
-      scenario === "workshop-doctor-recovery"
+      scenario === "workshop-doctor-recovery" ||
+      scenario === "update-report-recovery"
     ) {
       continue;
     }
