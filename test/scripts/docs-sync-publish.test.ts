@@ -160,6 +160,20 @@ describe("docs-sync-publish", () => {
     fs.mkdirSync(path.join(publishRoot, "docs", "fa"), { recursive: true });
     const translation = "<Note>\n  </Note>\n";
     fs.writeFileSync(path.join(publishRoot, "docs", "fa", "index.md"), translation);
+    for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+      fs.writeFileSync(path.join(publishRoot, "docs", name), "# Old authoring instructions\n");
+      fs.writeFileSync(path.join(publishRoot, "docs", "fa", name), "# Localized instructions\n");
+    }
+    const localizedTemplate = path.join(
+      publishRoot,
+      "docs",
+      "fa",
+      "reference",
+      "templates",
+      "AGENTS.md",
+    );
+    fs.mkdirSync(path.dirname(localizedTemplate), { recursive: true });
+    fs.writeFileSync(localizedTemplate, "# Localized workspace template\n");
     fs.symlinkSync(
       path.resolve("node_modules"),
       path.join(publishRoot, "node_modules"),
@@ -180,6 +194,18 @@ describe("docs-sync-publish", () => {
       expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
         translation,
       );
+      for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+        expect(fs.existsSync(path.join(publishRoot, "docs", name))).toBe(false);
+        // Translation finalization owns orphan deletion and inbound link repair.
+        expect(fs.existsSync(path.join(publishRoot, "docs", "fa", name))).toBe(true);
+      }
+      expect(
+        fs.readFileSync(
+          path.join(publishRoot, "docs", "reference", "templates", "AGENTS.md"),
+          "utf8",
+        ),
+      ).toBe(fs.readFileSync(path.join("docs", "reference", "templates", "AGENTS.md"), "utf8"));
+      expect(fs.readFileSync(localizedTemplate, "utf8")).toBe("# Localized workspace template\n");
       const published = JSON.parse(
         fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
       );
