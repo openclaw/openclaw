@@ -5,7 +5,7 @@ import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -77,6 +77,55 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it.each([
+    "The incident lookup failed because Slack received too many requests. Slack advised waiting one second before retrying, but no retry was made, as requested, so the lookup remains incomplete. The connection was lost separately before the turn finished; no recovery is recorded. No action is required from you.",
+    "The search service is overloaded, so I could not complete the document lookup. Please try the lookup again later.",
+  ])("preserves a model-authored tool failure explanation: %s", async (text) => {
+    const payload = setReplyPayloadMetadata(
+      { text, isError: true },
+      { toolFailureExplanation: true, assistantTranscriptOwned: true },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [payload], meta: {} });
+
+    const result = await executeTestTurn();
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]).toBe(payload);
+      expect(getReplyPayloadMetadata(result.runResult.payloads![0])).toMatchObject({
+        toolFailureExplanation: true,
+        assistantTranscriptOwned: true,
+      });
+    }
+  });
+
+  it.each([false, true])(
+    "preserves provider rate-limit handling with a tool explanation present: %s",
+    async (hasToolExplanation) => {
+      const payload = hasToolExplanation
+        ? setReplyPayloadMetadata(
+            { text: "Slack denied access to the channel.", isError: true },
+            { toolFailureExplanation: true },
+          )
+        : { text: "429 Too Many Requests", isError: true };
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [payload],
+        meta: hasToolExplanation
+          ? { error: { kind: "incomplete_turn", message: "429 Too Many Requests" } }
+          : {},
+      });
+
+      const result = await executeTestTurn();
+
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads).toEqual([
+          { text: "⚠️ API rate limit reached. Please try again later.", isError: true },
+        ]);
+      }
+    },
+  );
+
   it.each(
     [
       "Handoff refused after 529 OVERLOADED; reconnect before continuing.",
