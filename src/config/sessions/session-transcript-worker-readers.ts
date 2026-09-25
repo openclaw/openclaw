@@ -48,10 +48,7 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "transcript-match", request }),
         JSON.stringify(request).length * 2,
-        (value) => {
-          assertResultKind(value, "transcript-match", "a transcript match");
-          return value.result;
-        },
+        (value) => readResult(value, "transcript-match", "a transcript match").result,
       ),
     readHistoricalEvictionCandidates: async (input) =>
       await runRequest(
