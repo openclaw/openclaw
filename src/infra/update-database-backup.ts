@@ -40,6 +40,7 @@ const UpdateDatabaseBackupSchema = z.object({
     }),
   ),
   missingPaths: z.array(z.string()),
+  sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
   warnings: z.array(z.string()),
 });
@@ -162,7 +163,11 @@ async function canonicalDatabaseInventory(plan: InspectionPlan) {
       }
     }
   }
-  return { present: [...present].toSorted(), missing: [...missing].toSorted() };
+  return {
+    present: [...present].toSorted(),
+    missing: [...missing].toSorted(),
+    sourcePaths: [...new Set(plan.files.flatMap(([, database]) => database.spellings))].toSorted(),
+  };
 }
 
 /** Read-only capture; the caller separately decides whether automatic restoration is safe. */
@@ -234,7 +239,14 @@ export async function createUpdateDatabaseBackupInProcess(
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
   await inspectRestorableDatabaseFiles(inventory.present, identities);
-  return { directory, databases, missingPaths: inventory.missing, sourceGenerations, warnings };
+  return {
+    directory,
+    databases,
+    missingPaths: inventory.missing,
+    sourcePaths: inventory.sourcePaths,
+    sourceGenerations,
+    warnings,
+  };
 }
 
 /** Retain raw, verified database files separately from the old package fingerprint. */

@@ -291,6 +291,7 @@ it.each<{
                 directory: path.join(transaction.backupRoot, "databases"),
                 databases: [],
                 missingPaths: [],
+                sourcePaths: [],
                 sourceGenerations: {},
                 warnings: [],
               },

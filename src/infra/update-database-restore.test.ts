@@ -17,51 +17,48 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseHandleLease,
 } from "./state-database-coordinator.js";
-import type { UpdateDatabaseBackup } from "./update-database-backup.js";
+import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
+import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
-async function createRestoreFixture(state: OpenClawTestState) {
+async function createRestoreFixture(state: OpenClawTestState, linked = false) {
   const shared = openOpenClawStateDatabase({ env: state.env });
+  let agentDirectory = state.agentDir();
+  if (linked) {
+    await fs.mkdir(agentDirectory, { recursive: true });
+    const alias = state.path("linked-agent");
+    await fs.symlink(agentDirectory, alias, "junction");
+    agentDirectory = alias;
+  }
   const agent = openOpenClawAgentDatabase({
     agentId: "main",
-    path: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    path: path.join(agentDirectory, "openclaw-agent.sqlite"),
     env: state.env,
   });
   const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
-  const directory = state.path("database-backup");
-  await fs.mkdir(directory, { mode: 0o700 });
-  const backup: UpdateDatabaseBackup = {
-    directory,
-    databases: [],
-    missingPaths: [],
-    sourceGenerations: {},
-    warnings: [],
-  };
-  for (const [index, owner] of [shared, agent].entries()) {
+  for (const owner of [shared, agent]) {
     owner.db.exec(
       "CREATE TABLE restore_witness(value TEXT); INSERT INTO restore_witness VALUES ('baseline');",
     );
-    const snapshotPath = path.join(directory, `${index}.sqlite`);
-    const snapshot = await createVerifiedSqliteSnapshot({
-      sourcePath: owner.path,
-      targetPath: snapshotPath,
-      preserveRowIds: true,
-    });
-    const content = await durability.sha256File(snapshotPath);
-    backup.databases.push({
-      path: owner.path,
-      snapshotPath,
-      userVersion: snapshot.userVersion,
-      sha256: content.digest,
-      sizeBytes: content.bytes,
-    });
   }
+  const input = {
+    backupRoot: state.path("retained-package"),
+    stateDir: state.stateDir,
+    stagingRoot: state.path("snapshot-scratch"),
+    config: {},
+    env: state.env,
+  };
+  await fs.mkdir(`${input.backupRoot}.databases`, { mode: 0o700 });
+  await fs.mkdir(input.stagingRoot, { mode: 0o700 });
+  const backup = await createUpdateDatabaseBackupInProcess({
+    ...input,
+    inspectionPlan: await discoverUpdateStateSchemaInspectionInProcess(input),
+  });
   recordUpdateRunPhase(run.runId, "staging", {}, { env: state.env });
   for (const owner of [shared, agent]) {
     owner.db.exec(
@@ -85,10 +82,10 @@ async function createRestoreFixture(state: OpenClawTestState) {
 
 type RestoreFixture = Awaited<ReturnType<typeof createRestoreFixture>>;
 
-function withFixture(run: (fixture: RestoreFixture) => Promise<void>) {
+function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = false) {
   return withOpenClawTestState(
     { layout: "state-only", prefix: "update-database-restore-", scenario: "minimal" },
-    async (state) => run(await createRestoreFixture(state)),
+    async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
 
@@ -115,64 +112,67 @@ async function unchangedFiles(fixture: RestoreFixture) {
   };
 }
 
-it("retires cached and worker owners before restoring the original ledger and agent data", async () => {
-  await withFixture(async (fixture) => {
-    await recordBackupRunOutcome({
-      env: fixture.state.env,
-      archivePath: fixture.state.path("candidate-only-backup"),
-      kind: "sqlite-snapshot",
-      status: "ok",
-    });
-    expect(fixture.shared.db.isOpen).toBe(true);
-    expect(fixture.agent.db.isOpen).toBe(true);
-    const displaced = await fixture.restore();
-    expect(fixture.shared.db.isOpen).toBe(false);
-    expect(fixture.agent.db.isOpen).toBe(false);
-    expect(displaced).toEqual(
-      expect.arrayContaining(
-        fixture.backup.databases.map(
-          ({ path: pathname }) => `${pathname}.migrated-${fixture.run.runId}`,
-        ),
-      ),
-    );
-    expect(getUpdateRun(fixture.run.runId, { env: fixture.state.env })?.phase).toBe("requested");
-    const restoredShared = openOpenClawStateDatabase({ env: fixture.state.env });
-    const restoredAgent = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: fixture.agent.path,
-      env: fixture.state.env,
-    });
-    for (const owner of [restoredShared, restoredAgent]) {
-      expect(owner.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
-        { value: "baseline" },
-      ]);
-      expect(
-        owner.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'candidate_only'").get(),
-      ).toBeUndefined();
-      const migrated = new DatabaseSync(`${owner.path}.migrated-${fixture.run.runId}`, {
-        readOnly: true,
+it.each([false, true])(
+  "retires cached and worker owners before restoring data (linked=%s)",
+  async (linked) => {
+    await withFixture(async (fixture) => {
+      await recordBackupRunOutcome({
+        env: fixture.state.env,
+        archivePath: fixture.state.path("candidate-only-backup"),
+        kind: "sqlite-snapshot",
+        status: "ok",
       });
-      try {
-        expect(migrated.prepare("SELECT value FROM restore_witness").all()).toEqual([
-          { value: "candidate" },
+      expect(fixture.shared.db.isOpen).toBe(true);
+      expect(fixture.agent.db.isOpen).toBe(true);
+      const displaced = await fixture.restore();
+      expect(fixture.shared.db.isOpen).toBe(false);
+      expect(fixture.agent.db.isOpen).toBe(false);
+      expect(displaced).toEqual(
+        expect.arrayContaining(
+          fixture.backup.databases.map(
+            ({ path: pathname }) => `${pathname}.migrated-${fixture.run.runId}`,
+          ),
+        ),
+      );
+      expect(getUpdateRun(fixture.run.runId, { env: fixture.state.env })?.phase).toBe("requested");
+      const restoredShared = openOpenClawStateDatabase({ env: fixture.state.env });
+      const restoredAgent = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: fixture.agent.path,
+        env: fixture.state.env,
+      });
+      for (const owner of [restoredShared, restoredAgent]) {
+        expect(owner.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
+          { value: "baseline" },
         ]);
-      } finally {
-        migrated.close();
+        expect(
+          owner.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'candidate_only'").get(),
+        ).toBeUndefined();
+        const migrated = new DatabaseSync(`${owner.path}.migrated-${fixture.run.runId}`, {
+          readOnly: true,
+        });
+        try {
+          expect(migrated.prepare("SELECT value FROM restore_witness").all()).toEqual([
+            { value: "candidate" },
+          ]);
+        } finally {
+          migrated.close();
+        }
       }
-    }
-    expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([]);
-    const restoredArchivePath = fixture.state.path("restored-owner-backup");
-    await recordBackupRunOutcome({
-      env: fixture.state.env,
-      archivePath: restoredArchivePath,
-      kind: "sqlite-snapshot",
-      status: "ok",
-    });
-    expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([
-      { archive_path: restoredArchivePath },
-    ]);
-  });
-});
+      expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([]);
+      const restoredArchivePath = fixture.state.path("restored-owner-backup");
+      await recordBackupRunOutcome({
+        env: fixture.state.env,
+        archivePath: restoredArchivePath,
+        kind: "sqlite-snapshot",
+        status: "ok",
+      });
+      expect(restoredShared.db.prepare("SELECT archive_path FROM backup_runs").all()).toEqual([
+        { archive_path: restoredArchivePath },
+      ]);
+    }, linked);
+  },
+);
 
 it("verifies every snapshot before moving either live database", async () => {
   await withFixture(async (fixture) => {
