@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   readRecoveryStepInputs,
   requireRecoveryJob,
@@ -787,6 +788,126 @@ process.stdout.write(JSON.stringify([
     const replay = run("forbidden", "--existing-manifest", originalPath);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
+  });
+});
+
+describe("stable closeout workflow keyed runs and tag-only replay", () => {
+  const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+  const workflow = parse(
+    readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
+  ) as {
+    concurrency: { group: string; "cancel-in-progress": boolean | string };
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
+      };
+    };
+    jobs: Record<
+      "resolve" | "verify",
+      {
+        concurrency?: { group: string; "cancel-in-progress": boolean };
+        steps: Array<{ name: string; run?: string; env?: Record<string, string> }>;
+      }
+    >;
+  };
+  const resolveStep = expectDefined(
+    workflow.jobs.resolve.steps.find(
+      (step) => step.name === "Resolve published stable release evidence",
+    ),
+    "resolve step",
+  );
+
+  it("keeps push runs alive and serializes verification by resolved stable tag", () => {
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toContain("inputs.tag");
+    expect(workflow.jobs.verify.concurrency).toEqual({
+      group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
+      "cancel-in-progress": false,
+    });
+  });
+
+  it("needs only a tag and forwards sealed waivers to the closeout gate", () => {
+    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
+      if (name === "tag") {
+        continue;
+      }
+      expect(input.required, name).toBe(false);
+      // Optional string inputs have an implicit empty default in GitHub Actions.
+      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
+        "",
+        false,
+      ]);
+    }
+    const gateStep = expectDefined(
+      workflow.jobs.verify.steps.find((step) => step.name === "Verify release workflow evidence"),
+      "gate step",
+    );
+    expect(gateStep.env).toMatchObject({
+      PUBLISHED_STABLE_SOAK_WAIVER:
+        "${{ fromJSON(needs.resolve.outputs.published_stable_soak_waiver) }}",
+      PUBLISHED_LANE_WAIVER: "${{ fromJSON(needs.resolve.outputs.published_lane_waiver) }}",
+    });
+    expect(resolveStep.run).toContain(".laneWaiverAcknowledgement // .laneWaiver //");
+  });
+
+  const evidence = {
+    stableSoakWaiver: "Operator-approved for 2026.9.6",
+    laneWaiver: "2026.9.6 sealed lane",
+    laneWaiverAcknowledgement: "2026.9.6 acknowledged lane",
+  };
+  function resolveWaivers(sealed: unknown, soak = "", lane = "") {
+    const root = tempRoots.make("stable-closeout-waivers-");
+    const evidencePath = path.join(root, "evidence.json");
+    writeFileSync(evidencePath, JSON.stringify(sealed));
+    const run = expectDefined(resolveStep.run, "resolve script");
+    const block = expectDefined(
+      run.match(/# Operator inputs win[^]*?(?=^\{\s*$)/mu)?.[0],
+      "waiver block",
+    );
+    return spawnSync("bash", ["-euo", "pipefail"], {
+      cwd: root,
+      encoding: "utf8",
+      input: `${block}\nprintf '%s\\n' "$stable_soak_waiver" "$lane_waiver" "$published_stable_soak_waiver" "$published_lane_waiver"\n`,
+      env: {
+        PATH: process.env.PATH,
+        evidence_path: evidencePath,
+        INPUT_STABLE_SOAK_WAIVER: soak,
+        INPUT_LANE_WAIVER: lane,
+      },
+    });
+  }
+
+  it.each([
+    { name: "sealed acknowledgements", soak: "", lane: "", acknowledged: true },
+    {
+      name: "operator overrides",
+      soak: '2026.9.6 operator "approved"\nsoak',
+      lane: "2026.9.6 operator lane",
+      acknowledged: true,
+    },
+    { name: "legacy sealed lane", soak: "", lane: "", acknowledged: false },
+  ])("resolves $name while preserving published text", ({ soak, lane, acknowledged }) => {
+    const publishedLane = acknowledged ? evidence.laneWaiverAcknowledgement : evidence.laneWaiver;
+    const result = resolveWaivers(
+      { ...evidence, laneWaiverAcknowledgement: acknowledged ? publishedLane : undefined },
+      soak,
+      lane,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trimEnd().split("\n")).toEqual(
+      [
+        soak || evidence.stableSoakWaiver,
+        lane || publishedLane,
+        evidence.stableSoakWaiver,
+        publishedLane,
+      ].map((value) => JSON.stringify(value)),
+    );
+  });
+
+  it("rejects a non-string sealed soak waiver", () => {
+    const result = resolveWaivers({ ...evidence, stableSoakWaiver: 123 });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Invalid stable soak waiver");
   });
 });
 

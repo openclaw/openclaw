@@ -569,6 +569,99 @@ describe("OAuth refresh peer settlement", () => {
     }
   });
 
+  it.each([false, true])(
+    "reports exact removal owners and preserves a reconnected peer (reconnect=%s)",
+    async (reconnect) => {
+      const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+      let tempRoot = "";
+      try {
+        resetOAuthTestState();
+        tempRoot = await createOAuthTestTempRoot("openclaw-oauth-removal-scopes-");
+        const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+        const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+        const otherAgentDir = path.join(tempRoot, "agents", "other", "agent");
+        await Promise.all(
+          [peerAgentDir, otherAgentDir].map((dir) => fs.mkdir(dir, { recursive: true })),
+        );
+        const profileId = "openai:default";
+        const original = createExpiredOauthStore({
+          profileId,
+          provider: "openai",
+          accountId: "acct-a",
+        });
+        const replacement = createExpiredOauthStore({
+          profileId,
+          provider: "openai",
+          access: "independent-access",
+          refresh: "independent-refresh",
+          accountId: "acct-b",
+        });
+        // Create the historical copy first; a save after the shared owner exists is inherited.
+        saveAuthProfileStore(original, peerAgentDir);
+        saveAuthProfileStore(original, mainAgentDir);
+        saveAuthProfileStore(replacement, otherAgentDir);
+        expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toEqual(
+          original.profiles[profileId],
+        );
+        const peerScope = {
+          agentDir: peerAgentDir,
+          databasePath: resolveAuthProfileDatabasePath(peerAgentDir),
+          profileIds: [profileId],
+        };
+        const beforeRemove = vi.fn(async () => {
+          if (reconnect) {
+            await persistAuthProfileBatch({
+              agentDir: peerAgentDir,
+              profiles: [{ profileId, credential: replacement.profiles[profileId]! }],
+              allowOAuthGenerationReplacement: true,
+            });
+          }
+        });
+        const onIncomplete = vi.fn(async () => {});
+
+        await expect(
+          removeAuthProfilesAcrossOwnerStores({
+            agentDir: mainAgentDir,
+            profileIds: [profileId],
+            beforeRemove,
+            onIncomplete,
+          }),
+        ).resolves.toBe(true);
+
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith(
+          [profileId],
+          [
+            {
+              agentDir: undefined,
+              databasePath: resolveAuthProfileDatabasePath(mainAgentDir),
+              profileIds: [profileId],
+            },
+            peerScope,
+          ],
+        );
+        expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toEqual(
+          reconnect ? replacement.profiles[profileId] : undefined,
+        );
+        expect(loadPersistedAuthProfileStore(otherAgentDir)?.profiles[profileId]).toEqual(
+          replacement.profiles[profileId],
+        );
+        if (reconnect) {
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+            new Map([[profileId, replacement.profiles[profileId]]]),
+            [peerScope],
+          );
+        } else {
+          expect(onIncomplete).not.toHaveBeenCalled();
+        }
+      } finally {
+        envSnapshot.restore();
+        resetOAuthTestState();
+        await removeOAuthTestTempRoot(tempRoot);
+      }
+    },
+  );
+
   it("does not republish a refresh generation removed during provider I/O", async () => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     let tempRoot = "";

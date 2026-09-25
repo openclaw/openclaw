@@ -8,6 +8,7 @@ import {
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
@@ -86,6 +87,7 @@ import {
 import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
+registerMcpEnglish();
 
 export type ChatSendSubmitOptions = {
   asyncQuestionItemId?: string;
