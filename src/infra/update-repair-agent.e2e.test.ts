@@ -372,7 +372,15 @@ describe("update repair with a local model provider", () => {
               const ledgerEnv = { ...process.env };
               const run =
                 entry === "manual" || entry.endsWith("turn")
-                  ? createUpdateRun({ trigger: "cli" }, { env: ledgerEnv })
+                  ? createUpdateRun(
+                      entry === "manual"
+                        ? { trigger: "cli" }
+                        : {
+                            trigger: "chat",
+                            origin: { requester: { channel: "synthetic", senderId: "owner" } },
+                          },
+                      { env: ledgerEnv },
+                    )
                   : undefined;
               if (run && entry === "manual") {
                 finishUpdateRun(

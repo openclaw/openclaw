@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import {
   withDelegatedUpdateCommandExecutor,
@@ -10,6 +11,8 @@ import type { UpdateRepairTurnMessage, UpdateRepairTurnResult } from "./update-r
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
 import {
   createManagedUpdateRequesterAuthority,
+  createManagedUpdateRequesterContinuationAuthority,
+  resolveManagedUpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { getUpdateRun } from "./update-run-ledger.js";
@@ -50,12 +53,28 @@ export async function runDelegatedUpdateRepairTurn(
       message.target.installRoot,
       async (fence) => {
         fence.assertCurrent();
+        const readCurrentRun = () => {
+          const run = measure("runMs", () => getUpdateRun(message.runId, { env: admissionEnv }));
+          if (!process.connected || run?.status !== "running" || run.phase !== "repairing") {
+            throw new Error("Repair no longer owns the update attempt.");
+          }
+          if (!isDeepStrictEqual(run.origin.requester, message.requester)) {
+            throw new UpdateRequesterRevokedError();
+          }
+          return run;
+        };
+        const requesterInput = resolveManagedUpdateRequester(readCurrentRun().origin.requester);
         const runtime = await import("./update-repair-agent.runtime.js");
         fence.assertCurrent();
-        const requesterInput = message.requester;
         const requester = requesterInput
           ? await runtime.withUpdateRepairEnvironment(message.target, () =>
-              createManagedUpdateRequesterAuthority(requesterInput, admissionEnv),
+              requesterInput.authorizationSource?.startsWith("profile:")
+                ? createManagedUpdateRequesterContinuationAuthority(
+                    requesterInput,
+                    { runId: message.runId, executor: fence },
+                    admissionEnv,
+                  )
+                : createManagedUpdateRequesterAuthority(requesterInput, admissionEnv),
             )
           : undefined;
         const assertAuthority = () => {
@@ -65,14 +84,9 @@ export async function runDelegatedUpdateRepairTurn(
             measure("fenceMs", () => fence.assertCurrent());
             return withSynchronousArtifactPreservingStateSnapshot(
               () => {
+                readCurrentRun();
                 if (measure("requesterMs", () => requester?.isCurrent()) === false) {
                   throw new UpdateRequesterRevokedError();
-                }
-                const run = measure("runMs", () =>
-                  getUpdateRun(message.runId, { env: admissionEnv }),
-                );
-                if (!process.connected || run?.status !== "running" || run.phase !== "repairing") {
-                  throw new Error("Repair no longer owns the update attempt.");
                 }
                 return true;
               },
