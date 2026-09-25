@@ -40,15 +40,15 @@ export function createAgentCommandDeliveryGuard(
     try {
       params.assertDeliveryCurrent?.();
     } catch (error) {
-      const restart = isAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
-      const sourceInvalidated = isSessionWorkStartInvalidatedError(error);
-      const invalidated = error instanceof CommandOwnerRevokedError || sourceInvalidated;
-      // Recovery revalidates owner custody, but cannot reconstruct a changed source transcript.
+      // Only known restart retirement transfers custody. Recovery cannot repeat
+      // an unreadable or changed source assertion after its live closure is gone.
       const retryable =
-        (!sourceInvalidated || error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE) &&
-        (restart
-          ? !invalidated || completion?.commandOwnerReference != null
-          : !invalidated && !params.opts.abortSignal?.aborted);
+        isAgentRunRestartAbortReason(error) ||
+        (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason) &&
+          completion?.commandOwnerReference != null &&
+          (error instanceof CommandOwnerRevokedError ||
+            (isSessionWorkStartInvalidatedError(error) &&
+              error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)));
       throw new PlatformMessageNotDispatchedError(
         error instanceof Error ? error.message : "Agent final delivery source check failed",
         { cause: error, retryable },

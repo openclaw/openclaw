@@ -93,21 +93,21 @@ it.each(
         "revoked",
         "replaced",
         "source-unavailable",
-        "source-unavailable-owner-revoked",
-        "source-unavailable-owner-restored",
-        "source-unavailable-unlinked",
-        "source-unavailable-relinked",
-        "source-unavailable-profile-replaced",
-        "source-unavailable-default-restored",
-        "source-unavailable-grant-allowed",
-        "source-unavailable-grant-replaced",
-        "source-unavailable-grant-handoff-replaced",
-        "source-unavailable-policy-restored",
-        "source-unavailable-identity-policy-restored",
-        "source-unavailable-lifecycle",
-        "source-unavailable-missing-reference",
-        "source-unavailable-corrupt-reference",
-        "source-unavailable-recovered-handoff-revoked",
+        "restart-retained-owner-revoked",
+        "restart-retained-owner-restored",
+        "restart-retained-unlinked",
+        "restart-retained-relinked",
+        "restart-retained-profile-replaced",
+        "restart-retained-default-restored",
+        "restart-retained-grant-allowed",
+        "restart-retained-grant-replaced",
+        "restart-retained-grant-handoff-replaced",
+        "restart-retained-policy-restored",
+        "restart-retained-identity-policy-restored",
+        "restart-retained-lifecycle",
+        "restart-retained-missing-reference",
+        "restart-retained-corrupt-reference",
+        "restart-retained-recovered-handoff-revoked",
         "restart-source-unavailable",
         "cancelled",
       ] as const
@@ -162,7 +162,7 @@ it.each(
           roles.definitions.admin!.accessPolicyPlugin = "final-owner-policy";
           await activatePolicy({ roles });
         }
-        if (boundary === "source-unavailable-default-restored") {
+        if (boundary === "restart-retained-default-restored") {
           setUserProfileRole(admin.profile.id, null);
           await activatePolicy({ roles: { ...cfg.gateway!.roles!, default: "admin" } });
         }
@@ -238,9 +238,9 @@ it.each(
           if (held) {
             entered.resolve();
             await release.promise;
-          } else if (boundary === "source-unavailable-recovered-handoff-revoked") {
+          } else if (boundary === "restart-retained-recovered-handoff-revoked") {
             setUserProfileRole(admin.profile.id, "member");
-          } else if (boundary === "source-unavailable-grant-handoff-replaced") {
+          } else if (boundary === "restart-retained-grant-handoff-replaced") {
             replaceGrant();
           } else if (boundary === "restart-configured-handoff-removed") {
             cfg.commands!.ownerAllowFrom = [];
@@ -348,10 +348,12 @@ it.each(
           });
           const restarting = boundary.startsWith("restart");
           const ownerRevoked = boundary === "restart-owner-revoked";
-          const sourceUnavailable = boundary.includes("source-unavailable");
-          const lateRevocation = boundary.startsWith("source-unavailable-owner-");
+          const sourceUnavailable =
+            boundary === "source-unavailable" || boundary === "restart-source-unavailable";
+          const lateRevocation = boundary.startsWith("restart-retained-owner-");
           const recoverable =
-            (restarting || sourceUnavailable) &&
+            restarting &&
+            !sourceUnavailable &&
             boundary !== "restart-changed" &&
             !replaced &&
             !ownerRevoked;
@@ -372,6 +374,7 @@ it.each(
           } else if (
             boundary !== "restart" &&
             boundary !== "restart-owner-retired" &&
+            !boundary.startsWith("restart-retained-") &&
             !configured &&
             !ownerRevoked
           ) {
@@ -426,30 +429,30 @@ it.each(
             expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
           }
           if (
-            boundary === "source-unavailable-unlinked" ||
-            boundary === "source-unavailable-relinked" ||
-            boundary === "source-unavailable-profile-replaced"
+            boundary === "restart-retained-unlinked" ||
+            boundary === "restart-retained-relinked" ||
+            boundary === "restart-retained-profile-replaced"
           ) {
             unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-            if (boundary !== "source-unavailable-unlinked") {
+            if (boundary !== "restart-retained-unlinked") {
               linkUserChannelIdentity(
-                boundary === "source-unavailable-profile-replaced"
+                boundary === "restart-retained-profile-replaced"
                   ? admins[1]!.profile.id
                   : admin.profile.id,
                 admin.identity,
               );
             }
           }
-          if (boundary === "source-unavailable-grant-replaced") {
+          if (boundary === "restart-retained-grant-replaced") {
             replaceGrant();
           }
           if (
-            boundary === "source-unavailable-policy-restored" ||
-            boundary === "source-unavailable-default-restored"
+            boundary === "restart-retained-policy-restored" ||
+            boundary === "restart-retained-default-restored"
           ) {
             const original = structuredClone(cfg.gateway!.roles!);
             const changed = structuredClone(original);
-            if (boundary === "source-unavailable-default-restored") {
+            if (boundary === "restart-retained-default-restored") {
               changed.default = "member";
             } else {
               changed.definitions.admin!.scopes = ["operator.read"];
@@ -457,7 +460,7 @@ it.each(
             await activatePolicy({ roles: changed });
             await activatePolicy({ roles: original });
           }
-          if (boundary === "source-unavailable-identity-policy-restored") {
+          if (boundary === "restart-retained-identity-policy-restored") {
             const original = structuredClone(cfg.gateway!.auth!);
             await activatePolicy({ auth: { ...original, identityScopes: undefined } });
             await activatePolicy({ auth: original });
@@ -465,7 +468,7 @@ it.each(
           if (boundary.endsWith("reference")) {
             const db = openOpenClawStateDatabase().db;
             db.prepare(
-              boundary === "source-unavailable-missing-reference"
+              boundary === "restart-retained-missing-reference"
                 ? "UPDATE delivery_queue_entries SET entry_json = json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') WHERE queue_name = ?"
                 : "UPDATE delivery_queue_entries SET entry_json = json_set(entry_json, '$.deliveryCompletion.commandOwnerReference.id', 'corrupt') WHERE queue_name = ?",
             ).run(COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME);
@@ -478,19 +481,19 @@ it.each(
               ]
             : [];
           const markerKind = loadSessionEntry(target)?.pendingFinalDelivery?.kind;
-          if (boundary === "source-unavailable-lifecycle") {
+          if (boundary === "restart-retained-lifecycle") {
             await closeOpenClawStateDatabaseAsync();
           }
           const mayRecover =
             recoverable &&
             (!configured || boundary === "restart-configured-allowed") &&
-            (!boundary.startsWith("source-unavailable-") ||
-              boundary === "source-unavailable-lifecycle" ||
-              boundary === "source-unavailable-grant-allowed");
+            (!boundary.startsWith("restart-retained-") ||
+              boundary === "restart-retained-lifecycle" ||
+              boundary === "restart-retained-grant-allowed");
           held = false;
           await recover();
           if (
-            boundary === "source-unavailable-recovered-handoff-revoked" ||
+            boundary === "restart-retained-recovered-handoff-revoked" ||
             boundary === "restart-configured-handoff-removed"
           ) {
             expect(writes).toEqual([]);
@@ -517,7 +520,7 @@ it.each(
           await delivery;
         }
       },
-      boundary === "source-unavailable-identity-policy-restored" ? "identity-grant" : "role",
+      boundary === "restart-retained-identity-policy-restored" ? "identity-grant" : "role",
     );
   },
 );

@@ -64,7 +64,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/worker-runtime.test.ts",
   "src/skills/workshop/store.test.ts",
   "src/channels/message-access/operator-authority.test.ts",
-  "src/channels/message-access/discord-native-owner.test.ts",
   "src/auto-reply/reply/commands-allowlist.owner.test.ts",
   "src/channels/message-access/discord-native-acp-owner.test.ts",
   "src/channels/message-access/discord-native-owner.test.ts",

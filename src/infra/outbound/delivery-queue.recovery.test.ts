@@ -1005,7 +1005,7 @@ describe("delivery-queue recovery", () => {
   });
   it.each([
     ...[preConnectFailure, notDispatched].flatMap((error) =>
-      [undefined, "adapter_returned_no_send", "adapter_returned_no_identity"].map(
+      ([undefined, "adapter_returned_no_send", "adapter_returned_no_identity"] as const).map(
         (reason) =>
           [
             error.message,
