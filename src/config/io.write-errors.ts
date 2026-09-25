@@ -5,8 +5,27 @@ import type { ConfigValidationIssue } from "./types.js";
 
 const CONFIG_VALIDATION_FAILED_CODE = "CONFIG_VALIDATION_FAILED";
 const CONFIG_INCLUDE_OWNERSHIP_CODE = "CONFIG_INCLUDE_OWNERSHIP";
+const CONFIG_WRITE_REJECTED_CODE = "CONFIG_WRITE_REJECTED";
+
+const CONFIG_WRITE_SAFETY_REJECTION_MESSAGE =
+  "OpenClaw blocked this config update because it looked like it could overwrite or remove existing settings. Your current config was left unchanged. Run openclaw doctor --fix, then retry.";
 
 export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
+
+/**
+ * Refuses a suspicious root-config replacement without exposing filesystem
+ * paths or byte-level guard diagnostics through user-facing error surfaces.
+ */
+export function createConfigWriteSafetyRejectionError(params: {
+  reasons: readonly string[];
+  rejectedPath?: string;
+}): Error & { code: string; reasons: string[]; rejectedPath?: string } {
+  return Object.assign(new Error(CONFIG_WRITE_SAFETY_REJECTION_MESSAGE), {
+    code: CONFIG_WRITE_REJECTED_CODE,
+    reasons: [...params.reasons],
+    ...(params.rejectedPath ? { rejectedPath: params.rejectedPath } : {}),
+  });
+}
 
 /** A completed file write must not be handled as a retryable pre-write refusal. */
 export class ConfigWritePostCommitError extends Error {

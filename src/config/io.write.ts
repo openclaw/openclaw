@@ -71,6 +71,7 @@ import {
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
   ConfigWritePostCommitError,
+  createConfigWriteSafetyRejectionError,
   createConfigValidationFailedError,
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
@@ -429,15 +430,19 @@ export async function writeConfigFileFromContext(
     const saveDetail = rejectedSave.ok
       ? `Rejected payload saved to ${rejectedPath}.`
       : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
-    const error = Object.assign(new Error(message), {
+    const diagnosticMessage = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
+    const diagnosticError = Object.assign(new Error(diagnosticMessage), {
       code: "CONFIG_WRITE_REJECTED",
       ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
-    deps.logger.warn(message);
-    await appendWriteAudit("rejected", error);
-    throw error;
+    const userFacingError = createConfigWriteSafetyRejectionError({
+      reasons: blockingReasons,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
+    });
+    deps.logger.warn(diagnosticMessage);
+    await appendWriteAudit("rejected", diagnosticError);
+    throw userFacingError;
   }
 
   const preCommitRuntimePreflight =
