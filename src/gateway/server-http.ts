@@ -88,6 +88,7 @@ import {
 } from "./server-http-modules.js";
 import {
   getCachedPluginGatewayAuthBypassPaths,
+  rejectStalePluginNodeCapability,
   shouldEnforceDefaultPluginGatewayAuth,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
@@ -568,8 +569,12 @@ export function createGatewayHttpServer(opts: {
           (isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath) && !publicSessionPath),
         handleStandaloneControlUiRequest,
       );
+      let revalidatePluginNodeCapabilityFallback: (() => boolean) | undefined;
       addRequestStage(Boolean(nodeCapability), async () => {
-        const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
+        const {
+          authorizePluginNodeCapabilityRequest,
+          revalidatePluginNodeCapabilityFallback: revalidate,
+        } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
           auth: resolvedAuthValue,
@@ -585,13 +590,21 @@ export function createGatewayHttpServer(opts: {
           sendGatewayAuthFailure(res, ok);
           return true;
         }
+        const fallback = ok.pluginNodeCapabilityFallback;
+        revalidatePluginNodeCapabilityFallback = fallback ? () => revalidate(fallback) : undefined;
         return false;
       });
       addRequestStage(
         Boolean(nodeCapability) &&
           isCoreCanvasHostEnabled(configSnapshot) &&
           isCanvasDocumentHttpPath(scopedRequestPath),
-        async () => (await getCanvasServeModule()).handleCanvasDocumentHttpRequest(req, res),
+        async () => {
+          const canvasServe = await getCanvasServeModule();
+          if (rejectStalePluginNodeCapability(res, revalidatePluginNodeCapabilityFallback)) {
+            return true;
+          }
+          return await canvasServe.handleCanvasDocumentHttpRequest(req, res);
+        },
       );
       // This page must remain reachable when a plugin route is broken so the
       // operator can disable it. Other explicit plugin routes retain precedence.
@@ -662,11 +675,15 @@ export function createGatewayHttpServer(opts: {
               sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
               return true;
             }
+            if (rejectStalePluginNodeCapability(res, revalidatePluginNodeCapabilityFallback)) {
+              return true;
+            }
             return handlePluginRequest(req, res, pluginPathContext, {
               gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
               gatewayRequestClientIp: requestClientIp,
+              gatewayRequestNodeCapabilityRevalidate: revalidatePluginNodeCapabilityFallback,
             });
           },
         );
