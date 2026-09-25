@@ -1,12 +1,9 @@
-// Resolves platform-specific commands for best-effort browser opening.
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
-// Browser opening is best-effort and platform-specific; callers get a resolved
-// command first so UI can explain why open-in-browser is unavailable.
 type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
@@ -23,13 +20,6 @@ type BrowserOpenEnvironment = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-
-function shouldSkipBrowserOpenInTests(): boolean {
-  if (process.env.VITEST) {
-    return true;
-  }
-  return process.env.NODE_ENV === "test";
-}
 
 function resolveWindowsRundll32Path(): string {
   const { systemRoot } = getWindowsInstallRoots();
@@ -110,7 +100,7 @@ export async function detectBrowserOpenSupport(
 
 /** Open a safe HTTP(S) URL in the user's browser when the platform supports it. */
 export async function openUrl(url: string): Promise<boolean> {
-  if (shouldSkipBrowserOpenInTests()) {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return false;
   }
   const normalizedUrl = normalizeBrowserOpenUrl(url);
@@ -121,8 +111,7 @@ export async function openUrl(url: string): Promise<boolean> {
   if (!resolved.argv) {
     return false;
   }
-  const command = [...resolved.argv];
-  command.push(normalizedUrl);
+  const command = [...resolved.argv, normalizedUrl];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return result.code === 0 && result.termination === "exit";

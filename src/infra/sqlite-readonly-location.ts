@@ -156,24 +156,17 @@ function assertPinnedIdentityUnchanged(file: PinnedFile): void {
   }
 }
 
-function copyPinnedFile(source: PinnedFile, targetPath: string): void {
-  let target: number | undefined;
-  try {
-    target = fs.openSync(targetPath, "wx", 0o600);
-    copyFileDescriptorSync(source.descriptor, target);
-    fs.fsyncSync(target);
-    assertPinnedIdentityUnchanged(source);
-  } finally {
-    if (target !== undefined) {
-      fs.closeSync(target);
-    }
-  }
-}
-
 function copySourceFile(sourcePath: string, targetPath: string): void {
   const source = openPinnedFile(sourcePath);
   try {
-    copyPinnedFile(source, targetPath);
+    const target = fs.openSync(targetPath, "wx", 0o600);
+    try {
+      copyFileDescriptorSync(source.descriptor, target);
+      fs.fsyncSync(target);
+      assertPinnedIdentityUnchanged(source);
+    } finally {
+      fs.closeSync(target);
+    }
   } finally {
     fs.closeSync(source.descriptor);
   }
@@ -205,11 +198,6 @@ function assertExpectedSidecars(pathname: string, expected: SourceSidecars): voi
   if (!sameSidecars(readSourceSidecars(pathname), expected)) {
     throw new SqliteSourceChangedError(`SQLite journal state changed while copying: ${pathname}`);
   }
-}
-
-function replaceFile(sourcePath: string, targetPath: string): void {
-  fs.rmSync(targetPath, { force: true });
-  fs.renameSync(sourcePath, targetPath);
 }
 
 export function isSqliteReadOnlyError(error: unknown): boolean {
@@ -354,7 +342,8 @@ function createStableReadOnlyCopyInTempDirectory(
           `SQLite main database changed while copying: ${pathname}`,
         );
       }
-      replaceFile(firstPath, snapshotPath);
+      fs.rmSync(snapshotPath, { force: true });
+      fs.renameSync(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname) !== journalMode) {

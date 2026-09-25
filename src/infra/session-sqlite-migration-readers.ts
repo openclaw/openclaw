@@ -487,40 +487,29 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   try {
     database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = tableExists(database, "transcript_events");
-    const integrityRow = database.prepare("PRAGMA quick_check").get() as
-      | { quick_check?: unknown }
-      | undefined;
-    if (!hasTranscriptEvents) {
-      return {
-        ok: true,
-        stats: {
-          dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-          integrityCheck:
-            typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
-          largestSessions: [],
-          totalTranscriptRowBytes: 0,
-          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-        },
-      };
-    }
-    // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
-    const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
-      ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
-      : "octet_length(event_json)";
-    const totalRow = database
-      .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
-      .get() as { row_bytes?: unknown } | undefined;
-    const largestRows = database
-      .prepare(
-        `
+    const integrityRow = database.prepare("PRAGMA quick_check").get();
+    let totalRow: { row_bytes?: unknown } | undefined;
+    let largestRows: Array<{ events?: unknown; row_bytes?: unknown; session_id?: unknown }> = [];
+    if (hasTranscriptEvents) {
+      // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
+      const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
+        ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
+        : "octet_length(event_json)";
+      totalRow = database
+        .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
+        .get();
+      largestRows = database
+        .prepare(
+          `
           SELECT session_id, COUNT(*) AS events, COALESCE(SUM(${eventBytes}), 0) AS row_bytes
           FROM transcript_events
           GROUP BY session_id
           ORDER BY row_bytes DESC, events DESC, session_id ASC
           LIMIT 5
         `,
-      )
-      .all() as Array<{ events?: unknown; row_bytes?: unknown; session_id?: unknown }>;
+        )
+        .all();
+    }
     return {
       ok: true,
       stats: {
