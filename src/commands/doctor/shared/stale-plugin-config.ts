@@ -7,6 +7,7 @@ import {
   isExplicitPluginDisableMarker,
   isRetiredPluginId,
   normalizePluginId,
+  normalizePluginsConfig,
 } from "../../../plugins/config-state.js";
 import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
@@ -390,6 +391,10 @@ export function maybeRepairStalePluginConfig(
     nextPlugins.allow = nextPlugins.allow.filter(
       (pluginId) => typeof pluginId !== "string" || !staleAllowIds.has(normalizePluginId(pluginId)),
     );
+    // An empty allowlist is unrestricted, so removing its last id must not enable other plugins.
+    if (normalizePluginsConfig(next.plugins).allow.length === 0) {
+      nextPlugins.enabled = false;
+    }
   }
 
   const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
@@ -438,6 +443,11 @@ export function maybeRepairStalePluginConfig(
   if (allowIds.length > 0) {
     changes.push(
       `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
+    );
+  }
+  if (nextPlugins?.enabled === false) {
+    changes.push(
+      "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
     );
   }
   if (denyIds.length > 0) {

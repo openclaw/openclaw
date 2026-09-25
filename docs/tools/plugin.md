@@ -238,7 +238,9 @@ provenance.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation
 reports stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin
-paths.
+paths. If removing stale ids empties a restrictive `plugins.allow` list, Doctor
+sets `plugins.enabled: false` so unrelated plugins do not become enabled. Select
+the plugins you want in `plugins.allow` before setting `plugins.enabled: true`.
 
 ## Understand plugin formats
 

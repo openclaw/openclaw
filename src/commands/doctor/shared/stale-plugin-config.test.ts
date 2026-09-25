@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../../plugins/config-state.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
@@ -42,7 +46,13 @@ describe("doctor stale plugin config helpers", () => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({});
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
-      plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
+      plugins: [
+        manifest("discord"),
+        manifest("voice-call"),
+        manifest("openai"),
+        { ...manifest("unrelated-installed"), origin: "global" },
+        { ...manifest("surviving-installed"), origin: "global" },
+      ],
       diagnostics: [],
     });
   });
@@ -104,6 +114,89 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.entries).toEqual({
       "voice-call": { enabled: true },
     });
+  });
+
+  it.each([
+    {
+      name: "sole retired allowlist",
+      policy: { allow: ["webhooks"] },
+      enabled: false,
+      unrelated: false,
+      surviving: false,
+    },
+    {
+      name: "normalized sole retired allowlist",
+      policy: { allow: [" WebHooks ", " "] },
+      enabled: false,
+      unrelated: false,
+      surviving: false,
+    },
+    {
+      name: "mixed surviving allowlist",
+      policy: { allow: ["webhooks", "surviving-installed"] },
+      enabled: true,
+      unrelated: false,
+      surviving: true,
+    },
+    {
+      name: "already empty allowlist",
+      policy: { allow: [] },
+      enabled: true,
+      unrelated: true,
+      surviving: true,
+    },
+    { name: "unrestricted plugins", policy: {}, enabled: true, unrelated: true, surviving: true },
+    {
+      name: "retired deny-only entry",
+      policy: { deny: ["webhooks"] },
+      enabled: true,
+      unrelated: true,
+      surviving: true,
+    },
+    {
+      name: "surviving deny entry",
+      policy: { deny: ["webhooks", "unrelated-installed"] },
+      enabled: true,
+      unrelated: false,
+      surviving: true,
+    },
+  ])("preserves activation after repairing $name", ({ policy, enabled, unrelated, surviving }) => {
+    const cfg: OpenClawConfig = {
+      hooks: { enabled: true, token: "synthetic-gateway-hook-token" },
+      plugins: {
+        ...policy,
+        entries: {
+          webhooks: { enabled: true },
+          "unrelated-installed": { enabled: true },
+          "surviving-installed": { enabled: true },
+        },
+      },
+    };
+    const before = structuredClone(cfg);
+    const activation = (config: OpenClawConfig, id: string) =>
+      resolveEffectivePluginActivationState({
+        id,
+        origin: "global",
+        config: normalizePluginsConfig(config.plugins),
+        rootConfig: config,
+      });
+    expect(activation(cfg, "unrelated-installed").enabled).toBe(unrelated);
+    expect(activation(cfg, "surviving-installed").enabled).toBe(surviving);
+
+    const result = maybeRepairStalePluginConfig(cfg);
+
+    expect(activation(result.config, "unrelated-installed").enabled).toBe(unrelated);
+    expect(activation(result.config, "surviving-installed").enabled).toBe(surviving);
+    expect(normalizePluginsConfig(result.config.plugins).enabled).toBe(enabled);
+    expect(result.config.plugins?.entries?.webhooks).toBeUndefined();
+    expect(result.config.hooks).toEqual(cfg.hooks);
+    expect(cfg).toEqual(before);
+    expect(maybeRepairStalePluginConfig(result.config).changes).toEqual([]);
+    if (!enabled) {
+      expect(result.changes).toContain(
+        "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
+      );
+    }
   });
 
   it("preserves an explicit disable marker while removing stale disabled settings", () => {
@@ -470,6 +563,7 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.changes).toEqual([
       "- plugins.allow: removed 2 stale plugin ids (missing-a, missing-b)",
+      "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
       "- channels: removed 2 stale channel configs (missing-a, missing-b)",
       "- agents heartbeat: removed 1 stale heartbeat target (missing-a)",
       "- channels.modelByChannel: removed 1 stale channel model override (missing-a)",

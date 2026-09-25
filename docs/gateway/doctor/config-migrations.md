@@ -75,6 +75,11 @@ remove its stale entry and `plugins.allow` or `plugins.deny` references through
 the normal config backup and repair flow. This retirement does not change the
 database schema or delete stored Tasks or TaskFlows.
 
+If Webhooks was the only plugin in `plugins.allow`, Doctor sets
+`plugins.enabled: false` after removing it. An empty allowlist would otherwise
+allow unrelated installed plugins to load. Review the remaining plugin choices,
+set `plugins.allow` to the plugins you want, and then re-enable plugins.
+
 Use [Gateway HTTP hooks](/automation/cron-jobs/webhooks) to wake an agent or submit
 an agent turn from an external service. Their `hooks.*` settings, internal event
 hooks, and the `openclaw webhooks gmail` commands remain available. TaskFlow
