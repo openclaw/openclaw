@@ -296,6 +296,4 @@ describe("line-cap growth ratchet", () => {
       expect.stringContaining("src/file.ts: 3 -> 6 counted lines (cap 3)"),
     );
   });
-
-
 });
