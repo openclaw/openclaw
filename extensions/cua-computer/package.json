@@ -4,6 +4,7 @@
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "type": "module",
   "dependencies": {
+    "@openclaw/fs-safe": "0.18.2",
     "@trycua/cua-driver": "0.28.2",
     "rastermill": "0.3.3",
     "zod": "4.6.5"

@@ -28,10 +28,9 @@ import {
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = () => {
-  // Keep transient JSON outside the namespace observed by concurrent compilers.
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make("release-stable-test-", scratch));
+  return releaseFixture(directories.make(".release-stable-test-", scratch));
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);

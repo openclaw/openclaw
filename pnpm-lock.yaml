@@ -650,6 +650,9 @@ importers:
       '@agentclientprotocol/codex-acp':
         specifier: 1.12.0
         version: 1.12.0
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       acpx:
         specifier: 0.19.1
         version: 0.19.1
@@ -932,6 +935,9 @@ importers:
       '@openai/codex':
         specifier: 0.155.1
         version: 0.155.1
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -988,6 +994,9 @@ importers:
 
   extensions/cua-computer:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       '@trycua/cua-driver':
         specifier: 0.28.2
         version: 0.28.2
@@ -1198,6 +1207,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.74.0
         version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)

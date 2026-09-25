@@ -12,11 +12,12 @@ import { buildBtwCliPrompt } from "../agents/btw-prompts.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import type { InternalSessionEffectsTarget } from "../agents/internal-session-effects.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Message, Usage, ImageContent } from "../llm/types.js";
+import type { Message, ImageContent } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -102,14 +103,7 @@ type SessionCompanionActiveAsk = {
   controller: AbortController;
 };
 
-const EMPTY_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const EMPTY_USAGE = makeZeroUsageSnapshot();
 
 function toRunnerHistoryMessage(
   message: SessionCompanionPromptMessage,
@@ -479,13 +473,6 @@ function sanitizeAnswer(value: string): string {
   return truncateUtf16Safe(redacted, ANSWER_MAX_CHARS);
 }
 
-function contextError(
-  reason: "context-unavailable" | "session-missing",
-  message: string,
-): SessionCompanionAskError {
-  return new SessionCompanionAskError(reason, message);
-}
-
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
@@ -529,16 +516,19 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     }
     assertSourceCurrent?.();
     if (result.kind === "missing") {
-      throw contextError("session-missing", "The selected session is no longer available.");
+      throw new SessionCompanionAskError(
+        "session-missing",
+        "The selected session is no longer available.",
+      );
     }
     if (result.kind === "unavailable") {
-      throw contextError(
+      throw new SessionCompanionAskError(
         "context-unavailable",
         "The selected session history could not be loaded.",
       );
     }
     if (currentSessionId(sessionKey, agentId) !== result.context.sessionId) {
-      throw contextError(
+      throw new SessionCompanionAskError(
         "context-unavailable",
         "The selected session changed before its history was ready.",
       );
@@ -672,7 +662,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const { cfg } = resolveTarget(sessionKey, agentId);
       if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
         params.threads.delete(threadKey);
-        throw contextError(
+        throw new SessionCompanionAskError(
           "context-unavailable",
           "The selected session changed before Side chat could answer.",
         );
@@ -727,7 +717,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId
       ) {
         discardOwnedThread();
-        throw contextError(
+        throw new SessionCompanionAskError(
           "context-unavailable",
           "The selected session changed before Side chat could answer.",
         );
@@ -752,7 +742,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       if (activeAsk.cancellation === "backing-session-revoked") {
         discardOwnedThread();
-        throw contextError(
+        throw new SessionCompanionAskError(
           "context-unavailable",
           "The selected session changed before Side chat could answer.",
         );

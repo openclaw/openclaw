@@ -477,39 +477,36 @@ async function resolveAssistantMediaAvailability(
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    try {
-      const mediaKind = kindFromMime(mimeType);
-      const playbackProbe =
-        mediaKind === "audio" || mediaKind === "video"
-          ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
-          : null;
-      const playback =
-        mimeType && (mediaKind === "audio" || mediaKind === "video")
-          ? await resolvePlaybackModeForSource({
-              sourcePath: opened.realPath,
-              sourceStat: opened.stat,
-              mimeType,
-              kind: mediaKind,
-              probe: playbackProbe,
-            })
-          : undefined;
-      return {
-        available: true,
-        ...(mimeType ? { mimeType } : {}),
-        ...(playback ? { playback } : {}),
-        sizeBytes: opened.stat.size,
-        ...toMediaProbeResult(playbackProbe),
-        ...createAssistantMediaTicket({
-          source,
-          agentId,
-          session: policy.session,
-          reader: policy.reader,
-          ...(file ? { file } : {}),
-        }),
-      };
-    } finally {
-      await opened.handle.close().catch(() => {});
-    }
+    await using mediaOwner = opened;
+    const mediaKind = kindFromMime(mimeType);
+    const playbackProbe =
+      mediaKind === "audio" || mediaKind === "video"
+        ? await probePlaybackMediaFileDescriptor(mediaOwner.handle.fd, mediaKind)
+        : null;
+    const playback =
+      mimeType && (mediaKind === "audio" || mediaKind === "video")
+        ? await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType,
+            kind: mediaKind,
+            probe: playbackProbe,
+          })
+        : undefined;
+    return {
+      available: true,
+      ...(mimeType ? { mimeType } : {}),
+      ...(playback ? { playback } : {}),
+      sizeBytes: opened.stat.size,
+      ...toMediaProbeResult(playbackProbe),
+      ...createAssistantMediaTicket({
+        source,
+        agentId,
+        session: policy.session,
+        reader: policy.reader,
+        ...(file ? { file } : {}),
+      }),
+    };
   } catch (error) {
     return classifyAssistantMediaError(error);
   }

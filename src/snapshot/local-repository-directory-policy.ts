@@ -20,46 +20,10 @@ const MACOS_REPLACEMENT_ACL_PERMISSIONS = new Set([
   "delete_child",
   "writesecurity",
 ]);
-const WINDOWS_STAGING_ACCESS_RIGHTS = new Set([
-  "F",
-  "M",
-  "RX",
-  "R",
-  "W",
-  "D",
-  "DE",
-  "RC",
-  "WDAC",
-  "WO",
-  "AS",
-  "MA",
-  "GR",
-  "GW",
-  "GE",
-  "GA",
-  "RD",
-  "WD",
-  "AD",
-  "REA",
-  "WEA",
-  "X",
-  "DC",
-  "RA",
-  "WA",
-  "UNKNOWN",
-]);
-const WINDOWS_STAGING_REPLACEMENT_RIGHTS = new Set([
-  "F",
-  "M",
-  "D",
-  "DE",
-  "WDAC",
-  "WO",
-  "MA",
-  "GA",
-  "DC",
-  "UNKNOWN",
-]);
+const WINDOWS_SYNCHRONIZE_RIGHT = 0x100000;
+// Delete child/self, write DACL/owner, maximum allowed, and generic all.
+const WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK =
+  0x000040 | 0x010000 | 0x040000 | 0x080000 | 0x02000000 | 0x10000000;
 const WINDOWS_TRUSTED_OWNER_SIDS = new Set([
   "S-1-5-18", // LocalSystem
   "S-1-5-32-544", // Builtin Administrators
@@ -131,28 +95,7 @@ const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
   (mask, [right]) => mask | right,
   0,
 );
-const WINDOWS_READ_RIGHTS_MASK =
-  0x000001 | 0x000008 | 0x000020 | 0x000080 | 0x020000 | 0x10000000 | 0x20000000 | 0x80000000;
-const WINDOWS_WRITE_RIGHTS_MASK =
-  0x000002 |
-  0x000004 |
-  0x000010 |
-  0x000040 |
-  0x000100 |
-  0x010000 |
-  0x040000 |
-  0x080000 |
-  0x10000000 |
-  0x40000000;
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
-
-type WindowsAclEntry = {
-  readonly principal: string;
-  readonly rights: string[];
-  readonly rawRights: string;
-  readonly canRead: boolean;
-  readonly canWrite: boolean;
-};
 
 export function assertDirectory(
   stat: Pick<Stats, "isSymbolicLink" | "isDirectory">,
@@ -432,25 +375,22 @@ function assertTrustedWindowsAcl(
   if (allowedEntries.length === 0) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
   }
-  const unsafeEntry = allowedEntries
-    .filter(
-      (entry) =>
-        entry.principal !== currentUserSid && !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal),
-    )
-    .map(windowsSecurityEntryToAclEntry)
-    .find((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
+  const unsafeEntry = allowedEntries.find(
+    (entry) =>
+      entry.principal !== currentUserSid &&
+      !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal) &&
+      windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate),
+  );
   if (unsafeEntry) {
     throw new Error(
       `Windows ACL permits untrusted SQLite staging access on ${pathRole}: ` +
-        `path=${pathname} principal=${unsafeEntry.principal} rights=${unsafeEntry.rawRights}. ` +
+        `path=${pathname} principal=${unsafeEntry.principal} rights=${formatWindowsSecurityRights(unsafeEntry)}. ` +
         "Remove the untrusted grant or choose a private local directory; do not use a shared or synced root.",
     );
   }
 }
 
-function windowsSecurityEntryToAclEntry(
-  entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>,
-): WindowsAclEntry {
+function formatWindowsSecurityRights(entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>): string {
   const rights: string[] = WINDOWS_FILE_RIGHTS.filter(
     ([right]) => (entry.rightsMask & right) !== 0,
   ).map(([, name]) => name);
@@ -465,32 +405,25 @@ function windowsSecurityEntryToAclEntry(
     propagationFlags.has("NoPropagateInherit") ? "(NP)" : "",
     propagationFlags.has("InheritOnly") ? "(IO)" : "",
   ].join("");
-  return {
-    principal: entry.principal,
-    rights,
-    rawRights: `${rawFlags}(${rights.join(",")})`,
-    canRead: (entry.rightsMask & WINDOWS_READ_RIGHTS_MASK) !== 0,
-    canWrite: (entry.rightsMask & WINDOWS_WRITE_RIGHTS_MASK) !== 0,
-  };
+  return `${rawFlags}(${rights.join(",")})`;
 }
 
 function windowsAclEntryPermitsUnsafeStagingAccess(
-  entry: WindowsAclEntry,
+  entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>,
   requirePrivate: boolean,
 ): boolean {
   // Inherit-only ACEs on ordinary ancestors are covered when the protected
   // root is inspected. Private roots must also reject rights inherited by files.
-  if (!requirePrivate && /\(IO\)/iu.test(entry.rawRights)) {
+  if (
+    !requirePrivate &&
+    entry.propagationFlags.split(",").some((flag) => flag.trim() === "InheritOnly")
+  ) {
     return false;
   }
-  const rights = entry.rights.map((right) => right.toUpperCase());
-  const unsafeRights = requirePrivate
-    ? WINDOWS_STAGING_ACCESS_RIGHTS
-    : WINDOWS_STAGING_REPLACEMENT_RIGHTS;
-  return (
-    (requirePrivate && (entry.canWrite || entry.canRead)) ||
-    rights.some((right) => unsafeRights.has(right))
-  );
+  const unsafeMask = requirePrivate
+    ? ~WINDOWS_SYNCHRONIZE_RIGHT
+    : WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK | ~WINDOWS_KNOWN_FILE_RIGHTS_MASK;
+  return (entry.rightsMask & unsafeMask) !== 0;
 }
 
 async function inspectWindowsPathSecurity(

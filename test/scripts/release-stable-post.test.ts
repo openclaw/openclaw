@@ -19,10 +19,9 @@ import {
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = () => {
-  // Keep transient JSON outside the namespace observed by concurrent compilers.
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make("release-stable-post-test-", scratch));
+  return releaseFixture(directories.make(".release-stable-post-test-", scratch));
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const closeoutAssets = (
