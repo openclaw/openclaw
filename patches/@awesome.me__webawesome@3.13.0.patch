@@ -1,30 +1,7 @@
-diff --git a/dist/chunks/chunk.64OG2H45.js b/dist/chunks/chunk.64OG2H45.js
-index d73ee076101feff0950dd4abb2b3244ff5461992..16931b36519a72e082d903c837f394380bf30e2d 100644
---- a/dist/chunks/chunk.64OG2H45.js
-+++ b/dist/chunks/chunk.64OG2H45.js
-@@ -169,10 +169,17 @@ var WaPopup = class extends WebAwesomeElement {
-     if (!this.anchorEl || !this.active || !this.isConnected) {
-       return;
-     }
-+    this.cleanup?.();
-+    this.cleanup = void 0;
-     this.popup?.showPopover?.();
--    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
-+    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
-       this.reposition();
-     });
-+    if (!this.active || !this.isConnected) {
-+      cleanup();
-+      return;
-+    }
-+    this.cleanup = cleanup;
-   }
-   async stop() {
-     return new Promise((resolve) => {
-diff --git a/dist/chunks/chunk.BCXHEFKE.js b/dist/chunks/chunk.BCXHEFKE.js
-index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff74aa6f371 100644
---- a/dist/chunks/chunk.BCXHEFKE.js
-+++ b/dist/chunks/chunk.BCXHEFKE.js
+diff --git a/dist/chunks/chunk.4HJPQ4O4.js b/dist/chunks/chunk.4HJPQ4O4.js
+index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcfcff09197 100644
+--- a/dist/chunks/chunk.4HJPQ4O4.js
++++ b/dist/chunks/chunk.4HJPQ4O4.js
 @@ -25,9 +25,6 @@ import {
  import {
    uniqueId
@@ -35,7 +12,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -63,83 +60,45 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -80,83 +77,45 @@ var WaTooltip = class extends WebAwesomeElement {
      this.for = null;
      this.anchor = null;
      this.eventController = new AbortController();
@@ -79,7 +56,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
 +      } else {
 +        if (!open) {
 +          const target = event.relatedTarget;
-+          if (hover && target && (this.anchor?.contains(target) || this.contains(target))) return;
++          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
 +          this.dismissedByPress = false;
 +        }
 +        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
@@ -132,8 +109,8 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
 -    };
 -    this.handleMouseOut = (event) => {
 -      const relatedTarget = event.relatedTarget;
--      const movedIntoAnchor = Boolean(relatedTarget && this.anchor?.contains(relatedTarget));
--      const movedIntoTooltip = Boolean(relatedTarget && this.contains(relatedTarget));
+-      const movedIntoAnchor = Boolean(relatedTarget && this.anchor && containsComposedNode(this.anchor, relatedTarget));
+-      const movedIntoTooltip = Boolean(relatedTarget && containsComposedNode(this, relatedTarget));
 -      if (movedIntoAnchor || movedIntoTooltip) {
 -        return;
 -      }
@@ -148,7 +125,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
    }
    connectedCallback() {
      super.connectedCallback();
-@@ -148,43 +107,33 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -165,43 +124,33 @@ var WaTooltip = class extends WebAwesomeElement {
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -203,7 +180,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
      clearTimeout(this.hoverTimeout);
-@@ -216,41 +165,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -233,41 +182,47 @@ var WaTooltip = class extends WebAwesomeElement {
      }
    }
    async handleOpenChange() {
@@ -284,7 +261,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -264,23 +219,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -281,23 +236,19 @@ var WaTooltip = class extends WebAwesomeElement {
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -321,7 +298,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
      }
      this.anchor = newAnchor;
    }
-@@ -290,26 +241,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -307,26 +258,19 @@ var WaTooltip = class extends WebAwesomeElement {
        this.popup.reposition();
      }
    }
@@ -357,7 +334,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
    }
    render() {
      return html`
-@@ -332,7 +276,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -349,7 +293,7 @@ var WaTooltip = class extends WebAwesomeElement {
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -366,7 +343,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
            <slot></slot>
          </div>
        </wa-popup>
-@@ -384,7 +328,7 @@ __decorateClass([
+@@ -401,7 +345,7 @@ __decorateClass([
    state()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -375,7 +352,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -392,9 +336,6 @@ __decorateClass([
+@@ -409,9 +353,6 @@ __decorateClass([
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -385,186 +362,10 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff7
  WaTooltip = __decorateClass([
    customElement("wa-tooltip")
  ], WaTooltip);
-diff --git a/dist/chunks/chunk.CWBSN34U.js b/dist/chunks/chunk.CWBSN34U.js
-index 5b1df53a771e31410852af7ea483db52edbc0140..dbb7dc5db6d83acaf9261846451ce86b9eb4cab6 100644
---- a/dist/chunks/chunk.CWBSN34U.js
-+++ b/dist/chunks/chunk.CWBSN34U.js
-@@ -43,9 +43,6 @@ import {
- import {
-   size_styles_default
- } from "./chunk.G5ZZIGWB.js";
--import {
--  waitForEvent
--} from "./chunk.F25QOBDY.js";
- import {
-   animateWithClass
- } from "./chunk.L6CIKOFQ.js";
-@@ -74,6 +71,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-     this.selectionOrder = /* @__PURE__ */ new Map();
-     this.typeToSelectString = "";
-     this.slotChangePending = false;
-+    this.openTransition = { open: false };
-     this.displayLabel = "";
-     this.selectedOptions = [];
-     this.name = "";
-@@ -294,7 +292,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-   }
-   disconnectedCallback() {
-     super.disconnectedCallback();
--    this.removeOpenListeners();
-+    this.openTransition.controller?.abort();
-+    this.openTransition = { open: false };
-+    this.popup?.popup?.classList.remove("show", "hide");
-+    if (this.listbox) this.listbox.hidden = true;
-+    if (this.popup) this.popup.active = false;
-+    unregisterDismissible(this);
-     this.cachedOptions = null;
-   }
-   updateDefaultValue() {
-@@ -308,24 +311,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-       this._defaultValue = this.getAttribute("value") || null;
-     }
-   }
--  addOpenListeners() {
--    document.addEventListener("focusin", this.handleDocumentFocusIn);
--    document.addEventListener("keydown", this.handleDocumentKeyDown);
--    document.addEventListener("mousedown", this.handleDocumentMouseDown);
--    registerDismissible(this);
--    if (this.getRootNode() !== document) {
--      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
--  removeOpenListeners() {
--    document.removeEventListener("focusin", this.handleDocumentFocusIn);
--    document.removeEventListener("keydown", this.handleDocumentKeyDown);
--    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
--    unregisterDismissible(this);
--    if (this.getRootNode() !== document) {
--      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
-   handleFocus() {
-     this.displayInput.setSelectionRange(0, 0);
-   }
-@@ -588,6 +573,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-   handleDisabledChange() {
-     if (this.disabled && this.open) {
-       this.open = false;
-+      // The open watcher has already run for this update.
-+      this.handleOpenChange();
-     }
-   }
-   handleValueChange() {
-@@ -598,56 +585,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-     this.updateValidity();
-   }
-   async handleOpenChange() {
--    if (this.open && !this.disabled) {
--      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
--      const waShowEvent = new WaShowEvent();
--      this.dispatchEvent(waShowEvent);
--      if (waShowEvent.defaultPrevented) {
--        this.open = false;
--        return;
--      }
--      this.addOpenListeners();
-+    const open = this.open && !this.disabled;
-+    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
-+    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
-+    const event = open ? new WaShowEvent() : new WaHideEvent();
-+    this.dispatchEvent(event);
-+    if (event.defaultPrevented && !this.disabled) {
-+      this.open = this.openTransition.open;
-+      return this.openAnimation;
-+    }
-+    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
-+    this.openTransition.controller?.abort();
-+    this.openTransition = { open, controller: new AbortController() };
-+    const { signal } = this.openTransition.controller;
-+    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
-+    if (open) {
-+      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
-+      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
-+      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
-+      registerDismissible(this);
-+      const root = this.getRootNode();
-+      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
-       this.listbox.hidden = false;
-       this.popup.active = true;
-       requestAnimationFrame(() => {
--        this.setCurrentOption(this.currentOption);
-+        if (isCurrent()) this.setCurrentOption(this.currentOption);
-       });
--      await animateWithClass(this.popup.popup, "show");
--      if (this.currentOption) {
-+    } else {
-+      unregisterDismissible(this);
-+    }
-+    // Retire the old animation before joining its cleanup; only the accepted
-+    // transition may publish visibility, focus, or completion after an await.
-+    this.popup.popup.classList.remove("show", "hide");
-+    const previousAnimation = this.openAnimation;
-+    this.openAnimation = (async () => {
-+      await previousAnimation;
-+      if (!isCurrent()) return;
-+      await animateWithClass(this.popup.popup, open ? "show" : "hide");
-+      if (!isCurrent()) return;
-+      if (open && this.currentOption) {
-         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
-       }
--      this.dispatchEvent(new WaAfterShowEvent());
--    } else {
--      const waHideEvent = new WaHideEvent();
--      this.dispatchEvent(waHideEvent);
--      if (waHideEvent.defaultPrevented) {
--        this.open = false;
--        return;
-+      if (!open) {
-+        this.listbox.hidden = true;
-+        this.popup.active = false;
-       }
--      this.removeOpenListeners();
--      await animateWithClass(this.popup.popup, "hide");
--      this.listbox.hidden = true;
--      this.popup.active = false;
--      this.dispatchEvent(new WaAfterHideEvent());
--    }
-+      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
-+    })();
-+    return this.openAnimation;
-   }
-   /** Shows the listbox. */
-   async show() {
--    if (this.open || this.disabled) {
-+    if (this.disabled) {
-       this.open = false;
--      return void 0;
-+      return;
-     }
-+    if (!this.isConnected) return;
-     this.open = true;
--    return waitForEvent(this, "wa-after-show");
-+    await this.updateComplete;
-+    return this.handleOpenChange();
-   }
-   /** Hides the listbox. */
-   async hide() {
--    if (!this.open || this.disabled) {
--      this.open = false;
--      return void 0;
--    }
-     this.open = false;
--    return waitForEvent(this, "wa-after-hide");
-+    if (!this.isConnected) return;
-+    await this.updateComplete;
-+    return this.openAnimation;
-   }
-   /** Sets focus on the control. */
-   focus(options) {
-diff --git a/dist/chunks/chunk.JZGJWX35.js b/dist/chunks/chunk.JZGJWX35.js
-index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..66e09365025b0e593e38d8410c8019d660081e16 100644
---- a/dist/chunks/chunk.JZGJWX35.js
-+++ b/dist/chunks/chunk.JZGJWX35.js
+diff --git a/dist/chunks/chunk.BV5W4T7H.js b/dist/chunks/chunk.BV5W4T7H.js
+index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f9298d8b637d 100644
+--- a/dist/chunks/chunk.BV5W4T7H.js
++++ b/dist/chunks/chunk.BV5W4T7H.js
 @@ -29,6 +29,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
    constructor() {
      super(...arguments);
@@ -747,10 +548,259 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..66e09365025b0e593e38d8410c8019d6
      `;
    }
  };
-diff --git a/dist/chunks/chunk.KZJTFPDQ.js b/dist/chunks/chunk.KZJTFPDQ.js
-index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..287223ce3a16e03424e85a330b985e899e3f31c3 100644
---- a/dist/chunks/chunk.KZJTFPDQ.js
-+++ b/dist/chunks/chunk.KZJTFPDQ.js
+diff --git a/dist/chunks/chunk.KB3IOPVF.js b/dist/chunks/chunk.KB3IOPVF.js
+index 3b1abee761087a9d9784b7a91f6555e1be323145..a870bafe03138f84a1dcdc8a687cda3e5940ad1e 100644
+--- a/dist/chunks/chunk.KB3IOPVF.js
++++ b/dist/chunks/chunk.KB3IOPVF.js
+@@ -169,10 +169,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
+diff --git a/dist/chunks/chunk.L6CIKOFQ.js b/dist/chunks/chunk.L6CIKOFQ.js
+index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
+--- a/dist/chunks/chunk.L6CIKOFQ.js
++++ b/dist/chunks/chunk.L6CIKOFQ.js
+@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+   return el.animate(keyframes, options).finished.catch(() => {
+   });
+ }
+-function animateWithClass(el, className) {
+-  return new Promise((resolve) => {
+-    const controller = new AbortController();
+-    const { signal } = controller;
+-    if (el.classList.contains(className)) {
+-      return;
+-    }
+-    el.classList.add(className);
+-    let resolved = false;
+-    let onEnd = () => {
+-      if (resolved) {
+-        return;
+-      }
+-      resolved = true;
+-      el.classList.remove(className);
+-      resolve();
+-      controller.abort();
+-    };
+-    el.addEventListener("animationend", onEnd, { once: true, signal });
+-    el.addEventListener("animationcancel", onEnd, { once: true, signal });
+-    requestAnimationFrame(() => {
+-      if (!resolved && el.getAnimations().length === 0) {
+-        onEnd();
+-      }
+-    });
+-  });
++async function animateWithClass(el, className) {
++  // Observe pending class removal before reusing the same animation name;
++  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
++  el.getAnimations();
++  el.classList.add(className);
++  // Popup activation is reactive: let its display styles render before sampling.
++  // Native completion also settles animations canceled before animationstart, unlike DOM events.
++  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
++  const animations = el.getAnimations().filter(
++    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
++  );
++  await Promise.allSettled(animations.map((animation) => animation.finished));
++  el.classList.remove(className);
+ }
+ function parseDuration(duration) {
+   duration = duration.toString().toLowerCase();
+diff --git a/dist/chunks/chunk.LKUZUNJV.js b/dist/chunks/chunk.LKUZUNJV.js
+index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65ce602c07e 100644
+--- a/dist/chunks/chunk.LKUZUNJV.js
++++ b/dist/chunks/chunk.LKUZUNJV.js
+@@ -43,9 +43,6 @@ import {
+ import {
+   size_styles_default
+ } from "./chunk.G5ZZIGWB.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -74,6 +71,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.selectionOrder = /* @__PURE__ */ new Map();
+     this.typeToSelectString = "";
+     this.slotChangePending = false;
++    this.openTransition = { open: false };
+     this.displayLabel = "";
+     this.selectedOptions = [];
+     this.name = "";
+@@ -294,7 +292,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.removeOpenListeners();
++    this.openTransition.controller?.abort();
++    this.openTransition = { open: false };
++    this.popup?.popup?.classList.remove("show", "hide");
++    if (this.listbox) this.listbox.hidden = true;
++    if (this.popup) this.popup.active = false;
++    unregisterDismissible(this);
+     this.cachedOptions = null;
+   }
+   updateDefaultValue() {
+@@ -308,24 +311,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+       this._defaultValue = this.getAttribute("value") || null;
+     }
+   }
+-  addOpenListeners() {
+-    document.addEventListener("focusin", this.handleDocumentFocusIn);
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("mousedown", this.handleDocumentMouseDown);
+-    registerDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+-  removeOpenListeners() {
+-    document.removeEventListener("focusin", this.handleDocumentFocusIn);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
+-    unregisterDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+   handleFocus() {
+     this.displayInput.setSelectionRange(0, 0);
+   }
+@@ -590,6 +575,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleDisabledChange() {
+     if (this.disabled && this.open) {
+       this.open = false;
++      // The open watcher has already run for this update.
++      this.handleOpenChange();
+     }
+   }
+   handleValueChange() {
+@@ -600,56 +587,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.updateValidity();
+   }
+   async handleOpenChange() {
+-    if (this.open && !this.disabled) {
+-      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      this.addOpenListeners();
++    const open = this.open && !this.disabled;
++    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
++    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
++    const event = open ? new WaShowEvent() : new WaHideEvent();
++    this.dispatchEvent(event);
++    if (event.defaultPrevented && !this.disabled) {
++      this.open = this.openTransition.open;
++      return this.openAnimation;
++    }
++    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
++    this.openTransition.controller?.abort();
++    this.openTransition = { open, controller: new AbortController() };
++    const { signal } = this.openTransition.controller;
++    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
++    if (open) {
++      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
++      registerDismissible(this);
++      const root = this.getRootNode();
++      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
+       this.listbox.hidden = false;
+       this.popup.active = true;
+       requestAnimationFrame(() => {
+-        this.setCurrentOption(this.currentOption);
++        if (isCurrent()) this.setCurrentOption(this.currentOption);
+       });
+-      await animateWithClass(this.popup.popup, "show");
+-      if (this.currentOption) {
++    } else {
++      unregisterDismissible(this);
++    }
++    // Retire the old animation before joining its cleanup; only the accepted
++    // transition may publish visibility, focus, or completion after an await.
++    this.popup.popup.classList.remove("show", "hide");
++    const previousAnimation = this.openAnimation;
++    this.openAnimation = (async () => {
++      await previousAnimation;
++      if (!isCurrent()) return;
++      await animateWithClass(this.popup.popup, open ? "show" : "hide");
++      if (!isCurrent()) return;
++      if (open && this.currentOption) {
+         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
+       }
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
+       }
+-      this.removeOpenListeners();
+-      await animateWithClass(this.popup.popup, "hide");
+-      this.listbox.hidden = true;
+-      this.popup.active = false;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
++      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++    })();
++    return this.openAnimation;
+   }
+   /** Shows the listbox. */
+   async show() {
+-    if (this.open || this.disabled) {
++    if (this.disabled) {
+       this.open = false;
+-      return void 0;
++      return;
+     }
++    if (!this.isConnected) return;
+     this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Hides the listbox. */
+   async hide() {
+-    if (!this.open || this.disabled) {
+-      this.open = false;
+-      return void 0;
+-    }
+     this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++    if (!this.isConnected) return;
++    await this.updateComplete;
++    return this.openAnimation;
+   }
+   /** Sets focus on the control. */
+   focus(options) {
+diff --git a/dist/chunks/chunk.XSKA3LE6.js b/dist/chunks/chunk.XSKA3LE6.js
+index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc9110ac584e 100644
+--- a/dist/chunks/chunk.XSKA3LE6.js
++++ b/dist/chunks/chunk.XSKA3LE6.js
 @@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
  var WaDropdown = class extends WebAwesomeElement {
    constructor() {
@@ -1233,56 +1283,6 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..287223ce3a16e03424e85a330b985e89
        item.submenuElement.setAttribute("data-placement", placement2);
        Object.assign(item.submenuElement.style, {
          left: `${x}px`,
-diff --git a/dist/chunks/chunk.L6CIKOFQ.js b/dist/chunks/chunk.L6CIKOFQ.js
-index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
---- a/dist/chunks/chunk.L6CIKOFQ.js
-+++ b/dist/chunks/chunk.L6CIKOFQ.js
-@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
-   return el.animate(keyframes, options).finished.catch(() => {
-   });
- }
--function animateWithClass(el, className) {
--  return new Promise((resolve) => {
--    const controller = new AbortController();
--    const { signal } = controller;
--    if (el.classList.contains(className)) {
--      return;
--    }
--    el.classList.add(className);
--    let resolved = false;
--    let onEnd = () => {
--      if (resolved) {
--        return;
--      }
--      resolved = true;
--      el.classList.remove(className);
--      resolve();
--      controller.abort();
--    };
--    el.addEventListener("animationend", onEnd, { once: true, signal });
--    el.addEventListener("animationcancel", onEnd, { once: true, signal });
--    requestAnimationFrame(() => {
--      if (!resolved && el.getAnimations().length === 0) {
--        onEnd();
--      }
--    });
--  });
-+async function animateWithClass(el, className) {
-+  // Observe pending class removal before reusing the same animation name;
-+  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
-+  el.getAnimations();
-+  el.classList.add(className);
-+  // Popup activation is reactive: let its display styles render before sampling.
-+  // Native completion also settles animations canceled before animationstart, unlike DOM events.
-+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-+  const animations = el.getAnimations().filter(
-+    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
-+  );
-+  await Promise.allSettled(animations.map((animation) => animation.finished));
-+  el.classList.remove(className);
- }
- function parseDuration(duration) {
-   duration = duration.toString().toLowerCase();
 diff --git a/dist/components/dropdown/dropdown.d.ts b/dist/components/dropdown/dropdown.d.ts
 index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
 --- a/dist/components/dropdown/dropdown.d.ts
@@ -1434,10 +1434,10 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      show(): Promise<void>;
      /** Hides the tooltip */
 diff --git a/dist/custom-elements.json b/dist/custom-elements.json
-index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda369b1d92 100644
+index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2edc59b9db 100644
 --- a/dist/custom-elements.json
 +++ b/dist/custom-elements.json
-@@ -17736,22 +17736,12 @@
+@@ -18189,22 +18189,12 @@
              },
              {
                "kind": "field",
@@ -1462,7 +1462,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
                "privacy": "private"
              },
              {
-@@ -17762,22 +17752,7 @@
+@@ -18215,22 +18205,7 @@
              },
              {
                "kind": "field",
@@ -1486,7 +1486,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
                "privacy": "private"
              },
              {
-@@ -17854,13 +17829,6 @@
+@@ -18307,13 +18282,6 @@
                  "text": "handleOptionsChange() => void"
                }
              },
@@ -1500,7 +1500,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
              {
                "kind": "method",
                "name": "show",
-@@ -17946,6 +17914,11 @@
+@@ -18399,6 +18367,11 @@
                  "name": "WebAwesomeElement",
                  "module": "internal/webawesome-element.js"
                }
@@ -1512,7 +1512,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
              }
            ],
            "events": [
-@@ -27842,13 +27815,13 @@
+@@ -27985,13 +27958,13 @@
                "privacy": "private"
              },
              {
@@ -1545,10 +1545,445 @@ index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3
  export declare function animateWithClass(el: Element, className: string): Promise<void>;
  /** Parses a CSS duration and returns the number of milliseconds. */
  export declare function parseDuration(duration: number | string): number;
-diff --git a/dist-cdn/chunks/chunk.63RYV7SI.js b/dist-cdn/chunks/chunk.63RYV7SI.js
-index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..45902a28071c6a90dfeb29b8667f0ac3267100aa 100644
---- a/dist-cdn/chunks/chunk.63RYV7SI.js
-+++ b/dist-cdn/chunks/chunk.63RYV7SI.js
+diff --git a/dist-cdn/chunks/chunk.EPFYRZYN.js b/dist-cdn/chunks/chunk.EPFYRZYN.js
+index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259964de436 100644
+--- a/dist-cdn/chunks/chunk.EPFYRZYN.js
++++ b/dist-cdn/chunks/chunk.EPFYRZYN.js
+@@ -46,9 +46,6 @@ import {
+ import {
+   size_styles_default
+ } from "./chunk.JB5Y2AN3.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -88,6 +85,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.selectionOrder = /* @__PURE__ */ new Map();
+     this.typeToSelectString = "";
+     this.slotChangePending = false;
++    this.openTransition = { open: false };
+     this.displayLabel = "";
+     this.selectedOptions = [];
+     this.name = "";
+@@ -308,7 +306,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.removeOpenListeners();
++    this.openTransition.controller?.abort();
++    this.openTransition = { open: false };
++    this.popup?.popup?.classList.remove("show", "hide");
++    if (this.listbox) this.listbox.hidden = true;
++    if (this.popup) this.popup.active = false;
++    unregisterDismissible(this);
+     this.cachedOptions = null;
+   }
+   updateDefaultValue() {
+@@ -322,24 +325,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+       this._defaultValue = this.getAttribute("value") || null;
+     }
+   }
+-  addOpenListeners() {
+-    document.addEventListener("focusin", this.handleDocumentFocusIn);
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("mousedown", this.handleDocumentMouseDown);
+-    registerDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+-  removeOpenListeners() {
+-    document.removeEventListener("focusin", this.handleDocumentFocusIn);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
+-    unregisterDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+   handleFocus() {
+     this.displayInput.setSelectionRange(0, 0);
+   }
+@@ -604,6 +589,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleDisabledChange() {
+     if (this.disabled && this.open) {
+       this.open = false;
++      // The open watcher has already run for this update.
++      this.handleOpenChange();
+     }
+   }
+   handleValueChange() {
+@@ -614,56 +601,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.updateValidity();
+   }
+   async handleOpenChange() {
+-    if (this.open && !this.disabled) {
+-      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      this.addOpenListeners();
++    const open = this.open && !this.disabled;
++    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
++    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
++    const event = open ? new WaShowEvent() : new WaHideEvent();
++    this.dispatchEvent(event);
++    if (event.defaultPrevented && !this.disabled) {
++      this.open = this.openTransition.open;
++      return this.openAnimation;
++    }
++    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
++    this.openTransition.controller?.abort();
++    this.openTransition = { open, controller: new AbortController() };
++    const { signal } = this.openTransition.controller;
++    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
++    if (open) {
++      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
++      registerDismissible(this);
++      const root = this.getRootNode();
++      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
+       this.listbox.hidden = false;
+       this.popup.active = true;
+       requestAnimationFrame(() => {
+-        this.setCurrentOption(this.currentOption);
++        if (isCurrent()) this.setCurrentOption(this.currentOption);
+       });
+-      await animateWithClass(this.popup.popup, "show");
+-      if (this.currentOption) {
++    } else {
++      unregisterDismissible(this);
++    }
++    // Retire the old animation before joining its cleanup; only the accepted
++    // transition may publish visibility, focus, or completion after an await.
++    this.popup.popup.classList.remove("show", "hide");
++    const previousAnimation = this.openAnimation;
++    this.openAnimation = (async () => {
++      await previousAnimation;
++      if (!isCurrent()) return;
++      await animateWithClass(this.popup.popup, open ? "show" : "hide");
++      if (!isCurrent()) return;
++      if (open && this.currentOption) {
+         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
+       }
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
+       }
+-      this.removeOpenListeners();
+-      await animateWithClass(this.popup.popup, "hide");
+-      this.listbox.hidden = true;
+-      this.popup.active = false;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
++      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++    })();
++    return this.openAnimation;
+   }
+   /** Shows the listbox. */
+   async show() {
+-    if (this.open || this.disabled) {
++    if (this.disabled) {
+       this.open = false;
+-      return void 0;
++      return;
+     }
++    if (!this.isConnected) return;
+     this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Hides the listbox. */
+   async hide() {
+-    if (!this.open || this.disabled) {
+-      this.open = false;
+-      return void 0;
+-    }
+     this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++    if (!this.isConnected) return;
++    await this.updateComplete;
++    return this.openAnimation;
+   }
+   /** Sets focus on the control. */
+   focus(options) {
+diff --git a/dist-cdn/chunks/chunk.L6CIKOFQ.js b/dist-cdn/chunks/chunk.L6CIKOFQ.js
+index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
+--- a/dist-cdn/chunks/chunk.L6CIKOFQ.js
++++ b/dist-cdn/chunks/chunk.L6CIKOFQ.js
+@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+   return el.animate(keyframes, options).finished.catch(() => {
+   });
+ }
+-function animateWithClass(el, className) {
+-  return new Promise((resolve) => {
+-    const controller = new AbortController();
+-    const { signal } = controller;
+-    if (el.classList.contains(className)) {
+-      return;
+-    }
+-    el.classList.add(className);
+-    let resolved = false;
+-    let onEnd = () => {
+-      if (resolved) {
+-        return;
+-      }
+-      resolved = true;
+-      el.classList.remove(className);
+-      resolve();
+-      controller.abort();
+-    };
+-    el.addEventListener("animationend", onEnd, { once: true, signal });
+-    el.addEventListener("animationcancel", onEnd, { once: true, signal });
+-    requestAnimationFrame(() => {
+-      if (!resolved && el.getAnimations().length === 0) {
+-        onEnd();
+-      }
+-    });
+-  });
++async function animateWithClass(el, className) {
++  // Observe pending class removal before reusing the same animation name;
++  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
++  el.getAnimations();
++  el.classList.add(className);
++  // Popup activation is reactive: let its display styles render before sampling.
++  // Native completion also settles animations canceled before animationstart, unlike DOM events.
++  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
++  const animations = el.getAnimations().filter(
++    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
++  );
++  await Promise.allSettled(animations.map((animation) => animation.finished));
++  el.classList.remove(className);
+ }
+ function parseDuration(duration) {
+   duration = duration.toString().toLowerCase();
+diff --git a/dist-cdn/chunks/chunk.OHGWARAS.js b/dist-cdn/chunks/chunk.OHGWARAS.js
+index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c76b74ba73 100644
+--- a/dist-cdn/chunks/chunk.OHGWARAS.js
++++ b/dist-cdn/chunks/chunk.OHGWARAS.js
+@@ -36,6 +36,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   constructor() {
+     super(...arguments);
+     this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
++    this.submenuGeneration = 0;
+     this.active = false;
+     this.variant = "default";
+     this.size = "m";
+@@ -47,7 +48,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     this.submenuOpen = false;
+     this.hasSubmenu = false;
+     this.handleSlotChange = () => {
+-      this.hasSubmenu = this.hasSlotController.test("submenu");
++      const hasSubmenu = this.hasSlotController.test("submenu");
++      // Retire the branch before losing the old submenu state and popup.
++      if (!hasSubmenu) void this.closeSubmenu();
++      this.hasSubmenu = hasSubmenu;
+       this.updateHasSubmenuState();
+       if (this.hasSubmenu) {
+         this.setAttribute("aria-haspopup", "menu");
+@@ -74,7 +78,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     /** Handles pointer enter to open the submenu on hover */
+     this.handlePointerEnter = (event) => {
+       if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
+-        this.notifyParentOfOpening();
+         this.submenuOpen = true;
+       }
+     };
+@@ -91,7 +94,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.closeSubmenu();
++    this.submenuGeneration++;
++    void this.closeSubmenu();
++    const submenu = this.submenuElement;
++    if (submenu) {
++      submenu.classList.remove("show", "hide");
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+     this.removeEventListener?.("click", this.handleHostClick);
+     this.removeEventListener?.("pointerenter", this.handlePointerEnter);
+     this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
+@@ -134,11 +145,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     }
+     if (changedProperties.has("submenuOpen")) {
+       this.customStates.set("submenu-open", this.submenuOpen);
+-      if (this.submenuOpen) {
+-        this.openSubmenu();
+-      } else {
+-        this.closeSubmenu();
+-      }
++      const previousAnimation = this.submenuAnimation;
++      this.submenuAnimation = this.updateSubmenuVisibility(previousAnimation);
+     }
+   }
+   /** Update the has-submenu custom state */
+@@ -147,22 +155,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Opens the submenu. */
+   async openSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
+-    this.notifyParentOfOpening();
+-    submenu.showPopover?.();
+-    submenu.hidden = false;
+-    submenu.setAttribute("data-visible", "");
++    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
+     this.submenuOpen = true;
+-    this.setAttribute("aria-expanded", "true");
+-    await animateWithClass(submenu, "show");
+-    setTimeout(() => {
++    await this.updateComplete;
++    return this.submenuAnimation;
++  }
++  /** Reconciles property and public-method requests through one submenu lifecycle. */
++  async updateSubmenuVisibility(previousAnimation) {
++    const submenu = this.submenuElement;
++    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
++    if (!this.hasSubmenu || !submenu || !this.isConnected) {
++      await previousAnimation;
++      return;
++    }
++    const open = this.submenuOpen;
++    const generation = ++this.submenuGeneration;
++    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
++    // Retire the previous class before joining its cleanup. A stale close must never
++    // hide a reopened native popover, and repeated public requests share this promise.
++    submenu.classList.remove("show", "hide");
++    if (open) {
++      this.notifyParentOfOpening();
++      if (!isCurrent()) return;
++      submenu.showPopover?.();
++      submenu.hidden = false;
++      submenu.setAttribute("data-visible", "");
++    }
++    // Opening observers initialize embedded controls before the expanded state changes.
++    this.setAttribute("aria-expanded", String(open));
++    await previousAnimation;
++    await this.updateComplete;
++    if (!isCurrent()) return;
++    // Focus once when opening becomes usable, not again when the animation finishes:
++    // the operator may already have moved focus or returned to the parent by then.
++    if (open) {
+       const items = this.getSubmenuItems();
+-      if (items.length > 0) {
+-        items.forEach((item, index) => item.active = index === 0);
+-        items[0].focus({ preventScroll: true });
+-      }
+-    }, 0);
++      items.forEach((item, index) => item.active = index === 0);
++      items[0]?.focus({ preventScroll: true });
++    }
++    await animateWithClass(submenu, open ? "show" : "hide");
++    if (!isCurrent()) return;
++    if (!open) {
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+   }
+   /** Notifies the parent dropdown that this item is opening its submenu */
+   notifyParentOfOpening() {
+@@ -172,30 +209,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+       detail: { item: this }
+     });
+     this.dispatchEvent(event);
+-    const parent = this.parentElement;
+-    if (parent) {
+-      const siblings = [...parent.children].filter(
+-        (el) => el !== this && el.localName === "wa-dropdown-item" && el.getAttribute("slot") === this.getAttribute("slot") && el.submenuOpen
+-      );
+-      siblings.forEach((sibling) => {
+-        sibling.submenuOpen = false;
+-      });
+-    }
+   }
+   /** Closes the submenu. */
+   async closeSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu) return;
++    // A never-connected item's first update cannot settle; closing it is a public no-op.
++    if (!this.hasSubmenu || !this.submenuElement) return;
+     this.submenuOpen = false;
+-    this.setAttribute("aria-expanded", "false");
+-    if (!submenu.hidden) {
+-      await animateWithClass(submenu, "hide");
+-      if (submenu?.isConnected) {
+-        submenu.hidden = true;
+-        submenu.removeAttribute("data-visible");
+-        submenu.hidePopover?.();
+-      }
+-    }
++    this.dispatchEvent(new Event("submenu-closing"));
++    await this.updateComplete;
++    return this.submenuAnimation;
+   }
+   /** Determines whether the item navigates when selected. Items with submenus never navigate. */
+   isLink() {
+@@ -225,8 +247,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Gets all dropdown items in the submenu. */
+   getSubmenuItems() {
+-    return [...this.children].filter(
+-      (el) => el.localName === "wa-dropdown-item" && el.getAttribute("slot") === "submenu" && !el.hasAttribute("disabled")
++    const slot = this.submenuElement?.querySelector('slot[name="submenu"]');
++    return (slot?.assignedElements({ flatten: true }) ?? []).filter(
++      (el) => el.localName === "wa-dropdown-item" && !el.disabled
+     );
+   }
+   render() {
+@@ -285,7 +308,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+             >
+               <slot name="submenu"></slot>
+             </div>
+-          ` : ""}
++          ` : html`<slot name="submenu" hidden></slot>`}
+     `;
+   }
+ };
+diff --git a/dist-cdn/chunks/chunk.QYBSWZDP.js b/dist-cdn/chunks/chunk.QYBSWZDP.js
+index 7d00635638361679a37070b02f3c2df9f6921cea..52b573eeac08eb9ada098fb43b9648c66eda936f 100644
+--- a/dist-cdn/chunks/chunk.QYBSWZDP.js
++++ b/dist-cdn/chunks/chunk.QYBSWZDP.js
+@@ -1643,10 +1643,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
+diff --git a/dist-cdn/chunks/chunk.R3TB74QH.js b/dist-cdn/chunks/chunk.R3TB74QH.js
+index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6f517e71c 100644
+--- a/dist-cdn/chunks/chunk.R3TB74QH.js
++++ b/dist-cdn/chunks/chunk.R3TB74QH.js
 @@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
  var WaDropdown = class extends WebAwesomeElement {
    constructor() {
@@ -2031,10 +2466,10 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..45902a28071c6a90dfeb29b8667f0ac3
        item.submenuElement.setAttribute("data-placement", placement2);
        Object.assign(item.submenuElement.style, {
          left: `${x2}px`,
-diff --git a/dist-cdn/chunks/chunk.A73F6EP3.js b/dist-cdn/chunks/chunk.A73F6EP3.js
-index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae85244ef91 100644
---- a/dist-cdn/chunks/chunk.A73F6EP3.js
-+++ b/dist-cdn/chunks/chunk.A73F6EP3.js
+diff --git a/dist-cdn/chunks/chunk.RJFFANZD.js b/dist-cdn/chunks/chunk.RJFFANZD.js
+index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e512f6d084 100644
+--- a/dist-cdn/chunks/chunk.RJFFANZD.js
++++ b/dist-cdn/chunks/chunk.RJFFANZD.js
 @@ -25,9 +25,6 @@ import {
  import {
    uniqueId
@@ -2045,7 +2480,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -70,83 +67,45 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -87,83 +84,45 @@ var WaTooltip = class extends WebAwesomeElement {
      this.for = null;
      this.anchor = null;
      this.eventController = new AbortController();
@@ -2089,7 +2524,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
 +      } else {
 +        if (!open) {
 +          const target = event.relatedTarget;
-+          if (hover && target && (this.anchor?.contains(target) || this.contains(target))) return;
++          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
 +          this.dismissedByPress = false;
 +        }
 +        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
@@ -2142,8 +2577,8 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
 -    };
 -    this.handleMouseOut = (event) => {
 -      const relatedTarget = event.relatedTarget;
--      const movedIntoAnchor = Boolean(relatedTarget && this.anchor?.contains(relatedTarget));
--      const movedIntoTooltip = Boolean(relatedTarget && this.contains(relatedTarget));
+-      const movedIntoAnchor = Boolean(relatedTarget && this.anchor && containsComposedNode(this.anchor, relatedTarget));
+-      const movedIntoTooltip = Boolean(relatedTarget && containsComposedNode(this, relatedTarget));
 -      if (movedIntoAnchor || movedIntoTooltip) {
 -        return;
 -      }
@@ -2158,7 +2593,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
    }
    connectedCallback() {
      super.connectedCallback();
-@@ -155,43 +114,33 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -172,43 +131,33 @@ var WaTooltip = class extends WebAwesomeElement {
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -2213,7 +2648,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
      clearTimeout(this.hoverTimeout);
-@@ -223,41 +172,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -240,41 +189,47 @@ var WaTooltip = class extends WebAwesomeElement {
      }
    }
    async handleOpenChange() {
@@ -2294,7 +2729,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -271,23 +226,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -288,23 +243,19 @@ var WaTooltip = class extends WebAwesomeElement {
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -2331,7 +2766,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
      }
      this.anchor = newAnchor;
    }
-@@ -297,26 +248,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -314,26 +265,19 @@ var WaTooltip = class extends WebAwesomeElement {
        this.popup.reposition();
      }
    }
@@ -2367,7 +2802,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
    }
    render() {
      return x`
-@@ -339,7 +283,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -356,7 +300,7 @@ var WaTooltip = class extends WebAwesomeElement {
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -2376,7 +2811,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
            <slot></slot>
          </div>
        </wa-popup>
-@@ -391,7 +335,7 @@ __decorateClass([
+@@ -408,7 +352,7 @@ __decorateClass([
    r()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -2385,7 +2820,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -399,9 +343,6 @@ __decorateClass([
+@@ -416,9 +360,6 @@ __decorateClass([
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -2395,441 +2830,6 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae8
  WaTooltip = __decorateClass([
    t("wa-tooltip")
  ], WaTooltip);
-diff --git a/dist-cdn/chunks/chunk.L6CIKOFQ.js b/dist-cdn/chunks/chunk.L6CIKOFQ.js
-index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
---- a/dist-cdn/chunks/chunk.L6CIKOFQ.js
-+++ b/dist-cdn/chunks/chunk.L6CIKOFQ.js
-@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
-   return el.animate(keyframes, options).finished.catch(() => {
-   });
- }
--function animateWithClass(el, className) {
--  return new Promise((resolve) => {
--    const controller = new AbortController();
--    const { signal } = controller;
--    if (el.classList.contains(className)) {
--      return;
--    }
--    el.classList.add(className);
--    let resolved = false;
--    let onEnd = () => {
--      if (resolved) {
--        return;
--      }
--      resolved = true;
--      el.classList.remove(className);
--      resolve();
--      controller.abort();
--    };
--    el.addEventListener("animationend", onEnd, { once: true, signal });
--    el.addEventListener("animationcancel", onEnd, { once: true, signal });
--    requestAnimationFrame(() => {
--      if (!resolved && el.getAnimations().length === 0) {
--        onEnd();
--      }
--    });
--  });
-+async function animateWithClass(el, className) {
-+  // Observe pending class removal before reusing the same animation name;
-+  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
-+  el.getAnimations();
-+  el.classList.add(className);
-+  // Popup activation is reactive: let its display styles render before sampling.
-+  // Native completion also settles animations canceled before animationstart, unlike DOM events.
-+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-+  const animations = el.getAnimations().filter(
-+    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
-+  );
-+  await Promise.allSettled(animations.map((animation) => animation.finished));
-+  el.classList.remove(className);
- }
- function parseDuration(duration) {
-   duration = duration.toString().toLowerCase();
-diff --git a/dist-cdn/chunks/chunk.QERYKBRG.js b/dist-cdn/chunks/chunk.QERYKBRG.js
-index dce611cc655099d3adf42274a8dbeb4ba883b575..4d75dae5218a5cdaa4be57233bcb261ed268f8e2 100644
---- a/dist-cdn/chunks/chunk.QERYKBRG.js
-+++ b/dist-cdn/chunks/chunk.QERYKBRG.js
-@@ -1643,10 +1643,17 @@ var WaPopup = class extends WebAwesomeElement {
-     if (!this.anchorEl || !this.active || !this.isConnected) {
-       return;
-     }
-+    this.cleanup?.();
-+    this.cleanup = void 0;
-     this.popup?.showPopover?.();
--    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
-+    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
-       this.reposition();
-     });
-+    if (!this.active || !this.isConnected) {
-+      cleanup();
-+      return;
-+    }
-+    this.cleanup = cleanup;
-   }
-   async stop() {
-     return new Promise((resolve) => {
-diff --git a/dist-cdn/chunks/chunk.VVUBGO75.js b/dist-cdn/chunks/chunk.VVUBGO75.js
-index 79243983dd4273713e7d1cc5d7e9a7b103cb787c..b7007d1129565982cac88ea9878d78e47072e340 100644
---- a/dist-cdn/chunks/chunk.VVUBGO75.js
-+++ b/dist-cdn/chunks/chunk.VVUBGO75.js
-@@ -46,9 +46,6 @@ import {
- import {
-   size_styles_default
- } from "./chunk.JB5Y2AN3.js";
--import {
--  waitForEvent
--} from "./chunk.F25QOBDY.js";
- import {
-   animateWithClass
- } from "./chunk.L6CIKOFQ.js";
-@@ -88,6 +85,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-     this.selectionOrder = /* @__PURE__ */ new Map();
-     this.typeToSelectString = "";
-     this.slotChangePending = false;
-+    this.openTransition = { open: false };
-     this.displayLabel = "";
-     this.selectedOptions = [];
-     this.name = "";
-@@ -308,7 +306,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-   }
-   disconnectedCallback() {
-     super.disconnectedCallback();
--    this.removeOpenListeners();
-+    this.openTransition.controller?.abort();
-+    this.openTransition = { open: false };
-+    this.popup?.popup?.classList.remove("show", "hide");
-+    if (this.listbox) this.listbox.hidden = true;
-+    if (this.popup) this.popup.active = false;
-+    unregisterDismissible(this);
-     this.cachedOptions = null;
-   }
-   updateDefaultValue() {
-@@ -322,24 +325,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-       this._defaultValue = this.getAttribute("value") || null;
-     }
-   }
--  addOpenListeners() {
--    document.addEventListener("focusin", this.handleDocumentFocusIn);
--    document.addEventListener("keydown", this.handleDocumentKeyDown);
--    document.addEventListener("mousedown", this.handleDocumentMouseDown);
--    registerDismissible(this);
--    if (this.getRootNode() !== document) {
--      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
--  removeOpenListeners() {
--    document.removeEventListener("focusin", this.handleDocumentFocusIn);
--    document.removeEventListener("keydown", this.handleDocumentKeyDown);
--    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
--    unregisterDismissible(this);
--    if (this.getRootNode() !== document) {
--      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
-   handleFocus() {
-     this.displayInput.setSelectionRange(0, 0);
-   }
-@@ -602,6 +587,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-   handleDisabledChange() {
-     if (this.disabled && this.open) {
-       this.open = false;
-+      // The open watcher has already run for this update.
-+      this.handleOpenChange();
-     }
-   }
-   handleValueChange() {
-@@ -612,56 +599,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-     this.updateValidity();
-   }
-   async handleOpenChange() {
--    if (this.open && !this.disabled) {
--      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
--      const waShowEvent = new WaShowEvent();
--      this.dispatchEvent(waShowEvent);
--      if (waShowEvent.defaultPrevented) {
--        this.open = false;
--        return;
--      }
--      this.addOpenListeners();
-+    const open = this.open && !this.disabled;
-+    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
-+    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
-+    const event = open ? new WaShowEvent() : new WaHideEvent();
-+    this.dispatchEvent(event);
-+    if (event.defaultPrevented && !this.disabled) {
-+      this.open = this.openTransition.open;
-+      return this.openAnimation;
-+    }
-+    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
-+    this.openTransition.controller?.abort();
-+    this.openTransition = { open, controller: new AbortController() };
-+    const { signal } = this.openTransition.controller;
-+    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
-+    if (open) {
-+      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
-+      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
-+      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
-+      registerDismissible(this);
-+      const root = this.getRootNode();
-+      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
-       this.listbox.hidden = false;
-       this.popup.active = true;
-       requestAnimationFrame(() => {
--        this.setCurrentOption(this.currentOption);
-+        if (isCurrent()) this.setCurrentOption(this.currentOption);
-       });
--      await animateWithClass(this.popup.popup, "show");
--      if (this.currentOption) {
-+    } else {
-+      unregisterDismissible(this);
-+    }
-+    // Retire the old animation before joining its cleanup; only the accepted
-+    // transition may publish visibility, focus, or completion after an await.
-+    this.popup.popup.classList.remove("show", "hide");
-+    const previousAnimation = this.openAnimation;
-+    this.openAnimation = (async () => {
-+      await previousAnimation;
-+      if (!isCurrent()) return;
-+      await animateWithClass(this.popup.popup, open ? "show" : "hide");
-+      if (!isCurrent()) return;
-+      if (open && this.currentOption) {
-         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
-       }
--      this.dispatchEvent(new WaAfterShowEvent());
--    } else {
--      const waHideEvent = new WaHideEvent();
--      this.dispatchEvent(waHideEvent);
--      if (waHideEvent.defaultPrevented) {
--        this.open = false;
--        return;
-+      if (!open) {
-+        this.listbox.hidden = true;
-+        this.popup.active = false;
-       }
--      this.removeOpenListeners();
--      await animateWithClass(this.popup.popup, "hide");
--      this.listbox.hidden = true;
--      this.popup.active = false;
--      this.dispatchEvent(new WaAfterHideEvent());
--    }
-+      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
-+    })();
-+    return this.openAnimation;
-   }
-   /** Shows the listbox. */
-   async show() {
--    if (this.open || this.disabled) {
-+    if (this.disabled) {
-       this.open = false;
--      return void 0;
-+      return;
-     }
-+    if (!this.isConnected) return;
-     this.open = true;
--    return waitForEvent(this, "wa-after-show");
-+    await this.updateComplete;
-+    return this.handleOpenChange();
-   }
-   /** Hides the listbox. */
-   async hide() {
--    if (!this.open || this.disabled) {
--      this.open = false;
--      return void 0;
--    }
-     this.open = false;
--    return waitForEvent(this, "wa-after-hide");
-+    if (!this.isConnected) return;
-+    await this.updateComplete;
-+    return this.openAnimation;
-   }
-   /** Sets focus on the control. */
-   focus(options) {
-diff --git a/dist-cdn/chunks/chunk.W2C46OQX.js b/dist-cdn/chunks/chunk.W2C46OQX.js
-index da164574ce537b386894e751d6e9727cc9249d08..4625393889d6d1b92bddc212b8ba407843f70136 100644
---- a/dist-cdn/chunks/chunk.W2C46OQX.js
-+++ b/dist-cdn/chunks/chunk.W2C46OQX.js
-@@ -36,6 +36,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
-   constructor() {
-     super(...arguments);
-     this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
-+    this.submenuGeneration = 0;
-     this.active = false;
-     this.variant = "default";
-     this.size = "m";
-@@ -47,7 +48,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
-     this.submenuOpen = false;
-     this.hasSubmenu = false;
-     this.handleSlotChange = () => {
--      this.hasSubmenu = this.hasSlotController.test("submenu");
-+      const hasSubmenu = this.hasSlotController.test("submenu");
-+      // Retire the branch before losing the old submenu state and popup.
-+      if (!hasSubmenu) void this.closeSubmenu();
-+      this.hasSubmenu = hasSubmenu;
-       this.updateHasSubmenuState();
-       if (this.hasSubmenu) {
-         this.setAttribute("aria-haspopup", "menu");
-@@ -74,7 +78,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
-     /** Handles pointer enter to open the submenu on hover */
-     this.handlePointerEnter = (event) => {
-       if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
--        this.notifyParentOfOpening();
-         this.submenuOpen = true;
-       }
-     };
-@@ -91,7 +94,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
-   }
-   disconnectedCallback() {
-     super.disconnectedCallback();
--    this.closeSubmenu();
-+    this.submenuGeneration++;
-+    void this.closeSubmenu();
-+    const submenu = this.submenuElement;
-+    if (submenu) {
-+      submenu.classList.remove("show", "hide");
-+      submenu.hidden = true;
-+      submenu.removeAttribute("data-visible");
-+      submenu.hidePopover?.();
-+    }
-     this.removeEventListener?.("click", this.handleHostClick);
-     this.removeEventListener?.("pointerenter", this.handlePointerEnter);
-     this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
-@@ -134,11 +145,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
-     }
-     if (changedProperties.has("submenuOpen")) {
-       this.customStates.set("submenu-open", this.submenuOpen);
--      if (this.submenuOpen) {
--        this.openSubmenu();
--      } else {
--        this.closeSubmenu();
--      }
-+      const previousAnimation = this.submenuAnimation;
-+      this.submenuAnimation = this.updateSubmenuVisibility(previousAnimation);
-     }
-   }
-   /** Update the has-submenu custom state */
-@@ -147,22 +155,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
-   }
-   /** Opens the submenu. */
-   async openSubmenu() {
--    const submenu = this.submenuElement;
--    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
--    this.notifyParentOfOpening();
--    submenu.showPopover?.();
--    submenu.hidden = false;
--    submenu.setAttribute("data-visible", "");
-+    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
-     this.submenuOpen = true;
--    this.setAttribute("aria-expanded", "true");
--    await animateWithClass(submenu, "show");
--    setTimeout(() => {
-+    await this.updateComplete;
-+    return this.submenuAnimation;
-+  }
-+  /** Reconciles property and public-method requests through one submenu lifecycle. */
-+  async updateSubmenuVisibility(previousAnimation) {
-+    const submenu = this.submenuElement;
-+    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
-+    if (!this.hasSubmenu || !submenu || !this.isConnected) {
-+      await previousAnimation;
-+      return;
-+    }
-+    const open = this.submenuOpen;
-+    const generation = ++this.submenuGeneration;
-+    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
-+    // Retire the previous class before joining its cleanup. A stale close must never
-+    // hide a reopened native popover, and repeated public requests share this promise.
-+    submenu.classList.remove("show", "hide");
-+    if (open) {
-+      this.notifyParentOfOpening();
-+      if (!isCurrent()) return;
-+      submenu.showPopover?.();
-+      submenu.hidden = false;
-+      submenu.setAttribute("data-visible", "");
-+    }
-+    // Opening observers initialize embedded controls before the expanded state changes.
-+    this.setAttribute("aria-expanded", String(open));
-+    await previousAnimation;
-+    await this.updateComplete;
-+    if (!isCurrent()) return;
-+    // Focus once when opening becomes usable, not again when the animation finishes:
-+    // the operator may already have moved focus or returned to the parent by then.
-+    if (open) {
-       const items = this.getSubmenuItems();
--      if (items.length > 0) {
--        items.forEach((item, index) => item.active = index === 0);
--        items[0].focus({ preventScroll: true });
--      }
--    }, 0);
-+      items.forEach((item, index) => item.active = index === 0);
-+      items[0]?.focus({ preventScroll: true });
-+    }
-+    await animateWithClass(submenu, open ? "show" : "hide");
-+    if (!isCurrent()) return;
-+    if (!open) {
-+      submenu.hidden = true;
-+      submenu.removeAttribute("data-visible");
-+      submenu.hidePopover?.();
-+    }
-   }
-   /** Notifies the parent dropdown that this item is opening its submenu */
-   notifyParentOfOpening() {
-@@ -172,30 +209,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
-       detail: { item: this }
-     });
-     this.dispatchEvent(event);
--    const parent = this.parentElement;
--    if (parent) {
--      const siblings = [...parent.children].filter(
--        (el) => el !== this && el.localName === "wa-dropdown-item" && el.getAttribute("slot") === this.getAttribute("slot") && el.submenuOpen
--      );
--      siblings.forEach((sibling) => {
--        sibling.submenuOpen = false;
--      });
--    }
-   }
-   /** Closes the submenu. */
-   async closeSubmenu() {
--    const submenu = this.submenuElement;
--    if (!this.hasSubmenu || !submenu) return;
-+    // A never-connected item's first update cannot settle; closing it is a public no-op.
-+    if (!this.hasSubmenu || !this.submenuElement) return;
-     this.submenuOpen = false;
--    this.setAttribute("aria-expanded", "false");
--    if (!submenu.hidden) {
--      await animateWithClass(submenu, "hide");
--      if (submenu?.isConnected) {
--        submenu.hidden = true;
--        submenu.removeAttribute("data-visible");
--        submenu.hidePopover?.();
--      }
--    }
-+    this.dispatchEvent(new Event("submenu-closing"));
-+    await this.updateComplete;
-+    return this.submenuAnimation;
-   }
-   /** Determines whether the item navigates when selected. Items with submenus never navigate. */
-   isLink() {
-@@ -225,8 +247,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
-   }
-   /** Gets all dropdown items in the submenu. */
-   getSubmenuItems() {
--    return [...this.children].filter(
--      (el) => el.localName === "wa-dropdown-item" && el.getAttribute("slot") === "submenu" && !el.hasAttribute("disabled")
-+    const slot = this.submenuElement?.querySelector('slot[name="submenu"]');
-+    return (slot?.assignedElements({ flatten: true }) ?? []).filter(
-+      (el) => el.localName === "wa-dropdown-item" && !el.disabled
-     );
-   }
-   render() {
-@@ -285,7 +308,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
-             >
-               <slot name="submenu"></slot>
-             </div>
--          ` : ""}
-+          ` : html`<slot name="submenu" hidden></slot>`}
-     `;
-   }
- };
 diff --git a/dist-cdn/components/dropdown/dropdown.d.ts b/dist-cdn/components/dropdown/dropdown.d.ts
 index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
 --- a/dist-cdn/components/dropdown/dropdown.d.ts
@@ -2981,10 +2981,10 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      show(): Promise<void>;
      /** Hides the tooltip */
 diff --git a/dist-cdn/custom-elements.json b/dist-cdn/custom-elements.json
-index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda369b1d92 100644
+index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2edc59b9db 100644
 --- a/dist-cdn/custom-elements.json
 +++ b/dist-cdn/custom-elements.json
-@@ -17736,22 +17736,12 @@
+@@ -18189,22 +18189,12 @@
              },
              {
                "kind": "field",
@@ -3009,7 +3009,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
                "privacy": "private"
              },
              {
-@@ -17762,22 +17752,7 @@
+@@ -18215,22 +18205,7 @@
              },
              {
                "kind": "field",
@@ -3033,7 +3033,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
                "privacy": "private"
              },
              {
-@@ -17854,13 +17829,6 @@
+@@ -18307,13 +18282,6 @@
                  "text": "handleOptionsChange() => void"
                }
              },
@@ -3047,7 +3047,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
              {
                "kind": "method",
                "name": "show",
-@@ -17946,6 +17914,11 @@
+@@ -18399,6 +18367,11 @@
                  "name": "WebAwesomeElement",
                  "module": "internal/webawesome-element.js"
                }
@@ -3059,7 +3059,7 @@ index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda
              }
            ],
            "events": [
-@@ -27842,13 +27815,13 @@
+@@ -27985,13 +27958,13 @@
                "privacy": "private"
              },
              {
