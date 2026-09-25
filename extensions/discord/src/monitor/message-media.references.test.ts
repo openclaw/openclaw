@@ -135,7 +135,7 @@ describe("Discord media SSRF policy", () => {
     );
   });
 
-  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+  it("merges caller hostnames without inheriting private-network overrides", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -159,12 +159,41 @@ describe("Discord media SSRF policy", () => {
     const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
       | { ssrfPolicy?: Record<string, unknown> }
       | undefined;
-    expect(call?.ssrfPolicy).toMatchObject({
-      allowPrivateNetwork: true,
-      allowRfc2544BenchmarkRange: true,
-    });
+    expect(call?.ssrfPolicy?.allowPrivateNetwork).not.toBe(true);
+    expect(call?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).not.toBe(true);
+    expect(call?.ssrfPolicy?.allowRfc2544BenchmarkRange).toBe(true);
     expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
       expect.arrayContaining(["assets.example.com", "cdn.discordapp.com"]),
     );
+  });
+
+  it("forwards caller allowIpv6UniqueLocalRange into the media downloader policy", async () => {
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/c.png", contentType: "image/png" });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [{ id: "c1", url: "https://cdn.discordapp.com/c.png", filename: "c.png" }],
+      }),
+      1024,
+      {
+        ssrfPolicy: {
+          allowPrivateNetwork: true,
+          dangerouslyAllowPrivateNetwork: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
+    );
+
+    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
+      | { ssrfPolicy?: Record<string, unknown> }
+      | undefined;
+    expect(call?.ssrfPolicy?.allowIpv6UniqueLocalRange).toBe(true);
+    expect(call?.ssrfPolicy?.allowPrivateNetwork).not.toBe(true);
+    expect(call?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).not.toBe(true);
+    expect(call?.ssrfPolicy?.allowRfc2544BenchmarkRange).toBe(true);
   });
 });
