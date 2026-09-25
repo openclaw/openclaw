@@ -68,11 +68,24 @@ describe("update attention", () => {
     },
   );
 
-  it("retains cached git availability when the refreshed comparison is unavailable", () => {
-    const { entry, state } = resolveUpdateEntry(contextWithGitStatus("unavailable"));
-    expect(state.present).toBe(true);
-    expect(entry).not.toBeNull();
-  });
+  it.each([false, true])(
+    "retains failed check recovery with cleared availability=%s",
+    (cleared) => {
+      const context = contextWithGitStatus("unavailable");
+      if (cleared) {
+        context.overlays.snapshot.updateAvailable = null;
+        context.overlays.snapshot.updateSchedule = { channel: "dev", autoEnabled: false };
+        context.overlays.snapshot.updateStatusCheckBanner = {
+          tone: "warn",
+          text: "Could not check the latest update",
+          mode: "manual",
+        };
+      }
+      const { entry, state } = resolveUpdateEntry(context);
+      expect(state.present).toBe(true);
+      expect(entry).not.toBeNull();
+    },
+  );
 
   it.each(["behind", "diverged"] as const)(
     "keeps refreshed %s git availability in the Inbox",

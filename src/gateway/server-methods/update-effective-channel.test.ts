@@ -174,6 +174,28 @@ describe("update.status effective channel", () => {
     expect(respond).toHaveBeenCalledWith(true, { sentinel: null, updateAvailable: null });
   });
 
+  it("does not report cached status as a successful explicit refresh after a fetch error", async () => {
+    refreshGatewayUpdateStatusMock.mockRejectedValueOnce(new Error("fetch timed out"));
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+    const handler = updateHandlers["update.status"];
+    if (!handler) {
+      throw new Error("update.status handler is unavailable");
+    }
+    await handler({
+      params: { refreshCheckout: true },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({ update: { channel: "dev" } }),
+        logGateway: { warn: vi.fn() },
+      },
+    } as never);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Could not check the latest update. Try again.",
+    });
+  });
+
   it("refreshes the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",

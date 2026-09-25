@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -70,103 +71,116 @@ describe("deferred Gateway update-check lifecycle", () => {
     return call[0];
   }
 
-  it("scopes detailed update broadcasts to read-capable operator clients", async () => {
-    const clients = [
-      {
-        connId: "pairing",
-        connect: { role: "operator", scopes: ["operator.pairing"] },
-      },
-      { connId: "node", connect: { role: "node", scopes: ["node.read"] } },
-      {
-        connId: "operator-read",
-        connect: { role: "operator", scopes: ["operator.read"] },
-      },
-    ];
-    const broadcastToConnIds = vi.fn();
-    const getClientConnIds: UpdateCheckStartupParams["getClientConnIds"] = (filter) =>
-      new Set(
-        clients
-          .filter((client) => !filter || filter(client as never))
-          .map((client) => client.connId),
-      );
-    const createGatewayUpdateCheck = vi.fn(() => defaultUpdateCheck);
-
-    const result = await startUpdateCheck({
-      broadcastToConnIds,
-      getClientConnIds,
-      createUpdateCheck: createGatewayUpdateCheck,
-    });
-    await waitForGatewayTestState(() => {
-      expect(createGatewayUpdateCheck).toHaveBeenCalledTimes(1);
-    });
-
-    const updateCheckParams = mockCallArg(createGatewayUpdateCheck) as UpdateCheckParams;
-    const updateAvailable = {
-      currentVersion: "2026.8.7",
-      latestVersion: "2026.8.8",
-      channel: "dev" as const,
-      currentSha: "1111111111111111111111111111111111111111",
-      upstreamRef: "origin/main",
-      upstreamSha: "2222222222222222222222222222222222222222",
-      commitsBehind: 1,
-      commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
-    };
-    const schedule = {
-      channel: "dev" as const,
-      autoEnabled: true,
-      install: { kind: "git" as const },
-      target: {
-        kind: "git" as const,
-        currentSha: updateAvailable.currentSha,
-        upstreamRef: updateAvailable.upstreamRef,
-        upstreamSha: updateAvailable.upstreamSha,
-        commitsBehind: updateAvailable.commitsBehind,
-        commits: updateAvailable.commits,
-      },
-    };
-
-    updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
-    updateCheckParams.onUpdateScheduleChange?.(schedule);
-
-    expect(broadcastToConnIds.mock.calls).toEqual([
-      ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
-      [
-        "update.available",
+  it.each(["background", "early manual"])(
+    "scopes %s update broadcasts to read-capable operator clients",
+    async (source) => {
+      const clients = [
         {
-          updateAvailable: {
-            currentVersion: updateAvailable.currentVersion,
-            latestVersion: updateAvailable.latestVersion,
-            channel: updateAvailable.channel,
-          },
+          connId: "pairing",
+          connect: { role: "operator", scopes: ["operator.pairing"] },
         },
-        new Set(["pairing", "node"]),
-        { dropIfSlow: true },
-      ],
-      [
-        "update.available",
-        { updateAvailable, schedule },
-        new Set(["operator-read"]),
-        { dropIfSlow: true },
-      ],
-      [
-        "update.available",
+        { connId: "node", connect: { role: "node", scopes: ["node.read"] } },
         {
-          updateAvailable: {
-            currentVersion: updateAvailable.currentVersion,
-            latestVersion: updateAvailable.latestVersion,
-            channel: updateAvailable.channel,
-          },
+          connId: "operator-read",
+          connect: { role: "operator", scopes: ["operator.read"] },
         },
-        new Set(["pairing", "node"]),
-        { dropIfSlow: true },
-      ],
-    ]);
-    await result.stop();
-    broadcastToConnIds.mockClear();
-    updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
-    updateCheckParams.onUpdateScheduleChange?.(schedule);
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-  });
+      ];
+      const broadcastToConnIds = vi.fn();
+      const getClientConnIds: UpdateCheckStartupParams["getClientConnIds"] = (filter) =>
+        new Set(
+          clients
+            .filter((client) => !filter || filter(client as never))
+            .map((client) => client.connId),
+        );
+      const createGatewayUpdateCheck = vi.fn(() => defaultUpdateCheck);
+
+      const ready = createDeferred();
+      const result = await startUpdateCheck({
+        ...(source === "early manual" ? { waitForPostReadyWork: () => ready.promise } : {}),
+        broadcastToConnIds,
+        getClientConnIds,
+        createUpdateCheck: createGatewayUpdateCheck,
+      });
+      if (source === "background") {
+        await waitForGatewayTestState(() => {
+          expect(createGatewayUpdateCheck).toHaveBeenCalledTimes(1);
+        });
+      } else {
+        expect(createGatewayUpdateCheck).not.toHaveBeenCalled();
+      }
+
+      const updateCheckParams =
+        source === "background"
+          ? (mockCallArg(createGatewayUpdateCheck) as UpdateCheckParams)
+          : currentUpdateCheckLifecycle();
+      const updateAvailable = {
+        currentVersion: "2026.8.7",
+        latestVersion: "2026.8.8",
+        channel: "dev" as const,
+        currentSha: "1111111111111111111111111111111111111111",
+        upstreamRef: "origin/main",
+        upstreamSha: "2222222222222222222222222222222222222222",
+        commitsBehind: 1,
+        commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
+      };
+      const schedule = {
+        channel: "dev" as const,
+        autoEnabled: true,
+        install: { kind: "git" as const },
+        target: {
+          kind: "git" as const,
+          currentSha: updateAvailable.currentSha,
+          upstreamRef: updateAvailable.upstreamRef,
+          upstreamSha: updateAvailable.upstreamSha,
+          commitsBehind: updateAvailable.commitsBehind,
+          commits: updateAvailable.commits,
+        },
+      };
+
+      updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
+      updateCheckParams.onUpdateScheduleChange?.(schedule);
+
+      expect(broadcastToConnIds.mock.calls).toEqual([
+        ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
+        [
+          "update.available",
+          {
+            updateAvailable: {
+              currentVersion: updateAvailable.currentVersion,
+              latestVersion: updateAvailable.latestVersion,
+              channel: updateAvailable.channel,
+            },
+          },
+          new Set(["pairing", "node"]),
+          { dropIfSlow: true },
+        ],
+        [
+          "update.available",
+          { updateAvailable, schedule },
+          new Set(["operator-read"]),
+          { dropIfSlow: true },
+        ],
+        [
+          "update.available",
+          {
+            updateAvailable: {
+              currentVersion: updateAvailable.currentVersion,
+              latestVersion: updateAvailable.latestVersion,
+              channel: updateAvailable.channel,
+            },
+          },
+          new Set(["pairing", "node"]),
+          { dropIfSlow: true },
+        ],
+      ]);
+      await result.stop();
+      ready.resolve();
+      broadcastToConnIds.mockClear();
+      updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
+      updateCheckParams.onUpdateScheduleChange?.(schedule);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
 
   it("joins a late update-check factory and its cleanup when close wins startup", async () => {
     const factory = createDeferred<UpdateCheck>();

@@ -132,8 +132,21 @@ describe("application update campaign overlays", () => {
     async (source) => {
       vi.useFakeTimers();
       const updateStatus = deferred<unknown>();
+      const currentSchedule = {
+        ...AUTO_UPDATE_SCHEDULE,
+        campaign: {
+          ...AUTO_UPDATE_SCHEDULE.campaign,
+          state: "applying" as const,
+          updatedAtMs: 61_000,
+        },
+      };
+      let statusReads = 0;
       const request = vi.fn<RequestFn>((method) =>
-        method === "update.status" ? updateStatus.promise : Promise.resolve({}),
+        method === "update.status"
+          ? ++statusReads > 3
+            ? Promise.resolve({ schedule: currentSchedule })
+            : updateStatus.promise
+          : Promise.resolve({}),
       );
       const harness = createAutomaticUpdateHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
@@ -145,16 +158,7 @@ describe("application update campaign overlays", () => {
         expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
           source === "manual refresh" ? 3 : 2,
         );
-        harness.emitEvent("update.available", {
-          schedule: {
-            ...AUTO_UPDATE_SCHEDULE,
-            campaign: {
-              ...AUTO_UPDATE_SCHEDULE.campaign,
-              state: "applying",
-              updatedAtMs: 61_000,
-            },
-          },
-        });
+        harness.emitEvent("update.available", { schedule: currentSchedule });
         updateStatus.resolve({
           sentinel: {
             kind: "update",
@@ -164,7 +168,7 @@ describe("application update campaign overlays", () => {
           },
           schedule: AUTO_UPDATE_SCHEDULE,
         });
-        expect(await refresh).toBe(source === "manual refresh" ? false : undefined);
+        expect(await refresh).toBe(source === "manual refresh" ? true : undefined);
         await flushMicrotasks();
 
         expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");

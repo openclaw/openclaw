@@ -43,15 +43,17 @@ import {
 } from "./update-check-lifecycle.js";
 import { compareSemverStrings, resolveNpmChannelTag } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
-import { resolveDevGitCommits } from "./update-git-metadata.js";
 import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
+import { resolveDevGitUpdate, withoutTarget } from "./update-startup-refresh.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
   setUpdateAvailableCache,
   setUpdateScheduleCache,
 } from "./update-status-state.js";
+
+export { refreshGatewayUpdateStatus } from "./update-startup-refresh.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -113,11 +115,6 @@ function writeState(state: UpdateCheckState): void {
 
 function withoutCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
   const { campaign: _campaign, ...rest } = schedule;
-  return rest;
-}
-
-function withoutTarget(schedule: UpdateScheduleState): UpdateScheduleState {
-  const { target: _target, campaign: _campaign, ...rest } = schedule;
   return rest;
 }
 
@@ -243,52 +240,6 @@ export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartu
   return currentUpdateCheckLifecycle().initialize();
 }
 
-/** Refreshes the read-only Dev checkout comparison used by update.status. */
-export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
-  const lifecycle = currentUpdateCheckLifecycle();
-  const pending = lifecycle.refreshes.get(cfg);
-  if (pending) {
-    return pending;
-  }
-  const refresh = lifecycle
-    .run(async (signal) => {
-      const scheduleAtStart = getUpdateSchedule();
-      const configured = normalizeUpdateChannel(cfg.update?.channel);
-      const channel =
-        configured ??
-        resolveEffectiveUpdateChannel({
-          currentVersion: VERSION,
-          ...(await lifecycle.initialize()).status,
-        }).channel;
-      const isCurrent = () =>
-        lifecycle.isCurrent() &&
-        !signal.aborted &&
-        (getUpdateSchedule() === scheduleAtStart || getUpdateSchedule()?.channel === channel);
-      if (channel !== "dev" || !isCurrent()) {
-        return;
-      }
-      const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
-      if (!isCurrent()) {
-        return;
-      }
-      const schedule = getUpdateSchedule();
-      const current =
-        schedule?.channel === channel
-          ? schedule
-          : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
-      setUpdateScheduleCache({
-        next: withUpdateInstallStatus(current, status, true, installReceipt, root),
-      });
-    })
-    .finally(() => {
-      if (lifecycle.refreshes.get(cfg) === refresh) {
-        lifecycle.refreshes.delete(cfg);
-      }
-    });
-  lifecycle.refreshes.set(cfg, refresh);
-  return refresh;
-}
-
 function recordAutoUpdateAttempt(version: string): void {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = readState();
@@ -365,8 +316,18 @@ async function runGatewayUpdateCheckOwned(
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
+  let devGitCheckGeneration: number | undefined;
+  const isCurrent = () =>
+    lifecycle.isCurrent() &&
+    !params.signal.aborted &&
+    updateCampaign.getState()?.state !== "applying" &&
+    (devGitCheckGeneration === undefined ||
+      lifecycle.devGitCheckGeneration === devGitCheckGeneration);
   const initializedInstallStatus = await lifecycle.initialize();
   params.signal?.throwIfAborted();
+  if (!isCurrent()) {
+    return;
+  }
   const potentialChannel = resolveEffectiveUpdateChannel({
     configChannel,
     currentVersion: VERSION,
@@ -375,6 +336,9 @@ async function runGatewayUpdateCheckOwned(
   }).channel;
   let installStatus = initializedInstallStatus;
   if (potentialChannel === "dev" && installStatus.status.installKind === "git") {
+    // Manual and background discovery share one publication order, including
+    // the telemetry and metadata awaits after a fetched revision is captured.
+    devGitCheckGeneration = ++lifecycle.devGitCheckGeneration;
     installStatus = await resolveStartupInstallStatus(true, params.signal);
     params.signal?.throwIfAborted();
   }
@@ -391,7 +355,7 @@ async function runGatewayUpdateCheckOwned(
     autoEnabled &&
     !autoDisabledByExternalSupervisor;
 
-  if (updateCampaign.getState()?.state === "applying") {
+  if (!isCurrent()) {
     return;
   }
   const canApply = () => {
@@ -496,6 +460,9 @@ async function runGatewayUpdateCheckOwned(
   }
   const telemetryUpdate = await checkTelemetryUpdate(params.getConfig, { surface: "gateway" });
   params.signal?.throwIfAborted();
+  if (!isCurrent()) {
+    return;
+  }
   const state = readState();
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
@@ -557,14 +524,12 @@ async function runGatewayUpdateCheckOwned(
   if (isDevGit) {
     clearAvailabilityState(nextState);
     clearAutoState(nextState);
-    const git = status.git;
-    if (
-      typeof git?.behind !== "number" ||
-      git.behind <= 0 ||
-      !git.sha ||
-      !git.upstream ||
-      !git.upstreamSha
-    ) {
+    const update = await resolveDevGitUpdate(status, params.signal);
+    params.signal.throwIfAborted();
+    if (!isCurrent()) {
+      return;
+    }
+    if (!update) {
       updateCampaign.clear();
       setUpdateAvailableCache({
         next: null,
@@ -577,40 +542,13 @@ async function runGatewayUpdateCheckOwned(
       writeState(nextState);
       return;
     }
-    const currentSha = git.sha;
-    const upstreamRef = git.upstream;
-    const upstreamSha = git.upstreamSha;
-    const commitsBehind = git.behind;
-    const commits = await resolveDevGitCommits({
-      root: git.root,
-      currentSha,
-      upstreamSha,
-      signal: params.signal,
-    });
-    params.signal?.throwIfAborted();
-
-    const target: NonNullable<UpdateScheduleState["target"]> = {
-      kind: "git",
-      upstreamRef,
-      upstreamSha,
-      commitsBehind,
-    };
+    const { git, target, available } = update;
+    const { upstreamSha } = target;
     if (!updateCampaign.reconcileTarget(target)) {
       return;
     }
-    const nextAvailable: UpdateAvailable = {
-      currentVersion: VERSION,
-      latestVersion: VERSION,
-      channel: "dev",
-      currentSha,
-      upstreamRef,
-      upstreamSha,
-      ...(git.repositoryUrl ? { repositoryUrl: git.repositoryUrl } : {}),
-      commitsBehind,
-      commits,
-    };
     setUpdateAvailableCache({
-      next: nextAvailable,
+      next: available,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
     setUpdateScheduleCache({
@@ -850,7 +788,7 @@ export function createGatewayUpdateCheck(params: {
   start: () => void;
   stop: () => Promise<void>;
 } {
-  const lifecycle = params.lifecycle ?? createGatewayUpdateLifecycle();
+  const lifecycle = params.lifecycle ?? createGatewayUpdateLifecycle(params);
   lifecycle.campaign = gatewayUpdateCampaign;
   let started = false;
   let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;

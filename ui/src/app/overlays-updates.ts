@@ -407,6 +407,7 @@ export function createApplicationUpdateOverlays(
       (connected && nextProfile !== profileId) ||
       (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
     if (scopeChanged) {
+      connectedEpoch++;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
       updateReadGeneration++;

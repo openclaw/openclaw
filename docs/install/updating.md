@@ -408,6 +408,12 @@ upgrade succeeds, subsequent updates check the new version before activation.
 
 ### From chat
 
+In the Control UI, expand **Update available** in the Inbox to check the latest
+Dev Git target. The card checks again before opening update confirmation. While
+checking, it hides the previous SHA and disables the update action. A failed
+check shows an error; retry the action to check again. Opening the card does not
+start an update.
+
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's
 `update.run` action. The minimal, coding, and messaging profiles expose that update

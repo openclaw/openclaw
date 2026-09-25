@@ -33,8 +33,6 @@ export function createDeferredGatewayUpdateCheck(params: {
   isClosing?: () => boolean;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => Promise<void> } {
-  // Reserve cancellation before an early RPC can start install discovery.
-  const lifecycle = createGatewayUpdateLifecycle();
   let stopped = false;
   let started = false;
   let runWatcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
@@ -66,6 +64,27 @@ export function createDeferredGatewayUpdateCheck(params: {
       { dropIfSlow: true },
     );
   };
+
+  // Early RPC discovery shares the same cancellation and publication owner,
+  // even before the post-ready background factory has been admitted.
+  const lifecycle = createGatewayUpdateLifecycle({
+    onUpdateAvailableChange: (updateAvailable) => {
+      latestUpdateAvailable = updateAvailable;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable,
+        ...(latestSchedule ? { schedule: latestSchedule } : {}),
+      };
+      broadcastUpdateAvailable(payload);
+    },
+    onUpdateScheduleChange: (schedule) => {
+      latestSchedule = schedule;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable: latestUpdateAvailable,
+        schedule,
+      };
+      broadcastUpdateAvailable(payload);
+    },
+  });
 
   const stop = () => {
     stopped = true;
@@ -110,22 +129,8 @@ export function createDeferredGatewayUpdateCheck(params: {
             ...(params.activeWorkInspectors
               ? { activeWorkInspectors: params.activeWorkInspectors }
               : {}),
-            onUpdateAvailableChange: (updateAvailable) => {
-              latestUpdateAvailable = updateAvailable;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable,
-                ...(latestSchedule ? { schedule: latestSchedule } : {}),
-              };
-              broadcastUpdateAvailable(payload);
-            },
-            onUpdateScheduleChange: (schedule) => {
-              latestSchedule = schedule;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable: latestUpdateAvailable,
-                schedule,
-              };
-              broadcastUpdateAvailable(payload);
-            },
+            onUpdateAvailableChange: lifecycle.onUpdateAvailableChange,
+            onUpdateScheduleChange: lifecycle.onUpdateScheduleChange,
           });
         } catch (err) {
           if (!stopped) {

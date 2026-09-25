@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -46,6 +47,7 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
+  await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
   if (compact) {
     await page.locator(".chat-header-session-menu__trigger").click();
@@ -78,6 +80,71 @@ async function openConfirmation(page: Page, updateButton: Locator) {
 }
 
 suite.define(() => {
+  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const available = (sha: string, behind: number): UpdateAvailable => ({
+          channel: "dev",
+          currentVersion: "1.0.0",
+          latestVersion: "1.0.0",
+          currentSha: "a".repeat(40),
+          upstreamRef: "origin/main",
+          upstreamSha: sha.repeat(40),
+          commitsBehind: behind,
+          repositoryUrl: "https://github.com/openclaw/openclaw",
+        });
+        const status = (
+          sha: string,
+          behind: number,
+        ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
+          updateAvailable: available(sha, behind),
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            target: {
+              kind: "git",
+              upstreamRef: "origin/main",
+              upstreamSha: sha.repeat(40),
+              commitsBehind: behind,
+            },
+          },
+        });
+        const stale = status("b", 7);
+        const gateway = await installMockGateway(page, {
+          updateAvailable: stale.updateAvailable,
+          updateSchedule: stale.schedule,
+          methodResponses: { "update.status": stale },
+        });
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".sidebar-issues-button:visible").click();
+        const card = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await card.waitFor();
+        await gateway.setMethodResponse("update.status", status("c", 9));
+        await card.locator("summary").click();
+        await card.locator(".update-git-revisions code", { hasText: "cccccccc" }).waitFor();
+        expect(await gateway.getRequests("update.status", { refreshCheckout: true })).toHaveLength(
+          1,
+        );
+        expect(await card.locator(".update-git-revisions a").getAttribute("href")).toBe(
+          `https://github.com/openclaw/openclaw/compare/${"a".repeat(40)}...${"c".repeat(40)}`,
+        );
+        await gateway.setMethodResponse("update.status", status("d", 10));
+        await card.locator(".sidebar-update-card__action").click();
+        await confirmationDialog(page).waitFor();
+        expect(await confirmationCopy(page).textContent()).toContain("10 commits behind");
+        expect(
+          await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+        ).toContain("dddddddd");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      },
+    );
+  });
+
   it("keeps a dismissed Inbox update hidden until the Gateway boot changes", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },

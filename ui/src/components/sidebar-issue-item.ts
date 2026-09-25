@@ -185,7 +185,7 @@ export function renderSidebarUpdateSurface(params: {
     .connected=${gateway.phase === "connected"}
     .onAcknowledge=${() => context.overlays.acknowledgeUpdateRun()}
     .onCheckStatus=${() => context.overlays.refreshUpdateStatus()}
-    .statusBanner=${snapshot.updateStatusBanner}
+    .statusBanner=${snapshot.updateStatusCheckBanner ? { ...snapshot.updateStatusCheckBanner, source: "read" } : snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
     .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}

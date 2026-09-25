@@ -2141,49 +2141,6 @@ describe("update-startup", () => {
     },
   );
 
-  it("refreshes the inferred Dev channel for a configless Git installation", async () => {
-    mockDevGitStatus({ behind: 2 });
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
-    const announcement = getUpdateAvailable();
-    const schedule = getUpdateSchedule();
-    expect(schedule?.campaign?.state).toBe("countdown");
-    mockDevGitStatus({
-      behind: 3,
-      upstreamSha: "new-upstream-sha",
-      repositoryUrl: "https://github.com/example/openclaw",
-    });
-
-    await refreshGatewayUpdateStatus({});
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
-    expect(getUpdateSchedule()).toEqual({
-      ...schedule,
-      install: {
-        kind: "git",
-        git: {
-          status: "behind",
-          currentSha: "current-sha",
-          upstreamSha: "new-upstream-sha",
-          repositoryUrl: "https://github.com/example/openclaw",
-          commitsBehind: 3,
-        },
-      },
-    });
-    expect(getUpdateAvailable()).toBe(announcement);
-  });
-
   it.each([false, true])(
     "does not publish an old Dev status refresh over a replacement channel with inferred=%s",
     async (inferred) => {

@@ -234,7 +234,9 @@ export function createUpdateStatusRefresher(params: {
       operationGeneration === (refreshCheckout ? checkoutGeneration : generation) &&
       params.isCurrent(client, epoch);
     const isCurrent = () =>
-      ownsRequest() && params.canRefresh() && revision === params.getRevision();
+      ownsRequest() &&
+      params.canRefresh() &&
+      (refreshCheckout || revision === params.getRevision());
     if (refreshCheckout) {
       params.onRefreshing(true);
     }
@@ -243,7 +245,8 @@ export function createUpdateStatusRefresher(params: {
         .request<UpdateRestartStatusResponse>(
           "update.status",
           refreshCheckout ? { refreshCheckout: true } : {},
-          refreshCheckout ? undefined : { timeoutMs: 5_000 },
+          // Checkout discovery is bounded by the Gateway Git command budgets.
+          { timeoutMs: refreshCheckout ? null : 5_000 },
         )
         .catch((error: unknown) => {
           if (mode !== "background" && isCurrent()) {
@@ -257,27 +260,24 @@ export function createUpdateStatusRefresher(params: {
       if (response && isCurrent()) {
         if (refreshCheckout) {
           checkoutRevision++;
-          const preserveSchedule = progressRevisionAtStart !== progressRevision;
+          const preserveSchedule =
+            progressRevisionAtStart !== progressRevision || revision !== params.getRevision();
           // Runs carry their own monotonic revision; legacy sentinels do not.
           const { activeRun, lastRun, sentinel } = response;
           if (!preserveSchedule || activeRun || lastRun) {
             params.onStatus({ activeRun, lastRun, ...(!preserveSchedule ? { sentinel } : {}) });
           }
           params.onCheckout(response, preserveSchedule);
-          // Discovery may finish after the fast read captured an empty schedule.
-          // Let that read settle before reconciling, without extending the button's lifetime.
-          void progress?.then(() => {
-            if (isCurrent()) {
-              void refresh("background");
-            }
-          });
-        } else {
-          progressRevision++;
-          params.onError(null, "completion");
-          // Campaigns and availability still belong to progress, even when a
-          // concurrent checkout completed a newer install comparison.
-          params.onStatus(response, checkoutRevisionAtStart !== checkoutRevision);
+          // The fast read may predate the fetch. A successful interactive check
+          // must publish the reconciled target before its caller opens confirmation.
+          await progress;
+          return isCurrent() && (await refresh("completion"));
         }
+        progressRevision++;
+        params.onError(null, "completion");
+        // Campaigns and availability still belong to progress, even when a
+        // concurrent checkout completed a newer install comparison.
+        params.onStatus(response, checkoutRevisionAtStart !== checkoutRevision);
         return true;
       }
       return false;
