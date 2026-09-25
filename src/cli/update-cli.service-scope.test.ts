@@ -121,6 +121,34 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
 
+  it("names the gateway service process refusal in the update result", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await expect(
+      runWithGatewayServiceEnv({ yes: true, restart: false, json: true }),
+    ).rejects.toEqual(new ExitError(1));
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      reason: "managed-service-preflight",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          name: "managed-service-preflight",
+          failureFacts: [
+            expect.objectContaining({
+              check: "managed-service-preflight",
+              code: "gateway-service-process",
+            }),
+          ],
+        }),
+      ]),
+    });
+  });
+
   it.each([
     {
       name: "runtime probe fails",
@@ -371,6 +399,12 @@ describe("update-cli", () => {
       steps: [
         expect.objectContaining({
           stderrTail: expect.stringContaining("would kill this command"),
+          failureFacts: [
+            expect.objectContaining({
+              check: "managed-service-preflight",
+              code: "gateway-process-tree",
+            }),
+          ],
         }),
         recoveryVerificationStep(
           [

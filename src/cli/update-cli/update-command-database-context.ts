@@ -12,6 +12,7 @@ import {
 import { UpdatePreMutationError } from "./shared.js";
 import {
   formatUpdateAncestryBlockMessage,
+  managedServiceBlockCode,
   resolveForegroundUpdateAdmission,
 } from "./update-command-handoff.js";
 import {
@@ -24,6 +25,7 @@ import {
   GatewayServiceUpdateOwnershipError,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
+import { managedServiceRefusalFacts } from "./update-command-service-refusal.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -84,7 +86,12 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(inspected.blockMessage),
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
+        {
+          failureFacts: managedServiceRefusalFacts(
+            managedServiceBlockCode(inspected.blockMessage),
+            collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
+          ),
+        },
       );
     }
     if (
@@ -96,7 +103,12 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner before updating the foreground Gateway.",
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
+        {
+          failureFacts: managedServiceRefusalFacts(
+            "service-foreground-conflict",
+            collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
+          ),
+        },
       );
     }
     if (
@@ -107,6 +119,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
+        { failureFacts: managedServiceRefusalFacts("service-rebind-unwritable") },
       );
     }
     services.set(root, inspected);
@@ -124,6 +137,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     throw new UpdatePreMutationError(
       "managed-service-preflight",
       "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",
+      { failureFacts: managedServiceRefusalFacts("service-changed-before-admission") },
     );
   }
   return {

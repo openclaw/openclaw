@@ -12,6 +12,7 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import {
   formatUpdateAncestryBlockMessage,
   gatewayMaintenanceBlockMessage,
+  managedServiceBlockCode,
 } from "./update-command-handoff.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
@@ -214,6 +215,24 @@ describe("formatUpdateAncestryBlockMessage", () => {
     expect(updateMessage).not.toContain("terminal");
     expect(formatUpdateAncestryBlockMessage("service inspection unavailable")).toBe(
       "service inspection unavailable",
+    );
+  });
+});
+
+describe("managedServiceBlockCode", () => {
+  it("names the check behind each Gateway maintenance block", () => {
+    const ancestry = gatewayMaintenanceBlockMessage(callerService, process.cwd()) ?? "";
+    expect(managedServiceBlockCode(ancestry)).toBe("gateway-process-tree");
+    expect(managedServiceBlockCode(formatUpdateAncestryBlockMessage(ancestry))).toBe(
+      "gateway-process-tree",
+    );
+    expect(
+      managedServiceBlockCode(
+        "This maintenance command cannot stop the Gateway from inside its automatic triage process tree: stopping the service would cancel this repair.",
+      ),
+    ).toBe("gateway-triage-process-tree");
+    expect(managedServiceBlockCode("Gateway service ownership could not be verified.")).toBe(
+      "service-ownership-unverified",
     );
   });
 });

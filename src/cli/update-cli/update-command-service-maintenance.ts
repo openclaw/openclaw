@@ -25,7 +25,10 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
+import {
+  gatewayMaintenanceBlockMessage,
+  managedServiceBlockCode,
+} from "./update-command-handoff.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -40,6 +43,7 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
+import { managedServiceRefusalFacts } from "./update-command-service-refusal.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import {
   createWindowsTaskAutoStartRecovery,
@@ -527,7 +531,9 @@ async function stopManagedServiceBeforeMutableUpdate(
     let currentState = await readCurrentService(serviceState.env);
     const currentBlockMessage = await resolveAncestryBlock(currentState);
     if (currentBlockMessage) {
-      throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
+      throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage, {
+        failureFacts: managedServiceRefusalFacts(managedServiceBlockCode(currentBlockMessage)),
+      });
     }
     if (process.platform === "linux") {
       const { prepareSystemdGatewayMaintenance } =

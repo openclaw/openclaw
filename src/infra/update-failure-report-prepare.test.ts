@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { MANAGED_SERVICE_PREFLIGHT_DETAILS } from "./update-preflight-details.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
@@ -510,6 +511,42 @@ describe("update report diagnostic command boundary", () => {
       expect(report.body).not.toContain(secret);
     }
   });
+  it.each(Object.entries(MANAGED_SERVICE_PREFLIGHT_DETAILS))(
+    "names the managed-service check that refused: %s",
+    async (code, text) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: `managed-service-${code}`,
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "managed-service-preflight",
+            durationMs: 1,
+            steps: [
+              {
+                name: "managed-service-preflight",
+                command: "",
+                cwd: "",
+                durationMs: 1,
+                exitCode: 1,
+                failureFacts: [
+                  createUpdateFailureFact({
+                    check: "managed-service-preflight",
+                    code,
+                    message:
+                      "This command is running inside the gateway process tree (gateway PID 48213).",
+                  }),
+                ],
+              },
+            ],
+          },
+        },
+        context,
+      );
+      expect(report.body).toContain(`Failing check managed-service-preflight (${code}): ${text}`);
+      expect(report.body).not.toContain("48213");
+    },
+  );
   it("does not imply rollback when candidate repair stops before activation", async () => {
     const report = await prepareUpdateFailureReport(
       {

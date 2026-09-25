@@ -48,6 +48,7 @@ import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
   handoffUpdateFromGateway,
+  managedServiceBlockCode,
   parkForegroundUpdateForActivation,
 } from "./update-command-handoff.js";
 import {
@@ -71,6 +72,7 @@ import { captureUpdateActivationSchemas } from "./update-command-schema.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { managedServiceRefusalFacts } from "./update-command-service-refusal.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -335,11 +337,9 @@ export async function executeMutableUpdate(
       });
     }
 
-    const inspectionFailure = {
-      failureFacts: collectServiceInspectionFailureFacts(
-        preManagedServiceStop?.serviceUpdateVerdict,
-      ),
-    };
+    const inspectionFacts = collectServiceInspectionFailureFacts(
+      preManagedServiceStop?.serviceUpdateVerdict,
+    );
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
       throw new UpdatePreMutationError(
@@ -349,7 +349,7 @@ export async function executeMutableUpdate(
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${formatCliCommand("openclaw update")}\` from a terminal outside the gateway service.`,
         ].join("\n"),
-        inspectionFailure,
+        { failureFacts: managedServiceRefusalFacts("gateway-service-process", inspectionFacts) },
       );
     }
 
@@ -358,7 +358,12 @@ export async function executeMutableUpdate(
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
-        inspectionFailure,
+        {
+          failureFacts: managedServiceRefusalFacts(
+            managedServiceBlockCode(preManagedServiceStop.blockMessage),
+            inspectionFacts,
+          ),
+        },
       );
     }
   };
