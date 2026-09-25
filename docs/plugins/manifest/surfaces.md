@@ -396,8 +396,11 @@ plugin code.
 | `link-reader` | A reader or preview for supported links.             |
 
 The field is optional. Omission means unspecified; `[]` explicitly declares no
-UI contributions. Unknown values and non-array declarations are rejected.
-Duplicates are removed, and values use the order above. Declare kinds only,
+UI contributions. OpenClaw ignores an invalid declaration (unknown values or a
+non-array value) and reports a plugin warning; the plugin still loads. Older
+OpenClaw versions ignored this field, so malformed display metadata does not
+break existing installs after an update. Duplicates are removed, and values use
+the order above. Declare kinds only,
 not instance counts or live availability. Conditional registrations may be absent
 in a particular session without invalidating the declaration.
 

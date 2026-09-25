@@ -323,13 +323,6 @@ export function loadPluginManifest(
     });
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
-  if (!uiCapabilities.ok) {
-    return cacheResult({
-      ok: false,
-      error: `invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`,
-      manifestPath,
-    });
-  }
   const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
   if (!controlUiResult.ok) {
     return cacheResult({
@@ -350,11 +343,16 @@ export function loadPluginManifest(
 
   return cacheResult({
     ok: true,
+    // Older readers ignored this advisory field; invalid display metadata must
+    // not prevent an installed plugin from loading after an OpenClaw update.
+    ...(!uiCapabilities.ok
+      ? { warnings: [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`] }
+      : {}),
     manifest: {
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
       controlUi: controlUiResult.value,
-      ...(uiCapabilities.capabilities !== undefined
+      ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
         ? { uiCapabilities: uiCapabilities.capabilities }
         : {}),
       themes: themesResult.themes,

@@ -8,6 +8,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
@@ -69,13 +70,43 @@ describe("native Control UI manifest", () => {
     },
   );
 
-  it.each([null, "page", ["pages"], ["page", 1]])(
-    "rejects an invalid UI capability declaration %j",
-    (declaration) => {
-      expect(loadPluginManifest(fixture(undefined, declaration).dir)).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("uiCapabilities"),
+  it.each([
+    { declaration: null },
+    { declaration: "page" },
+    { declaration: ["pages"] },
+    { declaration: ["page", 1] },
+  ])(
+    "keeps an installed plugin discoverable with invalid optional UI metadata $declaration",
+    ({ declaration }) => {
+      const plugin = fixture(undefined, declaration);
+      const result = loadPluginManifest(plugin.dir);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.manifest.uiCapabilities).toBeUndefined();
+      }
+      const registry = loadPluginManifestRegistryCore({
+        installRecords: {},
+        candidates: [
+          {
+            idHint: plugin.id,
+            rootDir: plugin.dir,
+            source: plugin.file,
+            origin: "global",
+          },
+        ],
       });
+      expect(registry.plugins).toEqual([
+        expect.objectContaining({ id: plugin.id, uiCapabilities: undefined }),
+      ]);
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          pluginId: plugin.id,
+          source: path.join(plugin.dir, "openclaw.plugin.json"),
+          message: expect.stringContaining("ignoring invalid plugin manifest uiCapabilities"),
+        }),
+      );
+      expect(registry.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
     },
   );
 
