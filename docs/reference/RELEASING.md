@@ -668,6 +668,22 @@ A workflow-shape test cannot prove GitHub's runtime evaluation: confirm
 `runner_group_name` for a rerun job with
 `gh api repos/openclaw/openclaw/actions/runs/<id>/jobs` rather than assuming it.
 
+### Continuous release readiness
+
+The 04:00 UTC nightly seals a direct-root manifest and per-child receipts for the exact main SHA.
+For a same-day cut, start the release train on `main` (version and changelog) before 04:00 UTC,
+then cut `release/YYYY.M.PATCH` at the nightly SHA so the Code SHA equals the validated SHA.
+Per-child adoption matches exact target SHA, role, and dispatch inputs minus `dispatch_id`:
+`productPerformance` is adopted because its inputs are context-free and match.
+A stable candidate dispatched with `--target-ref release/YYYY.M.PATCH` resolves
+`coveragePolicy=npm-stable-v1` and `ci_release_scope=npm-stable`, versus `full` scope on `main`.
+`normalCi`, plugin prerelease, and release checks are re-dispatched because their inputs add
+`target_context_ref`, plugin prerelease and release checks add `allow_frozen_target_scenario_omissions=true`, and scope differs.
+Whole-parent adoption requires byte-identical manifest `validationInputs`, including `validationPurpose`,
+`publicationSelectionJson`, `targetContextRef`, `targetVersion`, `allowUnreleasedChangelog`, and `coveragePolicy`;
+a `main-qualification` nightly is never adopted wholesale by a `publish`-purpose stable candidate.
+Purpose/context-crossing adoption is a verifier policy follow-up.
+
 ## Stable main closeout
 
 Stable publication is not complete until `main` carries the actual shipped release state.
