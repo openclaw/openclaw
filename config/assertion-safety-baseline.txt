@@ -2648,10 +2648,8 @@ src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	10
-src/gateway/session-companion-rpc.ts	3
 src/gateway/session-history-state.ts	2
 src/gateway/session-lifecycle-state.ts	1
-src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	2
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/session-transcript-title-reader.ts	1
