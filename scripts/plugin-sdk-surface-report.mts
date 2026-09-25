@@ -410,7 +410,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +5: approved meeting participation contract: four types and one callable (#152327).
       // +4: versioned supervisor guidance contracts and bounded display-copy parser.
-      4577,
+      4581,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -573,7 +573,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +1: approved runMeetingParticipationWithBrowser callable (#152327).
       // +1: bounded supervisor guidance parser for plugin manifests.
-      2685,
+      2686,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

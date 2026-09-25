@@ -207,7 +207,7 @@ export async function confirmAndStartUpdateRuntime(
                     ></openclaw-update-run-view>`
                   : nothing
               }
-              ${(current.kind === "run" && current.run.reason === "external-supervisor-update-required") || current.kind === "failed" ? renderExternalSupervisorGuidance(latestProgress?.externalSupervisorGuidance) : nothing}
+              ${current.kind === "run" && current.run.reason === "external-supervisor-update-required" ? renderExternalSupervisorGuidance(latestProgress?.externalSupervisorGuidance) : nothing}
               <div class="exec-approval-actions">
                 ${
                   finished || showRecovery
