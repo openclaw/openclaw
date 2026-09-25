@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  AudioContextMock,
   AudioSocketMock,
   desktopAudioStream,
   stubDesktopAudio,
@@ -16,6 +15,7 @@ import {
   createPanel,
   desktopEnvironment,
 } from "./desktop-panel.test-support.ts";
+import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 
 describe("desktop panel audio wiring", () => {
   beforeEach(() => {
