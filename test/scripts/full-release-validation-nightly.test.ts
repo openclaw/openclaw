@@ -42,7 +42,12 @@ describe("nightly Full Release Validation", () => {
     "admits %s only on canonical main",
     (eventName) => {
       const expression = "${{ " + nightly.jobs.dispatch.if + " }}";
-      const context = { eventName, repository: "openclaw/openclaw", ref: "refs/heads/main" };
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runAttempt: 1,
+      };
       expect(evaluateWorkflowExpression(expression, context)).toBe(true);
       expect(
         evaluateWorkflowExpression(expression, { ...context, repository: "fork/openclaw" }),
@@ -82,11 +87,11 @@ describe("nightly Full Release Validation", () => {
         fail_fast: "false",
       },
     });
-    const { inputs } = dispatch.mock.calls[0][0];
+    const { inputs } = dispatch.mock.lastCall![0];
     for (const [key, value] of Object.entries(inputs)) {
-      const declared = frv.on.workflow_dispatch.inputs[key];
+      const declared = frv.on.workflow_dispatch?.inputs?.[key];
       expect(declared, key).toBeDefined();
-      if (declared.type === "choice") {
+      if (declared?.type === "choice") {
         expect(declared.options, key).toContain(value);
       }
     }
