@@ -221,8 +221,19 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolName: string | undefined,
     meta: string | undefined,
     commandBearing: boolean,
+    titleOnly?: string,
   ) => {
-    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    // Title-only exception at ordinary verbosity: the agent-authored exec title
+    // stays visible so users can follow (and interrupt) what the agent executes,
+    // while command-derived metadata (compact commands, working directories)
+    // remains gated behind verbose "full". Verbose "off" keeps summaries fully
+    // hidden.
+    const visibleMeta =
+      !commandBearing || params.verboseLevel === "full"
+        ? meta
+        : params.verboseLevel === "off"
+          ? undefined
+          : titleOnly;
     const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });

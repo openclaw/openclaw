@@ -687,30 +687,93 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exec", "server.exec"])(
-    "hides command metadata for %s unless full verbose mode is enabled",
-    async (toolName) => {
-      const onToolResult = vi.fn();
-      const toolHarness = createSubscribedSessionHarness({
-        runId: "run-exec-on",
-        verboseLevel: "on",
-        onToolResult,
-      });
+  it("shows the exec title in tool summaries at verbose on", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-on",
+      verboseLevel: "on",
+      onToolResult,
+    });
 
-      toolHarness.emit({
-        type: "tool_execution_start",
-        toolName,
-        toolCallId: "tool-exec-on",
-        args: { command: "echo private-sentinel" },
-      });
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-on",
+      args: { command: "echo private-sentinel", title: "smoke echo" },
+    });
 
-      await Promise.resolve();
+    await Promise.resolve();
 
-      const payload = toolResultPayloadAt(onToolResult, 0);
-      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
-      expect(payload?.text).not.toContain("private-sentinel");
-    },
-  );
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("smoke echo");
+    expect(payload?.text).not.toContain("private-sentinel");
+  });
+
+  it("keeps namespaced exec summaries visible at verbose on", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-on",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "server.exec",
+      toolCallId: "tool-exec-on",
+      args: { command: "echo private-sentinel", title: "smoke echo" },
+    });
+
+    await Promise.resolve();
+
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("Server.exec");
+  });
+
+  it("hides command-derived exec metadata at verbose on when no title is present", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-on-no-title",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-on-no-title",
+      args: { command: "echo private-sentinel && cat secrets.env" },
+    });
+
+    await Promise.resolve();
+
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("Exec");
+    expect(payload?.text).not.toContain("private-sentinel");
+    expect(payload?.text).not.toContain("secrets.env");
+  });
+
+  it("keeps command-derived exec metadata visible at verbose full", async () => {
+    const onToolResult = vi.fn();
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-exec-full-meta",
+      verboseLevel: "full",
+      toolProgressDetail: "raw",
+      onToolResult,
+    });
+
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-full-meta",
+      args: { command: "echo private-sentinel && cat secrets.env" },
+    });
+
+    await Promise.resolve();
+
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("private-sentinel");
+  });
 
   it("includes browser action metadata in tool summaries", async () => {
     const onToolResult = vi.fn();
