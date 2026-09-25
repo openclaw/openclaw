@@ -436,6 +436,9 @@ export async function maybeSpawnVisibleSession(params: {
             actor: { type: "agent", id: requesterAgentId },
             requesterSessionKey: requesterKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(params.options?.sessionPermissionPolicy
+              ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
+              : {}),
             ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
             inheritedToolPolicy: {
               version: 1,
@@ -478,9 +481,6 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
-        ...(params.options?.sessionPermissionPolicy
-          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
-          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(projectId ? { projectId } : {}),
