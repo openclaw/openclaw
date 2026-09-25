@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -8,7 +8,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -17,192 +17,202 @@ import {
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
-
 describe("session sharing store", () => {
   it("publishes membership changes only after their containing transaction commits", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-publication-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      const changes: SessionRowChange[] = [];
-      const members: string[][] = [];
-      const stopFacts = sessionChanges.subscribeFacts((change) => changes.push(change));
-      const stop = sessionChanges.subscribe(() => {
-        members.push(listSessionMembers(scope).map((member) => member.identityId));
-      });
-      try {
-        runOpenClawAgentWriteTransaction(
-          () => {
-            addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
-            expect(changes).toEqual([]);
-          },
-          { agentId: scope.agentId, env },
-        );
-        expect(changes).toEqual([
-          expect.objectContaining({
-            agentId: scope.agentId,
-            sessionKey: scope.sessionKey,
-            storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
-            facts: {
-              kind: "member",
-              sessionId: "session-main",
-              identityId: "guest",
-              present: true,
-            },
-          }),
-        ]);
-        expect(members).toEqual([["guest"]]);
-        changes.length = 0;
-        members.length = 0;
-        expect(() =>
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-publication-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+        const changes: SessionRowChange[] = [];
+        const members: string[][] = [];
+        const stopFacts = sessionChanges.subscribeFacts((change) => changes.push(change));
+        const stop = sessionChanges.subscribe(() => {
+          members.push(listSessionMembers(scope).map((member) => member.identityId));
+        });
+        try {
           runOpenClawAgentWriteTransaction(
             () => {
-              removeSessionMember(scope, "guest");
+              addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
               expect(changes).toEqual([]);
-              throw new Error("rollback");
             },
             { agentId: scope.agentId, env },
-          ),
-        ).toThrow("rollback");
-        expect(changes).toEqual([]);
-        removeSessionMember(scope, "guest");
-        expect(members).toEqual([[]]);
-        changes.length = 0;
-        members.length = 0;
-        runOpenClawAgentWriteTransaction(
-          () => {
-            addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
-            removeSessionMember(scope, "transient");
-            expect(changes).toEqual([]);
-          },
-          { agentId: scope.agentId, env },
-        );
-        expect(members).toEqual([[], []]);
-        expect(
-          changes.map((change) => ("sessionKey" in change ? change.facts : undefined)),
-        ).toEqual([
-          { kind: "member", sessionId: "session-main", identityId: "transient", present: true },
-          { kind: "member", sessionId: "session-main", identityId: "transient", present: false },
-        ]);
-      } finally {
-        stop();
-        stopFacts();
-      }
-    });
+          );
+          expect(changes).toEqual([
+            expect.objectContaining({
+              agentId: scope.agentId,
+              sessionKey: scope.sessionKey,
+              storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
+              facts: {
+                kind: "member",
+                sessionId: "session-main",
+                identityId: "guest",
+                present: true,
+              },
+            }),
+          ]);
+          expect(members).toEqual([["guest"]]);
+          changes.length = 0;
+          members.length = 0;
+          expect(() =>
+            runOpenClawAgentWriteTransaction(
+              () => {
+                removeSessionMember(scope, "guest");
+                expect(changes).toEqual([]);
+                throw new Error("rollback");
+              },
+              { agentId: scope.agentId, env },
+            ),
+          ).toThrow("rollback");
+          expect(changes).toEqual([]);
+          removeSessionMember(scope, "guest");
+          expect(members).toEqual([[]]);
+          changes.length = 0;
+          members.length = 0;
+          runOpenClawAgentWriteTransaction(
+            () => {
+              addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
+              removeSessionMember(scope, "transient");
+              expect(changes).toEqual([]);
+            },
+            { agentId: scope.agentId, env },
+          );
+          expect(members).toEqual([[], []]);
+          expect(
+            changes.map((change) => ("sessionKey" in change ? change.facts : undefined)),
+          ).toEqual([
+            { kind: "member", sessionId: "session-main", identityId: "transient", present: true },
+            { kind: "member", sessionId: "session-main", identityId: "transient", present: false },
+          ]);
+        } finally {
+          stop();
+          stopFacts();
+        }
+      },
+    );
   });
 
   it("reads existing and missing memberships without opening or creating writable databases", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-readonly-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      const missingScope = { agentId: "missing", env, sessionKey: "agent:missing:main" };
-      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
-      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env });
-      const missingPath = resolveOpenClawAgentSqlitePath({ agentId: missingScope.agentId, env });
-      closeOpenClawAgentDatabasesForTest();
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-readonly-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        const missingScope = { agentId: "missing", env, sessionKey: "agent:missing:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+        const databasePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env });
+        const missingPath = resolveOpenClawAgentSqlitePath({ agentId: missingScope.agentId, env });
+        closeOpenClawAgentDatabasesForTest();
 
-      expect(listSessionMembers(scope)).toEqual([
-        { identityId: "guest", addedBy: "owner", addedAt: 2 },
-      ]);
-      expect(isSessionMember(scope, "guest")).toBe(true);
-      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
-      expect(listSessionMembers(missingScope)).toEqual([]);
-      expect(isSessionMember(missingScope, "guest")).toBe(false);
-      expect(fs.existsSync(missingPath)).toBe(false);
-    });
+        expect(listSessionMembers(scope)).toEqual([
+          { identityId: "guest", addedBy: "owner", addedAt: 2 },
+        ]);
+        expect(isSessionMember(scope, "guest")).toBe(true);
+        expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+        expect(listSessionMembers(missingScope)).toEqual([]);
+        expect(isSessionMember(missingScope, "guest")).toBe(false);
+        expect(fs.existsSync(missingPath)).toBe(false);
+      },
+    );
   });
 
   it("keeps deterministic membership rows", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "session-main",
-        updatedAt: 1,
-        visibility: "shared",
-      });
-      expect(loadSessionEntry(scope)?.visibility).toBe("shared");
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-main",
+          updatedAt: 1,
+          visibility: "shared",
+        });
+        expect(loadSessionEntry(scope)?.visibility).toBe("shared");
 
-      expect(listSessionMembers(scope)).toEqual([]);
-      expect(
-        addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 }).inserted,
-      ).toBe(true);
-      expect(
-        addSessionMember(scope, { identityId: "alice", addedBy: "owner", addedAt: 3 }).inserted,
-      ).toBe(true);
+        expect(listSessionMembers(scope)).toEqual([]);
+        expect(
+          addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 }).inserted,
+        ).toBe(true);
+        expect(
+          addSessionMember(scope, { identityId: "alice", addedBy: "owner", addedAt: 3 }).inserted,
+        ).toBe(true);
 
-      expect(listSessionMembers(scope)).toEqual([
-        { identityId: "alice", addedBy: "owner", addedAt: 3 },
-        { identityId: "zoe", addedBy: "owner", addedAt: 2 },
-      ]);
-      expect(isSessionMember(scope, "alice")).toBe(true);
-      expect(removeSessionMember(scope, "alice")).toEqual({
-        identityId: "alice",
-        addedBy: "owner",
-        addedAt: 3,
-      });
-      expect(removeSessionMember(scope, "alice")).toBeNull();
-    });
+        expect(listSessionMembers(scope)).toEqual([
+          { identityId: "alice", addedBy: "owner", addedAt: 3 },
+          { identityId: "zoe", addedBy: "owner", addedAt: 2 },
+        ]);
+        expect(isSessionMember(scope, "alice")).toBe(true);
+        expect(removeSessionMember(scope, "alice")).toEqual({
+          identityId: "alice",
+          addedBy: "owner",
+          addedAt: 3,
+        });
+        expect(removeSessionMember(scope, "alice")).toBeNull();
+      },
+    );
   });
 
   it("does not recreate a missing canonical membership table", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-missing-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      database.db.exec("DROP TABLE session_members;");
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-missing-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+        const database = openOpenClawAgentDatabase({ agentId: "main", env });
+        database.db.exec("DROP TABLE session_members;");
 
-      expect(() => listSessionMembers(scope)).toThrow(
-        expect.objectContaining({
-          name: "SessionMetadataUnavailableError",
-          reason: "table-missing",
-          missingTables: ["session_members"],
-          cause: expect.objectContaining({
-            message: expect.stringMatching(/no such table: session_members/),
+        expect(() => listSessionMembers(scope)).toThrow(
+          expect.objectContaining({
+            name: "SessionMetadataUnavailableError",
+            reason: "table-missing",
+            missingTables: ["session_members"],
+            cause: expect.objectContaining({
+              message: expect.stringMatching(/no such table: session_members/),
+            }),
           }),
-        }),
-      );
-      expect(
-        database.db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")
-          .get(),
-      ).toBeUndefined();
-    });
+        );
+        expect(
+          database.db
+            .prepare(
+              "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'",
+            )
+            .get(),
+        ).toBeUndefined();
+      },
+    );
   });
 
   it("refuses member writes whose expected session instance no longer matches", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-instance-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 1 });
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-instance-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 1 });
 
-      // A write authorized against a now-replaced instance must not mutate the
-      // live one under the same key.
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "stale",
-          addedBy: "owner",
-          expectedSessionId: "session-a",
-        }),
-      ).toThrow(/session changed/);
-      expect(listSessionMembers(scope)).toEqual([]);
+        // A write authorized against a now-replaced instance must not mutate the
+        // live one under the same key.
+        expect(() =>
+          addSessionMember(scope, {
+            identityId: "stale",
+            addedBy: "owner",
+            expectedSessionId: "session-a",
+          }),
+        ).toThrow(/session changed/);
+        expect(listSessionMembers(scope)).toEqual([]);
 
-      expect(
-        addSessionMember(scope, {
-          identityId: "ok",
-          addedBy: "owner",
-          addedAt: 2,
-          expectedSessionId: "session-b",
-        }).inserted,
-      ).toBe(true);
-      expect(() => removeSessionMember(scope, "ok", undefined, "session-a")).toThrow(
-        /session changed/,
-      );
-      expect(isSessionMember(scope, "ok")).toBe(true);
-    });
+        expect(
+          addSessionMember(scope, {
+            identityId: "ok",
+            addedBy: "owner",
+            addedAt: 2,
+            expectedSessionId: "session-b",
+          }).inserted,
+        ).toBe(true);
+        expect(() => removeSessionMember(scope, "ok", undefined, "session-a")).toThrow(
+          /session changed/,
+        );
+        expect(isSessionMember(scope, "ok")).toBe(true);
+      },
+    );
   });
 
   it.each([
@@ -218,106 +228,112 @@ describe("session sharing store", () => {
   ] as const)(
     "preserves membership identity checks for %s",
     async (_, sessionId, entryJson, valid) => {
-      await withTestDir({ prefix: "openclaw-session-sharing-identity-" }, async (dir) => {
-        const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-        await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-        addSessionMember(scope, { identityId: "existing", addedBy: "owner", addedAt: 2 });
-        const database = openOpenClawAgentDatabase({ agentId: "main", env });
-        database.db
-          .prepare(
-            "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
-          )
-          .run(sessionId, entryJson, scope.sessionKey);
+      await withOpenClawTestState(
+        { prefix: "openclaw-session-sharing-identity-", layout: "state-only", applyEnv: false },
+        async ({ env }) => {
+          const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+          await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+          addSessionMember(scope, { identityId: "existing", addedBy: "owner", addedAt: 2 });
+          const database = openOpenClawAgentDatabase({ agentId: "main", env });
+          database.db
+            .prepare(
+              "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
+            )
+            .run(sessionId, entryJson, scope.sessionKey);
 
-        const add = () =>
-          addSessionMember(scope, { identityId: "new", addedBy: "owner", addedAt: 3 });
-        const remove = () => removeSessionMember(scope, "existing");
-        if (valid) {
-          expect(add().inserted).toBe(true);
-          expect(remove()).toEqual({ identityId: "existing", addedBy: "owner", addedAt: 2 });
-        } else {
-          expect(add).toThrow("session changed before sharing mutation");
-          expect(remove).toThrow("session changed before sharing mutation");
-          expect(listSessionMembers(scope)).toEqual([
-            { identityId: "existing", addedBy: "owner", addedAt: 2 },
-          ]);
-        }
-      });
+          const add = () =>
+            addSessionMember(scope, { identityId: "new", addedBy: "owner", addedAt: 3 });
+          const remove = () => removeSessionMember(scope, "existing");
+          if (valid) {
+            expect(add().inserted).toBe(true);
+            expect(remove()).toEqual({ identityId: "existing", addedBy: "owner", addedAt: 2 });
+          } else {
+            expect(add).toThrow("session changed before sharing mutation");
+            expect(remove).toThrow("session changed before sharing mutation");
+            expect(listSessionMembers(scope)).toEqual([
+              { identityId: "existing", addedBy: "owner", addedAt: 2 },
+            ]);
+          }
+        },
+      );
     },
   );
 
   it("drops members when the session instance is replaced under the same key", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "session-a",
-        updatedAt: 1,
-        visibility: "read-only",
-      });
-      expect(
-        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
-      ).toBe(true);
-      expect(isSessionMember(scope, "guest")).toBe(true);
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-recreate-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-a",
+          updatedAt: 1,
+          visibility: "read-only",
+        });
+        expect(
+          addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
+        ).toBe(true);
+        expect(isSessionMember(scope, "guest")).toBe(true);
 
-      // Reusing the canonical key with a new sessionId is a fresh session; a
-      // stale member must not inherit access, and the replacement must start
-      // shared even if the recreated entry copied a restricted visibility.
-      await upsertSessionEntryCore(scope, {
-        sessionId: "session-b",
-        updatedAt: 3,
-        visibility: "read-only",
-      });
-      expect(listSessionMembers(scope)).toEqual([]);
-      expect(isSessionMember(scope, "guest")).toBe(false);
-      // Replacement drops the copied restriction; absent visibility reads as
-      // shared, so the fresh instance is not hidden or read-only.
-      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
+        // Reusing the canonical key with a new sessionId is a fresh session; a
+        // stale member must not inherit access, and the replacement must start
+        // shared even if the recreated entry copied a restricted visibility.
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-b",
+          updatedAt: 3,
+          visibility: "read-only",
+        });
+        expect(listSessionMembers(scope)).toEqual([]);
+        expect(isSessionMember(scope, "guest")).toBe(false);
+        // Replacement drops the copied restriction; absent visibility reads as
+        // shared, so the fresh instance is not hidden or read-only.
+        expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
 
-      // An in-place update that keeps the same sessionId preserves membership.
-      expect(
-        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 4 }).inserted,
-      ).toBe(true);
-      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 5 });
-      expect(isSessionMember(scope, "guest")).toBe(true);
-    });
+        // An in-place update that keeps the same sessionId preserves membership.
+        expect(
+          addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 4 }).inserted,
+        ).toBe(true);
+        await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 5 });
+        expect(isSessionMember(scope, "guest")).toBe(true);
+      },
+    );
   });
 
   it("rejects stale member writes after entry-only deletion leaves a placeholder", async () => {
-    await withTestDir({ prefix: "openclaw-session-sharing-placeholder-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-      expect(
-        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
-      ).toBe(true);
+    await withOpenClawTestState(
+      { prefix: "openclaw-session-sharing-placeholder-", layout: "state-only", applyEnv: false },
+      async ({ env }) => {
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+        expect(
+          addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
+        ).toBe(true);
 
-      await deleteSessionEntryLifecycle({
-        agentId: "main",
-        archiveTranscript: false,
-        storePath: openOpenClawAgentDatabase({ agentId: "main", env }).path,
-        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-      });
+        await deleteSessionEntryLifecycle({
+          agentId: "main",
+          archiveTranscript: false,
+          storePath: openOpenClawAgentDatabase({ agentId: "main", env }).path,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        });
 
-      expect(loadSessionEntry(scope)).toBeUndefined();
-      expect(listSessionMembers(scope)).toEqual([]);
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "stale",
-          addedBy: "owner",
-          expectedSessionId: "session-a",
-        }),
-      ).toThrow(/session changed/);
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "planted",
-          addedBy: "owner",
-        }),
-      ).toThrow(/session changed/);
+        expect(loadSessionEntry(scope)).toBeUndefined();
+        expect(listSessionMembers(scope)).toEqual([]);
+        expect(() =>
+          addSessionMember(scope, {
+            identityId: "stale",
+            addedBy: "owner",
+            expectedSessionId: "session-a",
+          }),
+        ).toThrow(/session changed/);
+        expect(() =>
+          addSessionMember(scope, {
+            identityId: "planted",
+            addedBy: "owner",
+          }),
+        ).toThrow(/session changed/);
 
-      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 3 });
-      expect(listSessionMembers(scope)).toEqual([]);
-    });
+        await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 3 });
+        expect(listSessionMembers(scope)).toEqual([]);
+      },
+    );
   });
 });
