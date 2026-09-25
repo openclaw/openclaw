@@ -23,6 +23,7 @@ afterEach(() => {
 
 function accountRecoveryHarness(
   initialAccount: "original" | "replacement" | "unavailable" = "original",
+  source: "saved" | "inherited" = "saved",
 ) {
   const harness = createHarness("writer");
   const originalRequest = harness.request.getMockImplementation()!;
@@ -31,7 +32,7 @@ function accountRecoveryHarness(
     profileId: `example:${id}`,
     type: "oauth",
     status: "ok",
-    source: "saved",
+    source,
     email: `${id}@example.invalid`,
     logoutSupported: true,
   });
@@ -158,75 +159,78 @@ async function useReplacementAccount(page: ModelProvidersPageTestElement) {
 }
 
 describe("Models account recovery", () => {
-  it("recovers a removed selected account only after explicitly activating the replacement", async () => {
-    const restoreDialog = installDialogPolyfill();
-    const { context, request, runtimeConfig, modelRef, login, activation } =
-      accountRecoveryHarness();
-    const page = appendPage(context);
-    try {
-      await waitForProviders(page);
-      expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
-      page
-        .querySelector<HTMLButtonElement>('[aria-label="Log out original@example.invalid"]')!
-        .click();
-      await page.updateComplete;
-      const { modal } = await getRenderedModalDialog(document.body);
-      modal.querySelector<HTMLButtonElement>("button.danger")!.click();
-      await waitForFast(() =>
-        expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(0),
-      );
-      expect(request).toHaveBeenCalledWith("models.authLogout", {
-        provider: "example",
-        profileIds: ["example:original"],
-        agentId: "writer",
-      });
-      const recovery = page.querySelector("[data-models-account-recovery]");
-      expect(recovery?.textContent).toContain(modelRef);
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-
-      await openAccountRecovery(page);
-      expect(page.querySelector("[data-models-use-account]")).toBeNull();
-      await startSelectedLogin(page, "example-browser");
-      await submitCredential(page);
-      login.resolve({ done: true, status: "done" });
-      await waitForFast(() => expect(page.textContent).toContain("Provider credentials saved."));
-      expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
-      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
-        agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
-      });
-      expect(
-        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
-      ).toBe(false);
-
-      await useReplacementAccount(page);
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate.start",
-        {
-          sessionId: expect.any(String),
-          kind: "saved-auth:example%3Areplacement",
-          agentId: "writer",
-          modelRef,
-        },
-        { timeoutMs: null },
-      );
-      activation.resolve({ done: true, status: "done", modelActivation: { modelRef } });
-      await waitForFast(() => {
-        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+  it.each(["saved", "inherited"] as const)(
+    "recovers a removed selected account only after explicitly activating its %s replacement",
+    async (source) => {
+      const restoreDialog = installDialogPolyfill();
+      const { context, request, runtimeConfig, modelRef, login, activation } =
+        accountRecoveryHarness("original", source);
+      const page = appendPage(context);
+      try {
+        await waitForProviders(page);
         expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
-      });
-      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
-        agents: {
-          defaults: { model: "other/default-model" },
-          entries: { writer: { model: `${modelRef}@example:replacement` } },
-        },
-      });
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(context.navigate).not.toHaveBeenCalled();
-    } finally {
-      page.remove();
-      restoreDialog();
-    }
-  });
+        page
+          .querySelector<HTMLButtonElement>('[aria-label="Log out original@example.invalid"]')!
+          .click();
+        await page.updateComplete;
+        const { modal } = await getRenderedModalDialog(document.body);
+        modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+        await waitForFast(() =>
+          expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(0),
+        );
+        expect(request).toHaveBeenCalledWith("models.authLogout", {
+          provider: "example",
+          profileIds: ["example:original"],
+          agentId: "writer",
+        });
+        const recovery = page.querySelector("[data-models-account-recovery]");
+        expect(recovery?.textContent).toContain(modelRef);
+        expect(runtimeConfig.patch).not.toHaveBeenCalled();
+
+        await openAccountRecovery(page);
+        expect(page.querySelector("[data-models-use-account]")).toBeNull();
+        await startSelectedLogin(page, "example-browser");
+        await submitCredential(page);
+        login.resolve({ done: true, status: "done" });
+        await waitForFast(() => expect(page.textContent).toContain("Provider credentials saved."));
+        expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
+        expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
+          agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
+        });
+        expect(
+          request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
+        ).toBe(false);
+
+        await useReplacementAccount(page);
+        expect(request).toHaveBeenCalledWith(
+          "openclaw.setup.activate.start",
+          {
+            sessionId: expect.any(String),
+            kind: "saved-auth:example%3Areplacement",
+            agentId: "writer",
+            modelRef,
+          },
+          { timeoutMs: null },
+        );
+        activation.resolve({ done: true, status: "done", modelActivation: { modelRef } });
+        await waitForFast(() => {
+          expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+          expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+        });
+        expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
+          agents: {
+            defaults: { model: "other/default-model" },
+            entries: { writer: { model: `${modelRef}@example:replacement` } },
+          },
+        });
+        expect(runtimeConfig.patch).not.toHaveBeenCalled();
+        expect(context.navigate).not.toHaveBeenCalled();
+      } finally {
+        page.remove();
+        restoreDialog();
+      }
+    },
+  );
 
   it.each(["cancel", "failure", "missing receipt"] as const)(
     "keeps the unavailable selection visible after account activation %s",
@@ -270,80 +274,104 @@ describe("Models account recovery", () => {
     expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
   });
 
-  it("recovers through the OAuth owner when its provider card also offers API keys", async () => {
-    const { context, request, setConfiguredModel } = accountRecoveryHarness("replacement");
-    setConfiguredModel("minimax-portal/model@minimax-portal:removed");
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.authStatus"
-        ? {
-            ts: 1,
-            providers: [
-              {
-                provider: "minimax-portal",
-                displayName: "MiniMax",
-                status: "ok",
-                profiles: [
-                  {
-                    profileId: "minimax-portal:replacement",
-                    source: "saved",
-                    type: "oauth",
-                    status: "ok",
-                    email: "replacement@example.invalid",
-                  },
-                ],
-              },
-            ],
-            providerCapabilities: [
-              {
-                provider: "minimax",
-                apiKeySupported: true,
-                quickApiKeySetup: true,
-                loginOptions: [
-                  {
-                    id: "minimax-key",
-                    brandId: "minimax",
-                    label: "MiniMax API key",
-                    kind: "secret",
-                    featured: false,
-                  },
-                ],
-              },
-              {
-                provider: "minimax-portal",
-                apiKeySupported: false,
-                quickApiKeySetup: false,
-                loginOptions: [
-                  {
-                    id: "minimax-login",
-                    brandId: "minimax-portal",
-                    label: "MiniMax browser sign-in",
-                    kind: "oauth",
-                    featured: true,
-                  },
-                ],
-              },
-            ],
-          }
-        : originalRequest(method),
-    );
-    const page = appendPage(context);
-    await openAccountRecovery(page);
-    expect(
-      [...page.querySelectorAll<HTMLElement>("[data-models-login-provider]")]
-        .map((provider) => provider.dataset.modelsLoginProvider)
-        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-    ).toEqual(["minimax", "minimax-portal"]);
-    page.querySelector<HTMLButtonElement>('[data-models-login-provider="minimax-portal"]')!.click();
-    await page.updateComplete;
-    const dialog = page.querySelector("openclaw-modal-dialog")!;
-    expect(dialog.textContent).toContain("MiniMax browser sign-in");
-    const account = dialog.querySelector('[data-profile-id="minimax-portal:replacement"]')!;
-    expect(account.textContent).toContain("replacement@example.invalid");
-    expect(account.querySelector<HTMLButtonElement>("[data-models-use-account]")?.disabled).toBe(
-      false,
-    );
-  });
+  it.each(["minimax-portal", "minimax-portal-cn"])(
+    "offers only compatible accounts for %s when the display card combines auth owners",
+    async (modelProvider) => {
+      const { context, request, setConfiguredModel } = accountRecoveryHarness("replacement");
+      setConfiguredModel(`${modelProvider}/model@minimax-portal:removed`);
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method) =>
+        method === "models.authStatus"
+          ? {
+              ts: 1,
+              providers: [
+                {
+                  provider: modelProvider,
+                  authProvider: "minimax-portal",
+                  displayName: "MiniMax",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: "minimax-portal:replacement",
+                      source: "saved",
+                      type: "oauth",
+                      status: "ok",
+                      email: "replacement@example.invalid",
+                    },
+                  ],
+                },
+                {
+                  provider: "minimax",
+                  authProvider: "minimax",
+                  displayName: "MiniMax",
+                  status: "static",
+                  profiles: [
+                    {
+                      profileId: "minimax:api-key",
+                      source: "saved",
+                      type: "api_key",
+                      status: "static",
+                      displayName: "API key account",
+                    },
+                  ],
+                },
+              ],
+              providerCapabilities: [
+                {
+                  provider: "minimax",
+                  apiKeySupported: true,
+                  quickApiKeySetup: true,
+                  loginOptions: [
+                    {
+                      id: "minimax-key",
+                      brandId: "minimax",
+                      label: "MiniMax API key",
+                      kind: "secret",
+                      featured: false,
+                    },
+                  ],
+                },
+                {
+                  provider: "minimax-portal",
+                  apiKeySupported: false,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "minimax-login",
+                      brandId: "minimax-portal",
+                      label: "MiniMax browser sign-in",
+                      kind: "oauth",
+                      featured: true,
+                    },
+                  ],
+                },
+              ],
+            }
+          : originalRequest(method),
+      );
+      const page = appendPage(context);
+      await openAccountRecovery(page);
+      expect(
+        [...page.querySelectorAll<HTMLElement>("[data-models-login-provider]")]
+          .map((provider) => provider.dataset.modelsLoginProvider)
+          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+      ).toEqual(["minimax", "minimax-portal"]);
+      page
+        .querySelector<HTMLButtonElement>('[data-models-login-provider="minimax-portal"]')!
+        .click();
+      await page.updateComplete;
+      const dialog = page.querySelector("openclaw-modal-dialog")!;
+      expect(dialog.textContent).toContain("MiniMax browser sign-in");
+      const account = dialog.querySelector('[data-profile-id="minimax-portal:replacement"]')!;
+      expect(account.textContent).toContain("replacement@example.invalid");
+      expect(account.querySelector<HTMLButtonElement>("[data-models-use-account]")?.disabled).toBe(
+        false,
+      );
+      const incompatible = dialog.querySelector('[data-profile-id="minimax:api-key"]')!;
+      expect(incompatible.textContent).toContain("API key account");
+      expect(incompatible.querySelector("[data-models-use-account]")).toBeNull();
+    },
+  );
 
   it("rejects account recovery when the selected profile changes before activation dispatch", async () => {
     const { context, request, runtimeConfig, modelRef, activation, setConfiguredModel } =

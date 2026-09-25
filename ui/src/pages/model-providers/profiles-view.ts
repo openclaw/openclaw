@@ -380,7 +380,7 @@ function renderProfileIdentity(profile: ProviderProfile, identity: string, showD
 export function renderProviderAccountSummary(
   cards: ModelProviderCard[],
   recovery?: {
-    provider: string;
+    authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
   },
@@ -389,7 +389,10 @@ export function renderProviderAccountSummary(
     card.profiles.map((profile) => ({
       profile,
       authRejected: card.catalogStatus === "auth-rejected",
-      canUse: card.id === recovery?.provider && profile.source === "saved",
+      // A display card can combine providers whose credentials are not interchangeable.
+      canUse:
+        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
+        (profile.source === "saved" || profile.source === "inherited"),
     })),
   );
   const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];

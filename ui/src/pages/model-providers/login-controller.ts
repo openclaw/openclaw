@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
@@ -141,7 +142,12 @@ export class ModelProviderLoginController implements ReactiveController {
     ) {
       return null;
     }
-    return { model, provider: canonicalModelAuthProviderId(model.slice(0, slash)) };
+    const modelProvider = normalizeProviderId(model.slice(0, slash));
+    const authProvider =
+      authStatus.providers.find(
+        (provider) => normalizeProviderId(provider.provider) === modelProvider,
+      )?.authProvider ?? modelProvider;
+    return { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider };
   }
 
   renderRecovery() {
@@ -421,7 +427,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                   accounts,
                                   recovery
                                     ? {
-                                        provider: recovery.provider,
+                                        authProvider: recovery.authProvider,
                                         disabled: !picker.isCurrent() || !this.options.canStart(),
                                         onUse: (profileId) => {
                                           if (this.picker === picker && picker.isCurrent()) {
