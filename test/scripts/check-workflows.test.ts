@@ -71,23 +71,43 @@ describe("check-workflows", () => {
     expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
   });
 
-  it("uses the pinned go fallback and audits all workflows with zizmor", () => {
+  it.each([
+    { version: undefined, tool: "go" },
+    { version: "1.7.12", tool: "go" },
+    { version: "unknown", tool: "pre-commit" },
+    { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "installed" },
+  ])("selects $tool actionlint for installed version $version", ({ version, tool }) => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
     const markerPath = path.join(tempDir, "go-run.txt");
     const preCommitMarkerPath = path.join(tempDir, "pre-commit.txt");
+    const actionlintMarkerPath = path.join(tempDir, "actionlint.txt");
     mkdirSync(binDir);
-    writeFileSync(
-      path.join(binDir, "go"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "version" ]; then exit 0; fi',
-        'if [ "$1" = "run" ]; then printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"; exit 0; fi',
-        "exit 1",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
+    if (version) {
+      writeFileSync(
+        path.join(binDir, "actionlint"),
+        [
+          "#!/bin/sh",
+          `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
+          'printf "%s\\n" "$*" > "$ACTIONLINT_MARKER"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+    }
+    if (tool !== "pre-commit") {
+      writeFileSync(
+        path.join(binDir, "go"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "version" ]; then exit 0; fi',
+          'if [ "$1" = "run" ]; then printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"; exit 0; fi',
+          "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+    }
     writeFileSync(
       path.join(binDir, "pre-commit"),
       [
@@ -109,15 +129,23 @@ describe("check-workflows", () => {
         ...process.env,
         GO_FALLBACK_MARKER: markerPath,
         PRE_COMMIT_MARKER: preCommitMarkerPath,
+        ACTIONLINT_MARKER: actionlintMarkerPath,
         PATH: binDir,
       },
     });
 
     expect(result.status).toBe(0);
-    expect(readFileSync(markerPath, "utf8")).toContain(
-      "github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
-    );
+    expect(existsSync(actionlintMarkerPath)).toBe(tool === "installed");
+    expect(existsSync(markerPath)).toBe(tool === "go");
+    if (tool === "go") {
+      expect(readFileSync(markerPath, "utf8")).toContain(
+        "github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+      );
+    } else if (tool === "installed") {
+      expect(readFileSync(actionlintMarkerPath, "utf8")).toContain(".github/workflows/ci.yml");
+    }
     const preCommitArgs = readFileSync(preCommitMarkerPath, "utf8");
+    expect(preCommitArgs.includes(" actionlint --files")).toBe(tool === "pre-commit");
     expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
     expect(preCommitArgs).toContain(".github/workflows/ci.yml");
     expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");

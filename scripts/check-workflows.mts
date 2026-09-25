@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs local workflow sanity checks.
-// Uses installed tools when present, otherwise falls back to pinned hooks where
+// Uses qualified installed tools, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -17,6 +17,24 @@ const WORKFLOW_DIR = ".github/workflows";
 function commandExists(command: string, args: readonly string[] = ["--version"]): boolean {
   const result = spawnSync(command, args, { stdio: "ignore" });
   return !result.error && result.status === 0;
+}
+
+function hasPinnedActionlint(): boolean {
+  const result = spawnSync("actionlint", ["--version"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    return false;
+  }
+  // Released 1.7.12 can deadlock on Darwin. Only reuse the Go build of our CI
+  // pin; release and unknown local builds do not establish that fix's presence.
+  const version = result.stdout.split(/\r?\n/u, 1)[0]?.trim() ?? "";
+  const revision = /^v\d+\.\d+\.\d+-\d+\.\d{14}-([a-f0-9]{12})$/u.exec(version)?.[1];
+  if (revision === ACTIONLINT_REVISION.slice(0, 12)) {
+    return true;
+  }
+  console.warn(
+    `[check-workflows] installed actionlint does not match ${ACTIONLINT_REVISION}; using pinned fallback.`,
+  );
+  return false;
 }
 
 function probePythonVersion(
@@ -143,7 +161,7 @@ function runPreCommitHook(hook: string, files: string[]): void {
 
 const workflows = workflowFiles();
 
-if (commandExists("actionlint")) {
+if (hasPinnedActionlint()) {
   run("actionlint", workflows);
 } else if (commandExists("go", ["version"])) {
   run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`]);
